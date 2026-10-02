@@ -1,3 +1,22 @@
+/**
+ * ui/Card — the legacy card shell.
+ *
+ * THE HOVER BORDER IS `brand` NOW. It reached for Tailwind's own default `cyan-500` ramp
+ * (#06B6D4) at the same `/40` alpha — a hue with no token behind it, and a different cyan
+ * from the brand (#00D4FF), on every hoverable card in the application. It compiled and
+ * looked approximately right, which is why it survived; `ui/Button.jsx`'s `secondary`
+ * variant carried the identical mistake and was corrected the same way. Only the hue moved:
+ * the alpha, the radius, the lift and the transition are untouched.
+ *
+ * The retired utility is deliberately NOT spelled out in full anywhere in this file.
+ * Tailwind v4's content detection is a project-wide TEXT scan, so a complete class name
+ * written in a comment is emitted into `dist/` as if it had a real call site — see the
+ * `@source not` note in `src/index.css`.
+ *
+ * Everything else here is already on tokens: `bg-surface-raised` / `bg-surface-panel` and
+ * `border-line-default`.
+ */
+
 import React from 'react';
 
 export function Card({ 
@@ -14,7 +33,7 @@ export function Card({
     border border-line-default
     rounded-lg
     transition-all duration-300
-    ${hover ? 'hover:border-cyan-500/40 hover:-translate-y-0.5 cursor-pointer' : ''}
+    ${hover ? 'hover:border-brand/40 hover:-translate-y-0.5 cursor-pointer' : ''}
     ${onClick ? 'cursor-pointer' : ''}
     p-6
     ${className} ${cls}

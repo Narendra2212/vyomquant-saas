@@ -13,20 +13,45 @@ import {
 // the shim already returned (§17.2).
 import { token } from "../design/tokens";
 
+/*
+ * ── Ticket status and priority, on the one palette ────────────────────────
+ *
+ * These two maps used to hold a palette of their own — seven hues, none of them in
+ * `styles/tokens.css`: #ff4757, #ffd700, #ff8c00, #00d4aa and #6b9bb8, plus
+ * #00d4ff (the brand, spelled as a literal) and an `rgba(42, 74, 94, …)` slate
+ * wash. So an OPEN chip here rendered a different red from every `ds/StatusBadge`
+ * on every other page, and a RESOLVED chip a different green. Only the hues move;
+ * every `label`, every `icon` and the `{ bg, text }` shape are untouched, so no
+ * call site below changes.
+ *
+ * The palette carries ONE red, ONE amber, ONE green, the brand cyan and ONE
+ * neutral, which is four content-bearing hues for six states. The two that share
+ * are `in_progress` and `waiting_for_support`, and they shared already: #ffd700
+ * and #ff8c00 are both yellow-orange at 12% in a 9px chip, and both carried the
+ * same `Clock` icon. `tokens.css` made exactly this collapse once before
+ * ("C.gold #F59E0B and C.warning #FFB74D collapse to #F59E0B"). Each of the six
+ * still states its own word, which is what the chip was always read by.
+ */
 const STATUS_CONFIG = {
-  open: { bg: "rgba(255, 71, 87, 0.12)", text: "#ff4757", label: "OPEN", icon: AlertCircle },
-  in_progress: { bg: "rgba(255, 215, 0, 0.12)", text: "#ffd700", label: "IN PROGRESS", icon: Clock },
-  waiting_for_user: { bg: "rgba(0, 212, 255, 0.12)", text: "#00d4ff", label: "WAITING ON YOU", icon: MessageSquare },
-  waiting_for_support: { bg: "rgba(255, 140, 0, 0.12)", text: "#ff8c00", label: "WAITING ON SUPPORT", icon: Clock },
-  resolved: { bg: "rgba(0, 212, 170, 0.12)", text: "#00d4aa", label: "RESOLVED", icon: CheckCircle },
-  closed: { bg: "rgba(42, 74, 94, 0.2)", text: "#6b9bb8", label: "CLOSED", icon: Archive }
+  open: { bg: token.status.error.wash, text: token.status.error.fg, label: "OPEN", icon: AlertCircle },
+  in_progress: { bg: token.status.warning.wash, text: token.status.warning.fg, label: "IN PROGRESS", icon: Clock },
+  waiting_for_user: { bg: token.brand.wash, text: token.brand.base, label: "WAITING ON YOU", icon: MessageSquare },
+  waiting_for_support: { bg: token.status.warning.wash, text: token.status.warning.fg, label: "WAITING ON SUPPORT", icon: Clock },
+  resolved: { bg: token.status.profit.wash, text: token.status.profit.fg, label: "RESOLVED", icon: CheckCircle },
+  closed: { bg: token.status.neutral.wash, text: token.content.secondary, label: "CLOSED", icon: Archive }
 };
 
+/*
+ * `low` takes `content.secondary` rather than `status.neutral.fg` for its text even
+ * though `tokens.css` gives the two the same #8B95A5: the chip's content is a word,
+ * and `content.secondary` is the name for neutral TEXT (6.2:1). `content.muted` is
+ * marked NON-TEXT ONLY at 3.2:1 and is not an option here.
+ */
 const PRIORITY_CONFIG = {
-  low: { bg: "rgba(42, 74, 94, 0.2)", text: "#6b9bb8" },
-  medium: { bg: "rgba(0, 212, 255, 0.12)", text: "#00d4ff" },
-  high: { bg: "rgba(255, 140, 0, 0.15)", text: "#ff8c00" },
-  urgent: { bg: "rgba(255, 71, 87, 0.15)", text: "#ff4757" }
+  low: { bg: token.status.neutral.wash, text: token.content.secondary },
+  medium: { bg: token.brand.wash, text: token.brand.base },
+  high: { bg: token.status.warning.wash, text: token.status.warning.fg },
+  urgent: { bg: token.status.error.wash, text: token.status.error.fg }
 };
 
 const CATEGORIES = {
@@ -226,7 +251,7 @@ export default function SupportCenter() {
       {/* Top Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, borderBottom: `1px solid ${token.line.default}`, paddingBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ background: "rgba(0, 212, 255, 0.1)", border: `1px solid ${token.brand.base}40`, padding: 8, borderRadius: 10 }}>
+          <div style={{ background: token.brand.wash, border: `1px solid ${token.brand.base}40`, padding: 8, borderRadius: 10 }}>
             <HelpCircle size={22} color={token.brand.base} />
           </div>
           <div>
@@ -244,7 +269,7 @@ export default function SupportCenter() {
           <button
             onClick={() => { setActiveTab('faqs'); setSelectedTicket(null); }}
             style={{
-              background: activeTab === 'faqs' ? "rgba(0, 212, 255, 0.15)" : token.surface.inset,
+              background: activeTab === 'faqs' ? token.brand.wash : token.surface.inset,
               color: activeTab === 'faqs' ? token.brand.base : token.content.secondary,
               border: `1px solid ${activeTab === 'faqs' ? token.brand.base : token.line.default}`,
               padding: "8px 14px", borderRadius: 8, fontSize: 11, fontWeight: 700,
@@ -258,7 +283,7 @@ export default function SupportCenter() {
           <button
             onClick={() => { setActiveTab('tickets'); setSelectedTicket(null); loadTickets(); }}
             style={{
-              background: activeTab === 'tickets' ? "rgba(0, 212, 255, 0.15)" : token.surface.inset,
+              background: activeTab === 'tickets' ? token.brand.wash : token.surface.inset,
               color: activeTab === 'tickets' ? token.brand.base : token.content.secondary,
               border: `1px solid ${activeTab === 'tickets' ? token.brand.base : token.line.default}`,
               padding: "8px 14px", borderRadius: 8, fontSize: 11, fontWeight: 700,
@@ -273,7 +298,7 @@ export default function SupportCenter() {
             onClick={() => { setActiveTab('create'); setSelectedTicket(null); }}
             style={{
               background: activeTab === 'create' ? token.status.profit.fg : token.brand.base,
-              color: "#000", border: "none",
+              color: token.content.inverse, border: "none",
               padding: "8px 16px", borderRadius: 8, fontSize: 11, fontWeight: 900,
               fontFamily: "monospace", cursor: "pointer", display: "flex", alignItems: "center", gap: 6
             }}
@@ -286,14 +311,14 @@ export default function SupportCenter() {
 
       {/* Global Alerts */}
       {successMessage && (
-        <div style={{ background: "rgba(0, 212, 170, 0.12)", border: `1px solid ${token.status.profit.fg}40`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: token.status.profit.fg, fontSize: 12, fontFamily: "monospace" }}>
+        <div style={{ background: token.status.profit.wash, border: `1px solid ${token.status.profit.fg}40`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: token.status.profit.fg, fontSize: 12, fontFamily: "monospace" }}>
           <CheckCircle size={16} />
           {successMessage}
         </div>
       )}
 
       {error && (
-        <div style={{ background: "rgba(255, 71, 87, 0.12)", border: `1px solid ${token.status.loss.fg}40`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: token.status.loss.fg, fontSize: 12, fontFamily: "monospace" }}>
+        <div style={{ background: token.status.loss.wash, border: `1px solid ${token.status.loss.fg}40`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: token.status.loss.fg, fontSize: 12, fontFamily: "monospace" }}>
           <AlertCircle size={16} />
           <span style={{ flex: 1 }}>{error}</span>
           <button onClick={() => setError(null)} style={{ background: "transparent", border: "none", color: token.status.loss.fg, cursor: "pointer" }}><X size={14} /></button>
@@ -321,7 +346,7 @@ export default function SupportCenter() {
                   key={cat}
                   onClick={() => setFaqCategory(cat)}
                   style={{
-                    background: faqCategory === cat ? "rgba(0, 212, 255, 0.12)" : token.surface.inset,
+                    background: faqCategory === cat ? token.brand.wash : token.surface.inset,
                     color: faqCategory === cat ? token.brand.base : token.content.secondary,
                     border: `1px solid ${faqCategory === cat ? token.brand.base : token.line.default}`,
                     padding: "6px 10px", borderRadius: 6, fontSize: 10, fontFamily: "monospace", fontWeight: 700,
@@ -366,7 +391,7 @@ export default function SupportCenter() {
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ background: "rgba(0, 212, 255, 0.1)", color: token.brand.base, fontSize: 9, fontFamily: "monospace", fontWeight: 900, padding: "2px 6px", borderRadius: 4, textTransform: "uppercase" }}>
+                        <span style={{ background: token.brand.wash, color: token.brand.base, fontSize: 9, fontFamily: "monospace", fontWeight: 900, padding: "2px 6px", borderRadius: 4, textTransform: "uppercase" }}>
                           {item.category}
                         </span>
                         <span style={{ color: token.content.primary, fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>
@@ -464,7 +489,7 @@ export default function SupportCenter() {
               <div style={{ color: token.content.secondary, fontSize: 11, fontFamily: "monospace", marginBottom: 16 }}>Need assistance with exchange keys, order routing, or risk rules? Submit a ticket.</div>
               <button
                 onClick={() => setActiveTab('create')}
-                style={{ background: token.brand.base, color: "#000", border: "none", padding: "8px 16px", borderRadius: 8, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: "pointer" }}
+                style={{ background: token.brand.base, color: token.content.inverse, border: "none", padding: "8px 16px", borderRadius: 8, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: "pointer" }}
               >
                 Create New Ticket
               </button>
@@ -498,7 +523,9 @@ export default function SupportCenter() {
                       padding: "14px 18px", display: "flex", alignItems: "center", gap: 14,
                       cursor: "pointer", transition: "all 0.15s"
                     }}
-                    className="hover:border-cyan-500/40"
+                    // `border-brand`, not Tailwind's default `cyan-500` (#06B6D4) ramp, which
+                    // had no token behind it and was a different cyan from the brand.
+                    className="hover:border-brand/40"
                   >
                     <div style={{ background: status.bg, color: status.text, padding: 8, borderRadius: 8 }}>
                       <StatusIcon size={16} />
@@ -511,7 +538,7 @@ export default function SupportCenter() {
                           {t.subject}
                         </span>
                         {t.has_unread && (
-                          <span style={{ background: token.brand.base, color: "#000", fontSize: 9, fontWeight: 900, padding: "1px 5px", borderRadius: 10, fontFamily: "monospace" }}>
+                          <span style={{ background: token.brand.base, color: token.content.inverse, fontSize: 9, fontWeight: 900, padding: "1px 5px", borderRadius: 10, fontFamily: "monospace" }}>
                             NEW REPLY
                           </span>
                         )}
@@ -695,7 +722,7 @@ export default function SupportCenter() {
               <button
                 type="submit"
                 disabled={submitting}
-                style={{ background: submitting ? token.content.muted : token.brand.base, color: "#000", border: "none", padding: "10px 22px", borderRadius: 8, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: submitting ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6 }}
+                style={{ background: submitting ? token.content.muted : token.brand.base, color: token.content.inverse, border: "none", padding: "10px 22px", borderRadius: 8, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: submitting ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6 }}
               >
                 {submitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                 Submit Request
@@ -727,14 +754,14 @@ export default function SupportCenter() {
                 {selectedTicket.status !== 'closed' ? (
                   <button
                     onClick={() => handleStatusTransition('closed')}
-                    style={{ background: "rgba(255, 71, 87, 0.12)", border: `1px solid ${token.status.loss.fg}40`, color: token.status.loss.fg, padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "monospace", cursor: "pointer" }}
+                    style={{ background: token.status.loss.wash, border: `1px solid ${token.status.loss.fg}40`, color: token.status.loss.fg, padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "monospace", cursor: "pointer" }}
                   >
                     Close Ticket
                   </button>
                 ) : (
                   <button
                     onClick={() => handleStatusTransition('reopen')}
-                    style={{ background: "rgba(0, 212, 170, 0.12)", border: `1px solid ${token.status.profit.fg}40`, color: token.status.profit.fg, padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "monospace", cursor: "pointer" }}
+                    style={{ background: token.status.profit.wash, border: `1px solid ${token.status.profit.fg}40`, color: token.status.profit.fg, padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "monospace", cursor: "pointer" }}
                   >
                     Reopen Ticket
                   </button>
@@ -790,8 +817,10 @@ export default function SupportCenter() {
                 <div
                   key={c.id}
                   style={{
-                    background: c.is_staff ? "rgba(0, 212, 255, 0.06)" : token.surface.raised,
-                    border: `1px solid ${c.is_staff ? "rgba(0, 212, 255, 0.3)" : token.line.default}`,
+                    background: c.is_staff ? token.brand.wash : token.surface.raised,
+                    // `4D` is the 0.30 alpha this border already carried, now taken off the
+                    // brand token instead of a hand-spelled `rgba(0, 212, 255, 0.3)`.
+                    border: `1px solid ${c.is_staff ? `${token.brand.base}4D` : token.line.default}`,
                     borderRadius: 8, padding: 14
                   }}
                 >
@@ -801,7 +830,7 @@ export default function SupportCenter() {
                         {c.is_staff ? "⚡ VyomQuant Support Team" : "You"}
                       </span>
                       {c.is_staff && (
-                        <span style={{ background: "rgba(0, 212, 255, 0.2)", color: token.brand.base, fontSize: 8, fontWeight: 900, padding: "1px 5px", borderRadius: 3, fontFamily: "monospace" }}>
+                        <span style={{ background: token.brand.wash, color: token.brand.base, fontSize: 8, fontWeight: 900, padding: "1px 5px", borderRadius: 3, fontFamily: "monospace" }}>
                           STAFF
                         </span>
                       )}
@@ -841,7 +870,7 @@ export default function SupportCenter() {
                   disabled={submittingComment || !commentText.trim()}
                   style={{
                     background: submittingComment || !commentText.trim() ? token.content.muted : token.brand.base,
-                    color: "#000", border: "none", padding: "8px 18px", borderRadius: 6,
+                    color: token.content.inverse, border: "none", padding: "8px 18px", borderRadius: 6,
                     fontSize: 11, fontWeight: 900, fontFamily: "monospace",
                     cursor: submittingComment || !commentText.trim() ? "not-allowed" : "pointer",
                     display: "flex", alignItems: "center", gap: 6

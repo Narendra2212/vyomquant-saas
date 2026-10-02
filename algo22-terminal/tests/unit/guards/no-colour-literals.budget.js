@@ -1039,20 +1039,72 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   //    1 in `Toast`'s `boxShadow: "0 4px 12px rgba(0,0,0,0.4)"`, which is a hand-tuned
   //      elevation rather than `token.shadow.raised`'s `0 4px 12px rgba(0, 0, 0, 0.35)`.
   //
-  // They are NOT retokened here, and that is deliberate: stage A is a rehome. Changing five
-  // chip hues and a shadow alpha is a colour decision affecting `Tag2`'s seven consuming
-  // pages, and it would land in the same diff as fifteen moved import paths, where nobody
-  // could review either. `Tag2`'s successor is `ds/StatusBadge`, which derives its hue from a
-  // state word and accepts no colour prop — adopting it is what actually clears these 17, per
-  // call site, and the module's docblock records that.
+  // They were NOT retokened by THAT task, and that was deliberate: stage A was a rehome.
+  // Changing five chip hues and a shadow alpha is a colour decision affecting `Tag2`'s seven
+  // consuming pages, and it would have landed in the same diff as fifteen moved import paths,
+  // where nobody could review either.
   //
-  // OUT of scope, exactly as `ui-legacy/*` is and for the same reason: this guard does not
-  // assert the file reads zero. It is a ratchet at 18 — the 18 cannot grow, and they come
-  // down when the `ds/` adoption happens rather than on a promise made here.
-  'components/common/primitives.jsx': 18,
+  // 18 -> 0 at the app-wide colour-consistency pass, which is the diff that colour decision
+  // belongs in. It did NOT take `ds/StatusBadge` adoption to get there — that is still the
+  // route that deletes `Tag2` itself, and the module's docblock still records it. It took the
+  // hues, per tone, onto the group each tone already meant:
+  //
+  //   * `Tag2`'s 17. `profit`/`green` and `loss`/`red` read `status.profit` and `status.loss`,
+  //     so a profit tag no longer draws #26A69A text inside an #00C853 border. `warning` and
+  //     `gold` collapse onto the one `status.warning` amber — the same collapse `tokens.css`
+  //     made for #F59E0B/#FFB74D. `purple` becomes `status.neutral`: the palette holds no
+  //     purple, this tone's TEXT was already `status.neutral.fg`, and its one call site is
+  //     `StrategyDetail`'s timeframe chip — a fact rather than a state, which
+  //     `pages/Strategies.jsx` settled as "neutral surface, neutral line, neutral text".
+  //
+  //     The note above says substituting "would visibly change the chip", and it does: a 12%
+  //     #F59E0B is not a 10% #FFAB00. That was an argument for not doing it inside a rehome,
+  //     not an argument for never doing it — the chip changing is the POINT of a consistency
+  //     pass, and what it changes to is the amber every `ds/` surface already draws.
+  //   * `Toast`'s 1. `boxShadow: "0 4px 12px rgba(0,0,0,0.4)"` -> `token.shadow.raised`,
+  //     `0 4px 12px rgba(0, 0, 0, 0.35)`: same offset, blur and spread, declared alpha. The
+  //     substitution `pages/Profile.jsx` made on its switch knob.
+  //
+  // The base border keeps its 0.30 alpha and the hover its 0.15, written as `${fg}4D` and
+  // `${fg}26` off the group's own `fg`. That is not a hand-mix reappearing under a token's
+  // name: the brightening BETWEEN the two is the chip's only hover feedback, and flattening
+  // both onto `wash` would have deleted an interaction while claiming to change a colour.
+  //
+  // Still OUT of scope, exactly as `ui-legacy/*` was: this guard does not assert the file
+  // reads zero. The `0` stays rather than being deleted, per this group's header — these
+  // eleven components render across fifteen pages, which makes this the highest-leverage
+  // place in the tree for a hand-mixed hue to come back.
+  'components/common/primitives.jsx': 0,
 
   // -- Shell and cross-cutting components -----------------------------------
-  'components/DeployPreflightPanel.jsx': 30,
+  // 30 -> 0 at the app-wide colour-consistency pass. This file held the largest off-palette
+  // set left in the tree, and not one of its four verdict hues was in the palette: #10b981,
+  // #ef4444, #eab308 and #94a3b8 are Tailwind's emerald, red, yellow and slate ramps, where
+  // `tokens.css` declares #26A69A, #EF5350, #F59E0B and #8B95A5. The panel renders inside
+  // `pages/Strategies.jsx`'s deploy modal and inside `components/deploy/DeployConfirmation`,
+  // so a FAILED row here drew a different red from the `ds/StatusBadge` reading FAILED in the
+  // table the modal had just opened over.
+  //
+  // The four presentations now come from `design/semantic.js`, and the mapping was a lookup
+  // rather than a judgement because each state's word is already in that vocabulary:
+  // `statusToken('ok')` -> the `connected` group, `('failed')` -> `error`, `('pending')` ->
+  // `warning`, `('unknown')` -> `neutral`. Those four groups are exactly where the four
+  // literals were pointing. `borderColor` is the full-strength `fg` and the background the
+  // group's `wash`, which is `ds/StatusBadge`'s own treatment, so the two now match where
+  // they meet.
+  //
+  // THE BORDER STYLE IS UNTOUCHED — `solid` for the two verdicts, `dashed` for pending and
+  // unreadable. That axis is load-bearing (this file's own vocabulary: a `glyph` and a `word`
+  // beside the colour, never colour alone) and it is why those stay three properties rather
+  // than collapsing into a shorthand.
+  //
+  // The remaining 11 were chrome, each a second spelling of a token that already existed:
+  // #080a0e -> `surface.canvas`, #1e293b ×2 -> `line.default`, #151821 -> `line.subtle` (it
+  // was `surface.raised`'s value being used as a rule), #00d4ff ×2 -> `brand.base`,
+  // #5a6578 ×3 -> `content.muted`, #94a3b8 -> `content.secondary` (the panel's own body text,
+  // so it takes the 6.2:1 neutral and not the NON-TEXT ONLY one), and #e2e8f0 and #cbd5e1 ->
+  // `content.primary`.
+  'components/DeployPreflightPanel.jsx': 0,
   // `components/DashboardUpgrades.jsx: 6` stood here until task 19.4 deleted the file.
   // Removed rather than lowered to `0`, per this header: a `0` records that a live file is
   // clean and holds it there, but a deleted file has no source to measure and
@@ -1079,7 +1131,19 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // with the component. It was deleted as the only consumer of `contexts/CopilotContext.jsx`,
   // which that task removed for holding two addresses no router serves; it was mounted
   // nowhere and documented itself as dormant and unmounted.
-  'components/FirstTradeWizard.jsx': 3,
+  // 3 -> 0 at the app-wide colour-consistency pass. Two were `#fff` on the step disc — pure
+  // white, which is not in the palette — and both become `token.content.primary` (#F0F2F5)
+  // rather than `content.inverse`, because the glyph is light-on-dark in BOTH arms: the
+  // completed step has no fill of its own (the file records why) and shows the card surface
+  // through. That is the substitution `pages/Profile.jsx` recorded for its switch knob. The
+  // third was `boxShadow: "0 4px 20px rgba(0,0,0,0.3)"`, a hand-tuned elevation ->
+  // `token.shadow.raised`.
+  //
+  // This component has NO IMPORTER anywhere in `src/`, so none of the three rendered. It is
+  // retokened and kept rather than deleted — deleting an unmounted component is a scope
+  // question this pass does not own, and the entry holds the file at `0` either way, which is
+  // what stops a hand-mixed hue arriving with whichever change mounts it.
+  'components/FirstTradeWizard.jsx': 0,
 
   // -- Deferred pages: retokened by M1, layouts stay older (§14.4) ----------
   // `pages/ExchangeManager.jsx: 128` stood here — the largest single entry in this budget,
@@ -1122,8 +1186,51 @@ export const OUT_OF_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // `pages/SecurityLogs.jsx: 3` stood here until retail-ui-simplification task 7.4 took it to 0
   // and moved the entry into the in-scope block above. All three were the error banner's and
   // left with it; the full note is on the entry.
-  'components/SupportCenter.jsx': 37,
-  'components/NotificationCenter.jsx': 1,
+  // 37 -> 0 at the app-wide colour-consistency pass. **THE LAST WHOLE PAGE IN THE TREE
+  // CARRYING A PALETTE OF ITS OWN**, and the point worth recording is that task 1.6 only got
+  // half of this file: it replaced the `const C = { … }` this page declared — which is why
+  // `no-local-tokens.test.js`'s header still names it — but the SEVEN HUES in `STATUS_CONFIG`
+  // and `PRIORITY_CONFIG` were never in that object, so clearing the declaration left the
+  // palette behind. A guard that watches declaration sites cannot see a palette inlined into
+  // two frozen maps, and this is the file that proves it.
+  //
+  // Not one of the seven was in `tokens.css`: #ff4757, #ffd700, #ff8c00, #00d4aa and #6b9bb8,
+  // plus #00d4ff (the brand, spelled as a literal) and an `rgba(42, 74, 94, …)` slate wash.
+  // So an OPEN chip at `/app/support` drew a different red, and a RESOLVED chip a different
+  // green, from every `ds/StatusBadge` on every other page. The map now reads
+  // `status.error` / `status.warning` / `brand` / `status.warning` / `status.profit` /
+  // `status.neutral` for the six ticket states and `status.neutral` / `brand` /
+  // `status.warning` / `status.error` for the four priorities. Every `label`, every `icon`
+  // and the `{ bg, text }` shape are untouched, so no call site moved.
+  //
+  // TWO STATES SHARE AN AMBER NOW, AND THEY SHARED BEFORE. The palette carries one red, one
+  // amber, one green, the brand cyan and one neutral — four content-bearing hues for six
+  // states — so `in_progress` and `waiting_for_support` land together. #ffd700 and #ff8c00
+  // were both yellow-orange at 12% in a 9px chip and both carried the same `Clock` icon, so
+  // the distinguishability that is actually lost is close to nothing, and each state still
+  // states its own word, which is what the chip was read by. Inventing a sixth hue to keep
+  // them apart would have been the one thing a consistency pass must not do.
+  //
+  // The other 21: five `color: "#000"` on brand and profit fills -> `content.inverse`
+  // (#080A0E), the substitution `pages/Billing.jsx` and `pages/Wizard.jsx` made; eight
+  // hand-mixed brand alphas (0.06, 0.1 ×2, 0.12, 0.15 ×2, 0.2) -> the one declared
+  // `brand.wash`, which is the 0.15 -> 0.10 convergence `tokens.css` records; the success and
+  // error banners' `rgba(0, 212, 170, 0.12)` and `rgba(255, 71, 87, 0.12)` -> `status.profit
+  // .wash` and `status.loss.wash`; and the staff-comment border's `rgba(0, 212, 255, 0.3)` ->
+  // `${token.brand.base}4D`, which is that same 0.30 alpha taken off the token.
+  //
+  // One off-palette construct went with them that this guard cannot see, because it carries
+  // no literal: `hover:border-cyan-500/40` on the ticket row — Tailwind's own cyan ramp
+  // (#06B6D4), not the brand. It becomes `hover:border-brand/40`. That is the third file to
+  // carry that exact mistake (`ui/Button.jsx`, `ui/Card.jsx` and now this), which makes a
+  // default-ramp utility the most common thing the colour ratchet is structurally blind to.
+  'components/SupportCenter.jsx': 0,
+  // 1 -> 0 at the app-wide colour-consistency pass. The single literal was `color: '#000'` on
+  // the unread-count chip's brand fill — pure black, where `content.inverse` is the declared
+  // inverse (#080A0E). Same note as `SupportCenter.jsx` above: task 1.6 cleared this page's
+  // `const C` and the guard that watches declarations went quiet, but the `#000` was never in
+  // that object.
+  'components/NotificationCenter.jsx': 0,
 
   // -- Landing page: explicitly out of scope for v1 -------------------------
   // index.css's own header calls the landing `@utility` compositions out of

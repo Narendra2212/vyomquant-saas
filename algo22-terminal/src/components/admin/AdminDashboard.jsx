@@ -275,7 +275,12 @@ export default function AdminDashboard() {
             </div>
 
             {editingId && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                // `bg-surface-overlay` is the declared scrim — `rgba(8, 10, 14, 0.88)`, the
+                // same one `ds/ConfirmDialog` and `ds/Drawer` paint and the landing navbar
+                // sits on. It was a 60% pure black, which has no token behind it. (The
+                // retired utility is not spelled out: Tailwind v4 scans comments as text
+                // and would emit it as dead CSS.)
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-surface-overlay backdrop-blur-sm">
                     <div className="card-surface w-full max-w-md p-6">
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="text-lg font-bold text-content-primary">Edit Notes</h3>

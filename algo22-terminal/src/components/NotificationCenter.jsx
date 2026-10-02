@@ -291,7 +291,10 @@ function NotificationCenter() {
                 {unreadCount > 0 && (
                   <span style={{
                     background: token.brand.base,
-                    color: '#000',
+                    // `content.inverse` (#080A0E) is the declared colour for a glyph on a
+                    // brand fill. This was pure `#000`, which is not in the palette — the
+                    // same substitution `pages/Billing.jsx` and `pages/Wizard.jsx` made.
+                    color: token.content.inverse,
                     fontSize: 11,
                     padding: '2px 8px',
                     borderRadius: 12,

@@ -919,7 +919,7 @@ function BacktestsTab({ backtests, strategyId }) {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {backtests.map(bt => (
-            <Card key={bt.id} cls="p-4 hover:border-cyan-500/30 transition-all cursor-pointer" onClick={() => navigate(`/app/backtest?strategy_id=${strategyId}`)}>
+            <Card key={bt.id} cls="p-4 hover:border-brand/30 transition-all cursor-pointer" onClick={() => navigate(`/app/backtest?strategy_id=${strategyId}`)}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   {/* fontSize: 12 → --text-title (value). Q7, as the deployments row above. */}
@@ -1567,7 +1567,11 @@ function ExecutionsTab({ strategyId }) {
         </thead>
         <tbody>
           {executions.map(ex => (
-            <tr key={ex.id || Math.random()} style={{ borderBottom: `1px solid ${token.line.default}15` }} className="hover:bg-white/5 transition-colors">
+            // `hover:bg-surface-raised` is `ds/DataTable`'s own interactive-row hover, so this
+            // hand-rolled table now reads the same as every tokened one. It was a 5% pure
+            // white, which is not in the palette. (The retired utility is not spelled out:
+            // Tailwind v4 scans comments as text and would emit it as dead CSS.)
+            <tr key={ex.id || Math.random()} style={{ borderBottom: `1px solid ${token.line.default}15` }} className="hover:bg-surface-raised transition-colors">
               <td style={{ padding: "8px 14px", color: token.brand.base, fontWeight: 700 }}>
                 {ex.id ? (String(ex.id).length > 12 ? `${String(ex.id).slice(0, 8)}...` : ex.id) : "—"}
               </td>
@@ -1657,7 +1661,7 @@ function SignalsTab({ strategyId }) {
           {signals.map(sig => (
             <Card
               key={sig.id}
-              cls="p-4 hover:border-cyan-500/30 transition-all cursor-pointer"
+              cls="p-4 hover:border-brand/30 transition-all cursor-pointer"
               onClick={() => navigate(`/app/signal-trace/${sig.id}`)}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

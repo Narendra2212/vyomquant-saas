@@ -46,6 +46,8 @@
  * them and a deployment.
  */
 
+import { statusToken } from '../design/semantic';
+import { token } from '../design/tokens';
 import {
   CONDITION_FAILED,
   CONDITION_PASSED,
@@ -55,6 +57,34 @@ import {
 
 // ── Presentation vocabulary ─────────────────────────────────────────────────────────────
 
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE FOUR VERDICT HUES COME FROM `design/semantic.js`, NOT FROM THIS FILE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Every colour below used to be a literal, and none of the four was in the
+ * palette: #10b981, #ef4444, #eab308 and #94a3b8 are Tailwind's emerald, red,
+ * yellow and slate ramps, where `styles/tokens.css` declares #26A69A, #EF5350,
+ * #F59E0B and #8B95A5. So a FAILED row here rendered a different red from the
+ * `ds/StatusBadge` reading FAILED in the table the deploy modal opened over.
+ *
+ * Each state's word is already in `semantic.js`'s vocabulary, so the mapping is
+ * a lookup rather than a judgement: `ok` → the `connected` group, `failed` →
+ * `error`, `pending` → `warning`, `unknown` → `neutral`. Those four groups are
+ * exactly where the four literals were pointing.
+ *
+ * `borderColor` is the full-strength `fg` and `backgroundColor` the group's
+ * `wash`, which is `ds/StatusBadge`'s own treatment (`{ color: fg,
+ * backgroundColor: wash, borderColor: fg }`) — so the two are indistinguishable
+ * where they meet. THE BORDER STYLE IS UNCHANGED: `solid` for the two verdicts,
+ * `dashed` for pending and unreadable. That distinction is load-bearing and is
+ * the reason these are three properties rather than one shorthand.
+ */
+
+const PASSED_STATUS = statusToken('ok');
+const FAILED_STATUS = statusToken('failed');
+const PENDING_STATUS = statusToken('pending');
+const UNREADABLE_STATUS = statusToken('unknown');
+
 /**
  * How each wire status is drawn. Every entry carries a `glyph` *and* a `word`: the status
  * is never signalled by colour alone.
@@ -63,24 +93,24 @@ export const STATUS_PRESENTATION = Object.freeze({
   [CONDITION_PASSED]: Object.freeze({
     word: 'PASSED',
     glyph: '✓',
-    color: '#10b981',
-    border: '1px solid rgba(16,185,129,0.35)',
-    background: 'rgba(16,185,129,0.08)',
+    color: PASSED_STATUS.fg,
+    border: `1px solid ${PASSED_STATUS.fg}`,
+    background: PASSED_STATUS.wash,
   }),
   [CONDITION_FAILED]: Object.freeze({
     word: 'FAILED',
     glyph: '✕',
-    color: '#ef4444',
-    border: '1px solid rgba(239,68,68,0.45)',
-    background: 'rgba(239,68,68,0.10)',
+    color: FAILED_STATUS.fg,
+    border: `1px solid ${FAILED_STATUS.fg}`,
+    background: FAILED_STATUS.wash,
   }),
   [CONDITION_PENDING]: Object.freeze({
     word: 'PENDING',
     glyph: '◌',
     // Dashed, not solid: "not evaluated" reads as unfinished rather than as a verdict.
-    color: '#eab308',
-    border: '1px dashed rgba(234,179,8,0.55)',
-    background: 'rgba(234,179,8,0.08)',
+    color: PENDING_STATUS.fg,
+    border: `1px dashed ${PENDING_STATUS.fg}`,
+    background: PENDING_STATUS.wash,
   }),
 });
 
@@ -91,9 +121,9 @@ export const STATUS_PRESENTATION = Object.freeze({
 export const UNREADABLE_PRESENTATION = Object.freeze({
   word: 'UNREADABLE',
   glyph: '?',
-  color: '#94a3b8',
-  border: '1px dashed rgba(148,163,184,0.45)',
-  background: 'rgba(148,163,184,0.08)',
+  color: UNREADABLE_STATUS.fg,
+  border: `1px dashed ${UNREADABLE_STATUS.fg}`,
+  background: UNREADABLE_STATUS.wash,
 });
 
 /** Said only where the server sent no `reason` of its own for a pending condition. */
@@ -193,14 +223,17 @@ export function countConditions(conditions = []) {
 const mono = { fontFamily: 'monospace' };
 
 const panelStyle = {
-  background: '#080a0e',
-  border: '1px solid #1e293b',
+  background: token.surface.canvas,
+  border: `1px solid ${token.line.default}`,
   borderRadius: 8,
   padding: '10px 12px',
   marginBottom: 16,
   fontSize: 10,
   ...mono,
-  color: '#94a3b8',
+  // `#94a3b8` was Tailwind's slate-400, with no token behind it. This app's one
+  // neutral TEXT colour is `content.secondary` (#8B95A5, 6.2:1); `content.muted`
+  // is marked NON-TEXT ONLY at 3.2:1 and is not an option for prose.
+  color: token.content.secondary,
 };
 
 const rowStyle = (presentation) => ({
@@ -254,11 +287,11 @@ export default function DeployPreflightPanel({
           marginBottom: 8,
         }}
       >
-        <div style={{ color: '#00d4ff', fontWeight: 900 }}>PRE-FLIGHT VALIDATION:</div>
+        <div style={{ color: token.brand.base, fontWeight: 900 }}>PRE-FLIGHT VALIDATION:</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {/* Requirement 13.6: the panel is re-read while the modal is open, so saying when
               it was last answered is the difference between a live verdict and a stale one. */}
-          <span style={{ color: '#5a6578', fontSize: 9 }} data-testid="preflight-checked-at">
+          <span style={{ color: token.content.muted, fontSize: 9 }} data-testid="preflight-checked-at">
             {isLoading && !hasRows
               ? 'checking...'
               : checkedAt
@@ -272,9 +305,9 @@ export default function DeployPreflightPanel({
               data-testid="preflight-refresh"
               style={{
                 background: 'none',
-                border: '1px solid #1e293b',
+                border: `1px solid ${token.line.default}`,
                 borderRadius: 6,
-                color: '#00d4ff',
+                color: token.brand.base,
                 cursor: 'pointer',
                 fontSize: 9,
                 padding: '2px 6px',
@@ -298,13 +331,17 @@ export default function DeployPreflightPanel({
             rowGap: 2,
             margin: '0 0 8px',
             paddingBottom: 8,
-            borderBottom: '1px solid #151821',
+            // `line.subtle` is the declared token for an internal rule. The literal here
+            // was `#151821`, which is `surface.raised`'s value being used as a border.
+            borderBottom: `1px solid ${token.line.subtle}`,
           }}
         >
           {summary.map(([label, value]) => (
             <div key={label} style={{ display: 'contents' }}>
-              <dt style={{ color: '#5a6578' }}>{label}</dt>
-              <dd style={{ margin: 0, color: '#cbd5e1' }}>{value}</dd>
+              <dt style={{ color: token.content.muted }}>{label}</dt>
+              {/* `#cbd5e1` was Tailwind's slate-300; the value beside a muted label is
+                  this app's primary content colour. */}
+              <dd style={{ margin: 0, color: token.content.primary }}>{value}</dd>
             </div>
           ))}
         </dl>
@@ -343,7 +380,7 @@ export default function DeployPreflightPanel({
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                    <span style={{ color: '#e2e8f0', fontWeight: 700 }}>
+                    <span style={{ color: token.content.primary, fontWeight: 700 }}>
                       {conditionLabel(name)}
                     </span>
                     <span
@@ -352,7 +389,7 @@ export default function DeployPreflightPanel({
                       {presentation.word}
                     </span>
                     {condition?.code && (
-                      <span style={{ color: '#5a6578', fontSize: 9 }}>{condition.code}</span>
+                      <span style={{ color: token.content.muted, fontSize: 9 }}>{condition.code}</span>
                     )}
                   </div>
                   {/* The gate's own wording, printed as it arrived. */}
@@ -364,7 +401,7 @@ export default function DeployPreflightPanel({
                   )}
                   {note && <div style={{ color: presentation.color, marginTop: 2 }}>{note}</div>}
                   {details.length > 0 && (
-                    <div style={{ color: '#5a6578', marginTop: 2 }}>
+                    <div style={{ color: token.content.muted, marginTop: 2 }}>
                       {details.map(([label, value]) => `${label}: ${value}`).join(' · ')}
                     </div>
                   )}
@@ -373,7 +410,10 @@ export default function DeployPreflightPanel({
             );
           })
         ) : (
-          <div data-testid="preflight-unavailable" style={{ color: error ? '#ef4444' : '#5a6578' }}>
+          <div
+            data-testid="preflight-unavailable"
+            style={{ color: error ? FAILED_STATUS.fg : token.content.muted }}
+          >
             {isLoading && !error ? 'Running the deployment checks...' : UNAVAILABLE_NOTE}
           </div>
         )}
@@ -382,7 +422,10 @@ export default function DeployPreflightPanel({
       <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <span
           data-testid="preflight-verdict"
-          style={{ color: deployable ? '#10b981' : '#eab308', fontWeight: 900 }}
+          style={{
+            color: deployable ? PASSED_STATUS.fg : PENDING_STATUS.fg,
+            fontWeight: 900,
+          }}
         >
           {deployable
             ? `All ${counts.total} mandatory checks passed — deployment is unblocked.`
@@ -394,7 +437,7 @@ export default function DeployPreflightPanel({
         {/* The server's flag and its own condition list disagreeing is not a display
             detail: the button follows the conditions, and the author is told why. */}
         {reported === true && !deployable && hasRows && (
-          <span data-testid="preflight-disagreement" style={{ color: '#eab308' }}>
+          <span data-testid="preflight-disagreement" style={{ color: PENDING_STATUS.fg }}>
             The summary reported itself deployable, but its own conditions do not agree, so
             deployment stays blocked.
           </span>

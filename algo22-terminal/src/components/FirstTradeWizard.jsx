@@ -56,7 +56,9 @@ export default function FirstTradeWizard({ onComplete }) {
       borderRadius: 12,
       padding: 24,
       marginBottom: 24,
-      boxShadow: "0 4px 20px rgba(0,0,0,0.3)"
+      // Was `0 4px 20px rgba(0,0,0,0.3)`, a hand-tuned elevation. `token.shadow.raised` is
+      // the declared step for a lifted surface.
+      boxShadow: token.shadow.raised
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
@@ -118,7 +120,22 @@ export default function FirstTradeWizard({ onComplete }) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: (isCompleted || isActive) ? "#fff" : token.content.muted,
+                // `#fff` (not in the palette) split across the two arms it was already
+                // covering, because they sit on different surfaces. The ACTIVE step has the
+                // brand fill, so its glyph takes `content.inverse` — the treatment every
+                // brand-filled control in the app uses, from the landing page's hero CTA and
+                // `btn-primary` through `ds/CommandButton`. The COMPLETED step has NO fill of
+                // its own (see the note above) and shows the card surface through, so it
+                // takes `content.primary`, the light end of the same ramp.
+                //
+                // One `#fff` covering both meant the active step rendered #F0F2F5 on #00D4FF
+                // — about 1.2:1, which is the one arm where the substitution is also a
+                // legibility fix (#080A0E on brand is 10.7:1).
+                color: isActive
+                  ? token.content.inverse
+                  : isCompleted
+                    ? token.content.primary
+                    : token.content.muted,
                 marginBottom: 8,
                 transition: "all 0.3s ease",
                 boxShadow: isActive ? `0 0 10px ${token.brand.base}80` : "none"
@@ -165,7 +182,8 @@ export default function FirstTradeWizard({ onComplete }) {
           onClick={handleNext}
           style={{
             background: token.brand.base,
-            color: "#fff",
+            // `content.inverse` on a brand fill, as above and as `btn-primary` declares.
+            color: token.content.inverse,
             border: "none",
             borderRadius: 6,
             padding: "8px 16px",

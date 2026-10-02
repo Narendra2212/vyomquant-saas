@@ -92,10 +92,16 @@
  * `C.glow` or `C.gradient`.
  *
  * The seventeen `rgba()` washes in `Tag2` and the one in `Toast`'s shadow came
- * across untouched. They are off-palette — the retired #00C853 green, #FF3D00,
- * #FFAB00, #7C4DFF and #FFD600 — and replacing them is a colour decision, not a
- * rehome. They move with the components they belong to, which is why this file
- * takes over the shim's `no-colour-literals` budget entry.
+ * across untouched by the rehome. They were off-palette — the retired #00C853
+ * green, #FF3D00, #FFAB00, #7C4DFF and #FFD600 — and replacing them was a colour
+ * decision rather than a rehome, so they moved with the components they belong to
+ * and this file took over the shim's `no-colour-literals` budget entry.
+ *
+ * ALL EIGHTEEN ARE NOW GONE, and that entry reads `0`. They were cleared by the
+ * app-wide colour-consistency pass, not by this rehome: `Tag2`'s nine tones read
+ * their `status.*` group and `Toast` reads `token.shadow.raised`. The reasoning
+ * for each tone is on the map itself. Nothing else about the eleven changed —
+ * same props, same defaults, same markup, same geometry, same call sites.
  *
  * DO NOT add a component here. New shared UI belongs in `components/ds/*`.
  */
@@ -106,18 +112,58 @@ import { token } from "../../design/tokens";
 
 // ── Micro components ──────────────────────────────────────────────────────────
 
+/*
+ * ── `Tag2`'s nine tones, on the one palette ───────────────────────────────
+ *
+ * Seventeen of this module's eighteen colour literals were in this map, and not
+ * one of the five hues behind them is in `styles/tokens.css`: `rgba(0,200,83,…)`
+ * is the retired #00C853 green, `rgba(255,61,0,…)` is #FF3D00, and the `warning`,
+ * `purple` and `gold` tones were built from #FFAB00, #7C4DFF and #FFD600. The
+ * result was visible: a `profit` tag drew text at the current #26A69A inside a
+ * border of the green this palette replaced — two greens on one chip — and it sat
+ * beside `ds/StatusBadge`es painting a third.
+ *
+ * Each tone now reads the group it already meant, so the hue is the app's and the
+ * chip matches its `ds/StatusBadge` successor:
+ *
+ *   profit, green  → status.profit   (#26A69A, was #00C853)
+ *   loss, red      → status.loss     (#EF5350, was #FF3D00)
+ *   warning, gold  → status.warning  (#F59E0B, was #FFAB00 / #FFD600 — two
+ *                                     ambers collapsing to one, which is the
+ *                                     collapse tokens.css already made)
+ *   purple         → status.neutral  (#8B95A5). The palette holds no purple, and
+ *                                     this tone's TEXT was already
+ *                                     `status.neutral.fg`, so the chip was grey
+ *                                     text in a violet border. Its one call site
+ *                                     is `StrategyDetail`'s timeframe chip — a
+ *                                     fact, not a state — and `pages/Strategies`
+ *                                     settled that case as "neutral surface,
+ *                                     neutral line, neutral text".
+ *   accent, cyan   → unchanged. Already `surface.inset` + `line.strong` + brand.
+ *
+ * THE BASE-VERSUS-HOVER DELTA IS PRESERVED, WHICH IS WHY THESE ARE NOT ALL `wash`.
+ * `border` carried 0.30 alpha and `hoverBg` 0.15 while `bg` sat at the group's
+ * declared wash; the hover brightening is the chip's only interactive feedback and
+ * flattening all three onto `wash` would delete it. `4D` and `26` are those two
+ * alphas exactly (0.302 and 0.149), now taken off the group's own `fg` instead of
+ * a hand-spelled `rgba()`. Nothing else about this component changes: same props,
+ * same nine keys, same fallback, same markup, same geometry.
+ *
+ * `gray` and `orange` are passed at call sites and are NOT keys here, so they fall
+ * through to `accent`. That is pre-existing behaviour and is left exactly as it is.
+ */
 export const Tag2 = ({ c = "accent", children, interactive = false }) => {
   const [isHovered, setIsHovered] = useState(false);
   const m = {
     accent: { bg: token.surface.inset, border: token.line.strong, text: token.brand.base, hoverBg: token.surface.inset },
-    profit: { bg: token.status.profit.wash, border: "rgba(0,200,83,0.3)", text: token.status.profit.fg, hoverBg: "rgba(0,200,83,0.15)" },
-    loss: { bg: token.status.loss.wash, border: "rgba(255,61,0,0.3)", text: token.status.loss.fg, hoverBg: "rgba(255,61,0,0.15)" },
-    warning: { bg: "rgba(255,171,0,0.1)", border: "rgba(255,171,0,0.3)", text: token.status.warning.fg, hoverBg: "rgba(255,171,0,0.15)" },
-    purple: { bg: "rgba(124,77,255,0.1)", border: "rgba(124,77,255,0.3)", text: token.status.neutral.fg, hoverBg: "rgba(124,77,255,0.15)" },
-    gold: { bg: "rgba(255,214,0,0.1)", border: "rgba(255,214,0,0.3)", text: token.status.warning.fg, hoverBg: "rgba(255,214,0,0.15)" },
+    profit: { bg: token.status.profit.wash, border: `${token.status.profit.fg}4D`, text: token.status.profit.fg, hoverBg: `${token.status.profit.fg}26` },
+    loss: { bg: token.status.loss.wash, border: `${token.status.loss.fg}4D`, text: token.status.loss.fg, hoverBg: `${token.status.loss.fg}26` },
+    warning: { bg: token.status.warning.wash, border: `${token.status.warning.fg}4D`, text: token.status.warning.fg, hoverBg: `${token.status.warning.fg}26` },
+    purple: { bg: token.status.neutral.wash, border: `${token.status.neutral.fg}4D`, text: token.status.neutral.fg, hoverBg: `${token.status.neutral.fg}26` },
+    gold: { bg: token.status.warning.wash, border: `${token.status.warning.fg}4D`, text: token.status.warning.fg, hoverBg: `${token.status.warning.fg}26` },
     cyan: { bg: token.surface.inset, border: token.line.strong, text: token.brand.base, hoverBg: token.surface.inset },
-    green: { bg: token.status.profit.wash, border: "rgba(0,200,83,0.3)", text: token.status.profit.fg, hoverBg: "rgba(0,200,83,0.15)" },
-    red: { bg: token.status.loss.wash, border: "rgba(255,61,0,0.3)", text: token.status.loss.fg, hoverBg: "rgba(255,61,0,0.15)" },
+    green: { bg: token.status.profit.wash, border: `${token.status.profit.fg}4D`, text: token.status.profit.fg, hoverBg: `${token.status.profit.fg}26` },
+    red: { bg: token.status.loss.wash, border: `${token.status.loss.fg}4D`, text: token.status.loss.fg, hoverBg: `${token.status.loss.fg}26` },
   };
   const style = m[c] || m.accent;
   return (
@@ -226,8 +272,11 @@ export const Toast = ({ id, type, message, onClose }) => {
   const icons = { trade: <ArrowUpRight size={14} color={token.status.profit.fg} />, error: <XCircle size={14} color={token.status.loss.fg} />, strategy: <Bot size={14} color={token.brand.base} />, info: <Info size={14} color={token.content.secondary} /> };
   const colors = { trade: token.status.profit.fg, error: token.status.loss.fg, strategy: token.brand.base, info: token.content.secondary };
   useEffect(() => { const timer = setTimeout(() => onClose(id), 4000); return () => clearTimeout(timer); }, [id, onClose]);
+  // The eighteenth literal was this `boxShadow`'s `rgba(0,0,0,0.4)`. `token.shadow.raised`
+  // is `0 4px 12px rgba(0, 0, 0, 0.35)` — the same offset, blur and spread, at the declared
+  // alpha rather than a hand-tuned one. The same substitution `pages/Profile.jsx` made.
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: token.surface.raised, border: `1px solid ${token.line.default}`, borderLeft: `3px solid ${colors[type] || token.brand.base}`, borderRadius: 6, boxShadow: "0 4px 12px rgba(0,0,0,0.4)", minWidth: 240, maxWidth: 360, animation: "slideIn 0.2s ease-out" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: token.surface.raised, border: `1px solid ${token.line.default}`, borderLeft: `3px solid ${colors[type] || token.brand.base}`, borderRadius: 6, boxShadow: token.shadow.raised, minWidth: 240, maxWidth: 360, animation: "slideIn 0.2s ease-out" }}>
       <style>{`@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }`}</style>
       {icons[type] || icons.info}
       <span style={{ color: token.content.primary, fontSize: 12, fontFamily: "monospace", flex: 1 }}>{message}</span>
