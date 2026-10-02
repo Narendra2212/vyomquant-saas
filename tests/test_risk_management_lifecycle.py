@@ -237,7 +237,30 @@ async def test_max_positions_risk_enforcement(client):
 # 5. STRATEGY LIMITS CRUD
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_strategy_limits_crud(client):
+def test_strategy_limits_crud(client, monkeypatch):
+    """The CRUD round-trip through the four handlers, against NO persisted store.
+
+    ``_sb`` is pinned to ``None`` rather than left to resolve, and that is a correction rather
+    than a convenience. This test used to reach a real ``create_request_supabase_async``, get a
+    client, and have ``GET /strategy-limits`` fail its ``strategy_limits`` read with
+    ``getaddrinfo failed`` - which the handler swallowed into a 200 carrying only the in-memory
+    record. So the assertions below were passing *through* a database error, and the thing they
+    appeared to verify (the read works) was not what they were verifying (the read failed and was
+    ignored). ``tests/test_exception_swallow_regression.py`` is the test for that defect, and the
+    handler now refuses with 503 ``STRATEGY_LIMITS_FETCH_FAILED`` instead.
+
+    ``None`` is the honest description of this environment: there is no persisted store here, so
+    the in-memory record IS the whole answer and ``count == 1`` is a true claim about it. With the
+    store merely unreachable, the correct answer is a refusal and the assertions would be wrong.
+    ``tests/test_risk_settings_api.py`` patches ``_sb`` for the same reason.
+    """
+    import backend_app.routers.risk as risk_module
+
+    async def _no_persisted_store(_user):
+        return None
+
+    monkeypatch.setattr(risk_module, "_sb", _no_persisted_store)
+
     user_id = str(uuid4())
     token = get_test_auth_token(user_id=user_id)
     headers = {"Authorization": f"Bearer {token}"}

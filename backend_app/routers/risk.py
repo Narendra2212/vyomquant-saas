@@ -626,6 +626,35 @@ async def get_strategy_limits(user: dict = Depends(get_current_user)):
     The table is read under the caller's own token, so RLS scopes it. They are merged by
     ``strategy_id`` with the in-memory copy last, because a limit this process just wrote is
     the fresher of the two.
+
+    AN UNREADABLE TABLE IS A REFUSAL, NOT AN EMPTY LIST
+    --------------------------------------------------
+    The read used to ``logger.debug`` a failure and carry on with the in-memory half alone, so a
+    database error answered **200 with the limits it happened to have** - usually
+    ``{"limits": [], "count": 0}`` on a fresh process. An empty list and an unreadable list are
+    different facts and they look identical on screen: ``RiskSettings.jsx`` titles the panel
+    "Strategy capital allocations (0)" and renders nothing, which reads as "you have configured no
+    per-strategy limits". A trader who concludes that may then size a position believing no cap
+    applies, while the cap is sitting in a table this endpoint could not reach - and
+    ``paper_trading_service`` is still enforcing whatever the in-memory map holds. The failure
+    mode is a trader acting on a limit they have been told does not exist.
+
+    So a failed read now refuses with 503 ``STRATEGY_LIMITS_FETCH_FAILED``. Partial is not
+    offered: returning the in-memory subset labelled as the whole list is the same lie in a
+    smaller font, and this endpoint's contract is "the limits configured on this account".
+
+    STILL OPEN, AND DELIBERATELY NOT CHANGED HERE
+    ---------------------------------------------
+    ``sb is None`` - no access token, or ``create_request_supabase_async`` refused - still falls
+    through to the in-memory store and answers 200. That path is NOT the swallow this fix is
+    about, and closing it means deciding what a ``None`` from the module-shared :func:`_sb` means
+    for every handler in this file (it conflates "no token" with "client construction failed"),
+    which would change the answer ``tests/test_risk_management_lifecycle.py`` and
+    ``tests/test_risk_gate_enforcement.py`` depend on - both read this endpoint with no database
+    configured and legitimately expect the in-memory record. ``GET /settings`` above has the same
+    shape and a weaker claim (it enriches a defaulted record rather than reporting a store), and
+    it is left alone for the same reason. Both are recorded in
+    ``docs/pre-existing-test-failures.md``.
     """
     uid = str(user.get("id") or user.get("sub"))
     merged: Dict[str, Dict[str, Any]] = {}
@@ -645,7 +674,25 @@ async def get_strategy_limits(user: dict = Depends(get_current_user)):
                     "enabled": row.get("enabled", True),
                 }
         except Exception as e:
-            logger.debug(f"DB fetch fallback to memory store for strategy_limits user {uid}: {e}")
+            # `error`, not `debug`: this is an outage on a risk surface, and it used to be
+            # invisible precisely because it was logged at a level nothing collects.
+            logger.error(
+                "[RISK] strategy_limits read failed for %s (%s); refusing rather than "
+                "reporting the in-memory subset as the configured list.",
+                uid,
+                e,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "STRATEGY_LIMITS_FETCH_FAILED",
+                    "message": (
+                        "Your per-strategy limits could not be read, so none are listed rather "
+                        "than an incomplete set. Your configured limits are unchanged and are "
+                        "still enforced."
+                    ),
+                },
+            )
 
     for sid, limit in _user_strategy_limits.get(uid, {}).items():
         merged[str(sid)] = limit

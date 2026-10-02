@@ -109,6 +109,42 @@ MIGRATION_IDS: List[str] = [
     "006", "007", "008", "009", "010", "011", "012", "013", "014",
 ]
 
+#: Migration ids this checker can CLASSIFY but which ``apply_migrations.py`` must not run.
+#:
+#: WHY THIS IS A SECOND LIST AND NOT A LONGER ``MIGRATION_IDS``
+#: -----------------------------------------------------------
+#: ``apply_migrations.py`` imports :data:`MIGRATION_FILES` and uses it directly as its
+#: ``files_to_run``. Appending to ``MIGRATION_IDS`` would therefore not extend a checker - it
+#: would silently extend what an ``--apply`` run EXECUTES against a production database, which
+#: is the opposite of a read-only change. ``tests/test_migration_tooling.py`` pins the two lists
+#: to each other for exactly that reason, and that pin is doing its job.
+#:
+#: So the classification range and the application range are separate, and only the former grows
+#: here. Nothing in this module applies anything.
+#:
+#: WHY THESE FOUR WERE UNCHECKABLE, WHICH IS HOW THE QUESTION AROSE
+#: ---------------------------------------------------------------
+#: Nothing in this repository applies ``backend_app/migrations/*.sql`` automatically - no
+#: workflow, no Dockerfile, no entrypoint - so "is this file applied in production?" can only be
+#: answered by probing. ``017_plan_entitlements.sql`` ships ``profiles.billing_interval``,
+#: ``profiles.plan_limit_overrides`` and the ``plan_usage_ledger`` table, and the application is
+#: written to DEGRADE when they are absent: ``subscription_dependencies._PROFILE_COLUMN_SETS``
+#: retries without the column, the billing entitlements read drops to the pre-017 column set,
+#: and ``usage_ledger.collect_usage`` reports the metered figures as unavailable rather than
+#: inventing zeros. That tolerance is deliberate, and it is also why an unapplied 017 is
+#: INVISIBLE: the product keeps working, the billing cycle silently never renders, and the
+#: durable usage ledger silently does not exist. A degradation nobody can observe is one nobody
+#: fixes, so it has to be checkable.
+#:
+#: The parser needs no addition to read them. ``expectations_for_file`` already resolves 017's
+#: two ``profiles`` columns, the eight ``plan_usage_ledger`` columns, five constraints, two
+#: indexes, the RLS flag and the owner policy, and 018's three tables in full. ``016`` declares
+#: no checkable object at all - it widens an existing column's type - which the existing
+#: ``NO-CHECKABLE-OBJECTS`` status already reports honestly rather than as a pass.
+CHECK_ONLY_MIGRATION_IDS: List[str] = [
+    "015", "016", "017", "018",
+]
+
 POOLER_TRANSACTION_MODE_PORT = "6543"
 DIRECT_SESSION_PORT = "5432"
 
@@ -132,6 +168,12 @@ def _migration_path(migration_id: str) -> Path:
 
 
 MIGRATION_FILES: List[Path] = [_migration_path(mid) for mid in MIGRATION_IDS]
+
+#: Every file this checker can classify, in order. Read-only; see
+#: :data:`CHECK_ONLY_MIGRATION_IDS` for why it is not what the apply script runs.
+ALL_CHECKABLE_MIGRATION_FILES: List[Path] = MIGRATION_FILES + [
+    _migration_path(mid) for mid in CHECK_ONLY_MIGRATION_IDS
+]
 
 
 # ============================================================================
@@ -437,8 +479,8 @@ def format_report(statuses: List[FileStatus]) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Read-only preflight check for backend_app/migrations/006-014. "
-            "Never connects to the pgbouncer pooler port and never applies "
+            "Read-only preflight check for backend_app/migrations/006-014, or 006-018 "
+            "with --all. Never connects to the pgbouncer pooler port and never applies "
             "anything."
         )
     )
@@ -448,6 +490,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Postgres DSN for a direct session (port 5432). Falls back to "
             "the MIGRATION_DATABASE_URL environment variable. Never printed."
+        ),
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Also classify the files apply_migrations.py does not run "
+            f"({', '.join(CHECK_ONLY_MIGRATION_IDS)}). Still read-only: this flag widens "
+            "what is CHECKED and never what is applied. Use it to answer whether "
+            "017_plan_entitlements.sql is live, which the application tolerates being absent "
+            "and therefore cannot tell you."
         ),
     )
     return parser
@@ -486,7 +539,12 @@ def run(argv: Optional[List[str]] = None, connector=None) -> int:
 
         cursor_cm = conn.cursor()
         with cursor_cm as cur:
-            statuses = classify_all(cur)
+            # `--all` widens the CLASSIFICATION set only. The default is unchanged, so the
+            # exit-code contract the apply script depends on (3 == something is partially
+            # applied in the set it would run) keeps its original meaning.
+            statuses = classify_all(
+                cur, ALL_CHECKABLE_MIGRATION_FILES if args.all else MIGRATION_FILES
+            )
     finally:
         conn.close()
 

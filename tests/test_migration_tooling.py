@@ -438,3 +438,120 @@ def test_post_migration_validation_imports_os():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ===========================================================================
+# The check-only range: 015-018 are CLASSIFIABLE and must stay UNAPPLIABLE
+# ===========================================================================
+#
+# `017_plan_entitlements.sql` could not be checked by this tooling at all, and the gap was not
+# academic: nothing in this repository applies `backend_app/migrations/*.sql` automatically, and
+# the application is written to DEGRADE when 017's objects are absent — the plan read retries
+# without `plan_limit_overrides`, the billing entitlements read drops to the pre-017 column set,
+# and the metered usage figures report as unavailable rather than as zeros. So an unapplied 017
+# leaves a working product with a silently missing billing cycle and no durable usage ledger,
+# and there was no way to ask whether that was the live state.
+#
+# The fix widens CLASSIFICATION only. These tests exist because the obvious implementation —
+# appending to `MIGRATION_IDS` — would have widened what `apply_migrations.py --apply` EXECUTES
+# against production, since the applier imports that list as its `files_to_run`.
+
+
+def test_check_only_ids_are_not_in_the_appliable_set():
+    """The whole point of the second list. An overlap would be an applier widened by accident."""
+    assert set(preflight.CHECK_ONLY_MIGRATION_IDS).isdisjoint(preflight.MIGRATION_IDS)
+
+
+def test_the_applier_still_runs_only_the_original_range():
+    """Pins the blast radius: 015-018 must not have become appliable."""
+    appliable = [p.name.split("_", 1)[0] for p in applier.MIGRATION_FILES]
+    assert appliable == preflight.MIGRATION_IDS
+    for migration_id in preflight.CHECK_ONLY_MIGRATION_IDS:
+        assert migration_id not in appliable, (
+            f"{migration_id} became appliable; it is classification-only"
+        )
+
+
+def test_the_checkable_set_is_the_appliable_set_plus_the_check_only_range():
+    expected = preflight.MIGRATION_IDS + preflight.CHECK_ONLY_MIGRATION_IDS
+    actual = [p.name.split("_", 1)[0] for p in preflight.ALL_CHECKABLE_MIGRATION_FILES]
+    assert actual == expected
+
+
+def test_every_check_only_id_resolves_to_a_file_on_disk():
+    for path in preflight.ALL_CHECKABLE_MIGRATION_FILES:
+        assert path.is_file(), f"{path} is listed as checkable but is not on disk"
+
+
+def test_017_declares_the_three_artefacts_the_billing_layer_degrades_without():
+    """The classification is only useful if the parser resolves what 017 actually ships."""
+    path = next(
+        p for p in preflight.ALL_CHECKABLE_MIGRATION_FILES if p.name.startswith("017_")
+    )
+    expectations = preflight.expectations_for_file(path)
+
+    assert ("profiles", "billing_interval") in expectations.columns
+    assert ("profiles", "plan_limit_overrides") in expectations.columns
+    # The ledger is a whole table, so every one of its columns is an expectation.
+    ledger_columns = {column for table, column in expectations.columns if table == "plan_usage_ledger"}
+    assert {"user_id", "resource", "period", "amount", "idempotency_key"} <= ledger_columns
+    assert "plan_usage_ledger" in expectations.rls_tables
+    assert "uq_pul_idempotency" in expectations.constraints
+    assert "idx_pul_user_resource_period" in expectations.indexes
+
+
+def test_016_has_nothing_to_check_and_says_so_rather_than_passing():
+    """A file that declares no object must not be reported as applied.
+
+    `016_strategy_backtests_version_label.sql` widens an existing column's type, so there is no
+    new table, column, constraint, index, RLS flag or policy to probe. The existing
+    NO-CHECKABLE-OBJECTS status is the honest answer; silently counting it as APPLIED would make
+    the report read as evidence it is not.
+    """
+    path = next(
+        p for p in preflight.ALL_CHECKABLE_MIGRATION_FILES if p.name.startswith("016_")
+    )
+    expectations = preflight.expectations_for_file(path)
+    total = (
+        len(expectations.columns)
+        + len(expectations.constraints)
+        + len(expectations.indexes)
+        + len(expectations.rls_tables)
+        + len(expectations.policies)
+    )
+    assert total == 0
+
+    status = preflight.classify_file(_RecordingCursor([]), expectations)
+    assert status.status == preflight.NO_CHECKABLE_OBJECTS
+
+
+def test_all_flag_classifies_the_wider_set_and_default_does_not():
+    """`--all` is read-only: it changes which files are REPORTED, nothing else."""
+    dsn = "postgresql://user:pass@host.example.com:5432/postgres"
+
+    default_connection = _RecordingConnection(dsn)
+    preflight.run(argv=["--dsn", dsn], connector=_RecordingConnector(connection=default_connection))
+
+    wide_connection = _RecordingConnection(dsn)
+    preflight.run(
+        argv=["--dsn", dsn, "--all"],
+        connector=_RecordingConnector(connection=wide_connection),
+    )
+
+    # The recording cursor answers no rows, so every file classifies as NOT-APPLIED; what is
+    # asserted is the SET that was probed, which is what the flag controls.
+    assert len(wide_connection.statement_log) > len(default_connection.statement_log)
+
+
+def test_all_flag_issues_no_write_statement():
+    """A checker that could write would be a different tool with a different risk profile."""
+    dsn = "postgresql://user:pass@host.example.com:5432/postgres"
+    connection = _RecordingConnection(dsn)
+
+    preflight.run(argv=["--dsn", dsn, "--all"], connector=_RecordingConnector(connection=connection))
+
+    forbidden = ("insert", "update", "delete", "alter", "create", "drop", "truncate", "grant")
+    for statement in connection.statement_log:
+        lowered = statement.strip().lower()
+        assert lowered.startswith("select"), f"non-SELECT issued by a read-only checker: {statement!r}"
+        assert not any(lowered.startswith(verb) for verb in forbidden)

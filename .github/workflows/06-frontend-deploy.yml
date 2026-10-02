@@ -360,3 +360,137 @@ jobs:
             --id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
             --query "Distribution.Status" \
             --output text
+      # ════════════════════════════════════════════════════════════════════
+      #  THE WEBSOCKET HANDSHAKE IS EXERCISED, NOT ASSUMED
+      # ════════════════════════════════════════════════════════════════════
+      #
+      # WHY THIS STEP EXISTS. Production shipped with every socket dead and nothing noticed.
+      # The terminal showed "Not connected to the trading engine" with a CONNECTION FAILED chip
+      # on every authenticated page, while the REST API, the pricing catalogue and the whole SPA
+      # worked — because CloudFront was refusing the WebSocket upgrade on /ws/* before it ever
+      # reached the ALB. Observed, against the live distribution:
+      #
+      #   GET /ws/telemetry  (no upgrade headers)  → 404, `server: uvicorn`, JSON body
+      #                                              the origin answered; /ws/* IS forwarded
+      #   GET /ws/telemetry  (Upgrade: websocket)  → 403, NO `server` header, Content-Length: 0
+      #                                              CloudFront answered; the origin never saw it
+      #
+      # So the fault is observable only by attempting the upgrade. Every check above this one
+      # passes while the realtime layer is completely down: the build-time gate greps the bundle
+      # for an allowed API hostname, and a HOSTNAME allow-list could not have caught this — the
+      # host was on the list, the upgrade was being dropped at the edge.
+      #
+      # WHAT IT ASSERTS. That the origin, not the CDN, answers a handshake. An UNAUTHENTICATED
+      # handshake is expected to be refused: every route in `api_ws/ws_routes.py` closes before
+      # `accept()` on a missing credential, which an ASGI server renders as HTTP 403. That 403 is
+      # a PASS, because it proves the upgrade reached the application — `server: uvicorn` is the
+      # evidence. A 403 with no origin header is the failure this step exists to catch, and the
+      # two are indistinguishable by status code alone, which is why the header is what is tested.
+      #
+      # It deliberately does NOT authenticate. A real ticket needs a session, and minting one in
+      # CI would put a production credential in a workflow; the upgrade either reaches the origin
+      # or it does not, and that question needs no identity.
+      #
+      # THE HOST COMES FROM THE DEPLOYED BUNDLE, not from the secret. `VITE_WS_URL` is what the
+      # browser will actually dial, so the bundle is the authority on what to probe — and reading
+      # it here also makes a stale secret visible in the log.
+      #
+      # THIS STEP IS BLOCKING. It runs last, after the S3 sync and the invalidation, so the assets
+      # are already live when it fires: a failure reports a broken realtime layer, it does not
+      # roll the frontend back. Blocking is the point — a trading terminal that cannot open a
+      # socket is a product-down condition, and the previous arrangement let it ship silently.
+      - name: Verify the WebSocket upgrade reaches the origin
+        working-directory: ./algo22-terminal
+        run: |
+          echo "=== Verifying the deployed WebSocket endpoint accepts an upgrade ==="
+
+          INDEX_BUNDLE=$(ls dist/assets/index-*.js | head -1)
+          WS_BASE=$(grep -oE 'wss?://[A-Za-z0-9._:-]+' "$INDEX_BUNDLE" | head -1)
+
+          if [ -z "$WS_BASE" ]; then
+            echo "❌ No WebSocket base URL is present in the deployed bundle."
+            echo "   VITE_WS_URL was not substituted, so the client would fall back to the"
+            echo "   page origin at runtime and this check cannot name what it would dial."
+            exit 1
+          fi
+
+          WS_HOST=$(echo "$WS_BASE" | sed -E 's#^wss?://##')
+          PROBE_URL="https://${WS_HOST}/ws/telemetry"
+          echo "Bundle WebSocket base : $WS_BASE"
+          echo "Probing               : $PROBE_URL"
+          echo ""
+
+          # `--http1.1` IS LOAD-BEARING, NOT A PREFERENCE.
+          #
+          # HTTP/2 forbids the `Connection` header, so when curl negotiates h2 it DROPS
+          # `Connection: Upgrade` and `Upgrade: websocket` and sends a plain GET. The origin then
+          # answers that GET — 404, with `server: uvicorn` — and this step would conclude "the
+          # upgrade reached the origin" while no upgrade was ever attempted. Verified: the same
+          # probe reports 403-from-the-CDN over HTTP/1.1 and 404-from-the-origin over h2 against
+          # the same URL. Without this flag the gate cannot fail, which is worse than not having
+          # it. A `wss://` handshake is an HTTP/1.1 mechanism anyway — browsers do not use
+          # RFC 8441 extended CONNECT for it — so HTTP/1.1 is also what is actually being tested.
+          #
+          # `|| true`: a non-2xx is the expected outcome here, so curl's exit status is not the
+          # signal. The response HEADERS are.
+          HEADERS=$(curl -sS --http1.1 -o /dev/null -D - --max-time 25 \
+            -H "Connection: Upgrade" \
+            -H "Upgrade: websocket" \
+            -H "Sec-WebSocket-Version: 13" \
+            -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+            "$PROBE_URL" || true)
+
+          if ! echo "$HEADERS" | head -1 | grep -q "HTTP/1.1"; then
+            echo "❌ The probe did not negotiate HTTP/1.1, so the upgrade headers were not sent."
+            echo "   Status line: $(echo "$HEADERS" | head -1 | tr -d '\r')"
+            echo "   This check cannot draw a conclusion from a request that carried no upgrade."
+            exit 1
+          fi
+
+          echo "--- response headers ---"
+          echo "$HEADERS"
+          echo "------------------------"
+          echo ""
+
+          STATUS=$(echo "$HEADERS" | head -1 | tr -d '\r')
+
+          # `101` means the upgrade was accepted outright. `server:` from the origin means the
+          # handshake was forwarded and the application answered it — which for an
+          # unauthenticated probe is a refusal, and a refusal from the application is a PASS.
+          if echo "$STATUS" | grep -q "101"; then
+            echo "✅ The origin completed the upgrade (101 Switching Protocols)."
+            exit 0
+          fi
+
+          if echo "$HEADERS" | grep -qiE '^server:[[:space:]]*uvicorn'; then
+            echo "✅ The upgrade reached the origin — it answered: $STATUS"
+            echo "   An unauthenticated handshake is refused by design"
+            echo "   (api_ws/ws_routes.py closes before accept() with no credential)."
+            exit 0
+          fi
+
+          echo "❌ The WebSocket upgrade never reached the origin."
+          echo "   Status: $STATUS"
+          echo "   No origin 'server' header is present, so the response was generated by the CDN."
+          echo ""
+          echo "   Every socket in the product is dead in this state: the terminal shows"
+          echo "   'Not connected to the trading engine' on every authenticated page while the"
+          echo "   REST API continues to work, which is why it can ship unnoticed."
+          echo ""
+          echo "   REMEDIATION — on the CloudFront behaviour for /ws/* on the distribution"
+          echo "   serving ${WS_HOST}:"
+          echo "     1. Attach an origin request policy that forwards ALL viewer headers"
+          echo "        (AllViewer), or explicitly forward Upgrade, Connection,"
+          echo "        Sec-WebSocket-Key, Sec-WebSocket-Version, Sec-WebSocket-Extensions"
+          echo "        and Sec-WebSocket-Protocol. A managed caching policy strips these,"
+          echo "        and CloudFront then answers the upgrade itself with 403."
+          echo "     2. Use a cache policy that does not cache (CachingDisabled)."
+          echo "     3. Allow GET and HEAD on the behaviour (the handshake is a GET)."
+          echo ""
+          echo "   Confirm the fix with:"
+          echo "     curl -i -H 'Connection: Upgrade' -H 'Upgrade: websocket' \\"
+          echo "          -H 'Sec-WebSocket-Version: 13' \\"
+          echo "          -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \\"
+          echo "          $PROBE_URL"
+          echo "   A passing response carries 'server: uvicorn'."
+          exit 1

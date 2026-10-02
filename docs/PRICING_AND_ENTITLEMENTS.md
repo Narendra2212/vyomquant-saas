@@ -147,6 +147,33 @@ meter. Redis is a cache: flush it and every account would silently receive a fre
 successful reservation appends a row, and a missing meter key is **rebuilt from the ledger** before
 it is trusted. `idempotency_key` is unique, so a retried request cannot be counted twice.
 
+### Checking whether migration 017 is actually applied
+
+Nothing in this repository applies `backend_app/migrations/*.sql` automatically — no workflow, no
+Dockerfile, no entrypoint. So whether 017 is live in a given database is a question that has to be
+asked, and **the application cannot answer it**, by design: every read of 017's objects degrades
+rather than failing. `subscription_dependencies._PROFILE_COLUMN_SETS` retries without
+`plan_limit_overrides`, the billing entitlements read drops to the pre-017 column set, and
+`usage_ledger.collect_usage` reports the metered figures as unavailable instead of inventing zeros.
+That tolerance is deliberate — it stops a deploy that lands before a migration from 500-ing every
+gated route — and it is exactly why an unapplied 017 is invisible: the product works, the billing
+cycle silently never renders, and the durable ledger silently does not exist.
+
+Ask the database:
+
+```
+python scripts/migration_preflight.py --dsn "postgresql://…@…:5432/postgres" --all
+```
+
+Read-only, refuses the pgbouncer pooler port (6543), and never prints the DSN. `--all` widens what
+is **classified** to include 015–018; it does not widen what `scripts/apply_migrations.py` would
+apply, which stays at 006–014 and is pinned by `tests/test_migration_tooling.py`.
+
+For 017 the report resolves both `profiles` columns, all eight `plan_usage_ledger` columns, five
+constraints, two indexes, the RLS flag and the owner policy, and answers `APPLIED`, `NOT-APPLIED`
+or `!! PARTIAL !!` with the missing objects named. A partial result is the one that matters: more
+DDL on top of a half-applied file is how small drift becomes unrecoverable.
+
 ### Resources with no source of truth
 
 `custom_indicators` has **no per-account persistence** in this platform — indicators are a static

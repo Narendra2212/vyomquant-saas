@@ -65,6 +65,7 @@
       "via": "api.risk.getConfig"
     },
     {
+      "_baseline_note_raises": "AUTHORISED RE-RECORD \u2014 `GET /api/risk/strategy-limits` gained one raise: 503 STRATEGY_LIMITS_FETCH_FAILED. `raises` was EMPTY because the handler could not fail: a `strategy_limits` read that threw was caught, logged at DEBUG, and the request answered 200 with whatever the in-memory map held \u2014 on a fresh process `{\"limits\": [], \"count\": 0}`. An empty list and an unreadable list are different facts and they render identically: `pages/RiskSettings.jsx` titles the panel \"Strategy capital allocations (0)\" and shows nothing, which reads as \"no per-strategy limits are configured\". A trader who believes that may size a position as though no cap applies while the cap sits in a table this endpoint could not reach, and `paper_trading_service` goes on enforcing it. The response contract is otherwise UNCHANGED \u2014 `limits`, `count` and `user_id` keep their names, types and meaning on the success path, so no client that reads them is affected; what changed is that the failure path is now reachable and named instead of being disguised as a successful empty read. `tests/test_exception_swallow_regression.py::TestGetStrategyLimitsExceptionSwallow` is the test, and it was FAILING against the old behaviour. NOT closed here, deliberately: `sb is None` (no token, or `create_request_supabase_async` refused) still falls through to the in-memory store, and `GET /api/risk/settings` has the same shape over a defaulted record \u2014 both are recorded in docs/pre-existing-test-failures.md, because closing them means redefining what a `None` from the module-shared `_sb` means for every handler in `routers/risk.py`.",
       "handler_count": 1,
       "handlers": [
         {
@@ -79,7 +80,16 @@
               "depends_on": "get_current_user"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "STRATEGY_LIMITS_FETCH_FAILED",
+              "status_code": 503
+            }
+          ],
           "returns": [
             {
               "count": "int",

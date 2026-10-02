@@ -139,16 +139,48 @@ Both assertions are stale rather than the behaviour being absent: one checks cap
 other checks for an implementation that was deliberately replaced. Fixing them means editing
 assertions about work outside the pricing change, so they are recorded here instead.
 
-### Also confirmed pre-existing: the risk-limits exception swallow
+### The risk-limits exception swallow — RECORDED HERE, THEN FIXED
 
-| Node id | Observed error | Why it is pre-existing |
+| Node id | Observed error | Status |
 |---|---|---|
-| `test_exception_swallow_regression.py::TestGetStrategyLimitsExceptionSwallow::test_db_error_returns_503_not_empty_limits` | `Expected 503 (db crash), got 200: {"limits":[],"count":0,…}` | The swallow is in `backend_app/routers/risk.py`'s `get_strategy_limits`, which returns an empty list where it should refuse. That file is **untouched** by the pricing and entitlement work — it is unmodified in the working tree and its last commit (`c69b25bc`) predates it — and it imports nothing from `core/subscription_dependencies.py`, so neither the plan read nor its fail-closed refusal reaches it. The test is a genuine open finding about `risk.py`; it is listed here so it is not mistaken for fallout from the billing changes. |
+| `test_exception_swallow_regression.py::TestGetStrategyLimitsExceptionSwallow::test_db_error_returns_503_not_empty_limits` | `Expected 503 (db crash), got 200: {"limits":[],"count":0,…}` | **FIXED.** `routers/risk.py`'s `get_strategy_limits` now raises 503 `STRATEGY_LIMITS_FETCH_FAILED` instead of catching the failed `strategy_limits` read, logging it at `debug` and answering 200 with the in-memory subset. |
 
-This one is a REAL defect rather than a stale assertion: an empty allowance list and an unreadable
-one are different facts, and the endpoint reports the second as the first. It is left open because
-fixing it means changing refusal behaviour on a risk endpoint, which is not what the billing work
-was authorised to touch.
+It was first recorded here as pre-existing and unrelated to the billing work, with the evidence:
+`risk.py` was unmodified in the working tree, its last commit (`c69b25bc`) predated that work, and
+it imports nothing from `core/subscription_dependencies.py`. That attribution still stands — it was
+fixed afterwards, on its own, rather than as billing fallout.
+
+Why it mattered: an empty allowance list and an unreadable one are different facts and they render
+identically. `pages/RiskSettings.jsx` titles the panel "Strategy capital allocations (0)" and shows
+nothing, which reads as "no per-strategy limits are configured". A trader who concludes that may
+size a position as though no cap applies, while the cap sits in a table the endpoint could not
+reach and `paper_trading_service` goes on enforcing it.
+
+One test had to change with it. `test_risk_management_lifecycle.py::test_strategy_limits_crud` was
+passing **through** the defect: it reached a real `create_request_supabase_async`, got a client, and
+its `GET` failed the `strategy_limits` read with `getaddrinfo failed` — which the handler swallowed
+into a 200 carrying only the in-memory record. So its assertions appeared to verify that the read
+works and actually verified that a failed read was ignored. It now pins `_sb` to `None`, which is
+the honest description of an environment with no persisted store: the in-memory record IS the whole
+answer there, so `count == 1` is a true claim about it. `test_risk_settings_api.py` already patched
+`_sb` for the same reason.
+
+#### Two adjacent gaps left open, deliberately
+
+Both are the same shape as the one above and neither is closed, because closing either means
+redefining what a `None` from the module-shared `_sb` means for **every** handler in `routers/risk.py`
+— it currently conflates "the caller sent no token" with "client construction refused".
+
+1. **`get_strategy_limits` with `sb is None`** still falls through to the in-memory store and
+   answers 200. In production `get_current_user` guarantees a token, so a `None` there means
+   construction failed, which is an outage being reported as an answer.
+2. **`GET /api/risk/settings`** has the identical `except Exception: logger.debug` shape. Its claim
+   is weaker — it enriches a defaulted settings record rather than reporting a store — but the
+   consequence is of the same kind: an unreadable row answers 200 with `max_daily_loss: 500.0`,
+   a figure nothing on that path measured, on a surface a trader uses to decide position size.
+
+Fixing (1) and (2) together with a single explicit `_sb` contract is the right shape for that work,
+and it is a change to refusal behaviour across a risk router rather than a one-line correction.
 
 ## Category C items settled by the pricing-ladder change
 
