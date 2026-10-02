@@ -1996,15 +1996,6 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
             "symbol", "timeframe", "updated_at", "user_id",
         }
     ),
-    "execution_records": frozenset(  # 22 columns
-        {
-            "avg_price", "created_at", "exchange_id", "exchange_status",
-            "execution_id", "filled_at", "filled_size", "last_exchange_sync",
-            "order_id", "price", "remaining_size", "result", "side", "size",
-            "status", "strategy_id", "submitted_at", "symbol", "task_id",
-            "tenant_id", "updated_at", "user_id",
-        }
-    ),
     "library_strategies": frozenset(  # 52 columns
         {
             "author_id", "avg_rating", "backtest_end_date",
@@ -2041,25 +2032,35 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
 #: can fail on a NEW one; the count may SHRINK and may never grow.
 #:
 #: The value is (owning module, why it is not fixed here). Each reason is a
-#: statement about WHO decides, not an excuse:
+#: statement about WHO decides, not an excuse. All ten remaining entries are now
+#: the SAME reason: the ``billing_invoices`` and ``profiles`` billing columns sit
+#: in the parallel pricing/entitlements workstream's files. ``routers/billing.py``
+#: carries their uncommitted changes; editing it here would collide.
 #:
-#: * the ``billing_invoices`` and ``profiles`` billing columns sit in the
-#:   parallel pricing/entitlements workstream's files. ``routers/billing.py``
-#:   carries their uncommitted changes; editing it here would collide.
-#: * ``routers/signals.py`` is mounted at ``/api/signals`` and has NO frontend
-#:   caller - the Signal_Trace page calls ``/api/signal-trace/signals`` on
-#:   ``routers/signal_trace.py`` instead. ``execution_records`` is an
-#:   order-execution table with no ``indicators``, ``ml_inputs``,
-#:   ``ml_outputs``, ``confidence``, ``risk_verdict``, ``timeframe``,
-#:   ``latency_ms``, ``pnl`` or ``failure_reason`` to repoint those twelve
-#:   names AT. Choosing between deleting a mounted router and inventing nine
-#:   columns is not a parse's decision.
+#: THE REGISTER HAS GONE 24 -> 23 -> 10 ACROSS THREE TASKS, and every step was a
+#: read becoming correct rather than an exemption widening:
 #:
-#: ``strategies.tenant_id`` WAS the 24th entry and is now FIXED at its root
-#: (production-launch-hardening task 13.18), so it has left the register: the
-#: marketplace eligibility gate reads the tenant off ``user_id``, which is what
-#: this platform's tenancy model means and the column production has. See
-#: :data:`FIXED_ELIGIBILITY_TENANT_PREDICATE` and the test that pins it.
+#: * ``strategies.tenant_id`` was the 24th entry. FIXED in task 13.18: the
+#:   marketplace eligibility gate reads the tenant off ``user_id``, which is what
+#:   this platform's tenancy model means and the column production has. See
+#:   :data:`FIXED_ELIGIBILITY_TENANT_PREDICATE`.
+#: * ``profiles.volume_usd`` was the 23rd. FIXED in task 13.19 by removing it from
+#:   ``GET /api/admin/users``' projection. It was not a migration's omission: no
+#:   migration declares the column, nothing in the tree computes a trading volume,
+#:   and no caller reads it, so there was no figure to repoint the name at and
+#:   declaring an empty column would have put a number on an admin screen that
+#:   nothing produces. ``routers/admin.py`` wrapped nothing, so that endpoint
+#:   500ed unconditionally. See :data:`FIXED_ADMIN_USER_LIST_PROJECTION`.
+#: * the twelve ``execution_records`` columns were the rest. FIXED in task 13.19 by
+#:   deleting the three endpoints that named them. The register's previous note
+#:   said "choosing between deleting a mounted router and inventing nine columns is
+#:   not a parse's decision", which was correct - so it was taken as a decision,
+#:   with the supersession established first: ``routers/signal_trace.py`` at
+#:   ``/api/signal-trace`` serves the list, the detail and the export that the
+#:   frontend actually calls, nothing in ``algo22-terminal/`` calls ``/api/signals``
+#:   at all, and ``POST /{signal_id}/replay`` was the one capability with no
+#:   equivalent, so it survived and now reads ``signals`` only. See
+#:   :data:`FIXED_SIGNAL_TRACE_SUPERSESSION`.
 KNOWN_UNDECLARED_COLUMN_DEFECTS = {
     "billing_invoices.amount_inr": ("routers/billing.py", "parallel workstream"),
     "billing_invoices.amount_usd": ("routers/billing.py", "parallel workstream"),
@@ -2077,19 +2078,6 @@ KNOWN_UNDECLARED_COLUMN_DEFECTS = {
         "core/billing_lifecycle.py", "parallel workstream",
     ),
     "profiles.trial_end_date": ("core/billing_lifecycle.py", "parallel workstream"),
-    "profiles.volume_usd": ("routers/admin.py", "no source of truth anywhere"),
-    "execution_records.confidence": ("routers/signals.py", "unreachable router"),
-    "execution_records.failure_reason": ("routers/signals.py", "unreachable router"),
-    "execution_records.filled_quantity": ("routers/signals.py", "unreachable router"),
-    "execution_records.id": ("routers/signals.py", "unreachable router"),
-    "execution_records.indicators": ("routers/signals.py", "unreachable router"),
-    "execution_records.latency_ms": ("routers/signals.py", "unreachable router"),
-    "execution_records.ml_inputs": ("routers/signals.py", "unreachable router"),
-    "execution_records.ml_outputs": ("routers/signals.py", "unreachable router"),
-    "execution_records.pnl": ("routers/signals.py", "unreachable router"),
-    "execution_records.quantity": ("routers/signals.py", "unreachable router"),
-    "execution_records.risk_verdict": ("routers/signals.py", "unreachable router"),
-    "execution_records.timeframe": ("routers/signals.py", "unreachable router"),
 }
 
 #: The column reference `routers/library.py` used to carry and no longer does:
@@ -2115,6 +2103,54 @@ FIXED_CLONE_ENRICHMENT = ("strategies", "library_strategies", "source_library_id
 #: table to encode a distinction the system does not make.
 FIXED_ELIGIBILITY_TENANT_PREDICATE = ("strategies", "tenant_id", "user_id")
 
+#: The column reference ``GET /api/admin/users`` used to carry and no longer does,
+#: pinned as (table, the absent column, a control column on the same table that
+#: production answers OK for). ``routers/admin.py``'s ``list_users`` projected
+#: ``id, username, email, subscription_tier, volume_usd, is_frozen, created_at``
+#: off ``profiles`` with no ``try``/``except`` anywhere in the handler, so the
+#: 42703 propagated to the global handler and the endpoint answered 500 for every
+#: admin, always. Fixed in production-launch-hardening task 13.19 by removing the
+#: name. The control column is in the tuple on purpose: it is what makes the
+#: production measurement a measurement rather than "the whole table was absent".
+FIXED_ADMIN_USER_LIST_PROJECTION = ("profiles", "volume_usd", "subscription_tier")
+
+#: The three ``routers/signals.py`` endpoints deleted in task 13.19 as superseded by
+#: ``routers/signal_trace.py``, and the one that survived. Pinned as a pair so that
+#: neither a resurrected endpoint nor a deleted ``replay`` passes unnoticed: the
+#: twelve ``execution_records`` entries left the register because these three reads
+#: left the tree, so if a read comes back the register and the code disagree again.
+FIXED_SIGNAL_TRACE_SUPERSESSION = (
+    "execution_records",
+    ("list_signal_traces", "get_signal_trace", "export_signal_traces"),
+    "replay_signal_trace",
+)
+
+#: ``public.execution_records``' 22 real columns, measured in task 13.17 and
+#: re-measured in 13.19 (read-only ``SELECT "<col>" FROM public."execution_records"
+#: LIMIT 0``; ``user_id`` and ``symbol`` answer OK, and every one of the twelve names
+#: the deleted endpoints projected answers ``42703``).
+#:
+#: WHY IT IS HERE AND NOT IN :data:`PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES`. That
+#: roster is an oracle for tables application code READS, and
+#: ``test_the_recorded_production_column_sets_are_still_what_they_claim`` fails on an
+#: entry nothing reads any more - correctly, because an unread entry is a permanent
+#: unchecked exemption. Task 13.19 deleted the only three reads of this table in the
+#: tree, so the entry had to go. Discarding the measurement with it would throw away
+#: the evidence that justified the deletion, so it is retired here instead: the
+#: measurement stays checkable by
+#: ``test_the_superseded_signal_endpoints_no_longer_read_execution_records``, and if a
+#: read of the table ever comes back, the roster entry comes back WITH it rather than
+#: being re-derived from memory.
+RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS = frozenset(
+    {
+        "avg_price", "created_at", "exchange_id", "exchange_status",
+        "execution_id", "filled_at", "filled_size", "last_exchange_sync",
+        "order_id", "price", "remaining_size", "result", "side", "size",
+        "status", "strategy_id", "submitted_at", "symbol", "task_id",
+        "tenant_id", "updated_at", "user_id",
+    }
+)
+
 #: Call sites whose owning table could not be resolved with confidence, as
 #: observed when this guard was written. A RATCHET: coverage can erode to zero
 #: while every assertion still passes, so the count may shrink and may never
@@ -2124,7 +2160,27 @@ MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 182
 
 #: Call sites that DID resolve, as observed. The other half of the ratchet: a
 #: parser that stops matching would otherwise satisfy every assertion above.
-MIN_RESOLVED_COLUMN_CALL_SITES = 980
+#:
+#: 980 -> 967 in task 13.19. The 13 are ACCOUNTED FOR rather than absorbed, which
+#: is the only thing that distinguishes a deletion from a parser regression. This
+#: counter is one per resolved CALL, not per column, and ``routers/signals.py``
+#: contributed 16 of them at ``9afe8ab4`` and contributes 3 now - measured, by
+#: running the scanner over the file at both revisions:
+#:
+#:   * ``list_signal_traces``, deleted: 7 - one ``.select`` (the twenty-column
+#:     projection), five ``.eq`` filters, one ``.order``
+#:   * ``get_signal_trace``, deleted: 3 - one ``.select("*")``, two ``.eq``
+#:   * ``replay_signal_trace``'s ``execution_records`` fallback, deleted: 3 - one
+#:     ``.select("*")``, two ``.eq``
+#:   * ``replay_signal_trace``'s surviving ``signals`` read: 3, unchanged
+#:
+#: 7 + 3 + 3 = 13, and 16 - 13 = the 3 that remain. Those three endpoints were
+#: also the tree's only reads of ``execution_records``, which is why that table's
+#: entry left :data:`PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES` in the same change.
+#: Deletion is the one direction this floor may move without a regression behind
+#: it, so it is lowered to what is now observed. A drop with no deleted call sites
+#: named beside it is a parser that stopped matching - which is what this is for.
+MIN_RESOLVED_COLUMN_CALL_SITES = 967
 
 #: Floors on the parse itself, in the style of
 #: ``test_declared_set_is_parsed_and_non_trivial``.
@@ -3594,6 +3650,166 @@ class TestEveryReferencedColumnIsDeclared:
             "KNOWN_UNDECLARED_COLUMN_DEFECTS. Re-adding it would turn a closed "
             "defect into a permanent hole in the guard."
         )
+
+    def test_the_admin_user_list_projects_only_columns_profiles_has(self):
+        """The 23rd defect, fixed at its root rather than registered.
+
+        ``routers/admin.py``'s ``list_users`` named ``volume_usd`` on
+        ``profiles``. Production answers ``42703`` for it, with
+        ``subscription_tier`` on the same table answering OK, and NOTHING in
+        that handler wraps the chain - so ``GET /api/admin/users`` answered 500
+        for every admin on every call and had never once been able to answer.
+
+        The fix removed the name. That direction was not arbitrary: no
+        migration declares the column, nothing in the tree computes a trading
+        volume, and ``algo22-terminal/`` never reads it, so there was no figure
+        to repoint the name AT. Declaring an empty column would have put a
+        number on an admin screen that nothing produces, which is the
+        fabrication ``bugfix.md`` forbids.
+        """
+        table, absent, control = FIXED_ADMIN_USER_LIST_PROJECTION
+        references, _skips, _counters = _column_references()
+        admin = "backend_app/routers/admin.py"
+
+        # 1. NOTHING anywhere names the column production does not have.
+        absent_sites = references.get((table, absent), [])
+        assert not absent_sites, (
+            f"{table}.{absent} is referenced again at {absent_sites}. "
+            f"public.{table} has no {absent} column - production answers "
+            f'42703 column "{absent}" does not exist - and list_users wraps '
+            "nothing, so naming it makes GET /api/admin/users 500 "
+            "unconditionally. There is no source of truth to repoint it at: "
+            "add a migration AND something that computes the figure, or leave "
+            "it out."
+        )
+
+        # 2. The handler still reads the row, so the fix cannot have been
+        #    "stop listing users", which would also have made (1) true.
+        still_read = [
+            (path, line)
+            for path, line in references.get((table, control), [])
+            if path == admin
+        ]
+        assert still_read, (
+            f"{admin} no longer reads {table}.{control} anywhere. The fix was "
+            "to drop one column from the projection, not to drop the "
+            "projection - without this read the endpoint has no rows to return "
+            "and this test asserts nothing."
+        )
+
+        # 3. The premise and the register, both ways.
+        assert control in _allowed_columns(table), (
+            f"{table}.{control} has left the oracle; it is this test's control "
+            "column and the production measurement rests on it. Re-establish "
+            "it before editing this test."
+        )
+        assert absent not in _allowed_columns(table), (
+            f"{table}.{absent} now exists, so the premise of this test has "
+            "changed. Re-read it before editing."
+        )
+        assert f"{table}.{absent}" not in KNOWN_UNDECLARED_COLUMN_DEFECTS, (
+            f"{table}.{absent} is fixed at its root - it must not be in "
+            "KNOWN_UNDECLARED_COLUMN_DEFECTS."
+        )
+
+    def test_the_superseded_signal_endpoints_no_longer_read_execution_records(self):
+        """Twelve defects at once, fixed by deleting the reads that carried them.
+
+        ``routers/signals.py`` mounted four endpoints at ``/api/signals``.
+        ``list_signal_traces`` projected twenty columns off
+        ``execution_records``, **twelve of which that table does not have**, so
+        it answered ``503 SIGNAL_FETCH_FAILED`` for every caller with data
+        present; ``get_signal_trace`` read the same twelve names off a
+        ``select("*")`` and got ``None`` for each; ``export_signal_traces``
+        called the list and was in any case unreachable, having been declared
+        after ``GET /{signal_id}``.
+
+        The supersession was established before anything was deleted:
+        ``routers/signal_trace.py`` at ``/api/signal-trace`` serves the list,
+        the detail and the export, nothing in ``algo22-terminal/`` calls
+        ``/api/signals`` at all, and the Signal_Trace page calls
+        ``/api/signal-trace/signals``. ``POST /{signal_id}/replay`` was the one
+        capability with no equivalent, so it survived - and now reads
+        ``signals``, which the file's own comment already called "the proper
+        schema", rather than straddling two tables.
+        """
+        table, deleted_handlers, survivor = FIXED_SIGNAL_TRACE_SUPERSESSION
+        references, _skips, _counters = _column_references()
+        signals_router = REPO_ROOT / "backend_app" / "routers" / "signals.py"
+        source = signals_router.read_text(encoding="utf-8")
+
+        # 1. The twelve names are gone from the whole tree, and so is every
+        #    read of that table from this router.
+        absent_columns = (
+            "confidence", "failure_reason", "filled_quantity", "id",
+            "indicators", "latency_ms", "ml_inputs", "ml_outputs", "pnl",
+            "quantity", "risk_verdict", "timeframe",
+        )
+        offenders = {
+            "%s.%s" % (table, column): references.get((table, column), [])
+            for column in absent_columns
+            if references.get((table, column))
+        }
+        assert not offenders, (
+            f"public.{table} is an order-execution table and has none of these "
+            f"columns - production answers 42703 for every one of them: "
+            f"{offenders}. There is nothing to repoint them at; the signal "
+            "trace read model lives in routers/signal_trace.py."
+        )
+        assert '"%s"' % table not in source, (
+            f"routers/signals.py reads {table} again. The surviving replay "
+            f"endpoint reads `signals`, which HAS decision, indicators, "
+            "market_info and ml_info; the fallback existed only to straddle "
+            "two tables and is what made the twelve names look plausible."
+        )
+
+        # 2. The three handlers are gone and the survivor is still there, so
+        #    the fix cannot have been "delete the router", which would also
+        #    have made (1) true while removing a capability nothing replaces.
+        for handler in deleted_handlers:
+            assert "def %s" % handler not in source, (
+                f"{handler} is back in routers/signals.py. It is superseded by "
+                "routers/signal_trace.py; a second implementation reading a "
+                "table without the columns is how this defect arose."
+            )
+        assert "def %s" % survivor in source, (
+            f"{survivor} has gone from routers/signals.py. It is the ONE "
+            "endpoint signal_trace.py has no equivalent for - deleting it "
+            "removes a capability rather than a duplicate."
+        )
+
+        # 3. The premise, against the retired production measurement rather
+        #    than against a live oracle. The table has no entry in
+        #    PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES any more BECAUSE nothing
+        #    reads it - that roster may only carry tables code actually reads,
+        #    and `test_the_recorded_production_column_sets_are_still_what_they
+        #    _claim` enforces it. So the 22 real columns are retired to a
+        #    constant, and the twelve must not be among them.
+        measured = RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS
+        present = {c for c in absent_columns if c in measured}
+        assert not present, (
+            f"{sorted(present)} are recorded BOTH as columns public.{table} "
+            "has and as columns the deleted endpoints could not read. One of "
+            "the two is wrong; re-measure before editing."
+        )
+        assert {"side", "user_id", "symbol"} <= measured, (
+            f"{table}'s control columns have left the retired measurement. "
+            "They are what made the 42703 a measurement rather than 'the "
+            "whole table was absent'."
+        )
+        assert _allowed_columns(table) is None, (
+            f"{table} has a live column oracle again, which means something "
+            "reads it. Put its 22 columns back into "
+            "PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES alongside that read - "
+            "this constant is the retired copy, not the oracle."
+        )
+        for column in absent_columns:
+            assert (
+                "%s.%s" % (table, column) not in KNOWN_UNDECLARED_COLUMN_DEFECTS
+            ), (
+                f"{table}.{column} is fixed at its root - it must not be in "
+                "KNOWN_UNDECLARED_COLUMN_DEFECTS."
+            )
 
     def test_coverage_has_not_eroded(self):
         """The ratchet. Both directions, because either alone is gameable.

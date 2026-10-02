@@ -118,11 +118,16 @@ async def list_users(
     if not supabase:
         return [{"id": admin["id"], "email": admin.get("email"), "subscription_tier": "admin", "is_frozen": False}]
 
+    # `volume_usd` was in this projection and `public.profiles` does not have it
+    # (production answers 42703; `subscription_tier` on the same table answers OK). The
+    # chain is not wrapped, so this endpoint 500ed unconditionally and had never once
+    # answered. Removed rather than declared: no migration declares the column, nothing
+    # computes a trading volume anywhere in the tree, and no caller reads it - declaring
+    # an empty column would have put a figure on an admin screen that nothing produces.
+    # The no-supabase branch above already returns a row without it.
     query = (
         supabase.table("profiles")
-        .select(
-            "id, username, email, subscription_tier, volume_usd, is_frozen, created_at"
-        )
+        .select("id, username, email, subscription_tier, is_frozen, created_at")
         .limit(limit)
     )
     if search:

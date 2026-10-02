@@ -2217,6 +2217,189 @@ exists to remove.
       _predicate rather than a widening of 2.2)_
 
 
+- [ ] 13.19 Fix the last two reachable undeclared-column defects: `profiles.volume_usd` and
+  `routers/signals.py`'s twelve `execution_records` columns
+  - Two of 13.17's escalations, both resolved by **removing a read rather than declaring a
+    column** — and in both cases that direction was forced by there being nothing to repoint the
+    name AT, not chosen for being cheaper
+  - **(A) `profiles.volume_usd`, and why it was a 500 rather than a quiet null.**
+    `routers/admin.py`'s `list_users` projected
+    `id, username, email, subscription_tier, volume_usd, is_frozen, created_at` off `profiles`.
+    Production answers `42703` for `volume_usd` with `subscription_tier` on the same table
+    answering OK (re-measured this task, read-only `SELECT "<col>" … LIMIT 0`). Unlike every
+    other defect in this family the handler wraps **nothing** — no `try`, no `except` — so the
+    driver error reached the global handler and `GET /api/admin/users` answered **500 to every
+    admin on every call**. It had never once been able to answer. Fixed by deleting the name:
+    no migration declares it, nothing in the tree computes a trading volume, and
+    `algo22-terminal/` never reads it, so declaring an empty column would have put a figure on
+    an admin screen that nothing produces — the fabrication `§Bug condition` forbids. The
+    no-supabase branch twelve lines above already returned `id`/`email`/`subscription_tier`/
+    `is_frozen` with no `volume_usd`, so removing it makes the handler's two branches **agree**
+    where they previously diverged, which is now pinned as a verdict rather than as a diff
+  - **Checked end to end before deleting, so the omission is not a dangling key.** `list_users`
+    declares no `response_model` and returns `resp.data` raw; grep for `volume_usd` across the
+    repo returns the projection, the register entry, and one unrelated hit —
+    `ExchangeResponse.volume_usd` in `core/models/pydantic_models.py`, which is a *per-exchange*
+    connection field on a model that is declared and exported but used as nobody's
+    `response_model` anywhere. Different table, different concept, untouched and reported rather
+    than swept in. `algo22-terminal/` contains **no** reference to `volume_usd` and no caller of
+    `admin/users` at all, so no frontend type or admin UI column loses a field
+  - **(B) `routers/signals.py` — three endpoints superseded, one not, established before
+    anything was deleted.** The router mounted four endpoints at `/api/signals` (`main.py:689`):
+    `GET /` (list), `GET /{signal_id}` (detail), `POST /{signal_id}/replay`, `GET /export`.
+    `routers/signal_trace.py` at `/api/signal-trace` (`main.py:690`) serves eight, including the
+    list, the detail and the export — and it is the router the frontend actually calls: 13.17
+    established that nothing in `algo22-terminal/` calls `/api/signals` at all and the
+    Signal_Trace page calls `/api/signal-trace/signals`. So three of the four were not a second
+    opinion, they were a second implementation nobody used. **`POST /{signal_id}/replay` has no
+    equivalent in `signal_trace.py`** and is the one genuine capability only this router offers,
+    so it survived
+  - **All three superseded endpoints were also broken, each in a different way.**
+    `list_signal_traces` projected twenty columns off `execution_records` of which **twelve are
+    not columns of that table** (`id`, `indicators`, `ml_inputs`, `ml_outputs`, `confidence`,
+    `risk_verdict`, `filled_quantity`, `quantity`, `latency_ms`, `pnl`, `failure_reason`,
+    `timeframe` — each re-measured at `42703` this task, with `user_id` and `symbol` on the same
+    table answering OK), inside a blanket `except` that turned the failure into
+    `503 SIGNAL_FETCH_FAILED` **for every caller regardless of stored data**. It also defaulted
+    the absent names to literals — `confidence` to `0.88`, `latency_ms` to `42.5`, `indicators`
+    to a fixed RSI/SMA/EMA dict — so had the read ever succeeded it would have rendered invented
+    numbers as a trading signal's audit trail. `get_signal_trace` read the same twelve names off
+    a `select("*")` and got `None` for each. `export_signal_traces` called the list, and was
+    unreachable regardless — see the shadowing finding below
+  - **The replay router: KEPT in `signals.py` as a one-endpoint router, not moved into
+    `signal_trace.py`.** Moving it was the tidier-looking option and was rejected on evidence,
+    found by searching for callers before deleting anything: `tests/test_validation_sweep.py`
+    carries it in its **route register** as `signals.replay_signal_trace` →
+    `POST /api/signals/{id}/replay` → `backend_app.routers.signals:replay_signal_trace`, and
+    lists `backend_app.routers.signals` in its module roster;
+    `tests/test_strategy_analysis_endpoint_accuracy.py` imports the handler from that module and
+    patches `backend_app.routers.signals._sb`; `tests/test_router_registration_completeness.py`
+    asserts the `signals` router contributes a `/api/signals` route; `scripts/debug_imports.py`
+    imports the module. Moving the endpoint would have changed its public path, forced edits to
+    an IDOR/validation sweep's own register, and put a second `POST …/signals/{id}/…` beside
+    `signal_trace.py`'s `POST /signals` — four costs for no behavioural gain. **The path did not
+    change.** `/api/signals/{signal_id}/replay` is reachable exactly as before
+  - **Replay now reads `signals` only, and three straddling shims went with the fallback.** The
+    file's own comment already called that table "the proper schema". Removing the
+    `execution_records` fallback removed the reason for `rec.get("decision") or rec.get("side")`
+    — and the probe showed why the shim was never a compatibility layer: `signals` has **no
+    `side`** and **no `created_at`** (both `42703`), while `execution_records` has no `decision`,
+    no `indicators`, no `market_info` and no `ml_info`. So each alternative was reachable through
+    exactly one table, and a record retrieved through the fallback answered this endpoint's
+    `execution_metadata` with three nulls — an audit payload with the audit content missing.
+    `rec.get("created_at") or rec.get("generated_at")` collapsed to `generated_at` for the same
+    reason. **And a third thing the shim was hiding:** the expression ended `or "BUY"`, so a row
+    whose `decision` was NULL was reported to an auditor as a *buy*. That is a fabricated
+    financial fact in a compliance-retrieval payload, exactly `§Bug condition`, and it is now
+    `None` with a test that pins it
+  - **The `/export` shadowing bug, found while reading and fixed by the same deletion.**
+    `GET /export` was declared **after** `GET /{signal_id}` in the same router. `/{signal_id}`
+    matches any single segment, FastAPI matches in declaration order, so
+    `GET /api/signals/export` resolved to the **detail** handler with `signal_id="export"` and
+    the export handler was unreachable — dead on arrival, never once called. Recorded as
+    **resolved by deletion**: both endpoints are gone, and `/api/signals` now has one route, so
+    the hazard is structurally absent rather than merely reordered. **The contrast, verified
+    rather than assumed:** `signal_trace.py` declares `GET /signals/export` at line 316 and
+    `GET /signals/{signal_id}` at line 444 — export **first**, so it is correct. Asserted
+    through Starlette's own matcher on the mounted app (a registration-order bug cannot be
+    reproduced on a router assembled in a test), and `routers/signal_trace.py`'s module
+    docstring had already flagged `GET /api/signals/export` as "dead today" without anyone
+    acting on it
+  - **The register shrank 23 → 22 → 10, measured at each step rather than at the end.** With
+    `profiles.volume_usd` removed and `admin.py` fixed, the full drift suite failed on
+    **exactly** the twelve `execution_records` references and nothing else — which is what
+    isolated Fix A as complete before Fix B began. All ten survivors are now the **same** reason,
+    the parallel pricing/entitlements workstream's `billing_invoices`/`profiles` columns, so the
+    register no longer carries a single entry this workstream owns
+  - **Two ratchet consequences of deleting reads, both followed rather than suppressed.**
+    (1) `test_the_recorded_production_column_sets_are_still_what_they_claim` fired:
+    `execution_records` was in `PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES` but **nothing under
+    `backend_app/` reads a column of it any more**, and that roster may only carry tables code
+    actually reads — an unread entry is a permanent unchecked exemption. The entry was removed,
+    which is the guard's own prescribed response and a shrink, not a widening; its 22-column
+    production measurement was **retired to `RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS`
+    rather than discarded**, because throwing the measurement away would have thrown away the
+    evidence that justified the deletion, and the new test asserts `_allowed_columns` returns
+    `None` for the table so a resurrected read brings the roster entry back **with** it.
+    (2) `MIN_RESOLVED_COLUMN_CALL_SITES` 980 → 967. That floor exists to catch a parser that
+    stopped matching, so the 13 are **accounted for by measurement, not absorbed**: the scanner
+    was run over `signals.py` at `9afe8ab4` and at the fix, and the file contributed **16**
+    resolved call sites then and **3** now — `list_signal_traces` 7 (one `.select`, five `.eq`,
+    one `.order`), `get_signal_trace` 3, replay's deleted `execution_records` fallback 3, and
+    replay's surviving `signals` read 3, unchanged. 7+3+3 = 13 and 16−13 = 3
+  - **Why a schema-faithful double, and the proof it is not a permissive one.**
+    `tests/test_mounted_endpoint_projections.py` (new, **19 passed**) reuses 13.18's
+    `_SchemaFaithfulTable`: it raises a `42703`-shaped error for any column the relation does not
+    have and narrows rows to the projection, as Postgres does. Its notion of which columns exist
+    is **not** hand-written — it is the drift suite's own `_allowed_columns` oracle, the same one
+    that polices the real reads, which 13.18 recorded as the lesson. **Before** the fix: `GET
+    /api/admin/users` answered **500**, with the global handler reporting
+    `column "volume_usd" of relation "profiles" does not exist` — the production failure,
+    reproduced. **After:** 200 with both rows, `profiles` read once, no row carrying a
+    `volume_usd` key. Both pre-fix projection literals are replayed against the same double and
+    still refused, which is what pins the double as *capable* of reproducing the bugs — without
+    those two cases the passing tests could be passing because the double is permissive. The
+    pre-fix `list_signal_traces` projection is refused while holding a complete, valid
+    order-execution row, which is the measurement that `GET /api/signals/` could never have
+    answered with data present
+  - **Assertions ACTUALLY OBSERVED failing before the fixes — 11 of the 19 new tests.** Fix A:
+    `test_the_admin_user_list_answers_rather_than_500ing` (500, reproduced `42703`) and
+    `test_the_two_branches_of_the_handler_agree_on_shape`. Fix B: both parametrised families
+    over the three removed routes (6 cases — absent-from-route-table and now-404s),
+    `test_replay_404s_instead_of_falling_back_to_execution_records`,
+    `test_replay_does_not_synthesise_a_decision` (observed returning `"BUY"` for a NULL
+    decision) and `test_no_surviving_signals_route_can_shadow_another`. Plus, in the drift
+    suite, `test_every_referenced_column_resolves` and the new
+    `test_the_superseded_signal_endpoints_no_longer_read_execution_records`. **Stated rather
+    than implied: three of the new tests cannot be made to fail against `F`** —
+    `test_replay_reads_signals_and_never_touches_execution_records` passed before the fix too,
+    because a seeded `signals` row means the fallback is never reached, so it is a
+    *preservation* case rather than a regression case; and the two pre-fix-replay cases are
+    assertions *about* `F`, so they pass at both revisions by construction
+  - **Two existing tests asserted the removed behaviour and were re-pointed, not relaxed.**
+    `test_exception_swallow_regression.py`'s `TestListSignalTracesExceptionSwallow` drove
+    `GET /api/signals/` with an *injected* crash and asserted 503 — and passed, for the whole
+    life of the defect, because a permissive double cannot tell "the database is down" from
+    "this projection can never succeed". It now asserts the route is **gone** (the swallow
+    resolved by deletion) and additionally pins the same property on the endpoint that
+    *survived*, which carries the same blanket `except`.
+    `test_strategy_analysis_endpoint_accuracy.py`'s `test_signal_replay_execution_records_fallback`
+    asserted `tables_queried == ("signals", "execution_records")` and a decision read off
+    `execution_records.side`; it is replaced by
+    `test_signal_replay_does_not_fall_back_to_execution_records`, asserting a 404 and
+    `tables_queried == ("signals",)` — the **stronger** invariant, with the two tables' column
+    sets recorded as the reason
+  - **Route count: 354 → 351, delta −3**, exactly the three deleted endpoints and no collateral.
+    `/api/signals` contributes one route where it contributed four
+  - **Gates.** `tests/test_mounted_endpoint_projections.py` → **19 passed** (new);
+    `tests/test_schema_table_reference_drift.py` → **73 passed** (was 71; the two new pinning
+    tests — removing register *entries* does not change the test count);
+    `tests/test_exception_swallow_regression.py` → **6**;
+    `tests/test_strategy_analysis_endpoint_accuracy.py` → **9**;
+    `tests/test_marketplace_eligibility_tenant_verdict.py` → **7** (13.18's, still green);
+    `tests/test_no_undefined_names.py` → **3**;
+    `test_router_registration_completeness.py` + `test_task_13_1_signal_trace_list.py` +
+    `test_task_13_3_signal_trace_export.py` + `test_tenant_isolation_fixes.py` → **92 passed**
+    together; `tests/test_validation_sweep.py` → **381 passed, 11 skipped, 1 failed**, the
+    failure being `library.clone_strategy`, which was **confirmed pre-existing by re-running it
+    with `9afe8ab4`'s `admin.py` and `signals.py` restored** — it fails identically there, lives
+    in `routers/library.py` (unmodified, at HEAD) and is not reachable from either fix;
+    `flake8 --select=E9,F63,F7,F82` exit 0 on all six touched files; `backend_app.main` imports
+  - **What this still does not prove, stated rather than implied.** The behavioural cover runs
+    against a schema-faithful double, not against live Postgres: it shows each endpoint answers
+    correctly *given* the column sets the probe measured, and the probe is a production
+    observation but the verdict is not. `GET /api/admin/users` is admin-gated and was driven
+    with `get_admin_user` overridden, so the fix is proven for the handler and not for the
+    authorisation path in front of it. And the replay endpoint remains honestly labelled as
+    audit retrieval rather than replay — task 13.19 changed which table it reads, not what it
+    does, and `replay_implemented: False` is still the truthful answer
+  - _Requirements: 2.13 (a read that did not complete must be an explicit absence, not a_
+    _verdict and not a 500 — the clause both defects violated, one by answering 500_
+    _unconditionally and one by answering 503 unconditionally) and 1.1/2.1 by way of_
+    _`§Bug condition` (the deleted list endpoint defaulted absent columns to invented literals,_
+    _and replay reported a NULL decision as `"BUY"`; both now report absence as absence)_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`

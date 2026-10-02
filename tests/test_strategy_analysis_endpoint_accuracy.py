@@ -341,37 +341,57 @@ class TestSignalReplayEndpointAccuracy:
             assert "execution_metadata" in result
             assert result["execution_metadata"]["indicators"] == {"rsi": 45.0, "sma_20": 50000.0}
 
-    def test_signal_replay_execution_records_fallback(self):
-        """Test that signal replay falls back to execution_records table if signals table doesn't have record."""
+    def test_signal_replay_does_not_fall_back_to_execution_records(self):
+        """An id ``signals`` does not hold is an absence, not a lookup in another table.
+
+        REPLACES ``test_signal_replay_execution_records_fallback`` (task 13.19). That
+        test asserted ``tables_queried == ("signals", "execution_records")`` and a
+        ``stored_decision`` of ``"SELL"`` read off ``execution_records.side``. The
+        fallback it pinned has been removed, and the reason is in the two tables rather
+        than in a preference:
+
+          * ``execution_records`` is an order-execution log. It has no ``indicators``,
+            no ``market_info`` and no ``ml_info``, so a record retrieved through the
+            fallback answered this endpoint's ``execution_metadata`` with three nulls —
+            an audit payload with the audit content missing.
+          * It also has no ``decision``, which is why the old handler carried
+            ``rec.get("decision") or rec.get("side")``. ``signals`` has no ``side``
+            (production: ``42703``), so that shim's second alternative was reachable
+            only through the fallback and its first only through ``signals``.
+
+        So the assertion inverts: the second table must never be read, and the caller
+        must get a 404.
+        """
+        from fastapi import HTTPException
+
         from backend_app.routers.signals import replay_signal_trace
-        
-        # The signals table holds nothing for this id; execution_records does
+
+        # The signals table holds nothing for this id; execution_records does. A
+        # surviving fallback would therefore be observable as a second read.
         mock_execution_record = {
-            "id": "test-signal-id",
+            "execution_id": "test-signal-id",
             "user_id": "test-user-id",
             "side": "SELL",
             "symbol": "ETH/USDT",
             "strategy_id": "test-strategy-id",
             "created_at": "2025-08-02T12:00:00Z",
-            "indicators": {"rsi": 55.0}
         }
-        
+
         supabase = _FakeAsyncSupabase(
             {"signals": [], "execution_records": [mock_execution_record]}
         )
-        
+
         with _patched_sb(supabase):
             mock_user = {"id": "test-user-id"}
-            result = _run_coroutine(replay_signal_trace("test-signal-id", mock_user))
-            
-            # Both tables were read, signals first, and both reads were tenant-scoped
-            assert supabase.tables_queried == ("signals", "execution_records")
-            assert ("user_id", "test-user-id") in supabase.filters_for("execution_records")
-            
-            # Verify it falls back to execution_records
-            assert result["stored_decision"] == "SELL"
-            assert result["replay_implemented"] == False
-            assert result["audit_functionality"] == "stored_record_retrieval"
+            with pytest.raises(HTTPException) as raised:
+                _run_coroutine(replay_signal_trace("test-signal-id", mock_user))
+
+        assert raised.value.status_code == 404
+        assert supabase.tables_queried == ("signals",), (
+            "replay read %s. It must read signals and stop."
+            % (supabase.tables_queried,)
+        )
+        assert ("user_id", "test-user-id") in supabase.filters_for("signals")
 
     def test_signal_replay_honest_limitation_documentation(self):
         """Test that signal replay honestly documents its limitations."""

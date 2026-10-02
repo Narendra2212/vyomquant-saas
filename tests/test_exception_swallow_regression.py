@@ -68,33 +68,73 @@ class TestGetTicketsExceptionSwallow:
 
 
 # ---------------------------------------------------------------------------
-# signals.py — list_signal_traces
+# signals.py — list_signal_traces: RESOLVED BY DELETION (task 13.19)
 # ---------------------------------------------------------------------------
 
 class TestListSignalTracesExceptionSwallow:
-    def test_db_error_returns_503_not_empty_200(self):
-        """
-        Before fix: returned {"items": [], "total": 0} with HTTP 200.
-        After fix:  returns HTTP 503.
+    """``GET /api/signals/`` no longer exists, so its swallow cannot return.
+
+    WHY THIS CLASS CHANGED SHAPE RATHER THAN BEING DELETED
+    ------------------------------------------------------
+    The original test drove ``GET /api/signals/`` with a client whose ``table()`` raised
+    an *injected* ``Exception`` and asserted ``503 SIGNAL_FETCH_FAILED``. It passed. What
+    it could not see is that the handler answered that same 503 for *every* caller in
+    production, with no injection at all: its projection named twelve columns
+    ``public.execution_records`` does not have, so the real read raised ``42703`` and the
+    blanket ``except`` reported it exactly as it reported this injected crash. A
+    permissive double cannot tell "the database is down" from "this projection can never
+    succeed" — which is why this suite stayed green for the whole life of that defect.
+
+    Task 13.19 removed the endpoint as superseded by ``routers/signal_trace.py``. The
+    exception-swallow property it guarded is therefore resolved by deletion, not by a
+    code change, and the assertion that keeps it resolved is that the route is gone. The
+    equivalent live surface, ``GET /api/signal-trace/signals``, is covered by
+    ``tests/test_task_13_1_signal_trace_list.py``; the projection defect itself is
+    covered by ``tests/test_mounted_endpoint_projections.py``, which uses a
+    schema-faithful double that CAN reproduce a ``42703``.
+    """
+
+    def test_the_endpoint_is_gone_rather_than_swallowing(self):
+        app.dependency_overrides[get_current_user] = lambda: _user()
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            r = client.get("/api/signals/")
+            assert r.status_code == 404, (
+                "GET /api/signals/ answered %s. It was deleted in task 13.19 as "
+                "superseded by /api/signal-trace/signals; if it is back, it needs a "
+                "projection that names only columns execution_records has, and this "
+                "class needs its original 503 assertion back with it."
+                % r.status_code
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_the_surviving_replay_endpoint_still_refuses_rather_than_swallowing(self):
+        """The swallow pattern is still guarded on the endpoint that survived.
+
+        ``replay_signal_trace`` carries the same blanket ``except Exception``. It must
+        answer a failure, not an empty 200 — so a crashing client produces a 5xx with a
+        machine-readable code, which is the property this file exists for.
         """
         app.dependency_overrides[get_current_user] = lambda: _user()
 
-        # _sb() inside signals.py calls create_request_supabase(user.get("access_token"))
-        # We need to patch create_request_supabase so it returns a crashing client.
         import backend_app.routers.signals as sig_module
 
         crashing = _crashing_supabase("QuestDB unreachable")
         original = sig_module.create_request_supabase_async
-        sig_module.create_request_supabase_async = lambda token: crashing
+
+        async def _crashing_async(token):
+            return crashing
+
+        sig_module.create_request_supabase_async = _crashing_async
 
         try:
             client = TestClient(app, raise_server_exceptions=False)
-            r = client.get("/api/signals/")
-            assert r.status_code == 503, (
-                f"Expected 503 (db crash), got {r.status_code}: {r.text}"
+            r = client.post("/api/signals/sig-1/replay")
+            assert r.status_code >= 500, (
+                f"Expected a 5xx (db crash), got {r.status_code}: {r.text}"
             )
-            # Error code is in top-level "error" field
-            assert r.json()["error"] == "SIGNAL_FETCH_FAILED"
+            assert "SIGNAL_RETRIEVAL_FAILED" in r.text
         finally:
             sig_module.create_request_supabase_async = original
             app.dependency_overrides.clear()
