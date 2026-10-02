@@ -1858,6 +1858,254 @@ exists to remove.
       _same P1 as 13.15: a migration the release cannot replay, with the added lesson that a guard_
       _asserting WHERE a statement sits asserts nothing about whether it RUNS_
 
+  - [ ] 13.17 One level deeper than 13.14–13.16: the COLUMNS, and 24 live `42703`s
+    - **Why columns are a separate class, and not a hypothetical one.** 13.14–13.16 closed
+      TABLE-level drift: `tests/test_schema_table_reference_drift.py` is 49 green tests asserting
+      that every table Python reads and every relation the SQL migrations read is declared. A
+      relation that EXISTS and lacks the projected column answers `42703 column … does not exist`,
+      which no table-level guard can see. That has already shipped three times here: the
+      exchange-list read (fixed earlier in this spec); creator analytics selecting `monthly_price`
+      and `rating_average` off `library_strategies`, which has neither
+      (`tests/test_creator_analytics_regression.py`); and `strategy_backtests.version` declared
+      `VARCHAR(20)` by 001 and `INTEGER` by 006, so the router wrote `"v1.0"` into an integer
+      column (`tests/test_backtest_version_label_regression.py`, and 016's header)
+    - **The audit, and its own coverage stated honestly.** AST over `backend_app/**/*.py`, 388
+      modules; **338 contain no `.table(` / `.from_(` literal at all** and are not parsed, because
+      a chain with no table verb in the file cannot resolve and parsing them yielded nothing but
+      skip records for a plain dict's `.update`. **1,162 column-bearing call sites** — 268
+      `.select`, 687 filter/order/`filter`, 207 `insert`/`update`/`upsert`, plus 5 `on_conflict`
+      kwargs — of which **980 resolved** to a table and **182 were SKIPPED and counted**: 101
+      where the table name, the column name or the projection is not a literal (`for table in
+      EXCHANGE_ACCOUNT_TABLES` is the common shape) and 81 dynamically-built write payloads.
+      **527 distinct `table.column` pairs across 50 tables.** The chain walk is over the AST
+      receiver spine because a `.select()` five lines below its `.table()` inside a parenthesised
+      chain is the normal shape here. **Module-level string constants ARE followed**, including
+      `+` concatenation and cross-module `mod.NAME`: `listing_projection.LISTING_SELECT` names 25
+      columns and nine handlers read it, and `library_entries` concatenates it INSIDE a
+      `library_strategies!inner(…)` embed three more times — resolving constants took the parse
+      from 728 resolved / 283 pairs to 980 / 527, and skipping them would have left the guard
+      blind to the densest reads in the application
+    - **A false-positive class found and fixed before any finding was believed: scope.** The first
+      resolver did ONE module-wide pass over every assignment. Two handlers in `routers/library.py`
+      both build a local called `query`, one on `library_strategies` and one on
+      `library_subscriptions`; last-write-wins attributed the first handler's eight filters —
+      `category`, `difficulty`, `has_ml_model`, `backtest_sharpe_ratio`,
+      `backtest_total_return_pct`, `tags`, `submission_state`, `submitted_at` — to the second
+      handler's table, which has none of them. Bindings are now PER SCOPE and IN STATEMENT ORDER,
+      a nested `def` gets a COPY, and a rebinding inside a branch to a different table is recorded
+      as conflicted rather than guessed. That alone removed 8 of 33 candidates
+    - **Two oracles, and all four difference categories reported rather than only the convenient
+      one.** DECLARED = `CREATE TABLE` column lists **plus every `ALTER TABLE … ADD COLUMN` /
+      `DROP COLUMN` / `RENAME COLUMN` / `ALTER COLUMN … TYPE` applied in file order** across
+      `backend_app/migrations/*.sql` and `migrations/*.sql` — 36 files, 188 DDL events, 907
+      declared pairs over 66 tables. The `ALTER` half is not optional: 006 adds eleven columns to
+      `profiles` and nineteen to `strategies`, and a `CREATE TABLE`-only parse reports every one of
+      them missing. LIVE = `information_schema.columns` for `public`, read-only, 71 base tables /
+      950 column rows / PostgreSQL 17.6. **(1) referenced and absent from BOTH → 24 pairs, every
+      one a live `42703`.** **(2) present in production, declared by no migration → 87 pairs**,
+      over `profiles`, `strategies`, `execution_records` and `library_strategies` — a rebuild from
+      the migration set produces four tables narrower than the live ones. **(3) declared but absent
+      in production → 62 pairs**, the unapplied-migration class 13.14 recorded, concentrated in
+      `training_jobs` (19, migration 019, the parallel workstream's uncommitted file),
+      `strategy_research_reports` (10), `strategy_backtests` (8), `referral_payouts` (8),
+      `referral_wallets` (4, the redesign file 13.15/13.16 proved was never applied), `strategies`
+      (6) and `profiles` (4, 017's `billing_interval` / `plan_limit_overrides` and the redesign's
+      `referral_code` / `referred_by_user_id`). **(4) declared twice with DIFFERENT types → 30**,
+      after folding synonym spellings
+    - **Every one of the 24 was PROVEN against production, not inferred from a set difference.**
+      Read-only `SELECT "<col>" FROM public."<table>" LIMIT 0` in a `readonly` session — `LIMIT 0`,
+      so no row is read; the SQLSTATE is the whole point. **All 24 answered `42703`.** Eight
+      CONTROL columns on the same four tables answered **OK** (`profiles.subscription_tier`,
+      `strategies.user_id`, `strategies.source_library_id`,
+      `library_strategies.source_strategy_id`, `billing_invoices.amount`,
+      `execution_records.execution_id` / `filled_size` / `size`) — without the controls a probe
+      that answered `42703` for everything would have looked like proof. **Zero unexpected
+      answers.** No scratch schema was needed, because nothing beyond `information_schema` and
+      zero-row `SELECT`s ran, and every connection set `readonly` — which makes a write
+      impossible rather than merely unobserved. Afterwards `public` is byte-identical: **71 base
+      tables**, **950 `information_schema.columns` rows**, no `vq_*` or scratch schema. **One
+      honest correction to the usual closing count: `profiles` reads 181, not 180.** The 181st row
+      has `created_at 2026-10-02 03:08:14+00`, five hours before the final probe and inside this
+      session's window — an organic signup on a live system, and the only row created in the last
+      six hours. It is reported rather than rounded back to 180, and a read-only session could not
+      have produced it
+    - **FIX — one, and it is the only one the CODE determines.** `routers/library.py`'s
+      `_enrich_cards_with_user_context` read
+      `.table("library_strategies").select("id, source_library_id").eq("author_id", …)`.
+      `library_strategies` has no `source_library_id` — it records provenance the other way round,
+      as `source_strategy_id`. The CLONE is a row in `strategies`: `clone_strategy` inserts it
+      there with `user_id` + `source_library_id` (library.py step 7) and its own idempotency check
+      reads it back the same way (`.table("strategies").select("id").eq("source_library_id", …)
+      .eq("user_id", …)`), and the field the enrichment assigns is called `cloned_strategy_id`. So
+      the table AND the ownership column were both wrong and the file already contained the
+      correct form twice. The read is now against `strategies` scoped by `user_id`. **The
+      consequence was a silent omission, not an error page**: the `except` logged a warning and
+      returned, so `user_has_cloned` and `user_rating` were never set on ANY catalogue card, and
+      the rating read below never even ran. That is `bugfix.md`'s rule about a read that did not
+      complete — failing in the omission direction rather than the fabricated-zero direction, which
+      is the direction the handler's own comment claims to take deliberately
+    - **A test had encoded the defect, and correcting it made the assertion STRONGER.**
+      `tests/property/test_fixed_round_trips.py`'s P-57 pins the authenticated catalogue's
+      statement SEQUENCE and listed `library_strategies` **twice**. Its own failure message says a
+      repeat of a table already in the sequence is the N+1 signature it exists to catch, so the
+      pinned sequence was the shape it warns about. It now reads
+      `library_strategies, profiles, strategies, library_ratings` — four DISTINCT tables, same
+      round-trip count of 4. This is the one assertion this task edited, and it was edited to stop
+      asserting a defect, not to go green
+    - **What was deliberately NOT fixed, with who decides named rather than implied.** **(a) 5
+      `billing_invoices` columns** (`amount_inr`, `amount_usd`, `plan`, `provider`,
+      `provider_payment_id`) at `routers/billing.py:2082/2194/2405`, and
+      `profiles.cancel_at_period_end` at `:2764` — that file carries the parallel pricing
+      workstream's uncommitted
+      changes; editing it would collide. The three inserts sit inside `try/except … logger.warning`,
+      so **no invoice row has ever been written** and no 500 was ever raised — the copilot shape
+      from 13.14, in the billing ledger. **(b) 4 `profiles` billing-lifecycle columns**
+      (`subscription_status`, `trial_end_date`, `next_billing_date`, `pending_downgrade_tier`) in
+      `core/billing_lifecycle.py` and `core/subscription_middleware.py` — same domain, same
+      workstream, reported and attributed. **(c) 12 `execution_records` columns** at
+      `routers/signals.py:47/122/204`: 12 of a 20-column projection. Reachability was ESTABLISHED
+      rather than assumed — `main.py:689` mounts the router at `/api/signals`, and **nothing in
+      `algo22-terminal/` calls `/api/signals` at all**; the Signal_Trace page calls
+      `/api/signal-trace/signals`, served by `routers/signal_trace.py` (mounted at `main.py:690`),
+      which does not touch `execution_records`. `execution_records` is an order-execution table —
+      `execution_id`, `size`, `filled_size`, `avg_price` — with no `indicators`, `ml_inputs`,
+      `ml_outputs`, `confidence`, `risk_verdict`, `timeframe`, `latency_ms`, `pnl` or
+      `failure_reason` to repoint those names AT. Choosing between deleting a mounted router and
+      inventing nine columns is exactly the ambiguity 13.14 resolved by establishing reachability
+      and then asking, so it is reported. **(d) `profiles.volume_usd`** at `routers/admin.py:122`:
+      `GET /api/admin/users` is mounted behind `get_admin_user`, has no `try/except`, and therefore
+      **500s unconditionally**. No migration declares `volume_usd`, nothing computes it, and
+      `algo22-terminal/` never reads it — so both candidate fixes (drop it from the projection, or
+      declare an empty column) are decisions about whether an admin capability existed, and
+      declaring a column nothing populates would fabricate the figure `bugfix.md` forbids. **(e)
+      `strategies.tenant_id`** at `backend/marketplace/eligibility_gate.py:449` — the most severe
+      of the 24, and the one most clearly not a parse's call: the gate's four reads are wrapped so
+      that
+      any failure answers `unevaluable=True` (Requirement 2.13) — an explicit unavailable, exactly
+      as the rule demands — which means **every marketplace submission eligibility evaluation in
+      production currently returns "unknown"**. Dropping the column does not fix it:
+      `core/dependencies.py:318` defaults `tenant_id` to the caller's own `user_id`, so
+      `caller_tenant` is never null, and `_tenant_matches(None, caller_tenant)` is `False` by that
+      function's documented semantics — "always unevaluable" would become "always refused". The
+      spec's own `tenant-boundary-audit.md` records `strategies`' tenant predicate as `user_id`,
+      with no `tenant_id` column; so the choice is between adding and backfilling a column on a
+      live 187-row table and rewriting Criterion 2.2's tenant clause, and neither belongs in a
+      schema-drift task
+    - **GUARD: `tests/test_schema_table_reference_drift.py`, 49 → 70 tests, extended rather than
+      duplicated, still pure parse and still no network.** It shares `_mask_sql`,
+      `_sql_migration_files` and the exemption-pinning pattern the SQL side already uses; the 49
+      existing tests are untouched and still pass. Two new classes plus a scanner-health class.
+      PostgREST forms handled, each because this codebase writes it: `*`; `count`; `alias:col`;
+      `col::text`; `col->k` and `col->>k`; `amount.sum()`; `...spread`; `rel(a,b)`;
+      `rel!hint(a,b)`; and `rel!library_id!inner(a,b)` — the hint is stripped and the embed is
+      FOLLOWED into `rel`, where its own list is parsed recursively, so `library_strategies` is
+      never reported as a COLUMN of `library_subscriptions`. A dotted `.eq("rel.col", v)` is
+      attributed to `rel` for the same reason
+    - **The oracle for the four tables no migration CREATEs is RECORDED, and the recording is
+      pinned against rot.** `profiles` (20 columns), `strategies` (26), `execution_records` (22),
+      `library_strategies` (52) and `library_ratings` (8, declared only in Alembic) have no
+      `CREATE TABLE` anywhere in the tree, so the migration set's column list for them is a subset
+      by construction. Their production column sets are recorded with the server they were read
+      from — the same evidence pattern `SQL_UNDECLARED_PRESENT_IN_PRODUCTION` already uses for row
+      counts, and recorded rather than parsed for the same reason: there is no file here to parse
+      it out of and this suite takes no network. The companion test asserts each entry's table is
+      still not `CREATE`d (so a recorded roster can never shadow a parsed one), is still read by
+      Python, and — the clause that closed a real hole — that **EVERY** table a column reference
+      reaches has an oracle. Scoping that to ALTER-only tables was tried and was wrong:
+      `library_ratings` is neither created nor altered by the migration set, so deleting its entry
+      left 8 columns unchecked with the whole section green
+    - **The 24 open defects are a REGISTER, not an allowlist, and the distinction is enforced.**
+      Each entry names its owning module and who decides. The companion tests fail if an entry
+      stops being referenced, if its column starts existing, if the attributed module leaves the
+      tree, or if the reference moves to a different module — and the failure message states that
+      the register may only SHRINK and that adding a name to it re-creates the defect. The two
+      registers may not overlap: a column cannot be both recorded-present-in-production and a
+      known `42703`
+    - **Coverage is ratcheted in both directions, because either alone is gameable.** 182
+      unresolvable sites is a ceiling and 980 resolved is a floor. Without the floor a parser that
+      stopped matching would satisfy every assertion above; without the ceiling a refactor that put
+      every query behind a helper would take the blind spot to 100% and leave the suite green. The
+      two are also cross-checked against each other — the counters must equal the number of skip
+      records — and the message names the exposure honestly: **52 of the 182 sit in the parallel
+      workstream's files**, so a small rise there is to be explained rather than absorbed
+    - **Parser health, asserted the way `test_declared_set_is_parsed_and_non_trivial` is.** A
+      fixture exercising every form above, including the embed-with-hint, the double-hint, the
+      alias and the two-handler scope collision, resolving to an **EXACT** set over four tables —
+      31 columns on `outer_table`, 3 on `inner_table`, 1 on `other_inner`, 2 on `second_table` —
+      with `ghost_column` deliberately undeclared so the guard is proven to FIRE rather than to
+      have gone quiet, and with a dynamic table name and a dynamic payload that must be COUNTED
+      rather than attributed. Plus floors on the real parse (≥450 pairs, ≥40 tables, >100 selects,
+      >300 filters, ≥800 declared pairs, >50 `CREATE TABLE`s), an assertion that a `CREATE TABLE`
+      quoted inside a `RAISE NOTICE` is not a declaration, and four named columns that exist ONLY
+      via `ALTER TABLE` so the `ALTER` half of the oracle cannot silently stop being applied
+    - **The type-divergence class the `strategy_backtests.version` bug came from, guarded as a
+      shrinking inventory.** Synonym spellings are folded first — `DECIMAL(10,2)` and
+      `NUMERIC(10,2)` are one type, and 16 of the 46 raw hits were only that — leaving **30**
+      genuine conflicts, each recorded with the type production actually carries. `numeric(10,2)`
+      vs `numeric(20,8)` is deliberately NOT folded: those round money differently. The inventory
+      may shrink and may never grow; an entry that stops diverging must be removed, and the one
+      RECONCILED divergence is pinned by outcome — applying the whole set in order must leave
+      `strategy_backtests.version` as `VARCHAR(20)` from
+      `016_strategy_backtests_version_label.sql`, which is the column-type counterpart to the
+      statement-level pin in `test_backtest_version_label_regression.py`. Four of the 30 are
+      structural rather than precision: `strategy_research_reports.strategy_score` is `jsonb` in
+      001 and `numeric(6,4)` in 006, `.warnings` is `text[]` versus `jsonb`,
+      `strategy_deployments.exchange_id` is `uuid` versus `varchar(50)`, and
+      `referral_profiles.id` / `strategy_backtests.id` are `uuid` versus `text`
+    - **Before/after, OBSERVED, by mutating one thing at a time and restoring it in binary with
+      the SHA checked both ways.** Thirteen mutations, **all thirteen fired**, and the two that did
+      NOT fire on the first attempt are recorded here because each exposed a real weakness that was
+      then fixed rather than explained away. **(A)** `library.py` reverted to reading
+      `library_strategies` → **2 failed**, reporting
+      `reads library_strategies.source_library_id again at`
+      `[('backend_app/routers/library.py', 619), …]`.
+      **(B)** `profiles.volume_usd` removed from the register → **1 failed**. **(C)** all twelve
+      `execution_records` entries removed → **1 failed**. **(D)** `library_ratings` removed from
+      the roster → **passed** at first, which is how the ALTER-only scoping hole was found; after
+      widening the clause to every referenced table, **1 failed** with
+      `['library_ratings'] are read COLUMN BY COLUMN … and have no column oracle at all`. **(E)**
+      `profiles.subscription_tier` deleted from the roster → **1 failed**, so the roster is load-
+      bearing rather than decorative. **(F)** embed read as a column instead of followed → **2
+      failed**. **(G)** `!hint` no longer stripped → **1 failed**, `missing ['other_inner']`.
+      **(H)** the ORIGINAL defect reinstated — one module-wide binding pass, last write wins →
+      **passed** at first against a fixture that could not express it, so the mutation was
+      rewritten to be the actual defect and then **1 failed** with
+      `outer_table: unexpected []; missing ['built_two']`. **(I)** `ADD COLUMN` no longer applied →
+      **2 failed**. **(J)** `strategy_backtests.version` removed from the divergence inventory →
+      **1 failed**. **(K)** `DECIMAL` no longer folds to `NUMERIC` → **2 failed**. **(L)** the
+      skip ceiling lowered to 100 → **1 failed**. **(M)** the resolved floor raised to 1200 →
+      **1 failed**. With nothing mutated: **70 passed**. Said plainly rather than counted as
+      coverage: `test_each_recorded_conflict_still_names_two_real_spellings`,
+      `test_the_divergence_inventory_has_not_gone_stale`,
+      `test_the_two_column_exemption_registers_do_not_overlap` and
+      `test_the_type_parser_reads_the_shapes_this_set_contains` were not individually mutated —
+      they assert on the pinned inventories and on fixtures, and they pass in both directions by
+      construction
+    - **Gates.** `tests/test_schema_table_reference_drift.py` **70 passed** (49 pre-existing
+      unchanged + 21 new); `tests/test_no_undefined_names.py` **3 passed**;
+      `flake8 --select=E9,F63,F7,F82` clean on all three touched Python files;
+      `backend_app.main` imports and still exposes **354 routes**; `test_migration_tooling` 28 /
+      `test_no_dormant_schema_references` 2 / `test_schema_as_code_completeness` 6 /
+      `test_library_schema_contract` 14 → **50 passed** together;
+      `test_creator_analytics_regression` + `test_backtest_version_label_regression` → **45
+      passed**; and the suites that exercise the edited handler —
+      `tests/property/test_fixed_round_trips.py` + `test_library_detail_visibility_and_omission` →
+      **16 passed**, `test_library_detail_projection_regression` +
+      `test_library_route_resolution` + `test_listing_projection` +
+      `test_tenant_isolation_library_paper` → **149 passed, 2 failed**. Those two —
+      `test_a_library_mutation_of_another_tenants_record_leaves_every_row_byte_identical` for
+      `POST /api/library/{library_id}/checkout` and `/clone` — are **PRE-EXISTING and proven so**:
+      swapping `routers/library.py` for `git show HEAD:`'s copy in binary gives `2 failed, 13
+      passed` in both directions. They are not in 13.13's inventory either, which is a small gap in
+      that inventory rather than in this change
+    - _Requirements: none directly — the same schema-as-code class as 13.14–13.16, one level_
+      _deeper. Recorded because task 14 requires every launch blocker to be proven, BLOCKED with_
+      _its gap named, or closed by citation, and 24 reads that answer `42703` against the live_
+      _database are none of those. P1 for the class, with `strategies.tenant_id` the sharpest_
+      _instance: an eligibility gate that can only answer "unknown" means nothing can be published_
+      _to the marketplace, and it was invisible to a guard that only ever asked whether the TABLE_
+      _existed_
+
 
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes

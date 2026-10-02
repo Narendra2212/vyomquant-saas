@@ -1878,3 +1878,1924 @@ class TestFilterClausesAttachToAggregates:
             "COALESCE(SUM(r.commission_usd), 0) - it is the total across every "
             "status, including ones no balance column buckets."
         )
+
+# --------------------------------------------------------------------------
+# (g) one level deeper than a table: the COLUMNS the application names
+#
+# THE DEFECT CLASS THIS SECTION DETECTS
+# -------------------------------------
+# Everything above asks whether the RELATION exists. A relation that exists
+# and lacks the column a read projects answers `42703 column ... does not
+# exist`, which is a different failure with the same cause: the declared
+# schema and the applied schema disagree, and nothing asked.
+#
+# This has already shipped three times in this repository:
+#
+# * the exchange-list read, fixed earlier in this spec;
+# * creator analytics projecting `monthly_price` and `rating_average` off
+#   `library_strategies`, where neither column exists
+#   (`tests/test_creator_analytics_regression.py`);
+# * `strategy_backtests.version` declared `VARCHAR(20)` by
+#   `001_strategy_architecture.sql` and `INTEGER` by
+#   `006_reconcile_production_database.sql`
+#   (`tests/test_backtest_version_label_regression.py`, and 016's header).
+#
+# WHAT IS PARSED, AND WHY EACH FORM IS HERE
+# -----------------------------------------
+# The reference side is every column a `backend_app/**/*.py` call site names
+# against a table the chain resolves:
+#
+# * `.select("a, b, c")` - PostgREST syntax. `*`; `count`; aliases
+#   `alias:col`; casts `col::text`; JSON paths `col->k` / `col->>k`;
+#   aggregates `amount.sum()`; and embedded resources `rel(a,b)` /
+#   `rel!hint(a,b)` / `rel!fk!inner(a,b)`, which are NOT columns of the outer
+#   table - the hint is stripped and the embed is FOLLOWED into `rel`, where
+#   its own list is parsed recursively. `library_entries` builds three such
+#   projections by concatenating `listing_projection.LISTING_SELECT` inside a
+#   `library_strategies!inner(...)` embed, so getting this wrong would have
+#   reported 36 columns against the wrong relation.
+# * `.eq/.neq/.gt/.gte/.lt/.lte/.like/.ilike/.is_/.in_/.contains/.order/
+#   .filter(...)` - the first positional argument is a column. A dotted
+#   `.eq("rel.col", v)` addresses an embedded resource and is attributed to
+#   `rel`, not to the outer table.
+# * `.insert({...})` / `.update({...})` / `.upsert({...})` with a LITERAL
+#   dict - the keys are columns. A payload built dynamically is SKIPPED and
+#   COUNTED, never guessed.
+# * `on_conflict="col"`, including the comma-separated form.
+#
+# The chain walk is over the AST receiver spine, not a line-oriented regex: a
+# `.select()` five lines below its `.table()` inside a parenthesised chain is
+# the normal shape here. Local variables assigned from a resolved chain are
+# tracked PER SCOPE and IN STATEMENT ORDER - a single module-wide pass was
+# tried and was wrong: two handlers in `routers/library.py` both build a local
+# called `query`, one on `library_strategies` and one on
+# `library_subscriptions`, and last-write-wins attributed the first handler's
+# eight filters to the second handler's table.
+#
+# Module-level string constants ARE resolved, including `+` concatenation and
+# cross-module `mod.NAME`. Nothing else is: a loop variable over a list of
+# table names (`for table in EXCHANGE_ACCOUNT_TABLES`) is genuinely ambiguous,
+# so it is skipped and counted. :data:`MAX_UNRESOLVABLE_COLUMN_CALL_SITES` is
+# the ratchet that stops that count growing quietly.
+#
+# THE ORACLE
+# ----------
+# `CREATE TABLE` column lists PLUS every `ALTER TABLE ... ADD COLUMN` /
+# `DROP COLUMN` / `RENAME COLUMN` / `ALTER COLUMN ... TYPE`, applied in file
+# order. The `ALTER` half is not optional:
+# `006_reconcile_production_database.sql` adds eleven columns to `profiles`
+# and nineteen to `strategies` after the fact, so a `CREATE TABLE`-only parse
+# reports a flood of columns as missing that are not.
+#
+# Four tables this application reads have NO `CREATE TABLE` anywhere in the
+# migration set - they predate it. For those, and only those, the production
+# column set is RECORDED in
+# :data:`PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES` with the server and the
+# count it was read from. That is the same evidence pattern
+# `SQL_UNDECLARED_PRESENT_IN_PRODUCTION` already uses for row counts, and it
+# is recorded rather than parsed for the same reason: there is no file in this
+# checkout to parse it out of, and this suite takes no network.
+#
+# NO NETWORK HERE EITHER
+# ----------------------
+# Every assertion below is a parse of files in the checkout. The production
+# column sets and the `42703` answers quoted in the messages were established
+# by a read-only probe against PostgreSQL 17.6 and are recorded; they are not
+# re-read at test time.
+# --------------------------------------------------------------------------
+
+#: The tables this application reads that NO ``CREATE TABLE`` in the migration
+#: set declares, with their column sets AS READ FROM PRODUCTION (PostgreSQL
+#: 17.6, 71 base tables in ``public``, ``profiles`` 180 rows). The migration
+#: set only ``ALTER``s these, so its column list for them is a subset by
+#: construction and cannot be the oracle on its own.
+#:
+#: Recorded, not parsed, because nothing in this checkout declares them -
+#: which is the drift itself, and is already recorded at the table level by
+#: ``SQL_UNDECLARED_PRESENT_IN_PRODUCTION``. Adding a column here to silence a
+#: failure RE-CREATES the defect: the name belongs here only if production
+#: already has it, and a column production does not have needs a migration,
+#: not an entry.
+PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
+    "profiles": frozenset(  # 20 columns
+        {
+            "available_discounts", "avatar_url", "balance", "billing_currency",
+            "bio", "created_at", "deployed_bots", "display_name", "email",
+            "full_name", "id", "is_frozen", "max_api_slots",
+            "ml_addons_purchased", "ml_strategies_built", "preferred_currency",
+            "subscription_tier", "telegram_id", "updated_at", "username",
+        }
+    ),
+    "strategies": frozenset(  # 26 columns
+        {
+            "archived_at", "backtest_result", "buy_logic", "created_at",
+            "current_version", "dag_config", "dag_hash", "dag_schema_version",
+            "dag_version", "environment", "exchange_id", "execution_order",
+            "id", "indicators", "is_active", "last_signal_at", "ml_model_path",
+            "name", "risk", "sell_logic", "source_library_id", "status",
+            "symbol", "timeframe", "updated_at", "user_id",
+        }
+    ),
+    "execution_records": frozenset(  # 22 columns
+        {
+            "avg_price", "created_at", "exchange_id", "exchange_status",
+            "execution_id", "filled_at", "filled_size", "last_exchange_sync",
+            "order_id", "price", "remaining_size", "result", "side", "size",
+            "status", "strategy_id", "submitted_at", "symbol", "task_id",
+            "tenant_id", "updated_at", "user_id",
+        }
+    ),
+    "library_strategies": frozenset(  # 52 columns
+        {
+            "author_id", "avg_rating", "backtest_end_date",
+            "backtest_initial_capital", "backtest_max_drawdown_pct",
+            "backtest_profit_factor", "backtest_sharpe_ratio",
+            "backtest_start_date", "backtest_total_return_pct",
+            "backtest_total_trades", "backtest_win_rate_pct", "category",
+            "clone_count", "condition_count", "cover_image", "currency",
+            "deployment_requirements", "description", "difficulty",
+            "equity_curve_snapshot", "evaluation_score", "exchange_id",
+            "has_ml_model", "id", "is_active", "is_featured", "market_type",
+            "moderated_at", "moderated_by", "moderation_notes",
+            "moderation_status", "name", "node_count", "price", "price_minor",
+            "published_at", "rating_count", "risk_max_drawdown_pct",
+            "risk_max_position_size", "risk_stop_loss_pct",
+            "risk_take_profit_pct", "source_cloning_enabled",
+            "source_strategy_id", "subscriber_count", "subscription_tier",
+            "supported_timeframes", "symbol", "tags", "timeframe",
+            "updated_at", "verification_status", "version_history",
+        }
+    ),
+    "library_ratings": frozenset(  # 8 columns; declared only by Alembic
+        {
+            "created_at", "id", "is_verified_clone", "library_id", "rating",
+            "review_text", "updated_at", "user_id",
+        }
+    ),
+}
+
+#: A REGISTER OF OPEN DEFECTS, not an allowlist. Every entry was proven to
+#: answer ``42703`` against production (PostgreSQL 17.6, read-only
+#: ``SELECT "<col>" FROM public."<table>" LIMIT 0``) alongside a control
+#: column on the same table that answered ``OK``. They are listed so the guard
+#: can fail on a NEW one; the count may SHRINK and may never grow.
+#:
+#: The value is (owning module, why it is not fixed here). Each reason is a
+#: statement about WHO decides, not an excuse:
+#:
+#: * the ``billing_invoices`` and ``profiles`` billing columns sit in the
+#:   parallel pricing/entitlements workstream's files. ``routers/billing.py``
+#:   carries their uncommitted changes; editing it here would collide.
+#: * ``routers/signals.py`` is mounted at ``/api/signals`` and has NO frontend
+#:   caller - the Signal_Trace page calls ``/api/signal-trace/signals`` on
+#:   ``routers/signal_trace.py`` instead. ``execution_records`` is an
+#:   order-execution table with no ``indicators``, ``ml_inputs``,
+#:   ``ml_outputs``, ``confidence``, ``risk_verdict``, ``timeframe``,
+#:   ``latency_ms``, ``pnl`` or ``failure_reason`` to repoint those twelve
+#:   names AT. Choosing between deleting a mounted router and inventing nine
+#:   columns is not a parse's decision.
+#: * ``strategies.tenant_id`` breaks the marketplace eligibility gate, and
+#:   both candidate fixes are wrong to pick unilaterally - see the class.
+KNOWN_UNDECLARED_COLUMN_DEFECTS = {
+    "billing_invoices.amount_inr": ("routers/billing.py", "parallel workstream"),
+    "billing_invoices.amount_usd": ("routers/billing.py", "parallel workstream"),
+    "billing_invoices.plan": ("routers/billing.py", "parallel workstream"),
+    "billing_invoices.provider": ("routers/billing.py", "parallel workstream"),
+    "billing_invoices.provider_payment_id": (
+        "routers/billing.py", "parallel workstream",
+    ),
+    "profiles.cancel_at_period_end": ("routers/billing.py", "parallel workstream"),
+    "profiles.next_billing_date": ("core/billing_lifecycle.py", "parallel workstream"),
+    "profiles.pending_downgrade_tier": (
+        "core/billing_lifecycle.py", "parallel workstream",
+    ),
+    "profiles.subscription_status": (
+        "core/billing_lifecycle.py", "parallel workstream",
+    ),
+    "profiles.trial_end_date": ("core/billing_lifecycle.py", "parallel workstream"),
+    "profiles.volume_usd": ("routers/admin.py", "no source of truth anywhere"),
+    "strategies.tenant_id": (
+        "backend/marketplace/eligibility_gate.py", "design decision",
+    ),
+    "execution_records.confidence": ("routers/signals.py", "unreachable router"),
+    "execution_records.failure_reason": ("routers/signals.py", "unreachable router"),
+    "execution_records.filled_quantity": ("routers/signals.py", "unreachable router"),
+    "execution_records.id": ("routers/signals.py", "unreachable router"),
+    "execution_records.indicators": ("routers/signals.py", "unreachable router"),
+    "execution_records.latency_ms": ("routers/signals.py", "unreachable router"),
+    "execution_records.ml_inputs": ("routers/signals.py", "unreachable router"),
+    "execution_records.ml_outputs": ("routers/signals.py", "unreachable router"),
+    "execution_records.pnl": ("routers/signals.py", "unreachable router"),
+    "execution_records.quantity": ("routers/signals.py", "unreachable router"),
+    "execution_records.risk_verdict": ("routers/signals.py", "unreachable router"),
+    "execution_records.timeframe": ("routers/signals.py", "unreachable router"),
+}
+
+#: The column reference `routers/library.py` used to carry and no longer does:
+#: `_enrich_cards_with_user_context` read `library_strategies` filtered on
+#: `source_library_id`, which that table does not have - the clone lives in
+#: `strategies`, which is where `clone_strategy` inserts it and where its own
+#: idempotency check reads it back. Pinned as a pair so the wrong table cannot
+#: come back.
+FIXED_CLONE_ENRICHMENT = ("strategies", "library_strategies", "source_library_id")
+
+#: Call sites whose owning table could not be resolved with confidence, as
+#: observed when this guard was written. A RATCHET: coverage can erode to zero
+#: while every assertion still passes, so the count may shrink and may never
+#: grow. 52 of these sit in the parallel workstream's files, so a small rise
+#: there is expected to be explained rather than absorbed.
+MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 182
+
+#: Call sites that DID resolve, as observed. The other half of the ratchet: a
+#: parser that stops matching would otherwise satisfy every assertion above.
+MIN_RESOLVED_COLUMN_CALL_SITES = 980
+
+#: Floors on the parse itself, in the style of
+#: ``test_declared_set_is_parsed_and_non_trivial``.
+MIN_DISTINCT_COLUMN_PAIRS = 450
+MIN_TABLES_WITH_COLUMN_REFERENCES = 40
+MIN_DECLARED_COLUMN_PAIRS = 800
+
+# --------------------------------------------------------------------------
+# the PostgREST select-list parser
+# --------------------------------------------------------------------------
+
+#: Projection items that are not column names.
+_SELECT_PSEUDO_COLUMNS = frozenset({"*", "count"})
+
+#: Aggregate suffixes PostgREST accepts as ``col.sum()``.
+_SELECT_AGGREGATE_SUFFIXES = frozenset({"count", "sum", "avg", "min", "max"})
+
+_PLAIN_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_JSON_PATH_OPERATOR = re.compile(r"->>?")
+
+
+def _split_at_depth_zero(text: str, separator: str = ","):
+    """Split ``text`` on ``separator`` at parenthesis depth zero.
+
+    Shared by the select-list parser and the ``CREATE TABLE`` column-list
+    parser, which have the same problem: a comma inside ``numeric(10,2)`` or
+    inside an embed's own list is not a separator.
+    """
+    parts, depth, current = [], 0, []
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == separator and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _strip_select_alias(item: str) -> str:
+    """``alias:col`` -> ``col``. A ``::`` cast is not an alias."""
+    depth = 0
+    i = 0
+    while i < len(item):
+        ch = item[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == ":" and depth == 0:
+            if item[i + 1:i + 2] == ":":
+                i += 2
+                continue
+            return item[i + 1:].strip()
+        i += 1
+    return item
+
+
+def _select_base_column(token: str):
+    """One projection token reduced to the column it names, or ``None``.
+
+    Strips a ``::`` cast, a ``->``/``->>`` JSON path, and a ``col.sum()``
+    aggregate wrapper; answers ``None`` for ``*``, for bare ``count()`` and
+    for anything that is not a plain identifier afterwards.
+    """
+    token = token.strip()
+    if not token:
+        return None
+    token = token.split("::", 1)[0].strip()
+    token = _JSON_PATH_OPERATOR.split(token, maxsplit=1)[0].strip()
+    if token.endswith("()"):
+        token = token[:-2].strip()
+        if "." in token:
+            head, tail = token.rsplit(".", 1)
+            if tail.lower() in _SELECT_AGGREGATE_SUFFIXES:
+                token = head.strip()
+        else:
+            return None
+    if not token or token in _SELECT_PSEUDO_COLUMNS:
+        return None
+    if not _PLAIN_IDENTIFIER.match(token):
+        return None
+    return token.lower()
+
+
+def _parse_select_list(expr: str, table: str, sink, skips, site) -> None:
+    """Attribute every column in a PostgREST select list to its own table.
+
+    ``sink(table, column)`` per column. An embedded resource recurses into the
+    embedded relation; ``!hint`` and ``!fk!inner`` are stripped from the head
+    first, because the hint is not part of the relation name.
+    """
+    for raw in _split_at_depth_zero(expr):
+        item = raw.strip()
+        if not item:
+            continue
+        if item.startswith("..."):  # PostgREST spread embed
+            item = item[3:].strip()
+        item = _strip_select_alias(item)
+        open_paren = item.find("(")
+        if open_paren != -1 and item.endswith(")"):
+            body = item[open_paren + 1:-1]
+            head = item[:open_paren].strip()
+            if not body.strip():
+                column = _select_base_column(item)
+                if column:
+                    sink(table, column)
+                continue
+            relation = _strip_select_alias(head.split("!", 1)[0].strip()).lower()
+            if not _PLAIN_IDENTIFIER.match(relation or ""):
+                skips.append((site, "unparsable embed %r" % item))
+                continue
+            _parse_select_list(body, relation, sink, skips, site)
+            continue
+        column = _select_base_column(item)
+        if column:
+            sink(table, column)
+
+
+# --------------------------------------------------------------------------
+# the Python call-site scanner
+# --------------------------------------------------------------------------
+
+_COLUMN_TABLE_VERBS = ("table", "from_")
+
+#: First positional argument is a column name.
+_COLUMN_FILTER_METHODS = frozenset(
+    {
+        "eq", "neq", "gt", "gte", "lt", "lte", "like", "ilike", "is_", "in_",
+        "contains", "contained_by", "order", "filter", "like_all_of",
+        "like_any_of", "ilike_all_of", "ilike_any_of", "overlaps",
+        "text_search", "range_gt", "range_gte", "range_lt", "range_lte",
+        "range_adjacent", "not_",
+    }
+)
+_COLUMN_SELECT_METHODS = frozenset({"select"})
+_COLUMN_WRITE_METHODS = frozenset({"insert", "update", "upsert"})
+
+#: Statement fields that are nested SUITES. Excluded from the per-statement
+#: expression walk and recursed separately, so the statements inside them are
+#: seen in order relative to the assignments around them.
+_SUITE_FIELDS = ("body", "orelse", "finalbody", "handlers")
+
+#: A rebinding that would make one variable mean two tables. The binding is
+#: dropped rather than guessed.
+_COLUMN_CONFLICTED = object()
+
+
+def _constant_str(node, constants=None):
+    """The string this expression names, following module constants."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if constants is None:
+        return None
+    return constants.resolve(node)
+
+
+class _ConstantIndex:
+    """Module-level string constants across ``backend_app/``, with imports.
+
+    Indexing, parsing and resolution are all LAZY and cached: a module is
+    parsed when a scan or a lookup first reaches it, and the tree is shared.
+
+    Constants are resolved because the densest projections in this codebase
+    are constants - ``listing_projection.LISTING_SELECT`` names 25 columns and
+    is read by nine handlers, and ``library_entries`` concatenates it inside
+    an embed three more times. Treating them as unresolvable would leave the
+    guard blind to the reads that name the most columns. Nothing beyond a
+    module-level string and ``+`` concatenation of them is resolved: an
+    f-string, a loop variable or a dict lookup is genuinely ambiguous.
+    """
+
+    def __init__(self, root: Path, repo_root: Path) -> None:
+        self.root = root
+        self.repo_root = repo_root
+        self.assignments: dict = {}
+        self.imports: dict = {}
+        self._memo: dict = {}
+        self._active = set()
+        self._trees: dict = {}
+        self._paths = {
+            self.module_name(path): path for path in sorted(root.rglob("*.py"))
+        }
+
+    def module_name(self, path: Path) -> str:
+        parts = list(path.relative_to(self.repo_root).with_suffix("").parts)
+        if parts and parts[-1] == "__init__":
+            parts.pop()
+        return ".".join(parts)
+
+    def tree(self, path: Path):
+        key = str(path)
+        if key not in self._trees:
+            try:
+                self._trees[key] = ast.parse(
+                    path.read_text(encoding="utf-8", errors="replace")
+                )
+            except SyntaxError:
+                self._trees[key] = None
+        return self._trees[key]
+
+    def _index(self, module: str) -> bool:
+        if module in self.assignments:
+            return True
+        path = self._paths.get(module)
+        if path is None:
+            return False
+        tree = self.tree(path)
+        names: dict = {}
+        imports: dict = {}
+        if tree is not None:
+            for stmt in tree.body:
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            names[target.id] = stmt.value
+                elif isinstance(stmt, ast.AnnAssign) and isinstance(
+                    stmt.target, ast.Name
+                ):
+                    if stmt.value is not None:
+                        names[stmt.target.id] = stmt.value
+                elif isinstance(stmt, ast.ImportFrom):
+                    base = self._absolute(module, stmt)
+                    for alias in stmt.names:
+                        imports[alias.asname or alias.name] = (base, alias.name)
+                elif isinstance(stmt, ast.Import):
+                    for alias in stmt.names:
+                        local = alias.asname or alias.name.split(".")[0]
+                        imports[local] = (alias.name, None)
+        self.assignments[module] = names
+        self.imports[module] = imports
+        return True
+
+    @staticmethod
+    def _absolute(module: str, stmt: ast.ImportFrom) -> str:
+        if not stmt.level:
+            return stmt.module or ""
+        parts = module.split(".")
+        base = parts[:-1] if stmt.level == 1 else parts[: len(parts) - stmt.level + 1]
+        prefix = ".".join(base)
+        return "%s.%s" % (prefix, stmt.module) if stmt.module else prefix
+
+    def bind(self, module: str):
+        return _BoundConstants(self, module)
+
+    def lookup(self, module: str, name: str):
+        key = (module, name)
+        if key in self._memo:
+            return self._memo[key]
+        if key in self._active:
+            return None  # a cycle between two modules' constants
+        self._active.add(key)
+        try:
+            value = self._lookup(module, name)
+        finally:
+            self._active.discard(key)
+        self._memo[key] = value
+        return value
+
+    def _lookup(self, module: str, name: str):
+        self._index(module)
+        node = self.assignments.get(module, {}).get(name)
+        if node is not None:
+            return self.evaluate(module, node)
+        target = self.imports.get(module, {}).get(name)
+        if target is None:
+            return None
+        other, original = target
+        if original is None:
+            return None  # the local name is a MODULE, not a string
+        if self._index(other):
+            return self.lookup(other, original)
+        return None
+
+    def evaluate(self, module: str, node):
+        if isinstance(node, ast.Constant):
+            return node.value if isinstance(node.value, str) else None
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = self.evaluate(module, node.left)
+            right = self.evaluate(module, node.right)
+            if left is None or right is None:
+                return None
+            return left + right
+        if isinstance(node, ast.Name):
+            return self.lookup(module, node.id)
+        if isinstance(node, ast.Attribute):
+            return self._attribute(module, node)
+        return None
+
+    def _attribute(self, module: str, node: ast.Attribute):
+        parts = []
+        cursor = node
+        while isinstance(cursor, ast.Attribute):
+            parts.append(cursor.attr)
+            cursor = cursor.value
+        if not isinstance(cursor, ast.Name):
+            return None
+        parts.append(cursor.id)
+        parts.reverse()
+        attribute, head = parts[-1], parts[:-1]
+        if not head:
+            return None
+        self._index(module)
+        target = self.imports.get(module, {}).get(head[0])
+        if target is None:
+            return None
+        base, original = target
+        if original is None:
+            candidate = ".".join([base] + head[1:])
+        elif len(head) == 1:
+            candidate = "%s.%s" % (base, original) if base else original
+        else:
+            candidate = ".".join([base, original] + head[1:])
+        if self._index(candidate):
+            return self.lookup(candidate, attribute)
+        return None
+
+
+class _BoundConstants:
+    """A constant resolver bound to one module's namespace."""
+
+    def __init__(self, index: _ConstantIndex, module: str) -> None:
+        self.index = index
+        self.module = module
+
+    def resolve(self, node):
+        try:
+            return self.index.evaluate(self.module, node)
+        except RecursionError:  # pragma: no cover - a pathological constant
+            return None
+
+
+class _ColumnChainResolver:
+    """Resolves the ``.table("x")`` a column-bearing method call belongs to."""
+
+    def __init__(self, var_tables=None, constants=None) -> None:
+        self.var_tables = dict(var_tables or {})
+        self.constants = constants
+
+    def resolve(self, call):
+        node = call
+        for _step in range(64):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Attribute):
+                    if func.attr in _COLUMN_TABLE_VERBS and node.args:
+                        literal = _constant_str(node.args[0], self.constants)
+                        if literal is not None:
+                            return literal.lower(), None
+                        return None, "table name is not a literal"
+                    node = func.value
+                    continue
+                if isinstance(func, ast.Name):
+                    return None, "chain starts at the bare call %r" % func.id
+                return None, "chain starts at an unsupported callee"
+            if isinstance(node, ast.Attribute):
+                node = node.value
+                continue
+            if isinstance(node, (ast.Subscript, ast.Await)):
+                node = node.value
+                continue
+            if isinstance(node, ast.Name):
+                bound = self.var_tables.get(node.id)
+                if bound is _COLUMN_CONFLICTED:
+                    return None, "%r is bound to two tables here" % node.id
+                if bound is not None:
+                    return bound, None
+                return None, "chain starts at the variable %r" % node.id
+            return None, "chain starts at %s" % type(node).__name__
+        return None, "chain too deep"  # pragma: no cover
+
+    def note_assignment(self, stmt, branching: bool = False) -> None:
+        """Record ``name = <chain>`` when the chain resolves to a table."""
+        if isinstance(stmt, ast.Assign):
+            targets, value = stmt.targets, stmt.value
+        elif isinstance(stmt, (ast.AnnAssign, ast.AugAssign)):
+            targets, value = [stmt.target], stmt.value
+        else:
+            return
+        if value is None:
+            return
+        table = None
+        chainlike = isinstance(value, (ast.Call, ast.Attribute, ast.Await))
+        if chainlike:
+            node = value.value if isinstance(value, ast.Await) else value
+            table, _why = self.resolve(node)
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if table is None:
+                self.var_tables.pop(target.id, None)
+                continue
+            previous = self.var_tables.get(target.id)
+            if branching and previous not in (None, table):
+                self.var_tables[target.id] = _COLUMN_CONFLICTED
+            else:
+                self.var_tables[target.id] = table
+
+
+def _calls_in_statement(stmt):
+    """Every ``Call`` in this statement's own expressions.
+
+    A manual stack rather than :func:`ast.walk`: with
+    :func:`ast.iter_fields` it was half the runtime of the whole scan.
+    """
+    collected = []
+    stack = []
+    for field in stmt._fields:
+        if field in _SUITE_FIELDS:
+            continue
+        value = getattr(stmt, field, None)
+        if isinstance(value, list):
+            stack.extend(item for item in value if isinstance(item, ast.AST))
+        elif isinstance(value, ast.AST):
+            stack.append(value)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Call):
+            collected.append(node)
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if isinstance(value, list):
+                stack.extend(item for item in value if isinstance(item, ast.AST))
+            elif isinstance(value, ast.AST):
+                stack.append(value)
+    return collected
+
+
+def _keyword(node, name):
+    for kw in node.keywords:
+        if kw.arg == name:
+            return kw.value
+    return None
+
+
+def _scan_module_columns(path, tree, relative, bound, references, skips, counters):
+    """Collect ``(table, column) -> [(file, line)]`` out of one module."""
+
+    def attribute_filter(name, table, sink, site):
+        """``.eq("col", v)`` or ``.eq("rel.col", v)``.
+
+        A dotted filter addresses an EMBEDDED resource's column; attributing
+        it to the outer table would invent a column there.
+        """
+        name = name.strip()
+        if not name:
+            return
+        if "." in name:
+            head, tail = name.split(".", 1)
+            if _PLAIN_IDENTIFIER.match(head) and "." not in tail:
+                column = _select_base_column(tail)
+                if column:
+                    sink(head.lower(), column)
+                    return
+            skips.append((site, "dotted filter path %r" % name))
+            return
+        column = _select_base_column(name)
+        if column:
+            sink(table, column)
+
+    def visit_call(node, resolver):
+        if not isinstance(node.func, ast.Attribute):
+            return
+        method = node.func.attr
+        lineno = node.func.value.end_lineno or node.lineno
+        site = "%s:%d .%s" % (relative, lineno, method)
+
+        def sink(table, column):
+            references.setdefault((table, column), []).append((relative, lineno))
+
+        if method in _COLUMN_SELECT_METHODS:
+            counters["sites_select"] += 1
+            if not node.args:
+                return  # `.select()` with no projection is `*`
+            expr = _constant_str(node.args[0], bound)
+            if expr is None:
+                counters["skipped"] += 1
+                skips.append((site, "select list is not a literal"))
+                return
+            table, why = resolver.resolve(node)
+            if table is None:
+                counters["skipped"] += 1
+                skips.append((site, why))
+                return
+            counters["resolved"] += 1
+            _parse_select_list(expr, table, sink, skips, site)
+
+        elif method in _COLUMN_FILTER_METHODS:
+            counters["sites_filter"] += 1
+            if not node.args:
+                counters["skipped"] += 1
+                skips.append((site, "no positional argument"))
+                return
+            name = _constant_str(node.args[0], bound)
+            if name is None:
+                counters["skipped"] += 1
+                skips.append((site, "column name is not a literal"))
+                return
+            table, why = resolver.resolve(node)
+            if table is None:
+                counters["skipped"] += 1
+                skips.append((site, why))
+                return
+            counters["resolved"] += 1
+            attribute_filter(name, table, sink, site)
+
+        elif method in _COLUMN_WRITE_METHODS:
+            counters["sites_write"] += 1
+            table, why = resolver.resolve(node)
+            if table is None:
+                counters["skipped"] += 1
+                skips.append((site, why))
+                return
+            payloads = []
+            if node.args:
+                arg = node.args[0]
+                if isinstance(arg, ast.Dict):
+                    payloads.append(arg)
+                elif isinstance(arg, (ast.List, ast.Tuple)):
+                    for element in arg.elts:
+                        if isinstance(element, ast.Dict):
+                            payloads.append(element)
+                        else:
+                            counters["skipped_dynamic_payload"] += 1
+                            skips.append((site, "list element is not a literal dict"))
+                else:
+                    counters["skipped_dynamic_payload"] += 1
+                    skips.append((site, "payload is not a literal dict"))
+            else:
+                counters["skipped_dynamic_payload"] += 1
+                skips.append((site, "no payload argument"))
+            for payload in payloads:
+                for key in payload.keys:
+                    literal = _constant_str(key, bound)
+                    if literal is None:
+                        counters["skipped_dynamic_payload"] += 1
+                        skips.append((site, "dict key is not a literal"))
+                        continue
+                    column = _select_base_column(literal)
+                    if column:
+                        sink(table, column)
+            if payloads:
+                counters["resolved"] += 1
+            conflict = _keyword(node, "on_conflict")
+            if conflict is not None:
+                literal = _constant_str(conflict, bound)
+                if literal is None:
+                    counters["skipped"] += 1
+                    skips.append((site, "on_conflict is not a literal"))
+                else:
+                    counters["sites_on_conflict"] += 1
+                    for part in literal.split(","):
+                        column = _select_base_column(part)
+                        if column:
+                            sink(table, column)
+
+    def walk_scope(body, resolver, branching=False):
+        """One suite, in statement order, sharing one binding map.
+
+        Python scoping is per FUNCTION, so an ``if`` body shares the enclosing
+        function's bindings while a nested ``def`` gets a COPY - which is what
+        stops one handler's ``query`` reaching another's.
+        """
+        for stmt in body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                walk_scope(
+                    stmt.body, _ColumnChainResolver(resolver.var_tables, bound)
+                )
+                continue
+            for call in _calls_in_statement(stmt):
+                visit_call(call, resolver)
+            resolver.note_assignment(stmt, branching=branching)
+            for field in _SUITE_FIELDS:
+                nested = getattr(stmt, field, None)
+                if not isinstance(nested, list):
+                    continue
+                for item in nested:
+                    if isinstance(item, ast.excepthandler):
+                        walk_scope(item.body, resolver, branching=True)
+                    elif isinstance(item, ast.stmt):
+                        walk_scope([item], resolver, branching=True)
+
+    walk_scope(tree.body, _ColumnChainResolver(constants=bound))
+
+
+_COLUMN_SCAN_CACHE: dict = {}
+
+
+def _column_references():
+    """``((table, column) -> [(file, line)], skips, counters)`` under ``backend_app/``.
+
+    Memoised: the scan AST-parses the fifty modules that contain a table verb,
+    which is a few seconds, and ten assertions below read it.
+    """
+    if "scan" not in _COLUMN_SCAN_CACHE:
+        root = REPO_ROOT / "backend_app"
+        references: dict = {}
+        skips: list = []
+        counters = {
+            "sites_select": 0,
+            "sites_filter": 0,
+            "sites_write": 0,
+            "sites_on_conflict": 0,
+            "resolved": 0,
+            "skipped": 0,
+            "skipped_dynamic_payload": 0,
+            "unparsable_files": 0,
+            "files": 0,
+            "files_without_a_table_verb": 0,
+        }
+        constants = _ConstantIndex(root, REPO_ROOT)
+        for path in sorted(root.rglob("*.py")):
+            counters["files"] += 1
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if ".table(" not in text and ".from_(" not in text:
+                # No table verb in the file, so no chain in it can name a
+                # relation. Parsing it would yield nothing but skip records
+                # for `.update` and `.select` on objects that are not query
+                # builders at all - a plain dict's `.update`, for instance.
+                counters["files_without_a_table_verb"] += 1
+                continue
+            tree = constants.tree(path)
+            if tree is None:
+                counters["unparsable_files"] += 1
+                continue
+            _scan_module_columns(
+                path,
+                tree,
+                path.relative_to(REPO_ROOT).as_posix(),
+                constants.bind(constants.module_name(path)),
+                references,
+                skips,
+                counters,
+            )
+        _COLUMN_SCAN_CACHE["scan"] = (references, skips, counters)
+    return _COLUMN_SCAN_CACHE["scan"]
+
+
+# --------------------------------------------------------------------------
+# the DECLARED oracle: CREATE TABLE plus ALTER TABLE, applied in file order
+# --------------------------------------------------------------------------
+
+#: Column-list entries that are TABLE constraints rather than columns.
+_TABLE_CONSTRAINT_HEADS = frozenset(
+    {"primary", "foreign", "unique", "check", "constraint", "exclude", "like"}
+)
+
+#: Words that end a column's TYPE and begin its constraints or default.
+_TYPE_TERMINATORS = frozenset(
+    {
+        "not", "null", "default", "primary", "references", "unique", "check",
+        "generated", "collate", "constraint", "deferrable", "on", "storage",
+        "compression",
+    }
+)
+
+#: `ADD <word>` where the word is a constraint keyword, not a column name.
+_ADD_IS_NOT_A_COLUMN = frozenset(
+    {"constraint", "primary", "foreign", "unique", "check", "exclude", "column"}
+)
+
+#: PostgreSQL type spellings that mean the same type. Folded before two
+#: declarations are called divergent, so `DECIMAL(10,2)` and `NUMERIC(10,2)`
+#: - which are the same type - are not reported as a conflict, while
+#: `NUMERIC(10,2)` and `NUMERIC(20,8)` still are.
+_TYPE_SYNONYMS = {
+    "decimal": "numeric",
+    "timestamptz": "timestamp with time zone",
+    "timestamp": "timestamp without time zone",
+    "int": "integer",
+    "int4": "integer",
+    "int8": "bigint",
+    "bool": "boolean",
+    "varchar": "character varying",
+    "float8": "double precision",
+    "serial": "integer",
+    "bigserial": "bigint",
+}
+
+_CREATE_TABLE_HEAD = re.compile(
+    r"CREATE\s+(?:UNLOGGED\s+|TEMP(?:ORARY)?\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r'(?:"?(?P<schema>[A-Za-z_][A-Za-z0-9_]*)"?\s*\.\s*)?'
+    r'"?(?P<name>[A-Za-z_][A-Za-z0-9_]*)"?\s*\(',
+    re.IGNORECASE,
+)
+_ALTER_TABLE_HEAD = re.compile(
+    r"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?"
+    r'(?:"?(?P<schema>[A-Za-z_][A-Za-z0-9_]*)"?\s*\.\s*)?'
+    r'"?(?P<name>[A-Za-z_][A-Za-z0-9_]*)"?',
+    re.IGNORECASE,
+)
+_ADD_COLUMN_ACTION = re.compile(
+    r"^\s*ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"
+    r'"?(?P<name>[A-Za-z_][A-Za-z0-9_]*)"?\s+(?P<rest>.*)$',
+    re.IGNORECASE | re.DOTALL,
+)
+_DROP_COLUMN_ACTION = re.compile(
+    r'^\s*DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?"?(?P<name>[A-Za-z_][A-Za-z0-9_]*)"?',
+    re.IGNORECASE,
+)
+_RENAME_COLUMN_ACTION = re.compile(
+    r'^\s*RENAME\s+COLUMN\s+"?(?P<old>[A-Za-z_][A-Za-z0-9_]*)"?'
+    r'\s+TO\s+"?(?P<new>[A-Za-z_][A-Za-z0-9_]*)"?',
+    re.IGNORECASE,
+)
+_ALTER_COLUMN_TYPE_ACTION = re.compile(
+    r'^\s*ALTER\s+(?:COLUMN\s+)?"?(?P<name>[A-Za-z_][A-Za-z0-9_]*)"?'
+    r"\s+(?:SET\s+DATA\s+)?TYPE\s+(?P<type>.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _matching_close_paren(text: str, open_index: int) -> int:
+    depth = 0
+    for i in range(open_index, len(text)):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def _canonical_type(type_text: str) -> str:
+    """Fold synonym spellings; precision and scale are preserved."""
+    text = type_text.strip().lower()
+    head, _, tail = text.partition("(")
+    base = _TYPE_SYNONYMS.get(head.strip(), head.strip())
+    return "%s(%s" % (base, tail) if tail else base
+
+
+def _column_type_text(rest: str) -> str:
+    """The type at the head of a column declaration, as written."""
+    tokens: list = []
+    rest = rest.strip()
+    i = 0
+    while i < len(rest):
+        match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", rest[i:])
+        if not match:
+            break
+        word = match.group(1).lower()
+        if word in _TYPE_TERMINATORS:
+            break
+        tokens.append(word)
+        i += match.end()
+        sized = re.match(r"\s*\(([^()]*)\)", rest[i:])
+        if sized:
+            tokens[-1] += "(" + re.sub(r"\s+", "", sized.group(1)) + ")"
+            i += sized.end()
+        array = re.match(r"\s*(?:\[\s*\])+", rest[i:])
+        if array:
+            tokens[-1] += "[]"
+            i += array.end()
+        tail = re.match(
+            r"\s*(with\s+time\s+zone|without\s+time\s+zone|precision|varying)",
+            rest[i:],
+            re.IGNORECASE,
+        )
+        if tail:
+            tokens.append(re.sub(r"\s+", " ", tail.group(1).lower()))
+            i += tail.end()
+            continue
+        break
+    return " ".join(tokens)
+
+
+def _create_table_columns(masked: str, open_index: int):
+    """``[(column, type_text), ...]`` for the list starting at ``open_index``."""
+    close = _matching_close_paren(masked, open_index)
+    if close == -1:
+        return []
+    columns = []
+    for entry in _split_at_depth_zero(masked[open_index + 1:close]):
+        entry = entry.strip()
+        if not entry:
+            continue
+        head = re.match(r'"?([A-Za-z_][A-Za-z0-9_]*)"?\s*(.*)$', entry, re.DOTALL)
+        if not head:
+            continue
+        name = head.group(1).lower()
+        if name in _TABLE_CONSTRAINT_HEADS:
+            continue
+        columns.append((name, _column_type_text(head.group(2))))
+    return columns
+
+
+_DECLARED_COLUMN_CACHE: dict = {}
+
+
+def _declared_columns():
+    """The migration set's column state, applied in file order.
+
+    Returns ``(columns, type_spellings, created, altered_only)``:
+
+    * ``columns[table]`` - the live set after every CREATE / ADD / DROP /
+      RENAME in file order;
+    * ``type_spellings[(table, column)]`` - ``{canonical type: {files}}``;
+      more than one key is the ``strategy_backtests.version`` shape;
+    * ``created`` - tables a ``CREATE TABLE`` in the set declares, so the set
+      is AUTHORITATIVE for their columns;
+    * ``altered_only`` - tables the set only ``ALTER``s, so its column list
+      for them is a SUBSET and cannot be the oracle on its own.
+
+    Parsed off :func:`_mask_sql`'s output, so a ``CREATE TABLE`` quoted inside
+    a ``RAISE NOTICE`` is not a declaration. Alembic is deliberately NOT
+    consulted - a column declared only there is the drift 13.14 recorded.
+    """
+    if "declared" not in _DECLARED_COLUMN_CACHE:
+        columns: dict = {}
+        type_spellings: dict = {}
+        created: set = set()
+        touched: set = set()
+
+        for path in _sql_migration_files():
+            masked = _mask_sql(path.read_text(encoding="utf-8", errors="replace"))
+
+            for match in _CREATE_TABLE_HEAD.finditer(masked):
+                if (match.group("schema") or "public").lower() != "public":
+                    continue
+                table = match.group("name").lower()
+                created.add(table)
+                bucket = columns.setdefault(table, set())
+                for column, type_text in _create_table_columns(
+                    masked, match.end() - 1
+                ):
+                    bucket.add(column)
+                    if type_text:
+                        type_spellings.setdefault(
+                            (table, column), {}
+                        ).setdefault(_canonical_type(type_text), set()).add(path.name)
+
+            for match in _ALTER_TABLE_HEAD.finditer(masked):
+                if (match.group("schema") or "public").lower() != "public":
+                    continue
+                table = match.group("name").lower()
+                end = masked.find(";", match.end())
+                end = len(masked) if end == -1 else end
+                for action in _split_at_depth_zero(masked[match.end():end]):
+                    add = _ADD_COLUMN_ACTION.match(action)
+                    if add and add.group("name").lower() not in _ADD_IS_NOT_A_COLUMN:
+                        column = add.group("name").lower()
+                        columns.setdefault(table, set()).add(column)
+                        touched.add(table)
+                        type_text = _column_type_text(add.group("rest"))
+                        if type_text:
+                            type_spellings.setdefault(
+                                (table, column), {}
+                            ).setdefault(
+                                _canonical_type(type_text), set()
+                            ).add(path.name)
+                        continue
+                    drop = _DROP_COLUMN_ACTION.match(action)
+                    if drop:
+                        column = drop.group("name").lower()
+                        columns.setdefault(table, set()).discard(column)
+                        type_spellings.pop((table, column), None)
+                        touched.add(table)
+                        continue
+                    rename = _RENAME_COLUMN_ACTION.match(action)
+                    if rename:
+                        old = rename.group("old").lower()
+                        new = rename.group("new").lower()
+                        bucket = columns.setdefault(table, set())
+                        bucket.discard(old)
+                        bucket.add(new)
+                        if (table, old) in type_spellings:
+                            type_spellings[(table, new)] = type_spellings.pop(
+                                (table, old)
+                            )
+                        touched.add(table)
+                        continue
+                    retype = _ALTER_COLUMN_TYPE_ACTION.match(action)
+                    if retype:
+                        column = retype.group("name").lower()
+                        columns.setdefault(table, set()).add(column)
+                        touched.add(table)
+                        type_text = _column_type_text(retype.group("type"))
+                        if type_text:
+                            type_spellings.setdefault(
+                                (table, column), {}
+                            ).setdefault(
+                                _canonical_type(type_text), set()
+                            ).add(path.name)
+
+        _DECLARED_COLUMN_CACHE["declared"] = (
+            columns,
+            type_spellings,
+            created,
+            touched - created,
+        )
+    return _DECLARED_COLUMN_CACHE["declared"]
+
+
+def _allowed_columns(table: str):
+    """The column set ``table`` is allowed to be read with, or ``None``.
+
+    ``None`` means this guard has no oracle for the table at all, which is the
+    TABLE-level guard's business rather than this one's.
+    """
+    columns, _types, created, _altered = _declared_columns()
+    if table in created:
+        return frozenset(columns.get(table, ()))
+    recorded = PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES.get(table)
+    if recorded is not None:
+        return frozenset(columns.get(table, set())) | recorded
+    return None
+
+
+# --------------------------------------------------------------------------
+# the scanner's own health
+# --------------------------------------------------------------------------
+
+#: Every PostgREST form the scanner claims to handle, in the shapes this
+#: codebase actually writes them, plus the two that produced real bugs.
+#: `ghost_column` is deliberately undeclared so the guard is proven to FIRE.
+_COLUMN_SCANNER_FIXTURE = '''
+import other_module
+from . import listing_projection as _listing_projection
+
+PROJECTION = "id,name," + _listing_projection.LISTING_SELECT
+
+EMBED_PROJECTION = (
+    "id,library_id,status,"
+    "library_strategies!library_id!inner("
+    + _listing_projection.LISTING_SELECT
+    + ",marketplace_submissions(submission_state)"
+    ")"
+)
+
+
+def one(db, uid):
+    # select with every scalar form: alias, cast, json path, count, aggregate,
+    # star, and newlines inside the string
+    return (
+        db.table("outer_table")
+        .select(
+            """
+            plain,
+            alias:aliased,
+            cast_me::text,
+            payload->key,
+            payload_two->>other,
+            count,
+            amount.sum(),
+            *
+            """
+        )
+        .eq("filter_one", uid)
+        .neq("filter_two", 1)
+        .gt("filter_three", 1)
+        .gte("filter_four", 1)
+        .lt("filter_five", 1)
+        .lte("filter_six", 1)
+        .like("filter_seven", "%x%")
+        .ilike("filter_eight", "%x%")
+        .is_("filter_nine", "null")
+        .in_("filter_ten", [1])
+        .contains("filter_eleven", ["x"])
+        .filter("filter_twelve", "eq", 1)
+        .order("order_me", desc=True)
+        .execute()
+    )
+
+
+def two(db):
+    # an embed with a hint recurses into the EMBEDDED table, and the hint is
+    # not part of the relation name
+    return (
+        db.table("outer_table")
+        .select("own_column, inner_table!inner(inner_one, inner_two), "
+                "labelled:other_inner!fk(other_one)")
+        .execute()
+    )
+
+
+def three(db, uid):
+    # a chain built across statements, rebound in a branch
+    query = db.table("outer_table").select("built_one")
+    if uid:
+        query = query.eq("built_two", uid)
+    return query.execute()
+
+
+def four(db):
+    # two handlers' locals must not leak into one another: this `query` is a
+    # DIFFERENT table from `three`'s, and `built_two` must not land here
+    query = db.table("second_table").select("second_one")
+    return query.eq("second_two", 1).execute()
+
+
+def five(db, uid, payload):
+    db.table("outer_table").insert(
+        {"written_one": 1, "written_two": 2}
+    ).execute()
+    db.table("outer_table").upsert(
+        {"upserted_one": 1}, on_conflict="conflict_one,conflict_two"
+    ).execute()
+    db.table("outer_table").update({"updated_one": 1}).eq("id_col", uid).execute()
+    # NOT a literal dict: skipped and counted, never guessed
+    db.table("outer_table").insert(payload).execute()
+    # NOT a literal table: skipped and counted
+    db.table(payload["t"]).select("invisible_one").execute()
+    # a dotted filter addresses the EMBEDDED resource, not `outer_table`
+    db.table("outer_table").select("x").eq("inner_table.dotted_one", 1).execute()
+    # the undeclared one, so the guard is proven to fire rather than to be quiet
+    db.table("outer_table").select("ghost_column").execute()
+    # a plain dict's `.update` is not a query builder; no table, no column
+    {}.update({"not_a_column": 1})
+'''
+
+#: What the fixture must resolve to, EXACTLY. `LISTING_SELECT` resolves to
+#: nothing here (there is no sibling module to import), so `PROJECTION` and
+#: `EMBED_PROJECTION` are unresolvable constants - which is itself part of the
+#: claim: an unresolvable constant contributes no column rather than a wrong
+#: one.
+_COLUMN_FIXTURE_EXPECTED = {
+    "outer_table": frozenset(
+        {
+            "plain", "aliased", "cast_me", "payload", "payload_two", "amount",
+            "filter_one", "filter_two", "filter_three", "filter_four",
+            "filter_five", "filter_six", "filter_seven", "filter_eight",
+            "filter_nine", "filter_ten", "filter_eleven", "filter_twelve",
+            "order_me", "own_column", "built_one", "built_two",
+            "written_one", "written_two", "upserted_one", "conflict_one",
+            "conflict_two", "updated_one", "id_col", "x", "ghost_column",
+        }
+    ),
+    "inner_table": frozenset({"inner_one", "inner_two", "dotted_one"}),
+    "other_inner": frozenset({"other_one"}),
+    "second_table": frozenset({"second_one", "second_two"}),
+}
+
+
+def _scan_fixture(source: str):
+    """Run the scanner over a source string, with no constant index."""
+    references: dict = {}
+    skips: list = []
+    counters = {
+        "sites_select": 0,
+        "sites_filter": 0,
+        "sites_write": 0,
+        "sites_on_conflict": 0,
+        "resolved": 0,
+        "skipped": 0,
+        "skipped_dynamic_payload": 0,
+    }
+    _scan_module_columns(
+        None, ast.parse(source), "<fixture>", None, references, skips, counters
+    )
+    found: dict = {}
+    for table, column in references:
+        found.setdefault(table, set()).add(column)
+    return found, skips, counters
+
+
+class TestTheColumnScannerIsHonest:
+    """Guards the guard. A parser that quietly matches nothing passes
+    everything, and a parser drowning in false positives gets allowlisted
+    away - both failures look like a green suite."""
+
+    def test_the_fixture_resolves_to_exactly_its_real_columns(self):
+        """Every PostgREST form, resolving to an EXACT set.
+
+        If the embed stops being followed, ``inner_table`` goes missing and
+        ``inner_table`` appears as a COLUMN of ``outer_table``. If the hint
+        stops being stripped, ``other_inner`` becomes ``other_inner!fk``. If
+        the scope tracking regresses, ``built_two`` lands on
+        ``second_table``. Each of those fails here rather than in a migration
+        where the instinct is to reach for the exemption list.
+        """
+        found, _skips, _counters = _scan_fixture(_COLUMN_SCANNER_FIXTURE)
+        assert set(found) == set(_COLUMN_FIXTURE_EXPECTED), (
+            "tables: unexpected "
+            f"{sorted(set(found) - set(_COLUMN_FIXTURE_EXPECTED))}; missing "
+            f"{sorted(set(_COLUMN_FIXTURE_EXPECTED) - set(found))}"
+        )
+        for table, expected in _COLUMN_FIXTURE_EXPECTED.items():
+            assert found[table] == expected, (
+                f"{table}: unexpected {sorted(found[table] - expected)}; "
+                f"missing {sorted(expected - found[table])}"
+            )
+
+    def test_the_fixture_proves_the_guard_still_fires(self):
+        """At least one fixture column is deliberately undeclared.
+
+        A scanner that has gone quiet and a schema with no drift look the same
+        from the outside. This is the difference.
+        """
+        found, _skips, _counters = _scan_fixture(_COLUMN_SCANNER_FIXTURE)
+        assert "ghost_column" in found["outer_table"], (
+            "the deliberately-undeclared fixture column is no longer found, so "
+            "nothing proves this guard can still report anything."
+        )
+        assert _allowed_columns("outer_table") is None, (
+            "the fixture's table name has become a real relation; rename the "
+            "fixture's tables so the fixture cannot be satisfied by the schema."
+        )
+
+    def test_embeds_are_followed_and_never_read_as_columns(self):
+        """``rel(a,b)`` is a relation, not a column of the outer table."""
+        found, _skips, _counters = _scan_fixture(_COLUMN_SCANNER_FIXTURE)
+        for relation in ("inner_table", "other_inner", "marketplace_submissions"):
+            assert relation not in found["outer_table"], (
+                f"{relation!r} is reported as a COLUMN of outer_table. An "
+                "embedded resource names a RELATION; reading it as a column "
+                "invents one on the outer table and misses every column inside "
+                "the embed."
+            )
+
+    def test_the_unresolvable_forms_are_skipped_and_counted(self):
+        """A dynamic payload and a dynamic table name are counted, not guessed."""
+        found, skips, counters = _scan_fixture(_COLUMN_SCANNER_FIXTURE)
+        assert "invisible_one" not in found["outer_table"], (
+            "a select whose TABLE is not a literal was attributed to a table "
+            "anyway - that is a guess, and a guess is what this counts instead."
+        )
+        assert counters["skipped"] >= 1 and counters["skipped_dynamic_payload"] >= 1, (
+            f"the fixture's unresolvable sites were not counted: {counters}"
+        )
+        assert any("not a literal" in reason for _site, reason in skips), skips
+
+    def test_the_real_scan_is_non_trivial(self):
+        """Floors on the real parse, the way the table-level guard has them."""
+        references, _skips, counters = _column_references()
+        tables = {table for table, _column in references}
+        assert len(references) >= MIN_DISTINCT_COLUMN_PAIRS, (
+            f"only {len(references)} distinct table.column pairs parsed out of "
+            f"{counters['files']} modules - the scan has stopped matching, so "
+            "every assertion built on it is vacuous."
+        )
+        assert len(tables) >= MIN_TABLES_WITH_COLUMN_REFERENCES, (
+            f"only {len(tables)} tables reached by a column reference."
+        )
+        assert counters["sites_select"] > 100 and counters["sites_filter"] > 300, (
+            f"too few call sites parsed: {counters}"
+        )
+
+    def test_the_declared_column_oracle_is_non_trivial(self):
+        columns, type_spellings, created, altered_only = _declared_columns()
+        pairs = sum(len(v) for v in columns.values())
+        assert pairs >= MIN_DECLARED_COLUMN_PAIRS, (
+            f"only {pairs} declared table.column pairs parsed out of "
+            f"{len(_sql_migration_files())} SQL migrations - the column-list "
+            "parser has stopped matching."
+        )
+        assert len(created) > 50, f"only {len(created)} CREATE TABLEs parsed"
+        assert altered_only, (
+            "no table is ALTER-only any more. 006_reconcile_production_database "
+            "exists precisely to ALTER tables no migration creates; if that is "
+            "really gone, PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES should go too."
+        )
+        assert type_spellings, "no column types parsed at all"
+
+    def test_the_alter_half_of_the_oracle_is_load_bearing(self):
+        """A CREATE-TABLE-only parse would report these as missing.
+
+        Named rather than counted: these are the columns 006 and the
+        later migrations add to tables 001 already created, and they are what
+        makes the difference between 83 reported findings and a flood.
+        """
+        columns, _types, _created, _altered = _declared_columns()
+        for table, column, source in (
+            ("profiles", "billing_currency", "add_billing_currency_and_dag_hash.sql"),
+            ("strategies", "dag_config", "006_reconcile_production_database.sql"),
+            ("strategies", "last_signal_at", "015_strategy_last_signal_at.sql"),
+            ("library_strategies", "price_minor", "007_marketplace_submissions.sql"),
+        ):
+            assert column in columns.get(table, set()), (
+                f"{table}.{column} is not in the declared set. It is added by an "
+                f"ALTER TABLE in {source}, so the oracle has stopped applying "
+                "ALTERs and is about to report every such column as missing."
+            )
+
+    def test_masking_is_what_the_column_parse_reads(self):
+        """A column list inside a string literal is not a declaration."""
+        fixture = (
+            "DO $$ BEGIN RAISE NOTICE 'CREATE TABLE ghost_decl (ghost_col uuid)'; "
+            "END $$;\n"
+            "-- CREATE TABLE commented_decl (commented_col uuid);\n"
+            "CREATE TABLE real_decl (real_col uuid, other_col numeric(10,2));\n"
+        )
+        masked = _mask_sql(fixture)
+        found = {}
+        for match in _CREATE_TABLE_HEAD.finditer(masked):
+            found[match.group("name").lower()] = dict(
+                _create_table_columns(masked, match.end() - 1)
+            )
+        assert set(found) == {"real_decl"}, found
+        assert found["real_decl"] == {"real_col": "uuid", "other_col": "numeric(10,2)"}
+
+
+# --------------------------------------------------------------------------
+# the general column guard
+# --------------------------------------------------------------------------
+
+
+class TestEveryReferencedColumnIsDeclared:
+    """One level deeper than :class:`TestEveryReferencedTableIsDeclared`.
+
+    That class asks whether the RELATION a read names exists. This one asks
+    whether the COLUMNS do, which is the question that let creator analytics
+    ship a ``.select`` naming ``monthly_price`` and ``rating_average`` off a
+    table that has neither.
+    """
+
+    def test_every_referenced_column_resolves(self):
+        references, _skips, _counters = _column_references()
+        offenders: dict = {}
+        for (table, column), sites in references.items():
+            allowed = _allowed_columns(table)
+            if allowed is None:
+                continue  # no column oracle for this relation at all
+            if column in allowed:
+                continue
+            if "%s.%s" % (table, column) in KNOWN_UNDECLARED_COLUMN_DEFECTS:
+                continue
+            offenders[(table, column)] = sites
+        if offenders:
+            lines = []
+            for table, column in sorted(offenders):
+                sites = offenders[(table, column)]
+                path, lineno = sites[0]
+                extra = len(sites) - 1
+                suffix = f" (and {extra} more)" if extra else ""
+                lines.append(f"  {table}.{column}  at {path}:{lineno}{suffix}")
+            pytest.fail(
+                "These COLUMNS are named by a read or a write and exist in "
+                "neither the migration set nor the recorded production schema, "
+                "so PostgREST answers 42703 column does not exist - the same "
+                "defect as creator analytics selecting monthly_price off "
+                "library_strategies, and as the exchange-list read:\n"
+                + "\n".join(lines)
+                + "\n\nFix by adding the column in a migration, or by naming the "
+                "column the table actually has. Do NOT add the name to "
+                "PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES - that set records "
+                "columns production ALREADY HAS, and adding one production does "
+                "not have re-creates exactly this defect. Do NOT add it to "
+                "KNOWN_UNDECLARED_COLUMN_DEFECTS either: that register may only "
+                "SHRINK, and every entry in it names a live 42703 that is "
+                "waiting on a decision, not a tolerated name."
+            )
+
+    def test_the_recorded_production_column_sets_are_still_what_they_claim(self):
+        """The roster cannot rot, and cannot shadow a real CREATE TABLE."""
+        columns, _types, created, altered_only = _declared_columns()
+        references, _skips, _counters = _column_references()
+        referenced_tables = {table for table, _column in references}
+        for table, recorded in PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES.items():
+            assert table not in created, (
+                f"{table!r} is now declared by a CREATE TABLE in the migration "
+                "set, so the migration set is the authoritative oracle for its "
+                "columns. Delete the entry from "
+                "PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES rather than leaving a "
+                "recorded roster that can disagree with a parsed one."
+            )
+            assert table in referenced_tables, (
+                f"{table!r} is in PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES but "
+                "nothing under backend_app/ reads a column of it any more - "
+                "remove the entry."
+            )
+            assert recorded, f"{table!r} has an empty recorded column set"
+        assert "users" not in PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES, (
+            "users must never be recorded here: there is no public.users in "
+            "this schema at all, which is the whole of the health_check defect."
+        )
+        # EVERY table a column reference reaches must have an oracle, or the
+        # guard silently stops covering it. Scoping this to ALTER-only tables
+        # was tried and was a hole: `library_ratings` is neither created NOR
+        # altered by the migration set - it is declared only in Alembic - so
+        # deleting its roster entry left eight columns unchecked and every
+        # assertion above still green.
+        uncovered = sorted(
+            table
+            for table in referenced_tables
+            if table not in created
+            and table not in PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES
+        )
+        assert not uncovered, (
+            f"{uncovered} are read COLUMN BY COLUMN by the application and have "
+            "no column oracle at all: no CREATE TABLE in the migration set, and "
+            "no recorded production column set. Every column read off them is "
+            "unchecked, so this whole section stops covering them silently. "
+            "Add the CREATE TABLE - which is the better fix, and the one "
+            "TestEveryReferencedTableIsDeclared also wants - or record the "
+            "production columns with the server they were read from.\n"
+            f"(ALTER-only tables, for context: {sorted(altered_only)})"
+        )
+
+    def test_the_two_column_exemption_registers_do_not_overlap(self):
+        """A column is either present in production or a known 42703."""
+        for key in KNOWN_UNDECLARED_COLUMN_DEFECTS:
+            table, column = key.split(".", 1)
+            recorded = PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES.get(table)
+            if recorded is None:
+                continue
+            assert column not in recorded, (
+                f"{key} is recorded BOTH as present in production and as a "
+                "known 42703. The two justifications are incompatible; one of "
+                "them is wrong."
+            )
+
+    def test_every_known_defect_is_still_a_defect(self):
+        """The register is a list of OPEN defects, pinned so it cannot rot.
+
+        An entry that is no longer referenced, or whose column now exists, is
+        a FIXED defect and must leave the register - otherwise the register
+        becomes a permanent hole in the guard, which is the failure mode the
+        table-level exemptions are also pinned against.
+        """
+        references, _skips, _counters = _column_references()
+        stale = []
+        for key in sorted(KNOWN_UNDECLARED_COLUMN_DEFECTS):
+            table, column = key.split(".", 1)
+            if (table, column) not in references:
+                stale.append("%s is no longer referenced at all" % key)
+                continue
+            allowed = _allowed_columns(table)
+            if allowed is not None and column in allowed:
+                stale.append("%s now exists in the oracle" % key)
+        assert not stale, (
+            "KNOWN_UNDECLARED_COLUMN_DEFECTS has gone stale:\n  "
+            + "\n  ".join(stale)
+            + "\n\nRemove the fixed entries. Leaving them makes the register "
+            "larger than the defect, and the register is the thing that may "
+            "only shrink."
+        )
+
+    def test_the_known_defects_are_attributed_rather_than_merely_listed(self):
+        """Each entry names the module that owns it and who decides.
+
+        The point of the attribution is that it is checkable: the owning
+        module must still exist and must still be the one making the
+        reference.
+        """
+        references, _skips, _counters = _column_references()
+        for key, (module, reason) in sorted(
+            KNOWN_UNDECLARED_COLUMN_DEFECTS.items()
+        ):
+            assert reason, f"{key} carries no reason"
+            path = REPO_ROOT / "backend_app" / module
+            assert path.is_file(), (
+                f"{key} is attributed to backend_app/{module}, which is no "
+                "longer in the tree. Re-attribute it or remove the entry."
+            )
+            table, column = key.split(".", 1)
+            sites = references.get((table, column), [])
+            assert any(
+                site.endswith(module) for site, _line in sites
+            ), (
+                f"{key} is attributed to backend_app/{module} but is referenced "
+                f"from {sorted({site for site, _line in sites})} instead."
+            )
+
+    def test_the_clone_enrichment_reads_the_table_that_has_the_column(self):
+        """``routers/library.py``'s fixed read, pinned both ways.
+
+        ``_enrich_cards_with_user_context`` filtered ``library_strategies`` on
+        ``source_library_id``. That table records provenance as
+        ``source_strategy_id``; the CLONE is a row in ``strategies``, which is
+        where ``clone_strategy`` inserts it with ``source_library_id`` and
+        where its own idempotency check reads it back. The old read answered
+        ``42703`` on every catalogue page, the ``except`` logged a warning, and
+        ``user_has_cloned`` / ``user_rating`` were never set on any card -
+        which is the "a read that did not complete must not be collapsed into
+        a value" rule, failing in the omission direction.
+        """
+        right, wrong, column = FIXED_CLONE_ENRICHMENT
+        references, _skips, _counters = _column_references()
+        library = "backend_app/routers/library.py"
+
+        wrong_sites = [
+            (path, line)
+            for path, line in references.get((wrong, column), [])
+            if path == library
+        ]
+        assert not wrong_sites, (
+            f"{library} reads {wrong}.{column} again at {wrong_sites}. "
+            f"{wrong} has no {column} column - production answers "
+            f'42703 column "{column}" does not exist. The clone lives in '
+            f"{right}; read it there."
+        )
+        right_sites = [
+            (path, line)
+            for path, line in references.get((right, column), [])
+            if path == library
+        ]
+        assert len(right_sites) >= 3, (
+            f"{library} should read {right}.{column} in at least three places "
+            "(the card enrichment, the clone idempotency check and the clone "
+            f"insert); found {right_sites}. Without the enrichment read, "
+            "user_has_cloned is never set and this class asserts nothing."
+        )
+        assert column in _allowed_columns(right), (
+            f"{right}.{column} has left the oracle; re-establish it before "
+            "editing this test."
+        )
+        assert column not in _allowed_columns(wrong), (
+            f"{wrong}.{column} now exists, so the premise of this class has "
+            "changed. Re-read it before editing."
+        )
+
+    def test_coverage_has_not_eroded(self):
+        """The ratchet. Both directions, because either alone is gameable.
+
+        A call site whose table cannot be resolved is not checked at all, so
+        the number of them is the size of the blind spot. Left unpinned, a
+        refactor that moved every query behind a helper would take the blind
+        spot to 100% and leave this whole section green.
+        """
+        _references, skips, counters = _column_references()
+        unresolvable = counters["skipped"] + counters["skipped_dynamic_payload"]
+        assert unresolvable == len(skips), (
+            f"the skip counters ({unresolvable}) and the skip records "
+            f"({len(skips)}) disagree, so one of them is not being kept."
+        )
+        assert unresolvable <= MAX_UNRESOLVABLE_COLUMN_CALL_SITES, (
+            f"{unresolvable} call sites cannot be resolved to a table, up from "
+            f"{MAX_UNRESOLVABLE_COLUMN_CALL_SITES}. Every one of them is a "
+            "column reference this guard does not check. Either make the new "
+            "sites resolvable - a literal table name and a literal projection "
+            "are all it takes - or establish why the new blind spot is "
+            "acceptable and lower the pin deliberately. Do not raise it to go "
+            "green."
+        )
+        assert counters["resolved"] >= MIN_RESOLVED_COLUMN_CALL_SITES, (
+            f"only {counters['resolved']} call sites resolved, down from "
+            f"{MIN_RESOLVED_COLUMN_CALL_SITES}. Coverage has shrunk; a parser "
+            "that resolves nothing satisfies every assertion above."
+        )
+
+
+# --------------------------------------------------------------------------
+# (h) a column declared twice with two different types
+#
+# This is the `strategy_backtests.version` shape, and it is the one of the
+# three recorded defects that actually cost a bug: 001 declares it
+# `VARCHAR(20)`, 006 declares it `INTEGER`, so which type a rebuilt database
+# gets depends on which file ran last, and the router wrote `"v1.0"` into a
+# column production carried as `integer`. Migration 016 reconciles it.
+#
+# Synonym spellings are folded first - `DECIMAL(10,2)` and `NUMERIC(10,2)` are
+# the same type and 16 of the 46 raw hits were only that - so what remains is
+# 30 genuine conflicts. They are pinned as an inventory with production's
+# actual type recorded beside each, and the inventory may SHRINK and may never
+# GROW.
+# --------------------------------------------------------------------------
+
+#: 30 columns two migrations declare with two different types, with the type
+#: production actually carries. Every one is a rebuild hazard: the type a
+#: fresh database gets depends on file order. Recorded as an inventory rather
+#: than fixed here - reconciling a type is a data migration against live rows,
+#: which is what 016 had to do for `strategy_backtests.version` and is not a
+#: parse's decision.
+DIVERGENT_COLUMN_TYPES = {
+    "referral_codes.code": (
+        ("character varying(20)", "character varying(50)"),
+        "character varying(50)",
+    ),
+    "referral_profiles.approved_earnings": (
+        ("numeric(10,2)", "numeric(20,8)"),
+        "numeric(10,2)",
+    ),
+    "referral_profiles.id": (("text", "uuid"), "uuid"),
+    "referral_profiles.lifetime_earnings": (
+        ("numeric(10,2)", "numeric(20,8)"),
+        "numeric(10,2)",
+    ),
+    "referral_profiles.paid_earnings": (
+        ("numeric(10,2)", "numeric(20,8)"),
+        "numeric(10,2)",
+    ),
+    "referral_profiles.pending_earnings": (
+        ("numeric(10,2)", "numeric(20,8)"),
+        "numeric(10,2)",
+    ),
+    "referral_profiles.referral_code": (
+        ("character varying(20)", "character varying(50)"),
+        "character varying(50)",
+    ),
+    "strategy_backtests.commission": (
+        ("numeric(10,6)", "numeric(6,4)"),
+        "numeric(6,4)",
+    ),
+    "strategy_backtests.dataset": (("character varying(100)", "text"), "text"),
+    "strategy_backtests.end_date": (
+        ("date", "timestamp with time zone"),
+        "timestamp with time zone",
+    ),
+    "strategy_backtests.id": (("text", "uuid"), "text"),
+    "strategy_backtests.initial_capital": (
+        ("numeric(15,2)", "numeric(20,8)"),
+        "numeric(15,2)",
+    ),
+    "strategy_backtests.profit_factor": (
+        ("numeric(10,4)", "numeric(8,4)"),
+        "numeric(8,4)",
+    ),
+    "strategy_backtests.sharpe_ratio": (
+        ("numeric(10,4)", "numeric(8,4)"),
+        "numeric(8,4)",
+    ),
+    "strategy_backtests.slippage": (
+        ("numeric(10,6)", "numeric(6,4)"),
+        "numeric(6,4)",
+    ),
+    "strategy_backtests.sortino_ratio": (
+        ("numeric(10,4)", "numeric(8,4)"),
+        "numeric(8,4)",
+    ),
+    "strategy_backtests.start_date": (
+        ("date", "timestamp with time zone"),
+        "timestamp with time zone",
+    ),
+    "strategy_backtests.status": (
+        ("character varying(20)", "character varying(50)"),
+        "character varying(50)",
+    ),
+    "strategy_backtests.strategy_id": (("text", "uuid"), "text"),
+    "strategy_backtests.total_return": (
+        ("numeric(15,2)", "numeric(20,8)"),
+        "numeric(15,2)",
+    ),
+    "strategy_backtests.user_id": (("text", "uuid"), "text"),
+    "strategy_backtests.version": (
+        ("character varying(20)", "integer"),
+        "character varying(20)",
+    ),
+    "strategy_backtests.win_rate": (
+        ("numeric(10,4)", "numeric(6,4)"),
+        "numeric(6,4)",
+    ),
+    "strategy_deployments.exchange_id": (
+        ("character varying(50)", "uuid"),
+        "character varying(50)",
+    ),
+    "strategy_research_reports.id": (("text", "uuid"), "text"),
+    "strategy_research_reports.overall_quality_score": (
+        ("numeric(5,4)", "numeric(6,4)"),
+        "numeric(6,4)",
+    ),
+    "strategy_research_reports.strategy_id": (("text", "uuid"), "text"),
+    "strategy_research_reports.strategy_score": (
+        ("jsonb", "numeric(6,4)"),
+        "numeric(6,4)",
+    ),
+    "strategy_research_reports.user_id": (("text", "uuid"), "text"),
+    "strategy_research_reports.warnings": (("jsonb", "text[]"), "jsonb"),
+}
+
+#: The one divergence that has been RECONCILED, and the migration that did it.
+#: 016 restores `VARCHAR(20)` after 006 made it `INTEGER`; the router writes
+#: `"v1.0"`, which an integer column rejects.
+RECONCILED_DIVERGENCE = (
+    "strategy_backtests",
+    "version",
+    "character varying(20)",
+    "016_strategy_backtests_version_label.sql",
+)
+
+
+def _divergent_column_types():
+    """``{"table.column": {canonical type: {files}}}`` for every conflict."""
+    _columns, type_spellings, _created, _altered = _declared_columns()
+    return {
+        "%s.%s" % key: value
+        for key, value in type_spellings.items()
+        if len(value) > 1
+    }
+
+
+class TestColumnTypesAreDeclaredOnce:
+    """Two migrations declaring one column with two types is a rebuild
+    hazard: the type a fresh database gets depends on file order."""
+
+    def test_the_synonym_folding_is_what_makes_this_tractable(self):
+        """``DECIMAL(10,2)`` and ``NUMERIC(10,2)`` are one type; the fold must
+        not also swallow a precision change, which is a real conflict."""
+        assert _canonical_type("DECIMAL(10,2)") == _canonical_type("numeric(10,2)")
+        assert _canonical_type("TIMESTAMPTZ") == _canonical_type(
+            "timestamp with time zone"
+        )
+        assert _canonical_type("VARCHAR(20)") == "character varying(20)"
+        assert _canonical_type("numeric(10,2)") != _canonical_type("numeric(20,8)"), (
+            "a precision change is a real divergence - 20,8 and 10,2 round "
+            "money differently - and must not be folded away."
+        )
+        assert _canonical_type("jsonb") != _canonical_type("text[]")
+
+    def test_the_type_parser_reads_the_shapes_this_set_contains(self):
+        for declaration, expected in (
+            ("VARCHAR(20) NOT NULL DEFAULT 'v1.0'", "varchar(20)"),
+            ("NUMERIC(20, 8) DEFAULT 0", "numeric(20,8)"),
+            ("TIMESTAMP WITH TIME ZONE DEFAULT NOW()", "timestamp with time zone"),
+            ("DOUBLE PRECISION", "double precision"),
+            ("TEXT[] DEFAULT '{}'", "text[]"),
+            ("UUID PRIMARY KEY REFERENCES other(id)", "uuid"),
+            ("JSONB NOT NULL", "jsonb"),
+            ("BOOLEAN DEFAULT FALSE", "boolean"),
+        ):
+            assert _column_type_text(declaration) == expected, (
+                f"{declaration!r} parsed as "
+                f"{_column_type_text(declaration)!r}, expected {expected!r}"
+            )
+
+    def test_the_divergence_inventory_has_not_grown(self):
+        found = _divergent_column_types()
+        new = sorted(set(found) - set(DIVERGENT_COLUMN_TYPES))
+        if new:
+            lines = []
+            for key in new:
+                spellings = found[key]
+                detail = "; ".join(
+                    "%s in %s" % (type_text, sorted(files))
+                    for type_text, files in sorted(spellings.items())
+                )
+                lines.append(f"  {key}: {detail}")
+            pytest.fail(
+                "These columns are now declared with two different types by "
+                "two different migrations, so the type a rebuilt database gets "
+                "depends on which file ran last. That is the "
+                "strategy_backtests.version shape: 001 said VARCHAR(20), 006 "
+                "said INTEGER, production carried integer, and the router "
+                'wrote "v1.0" into it:\n'
+                + "\n".join(lines)
+                + "\n\nDeclare the column once, or add an explicit "
+                "ALTER COLUMN ... TYPE reconciliation the way "
+                "016_strategy_backtests_version_label.sql does. Adding the "
+                "name to DIVERGENT_COLUMN_TYPES re-creates the defect: that "
+                "inventory records conflicts that already shipped and may only "
+                "SHRINK."
+            )
+
+    def test_the_divergence_inventory_has_not_gone_stale(self):
+        """An entry that is no longer divergent has been fixed; it must leave.
+
+        Without this the inventory outlives the conflicts and this class stops
+        being able to tell the difference between a clean set and a parser that
+        has stopped matching.
+        """
+        found = _divergent_column_types()
+        fixed = sorted(set(DIVERGENT_COLUMN_TYPES) - set(found))
+        assert not fixed, (
+            f"{fixed} are no longer declared with conflicting types. Remove "
+            "them from DIVERGENT_COLUMN_TYPES - the inventory is the thing "
+            "that may only shrink, and an entry that outlives its conflict is "
+            "a permanent hole."
+        )
+
+    def test_each_recorded_conflict_still_names_two_real_spellings(self):
+        found = _divergent_column_types()
+        for key, (spellings, _production) in sorted(
+            DIVERGENT_COLUMN_TYPES.items()
+        ):
+            actual = tuple(sorted(found[key]))
+            assert actual == tuple(sorted(spellings)), (
+                f"{key} now diverges as {actual}, not as {tuple(sorted(spellings))}. "
+                "The conflict has changed shape; re-read it rather than "
+                "updating the tuple to match."
+            )
+
+    def test_the_one_reconciled_divergence_stays_reconciled(self):
+        """016's reconciliation, pinned at the column-type level.
+
+        ``tests/test_backtest_version_label_regression.py`` pins the
+        statement; this pins the OUTCOME of applying the whole set in order,
+        which is the thing a rebuilt database actually gets.
+        """
+        table, column, expected, migration = RECONCILED_DIVERGENCE
+        columns, type_spellings, _created, _altered = _declared_columns()
+        assert column in columns.get(table, set()), (
+            f"{table}.{column} is not in the declared set at all."
+        )
+        spellings = type_spellings.get((table, column), {})
+        assert expected in spellings, (
+            f"{table}.{column} is no longer declared as {expected!r} anywhere; "
+            f"spellings found: {sorted(spellings)}. {migration} exists to "
+            "restore that type after 006 made it integer, and the router writes "
+            'a label like "v1.0" which an integer column rejects.'
+        )
+        assert migration in spellings[expected], (
+            f"{migration} no longer declares {table}.{column} as {expected!r}; "
+            f"the type comes from {sorted(spellings[expected])} instead. If "
+            "that migration has been renamed, update "
+            "RECONCILED_DIVERGENCE deliberately."
+        )

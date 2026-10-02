@@ -261,10 +261,18 @@ STRATEGIES_ROUND_TRIPS = 3
 #: two statements against the wrong two tables is not what Requirement 27.1 describes.
 CATALOGUE_TABLES: Tuple[str, ...] = ("library_strategies", "profiles")
 CATALOGUE_TABLES_FOR_AN_EMPTY_PAGE: Tuple[str, ...] = ("library_strategies",)
+#: The clone read is against ``strategies``, not ``library_strategies``: a clone is a row in
+#: ``strategies`` carrying ``source_library_id``, which is where ``clone_strategy`` inserts it
+#: and where its own idempotency check reads it back. This sequence used to name
+#: ``library_strategies`` a second time, which was the defect rather than the design -
+#: ``library_strategies`` has no ``source_library_id`` column, so that statement answered
+#: ``42703`` against the real database and the enrichment silently omitted both of its fields.
+#: Four DISTINCT tables is also the stronger shape for what P-57 asserts: a repeat of a table
+#: already in the sequence is the N+1 signature this test exists to catch.
 CATALOGUE_TABLES_AUTHENTICATED: Tuple[str, ...] = (
     "library_strategies",
     "profiles",
-    "library_strategies",
+    "strategies",
     "library_ratings",
 )
 STRATEGIES_TABLES: Tuple[str, ...] = (

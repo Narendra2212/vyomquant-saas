@@ -613,10 +613,19 @@ def _enrich_cards_with_user_context(cards, svc, user_id):
     if not library_ids:
         return
     try:
+        # A clone is a row in `strategies`, not in `library_strategies`: `clone_strategy`
+        # inserts it there with `user_id` + `source_library_id` (step 7 below) and its own
+        # idempotency check reads it back the same way. `library_strategies` has no
+        # `source_library_id` column at all - it records provenance the other way round, as
+        # `source_strategy_id` - so this read used to answer
+        # `42703 column "source_library_id" does not exist` on every catalogue page, the
+        # `except` below logged a warning, and `user_has_cloned` / `user_rating` were never
+        # set on any card. The field assigned below is called `cloned_strategy_id`, which is
+        # what the id has to be.
         clones_resp = (
-            svc.table("library_strategies")
+            svc.table("strategies")
             .select("id, source_library_id")
-            .eq("author_id", user_id)
+            .eq("user_id", user_id)
             .in_("source_library_id", library_ids)
             .execute()
         )
