@@ -4053,6 +4053,163 @@ exists to remove.
     _standing just because the decision it justified was right)_
 
 
+- [ ] 13.28 CLAUSE 1.20'S THIRD SURFACE IS CLOSED: NINE CREDENTIAL-BEARING EXCHANGE ROUTES
+  ARE NOW DRIVEN WITH PLANTED SENTINEL CREDENTIALS AND NONE RETURNS ONE — AND THE TWO
+  TESTS THAT LOOKED LIKE THIS COVER ARE SHOWN TO HAVE ASSERTED AGAINST A DICT LITERAL
+  - **THE SURFACE, AND WHY IT WAS STILL OPEN.** 1.20 [P1] names three places a credential
+    may not appear: the built bundle (held by `tests/test_no_secrets_in_bundle.py`), the
+    production logs (discharged by 13.26 against the live log group, tightened by 13.27),
+    and **an API response body**. 13.26 named the response-body half as the remaining gap
+    and established that nothing covered it. This task covers it:
+    **`tests/test_no_credential_in_api_response_body.py`, 47 passed**
+  - **THE TWO VACUOUS TESTS, NAMED PRECISELY, BECAUSE THE NEW FILE'S DESIGN IS A REACTION
+    TO THEM.** `tests/test_exchange_connection_security.py::test_connection_metadata_redaction`
+    and `tests/test_exchange_connection_e2e.py::test_e2e_schema_to_preflight_flow` both
+    assert `api_key` / `secret_key` / `password` are absent **from a dict literal the test
+    itself wrote three lines earlier** — the author picks the keys, then asserts those keys
+    are missing, and no route is called. The first file's module docstring claims "Stored
+    secrets never leak in GET /api/exchanges/connections" while never naming that path.
+    `tests/test_exchange_vault_contract.py` asserts in the opposite direction, that
+    `ExchangeKeysRequest` *retains* `api_key` / `secret_key` — correct for a request model,
+    silent about responses. Genuine response-body scans exist elsewhere
+    (`test_deterministic_sandbox.py`, `test_asset_discovery.py`,
+    `test_support_feature_e2e.py`, `test_task_13_2_signal_trace_detail.py`,
+    `test_notifications_feature_e2e.py`, `test_model_versioning.py`) and **not one drives a
+    credential-bearing route**. Neither vacuous test was deleted and neither was rewritten:
+    deleting them would lose the record of how the gap hid, and the new file is the
+    deliverable
+  - **THE RULE: ASSERT ON A VALUE YOU PLANTED, NOT A KEY YOU CHOSE.** Six high-entropy
+    sentinels are planted — `SENTINEL_API_KEY_9f3c1d4a7e20b815`,
+    `SENTINEL_API_SECRET_7b2e8450cf1396ad`, `SENTINEL_PASSPHRASE_3d9a61fe08b742cc` as
+    plaintext, plus `SENTINEL_CIPHERTEXT_APIKEY_…` / `_SECRET_…` / `_PASSWORD_…` for the
+    `encrypted_*` columns at rest. **Ciphertext gets its own sentinels** so a leak of the
+    stored row is distinguishable in the failure from a leak of the request. The scan is
+    **exact literal containment over `response.text`** — the whole serialised body as text,
+    never a field list and never a pattern, so a nested object, a `details` member, an
+    error `message` or an echoed request is in scope. No regex, deliberately: this spec has
+    burned three times on a probe matching something adjacent to its target (`re_` against
+    `total_exposure_usdt`, an unscoped `token=` against a QuestDB view name, a
+    `"136-to-2" not in text` guard firing on its own correction). **Both halves are
+    asserted** — the sentinel scan and a `CREDENTIAL_KEY_NAMES` scan over nine field names
+    — because they fail differently: a key scan catches a renamed field that still carries
+    the secret, a sentinel catches a value escaping through a field nobody enumerated
+  - **EVERY SCAN IS PAIRED WITH A POSITIVE CONTROL, WHICH IS THE OTHER HALF OF NON-VACUITY.**
+    "No sentinel in the body" passes trivially against an empty list, a 500 or a route
+    never reached — which is how the two tests above ended up proving nothing. So each
+    route also asserts a planted **non-secret** came back: `2026-03-04T05:06:07.890123+00:00`
+    for the connections read (odd to the microsecond, so its presence can only mean the
+    seeded row was read), `4242.42` for the verification routes (`round(x, 2)` leaves it
+    unchanged and no default in the router produces it), the vault's own record that it
+    received the sentinel for the storage route, the engine double's record of the
+    credential it was **constructed with** for every venue-dialling route, and an empty
+    store for the delete. Each control failure says `POSITIVE CONTROL FAILED` and states
+    that the assertions after it would be vacuous
+  - **THE HARNESS IS ITSELF TESTED, IN BOTH DIRECTIONS.**
+    `TestTheScanItselfFires` runs the helpers against bodies that **do** leak and requires
+    them to raise — a nested `details.echo.api_key`, a sentinel inside an error `message`,
+    a renamed `apiKey` field, and an empty body against the positive control. Without this,
+    a mis-planted sentinel or an unreachable loop body would make all 47 tests pass while
+    measuring nothing. `TestTheCleanBodyIsTheHandlersDoingNotTheDoubles` closes the
+    opposite objection: the schema-faithful double narrows rows to the projection, so a
+    clean body might be the double's doing. The same route is therefore driven against a
+    **permissive** store that hands back the whole row, every `encrypted_*` column
+    included — and the body stays clean, which isolates the property to the one that
+    matters: `list_exchanges` assembles its response field by field and never splats the
+    row it read. That store is itself proven to hand back the ciphertext, otherwise that
+    test is just the narrowing test again
+  - **THE NINE ROUTES COVERED.** `GET ""` and `GET "/"` and `GET /connections` (one
+    implementation, three mounted paths — `/connections` is driven rather than argued about
+    because it is the path the vacuous test named); `POST /keys`; `POST /test`;
+    `POST /test-stored`; `POST /connections/{id}/test`; `POST /connections/{id}/reconnect`;
+    `DELETE /{exchange_id}`. The delete was the easiest to leave out on a reading — it
+    deletes rather than projects — and is driven anyway, because a delete that reported the
+    row it removed is the same leak as a read
+  - **THE ROUTES EXCLUDED, WITH THE REASON STATED RATHER THAN THE SCAN SILENTLY NARROWED.**
+    `GET /certification`, `GET /{id}/capabilities`, `GET /{id}/health` and
+    `POST /{id}/preflight` each resolve `get_exchange_certification_registry()` and return
+    its answer — no store read, no vault call, no request credential, so nothing
+    credential-bearing can reach them. `GET /supported` builds its list from
+    `ccxt.exchanges` and each venue's `has` map, same reason.
+    `GET /schema/{id}` and `GET /{id}/connection-schema` are excluded **from the key-name
+    half only**, because they describe the shape of the connection FORM and their bodies
+    legitimately contain `api_key`, `secret_key` and `password` as field identifiers —
+    and that exclusion is **driven, not asserted**: the test requires those names to be
+    present (as its positive control), requires no sentinel to be, and requires every
+    field's `value` to be empty. An exclusion that cannot be distinguished from a
+    convenient narrowing is worth no more than an unscoped probe. `GET /supported` shares
+    that caveat — it reports `required_fields`, and those identifiers are exactly
+    `api_key` / `secret_key` / `password`
+  - **THE ERROR PATHS, WHICH ARE WHERE A LEAK ACTUALLY LIVES.** A handler that stringifies
+    a caught exception into its body leaks, and a happy-path-only test sees nothing — 13.19
+    found exactly that shape (`status: 500` carrying the driver's text). So every route is
+    also driven failing, with the sentinel **inside the cause**: a
+    `_CredentialEchoingDriverError` shaped as PostgreSQL's
+    `value too long … DETAIL: Failing row contains (…)` over the connections read, the
+    `exchange_keys` delete and the vault write; real `ccxt.AuthenticationError`,
+    `ccxt.PermissionDenied`, `ccxt.NetworkError` and an unclassified `RuntimeError` across
+    all four arms of `_verification_refusal` (400 / 403 / 503 / 502 each asserted, so the
+    classifier is genuinely exercised rather than one fallback branch); the vault's two
+    **real** `ValueError` texts on `POST /keys`, which is the one branch in this router
+    that returns `str(e)` to the client; and `load_decrypted_keys`' two real `ValueError`
+    texts on the 404 path. **All of them answer their stable code and none carries the
+    sentinel, the `22001`, the `Failing row` detail, ccxt's `-2015` or `Decryption failed`**
+  - **THE VERDICT: NO ROUTE LEAKS. 13.26'S READING OF `GET /api/exchanges` IS CONFIRMED,
+    AND EXTENDED TO EIGHT ROUTES IT SAID NOTHING ABOUT.** 13.26 argued from source that the
+    route was clean by construction — `_EXCHANGE_KEYS_PROJECTION = "exchange_id, created_at"`
+    never selects the `encrypted_*` columns, and `masked_key` is built from the exchange id.
+    Both now hold as **measurements**: the projection is exercised against a store whose
+    columns match production, and a dedicated test proves no 4-, 6- or 8-character prefix of
+    any sentinel reaches `masked_key`. **Nothing was weakened and nothing is xfailed** —
+    there was no leak to record, which is the one outcome that needed no concession.
+    `backend_app/routers/exchange.py` was **not edited**: it is staged by the parallel
+    workstream, and had a leak been found the finding would have been recorded with the
+    route and field named and the fix marked blocked on that file's release
+  - **WHY THE DOUBLE WAS REUSED AND NOT REWRITTEN.** 13.18/13.19's
+    `tests/test_mounted_endpoint_projections.py::_SchemaFaithfulTable` is imported, not
+    reimplemented — its `.select()` raises a `42703` for any column `public.exchange_keys`
+    lacks and narrows rows to the projection, with the column oracle taken from the drift
+    suite's own `_allowed_columns` rather than a list written beside the new file. Three
+    small subclasses extend it (`delete`, a credential-echoing failure, a permissive read)
+    rather than a fourth hand-written double. One stub is used and declared: the exchange
+    connection-slot quota gate on `POST /keys`, neutralised because a refusal from it
+    short-circuits the handler before any credential moves, which would make every
+    assertion after it vacuous (its own behaviour is covered by
+    `tests/test_subscriber_restricted_operations.py`)
+  - **GATES, ALL GREEN.** `tests/test_no_credential_in_api_response_body.py` **47 passed**;
+    `tests/test_mounted_endpoint_projections.py` **19**;
+    `tests/test_no_secrets_in_bundle.py` **7**; `tests/test_no_undefined_names.py` **3**;
+    `tests/test_schema_table_reference_drift.py` **86**;
+    `tests/test_exchange_vault_contract.py` **6**,
+    `tests/test_exchange_connection_security.py` **2**,
+    `tests/test_exchange_credential_log_redaction.py` **4** and
+    `tests/test_exchange_connections_read_regression.py` **22** (34 together);
+    `flake8 --select=E9,F63,F7,F82` clean on the one touched Python file;
+    `backend_app.main` imports with **351** routes — unchanged, as expected for a
+    test-only change. No production file was edited, so no held path was touched:
+    nothing under `backend_app/routers/exchange.py`, `routers/auth.py`,
+    `backend/strategy_service.py`, `routers/strategy_operations.py`, `routers/billing.py`,
+    `core/billing_lifecycle.py`, `core/subscription_middleware.py` or
+    `backend/ml_training_policy.py`, and `tests/property/test_tenant_isolation_matrix.py`
+    and the untracked `tests/test_reconciliation_worker_claims_match_behaviour.py` were
+    left alone. The commit is a pathspec commit over exactly two paths
+  - **THE GENERAL LESSON, WHICH IS 13.27'S FROM THE OTHER END.** 13.27's rule was *scope the
+    probe, then classify each hit against the shape of what you are counting*. The
+    response-body analogue is **plant the thing you are looking for**: an absence assertion
+    over a value you chose is a statement about your own imagination, and an absence
+    assertion over a body you never obtained is a statement about nothing. Two conditions
+    make such a guard real, and both are cheap — the value must be one the **system** put
+    there, and the test must prove the route **answered** before it reads anything into the
+    answer. The two tests this file replaces failed the first; a scan over an empty list or
+    a 500 fails the second
+  - _Requirements: 1.20 (the response-body third of the clause moves from **UNVERIFIED** to_
+    _**proven** — the bundle third stays held by `test_no_secrets_in_bundle.py` and the log_
+    _third stays discharged by 13.26 as corrected by 13.27, so with this task **1.20 is_
+    _closed on all three surfaces**) and 2.20 / `§Bug condition` by way of SC-27's principle_
+    _applied to the response body rather than the log (a refusal may carry a category and_
+    _never the provider's text — and until this task that was a property of the source,_
+    _asserted nowhere a route was actually called)_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`
