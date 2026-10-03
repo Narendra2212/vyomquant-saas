@@ -288,7 +288,31 @@ ALTER TABLE strategies ADD COLUMN IF NOT EXISTS is_subscribed BOOLEAN DEFAULT FA
 ALTER TABLE strategies ADD COLUMN IF NOT EXISTS is_read_only BOOLEAN DEFAULT FALSE;
 ALTER TABLE strategies ADD COLUMN IF NOT EXISTS subscription_id UUID REFERENCES strategy_subscriptions(id);
 ALTER TABLE strategies ADD COLUMN IF NOT EXISTS cloned_from UUID REFERENCES strategies(id);
-ALTER TABLE strategies ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'draft';
+-- CORRECTED IN TASK 13.22, and the correction can never execute, which is the
+-- whole reason it is safe. This line read
+--
+--     ... ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'draft';
+--
+-- and BOTH halves of that were false. Production carries
+-- strategies.status TEXT DEFAULT 'stopped'::text - read off
+-- information_schema.columns on PostgreSQL 17.6 - so the column already
+-- existed when this file was written and ADD COLUMN IF NOT EXISTS has been a
+-- no-op in every database since. It stays a no-op now: no database can reach
+-- this statement without already having the column, because the only
+-- declaration of public.strategies is
+-- 020_declare_pre_existing_tables.sql, which must run BEFORE this file (this
+-- very section ALTERs a table 020 creates - see PROVISIONING_ORDER.md).
+--
+-- It was corrected rather than left alone because the stale spelling was a
+-- REBUILD HAZARD the moment 020 declared the real one: two migrations naming
+-- one column with two types is the strategy_backtests.version shape, where 001
+-- said VARCHAR(20), 006 said INTEGER, production took the integer and every
+-- backtest insert failed with 22P02 until 016 reconciled it.
+-- tests/test_schema_table_reference_drift.py's
+-- test_the_divergence_inventory_has_not_grown caught this one BEFORE it could
+-- ship, and recording it in DIVERGENT_COLUMN_TYPES was refused: that inventory
+-- holds conflicts that already shipped and may only shrink.
+ALTER TABLE strategies ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'stopped';
 
 -- Add indexes for new strategy columns
 CREATE INDEX IF NOT EXISTS idx_strategies_current_version ON strategies(current_version);

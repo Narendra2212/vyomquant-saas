@@ -2727,6 +2727,247 @@ exists to remove.
     _`read committed` session and a warning, which is a fabricated status, not an absence)_
 
 
+- [ ] 13.22 THIS REPOSITORY COULD NOT PROVISION ITS OWN DATABASE — three live
+  production tables, including both core tables, were declared by NOTHING, and the
+  declaration was captured from production's catalogue rather than written from memory
+  - **The gap, counted rather than asserted.** Parsing `CREATE TABLE` out of
+    `backend_app/migrations/*.sql` + `migrations/*.sql` yields 64 tables, and
+    `op.create_table(...)` out of `backend_app/alembic/versions/*.py` yields 19.
+    Differencing that union against production's `pg_tables` (PostgreSQL 17.6,
+    **71** base tables in `public`, read-only) leaves **four** names declared by
+    nothing at all: `alembic_version` (1 column, 1 row — Alembic creates it
+    itself from `env.py`, so it is **not** a defect and is excluded),
+    `processed_orders` (3 columns, 25 rows — **a new finding in this task**),
+    `profiles` (20 columns, 181 rows — the core user table) and `strategies`
+    (26 columns, 187 rows — the core strategy table). Task 13.21 recorded the
+    consequence and could not fix it: **no disaster-recovery rebuild and no way
+    to stand up staging from source.** Production's 71 tables exist only because
+    they were applied out-of-band
+  - **Distinct from the sixteen ALEMBIC-ONLY tables, and the distinction is kept
+    straight.** `dag_tasks`, `execution_records`, `fills`, `idempotency_keys`,
+    `invoices`, `library_ratings`, `library_strategies`, `orders`,
+    `payment_methods`, `positions`, `reconciliation_mismatches`, `referrals`,
+    `subscriptions`, `transaction_checkpoints`, `transaction_records` and
+    `transaction_rollbacks` are declared in `alembic/versions/` and by no SQL
+    migration. They are **deliberately NOT re-declared** by this task: two
+    declarations of one table is the divergence 016's header warns about and the
+    one 13.15 found between `006_reconcile_production_database.sql` and
+    `referral_system_redesign.sql`. `referrals` is the one 13.15 proved ABSENT
+    from production — declared in Alembic, not in the database — which is a
+    different defect from the three in this task and stays recorded as such
+  - **New migration `020_declare_pre_existing_tables.sql`, and EVERY LINE OF ITS
+    DDL WAS CAPTURED FROM THE CATALOGUE.** Not written from knowledge, not taken
+    from the audit documents. The capture method is stated in the file header so
+    a reader can tell captured DDL from invented DDL:
+    `information_schema.columns` for name / ordinal position / type / length and
+    precision / nullability / default; `pg_constraint` with
+    `pg_get_constraintdef(oid)` so every PK, UNIQUE, FK and CHECK is
+    PostgreSQL's own rendering of the live constraint; `pg_indexes.indexdef`;
+    `pg_policies`; and `pg_trigger` (none of the three has one, so none is
+    declared). 020 is **017/018/019 were all taken** — 019 is the parallel
+    workstream's, now committed
+  - **What the catalogue said that the documents did not.**
+    `PHASE_7A_AUTH_FORENSIC_AUDIT.md` and `TENANT_ISOLATION_AUDIT_REPORT.md`
+    both imply a `user_id` on `processed_orders`; the column exists, but the
+    table has only THREE columns and its primary key is **`order_id`**, not a
+    surrogate `id` — it is an idempotency ledger, and the PK *is* the
+    duplicate-suppression mechanism. `user_id` is **NULLABLE**, which has a
+    consequence nothing had written down: a row with a NULL `user_id` satisfies
+    `auth.uid() = user_id` for nobody, so it is invisible to every browser-side
+    caller and reachable only by `service_role`. Flagged, not fixed — `SET NOT
+    NULL` would be an ALTER against a populated table. Two more shapes that
+    would have been got wrong by inference: `profiles.balance` is
+    **unconstrained** `NUMERIC` (no precision, no scale) with `DEFAULT 0.00`,
+    and `strategies.current_version` / `environment` are `varchar(20)` while
+    every other text column on that table is `TEXT`
+  - **`rls_migration.sql` WAS NEVER APPLIED, and the catalogue is what proves
+    it.** That repo-root file is the only other place in the tree claiming RLS
+    for these tables. It creates `profiles_authenticated_owner`,
+    `strategies_authenticated_owner` and `processed_orders_authenticated_owner`;
+    production has **none of those three names**. It creates
+    `idx_strategies_user_id` and `idx_processed_orders_user_id`; production has
+    **neither** (`strategies` carries a composite `idx_strategies_user_status`
+    instead, and `processed_orders` has only its primary key index). Of
+    everything that file would create, only `idx_profiles_id` is present. 020
+    reproduces the **six policies production actually has** —
+    `Select own profile`, `Update own profile`, `profiles_owner_access`,
+    `profiles_service_role`, `Manage own strategies`,
+    `Manage own processed orders` — four of them named with spaces and initial
+    capitals, which is the fingerprint of the Supabase dashboard this whole
+    migration exists to replace. The names are kept **verbatim and quoted**,
+    because the idempotency guard matches on `policyname`: renaming them to the
+    repo's snake_case convention would make 020 create a second, duplicate
+    policy on a live table instead of being a no-op
+  - **A PRE-EXISTING FALSE DECLARATION THE NEW ONE EXPOSED, fixed at the root.**
+    `001_strategy_architecture.sql` line 291 read `ALTER TABLE strategies ADD
+    COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'draft'`. Production carries
+    `strategies.status TEXT DEFAULT 'stopped'::text`, so **both halves were
+    false** and the statement has been a no-op in every database since it was
+    written — `status` always already exists. Invisible until now, because with
+    no `CREATE TABLE` for `strategies` there was only ONE declaration to
+    compare, and the roster that recorded production's columns recorded names
+    without types. The moment 020 declared the real type,
+    `test_the_divergence_inventory_has_not_grown` failed with
+    `strategies.status: character varying(20) in ['001…']; text in ['020…']` —
+    exactly the `strategy_backtests.version` shape, where 001 said `VARCHAR(20)`,
+    006 said `INTEGER`, production took the integer and every backtest insert
+    failed with `22P02` until 016 reconciled it. **Recording it in
+    `DIVERGENT_COLUMN_TYPES` was refused** (that inventory holds conflicts which
+    already shipped and may only shrink), and a reconciling `ALTER COLUMN …
+    TYPE` was refused too — against production that is an ALTER on a live table,
+    and the parser adds a spelling rather than replacing one, so it would not
+    have resolved the conflict anyway. 001's token was corrected instead, with
+    the reasoning in a 24-line comment above it: the correction **cannot
+    execute** on any database, because the only declaration of `strategies` is
+    020 and 020 must run first
+  - **PROVISIONING ORDER, written where an operator will find it.** New
+    `backend_app/migrations/PROVISIONING_ORDER.md`, linked from 020's header.
+    **020 is numbered last and must be applied FIRST** — nine files in the
+    numbered set `ALTER` `profiles` or `strategies`, so on an empty database
+    `001` fails at its section 6 with `42P01`. The number could not be lowered
+    (017-019 taken) and renaming an applied file is invisible to an operator,
+    since migrations here are applied by hand with nothing recording which files
+    an environment has run. The doc states which tables come from Alembic and
+    which from the SQL set, the order, and the measured obstacles: (i)
+    `4ef23035a692_baseline.py`'s `upgrade()` contains **only DROPs** — re-counted
+    here by AST as 30 `execute` calls and **zero** `op.create_table`, its seven
+    `CREATE TABLE`s being in `downgrade()` — which is why step 2 names
+    `d97ffff9c3bb` and not `head`; (ii) `add_foreign_keys_20260817.py` adds
+    `FOREIGN KEY (tenant_id) REFERENCES profiles(id) ON DELETE CASCADE` **five
+    times** (`fills`, `orders`, `positions`, `dag_tasks`, `execution_records`)
+    and so can only run AFTER 020. **That last point is the actual unlock:** with
+    `profiles` declared, the Alembic chain past the branchpoint stops being
+    unrunnable
+  - **PROVEN ON REAL POSTGRESQL, column by column, and programmatically.** The
+    scratch-schema technique of 13.11 / 13.15 / 13.16 / 13.21: a uniquely named
+    schema on the production server, `search_path` pinned to it, the migration
+    text rewritten so that every `public.` reference and every `'public'`
+    catalogue literal addresses the scratch schema, the whole run in ONE
+    transaction ending in `ROLLBACK`, and `DROP SCHEMA … CASCADE` before it.
+    The rewrite is **hard-asserted before the server is touched**: zero residual
+    lowercase `public`, and the four `TO PUBLIC` role grants (a ROLE, not the
+    schema) still intact. `auth.users` and `library_strategies` are remapped to
+    stubs inside the scratch schema so the run never takes a lock on a live
+    Supabase table — `ALTER TABLE … ADD FOREIGN KEY` locks the *referenced*
+    table, and the constraint definitions are production's own
+    `pg_get_constraintdef` output, so their creatability against the real
+    referents is established by their existence. Result: **76 checks, 0
+    failures.** 49/49 columns identical in name, ordinal position, type,
+    precision, nullability and default (20 + 26 + 3); all 11 index definitions
+    identical after schema normalisation; all 10 constraints identical; all 6
+    policies identical in command, roles, `USING` and `WITH CHECK`; RLS flags
+    `(true, false)` on all three
+  - **IDEMPOTENT, and a NO-OP AGAINST PRODUCTION.** Applied a second time in the
+    same transaction: the catalogue was byte-identical to run 1, and the only
+    output was ten `already exists, skipping` notices. Every `CREATE TABLE` and
+    `CREATE INDEX` is `IF NOT EXISTS`; PostgreSQL has no `CREATE POLICY IF NOT
+    EXISTS`, so all six policies are guarded on `pg_policies` by
+    schema + table + policy name — the 018 section 4 / 017 section 3d / 008
+    section 6 pattern, **not** `DROP POLICY IF EXISTS … CREATE POLICY`, which
+    would leave a populated RLS-enabled table policy-less in between. Verified
+    afterwards on a fresh read-only session: **71 tables in `public`, zero
+    `vq_*` schemas, `profiles` 181 / `strategies` 187 / `processed_orders` 25
+    rows unchanged, 6 policies**. There is deliberately **no `COMMENT ON`** in
+    020: none of the three tables carries a comment in production, so a comment
+    would be a WRITE against the live catalogue. The prose lives in the header
+  - **Four foreign keys, added separately and guarded, with the skip announced.**
+    `auth.users` is the platform's and `library_strategies` is Alembic's, so an
+    inline `REFERENCES` would abort the whole file on a from-source rebuild. Each
+    FK is a guarded `ALTER TABLE … ADD CONSTRAINT` keyed on
+    `conrelid = '…'::regclass` rather than on the bare constraint name (names are
+    unique per table, not per database), and a missing referent produces a
+    `RAISE NOTICE` naming the skipped constraint — so a rebuild that produced a
+    weaker schema than production says so in its own log instead of looking
+    clean. The asymmetry is production's and is preserved: `profiles.id` cascades
+    on user delete, `strategies.user_id` does not
+  - **GRANTS ARE NOT RESTATED, and the reason is measured.** All three tables
+    carry the identical privilege shape in production, and so do **44 of the 71**
+    `public` tables — it is Supabase's schema-level default, not a per-table
+    decision. Emitting `GRANT`s would turn a platform default into a claim this
+    repository owns; emitting the `REVOKE`s that would narrow it (`anon` holds
+    INSERT/UPDATE/DELETE on `profiles` today) would **change production**, which
+    this migration must not do. Narrowing `anon` on these three tables is a real
+    and separate decision, named here rather than smuggled into a no-op
+  - **GUARD, extended in the file that already owns this claim.** No new test
+    file: `tests/test_schema_table_reference_drift.py` **73 → 86**. The three
+    tables LEFT their exemptions rather than being added to any —
+    `PRE_MIGRATION_BASE_TABLES` is now **empty** (`profiles`, `strategies`
+    removed), `SQL_UNDECLARED_PRESENT_IN_PRODUCTION` is 4 → 2 entries
+    (`execution_records` and `library_strategies` stay), and
+    `PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES` lost its `profiles` (20 columns)
+    and `strategies` (26) rosters because the parse is now the oracle for both.
+    `library_strategies` and `library_ratings` STAY exempt — Alembic-only,
+    deliberately not re-declared, so the recorded roster is the only cover their
+    columns have — and `RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS` is
+    untouched. Two loops became vacuous when their sets emptied, which is the
+    failure mode this file pins everywhere else, so both are now **positive
+    assertions**: that `PRE_MIGRATION_BASE_TABLES` IS empty, and that 020 still
+    declares the two names that left it
+  - **The new load-bearing assertion.** `PRODUCTION_PUBLIC_TABLES` records all
+    71 production table names, and
+    `test_only_alembic_version_is_declared_by_nothing` differences it against the
+    PARSED declaration set and asserts the remainder is **exactly**
+    `{alembic_version}`. Stated as an equality, not a subset, so it fails in both
+    directions: a new undeclared table appearing in the tree fails the build, and
+    a declaration quietly disappearing fails too. Guarded by
+    `test_alembic_version_is_genuinely_declared_by_nothing` (the one exemption
+    must stay real, not become a typo that happens to pass) and
+    `test_the_production_roster_is_the_size_it_was_measured_at` (a truncated
+    roster would satisfy the equality). Plus
+    `test_020_does_not_redeclare_the_alembic_only_tables` and
+    `test_the_alembic_only_roster_is_still_alembic_only`, which hold the sixteen
+    on Alembic's side of the line
+  - **ASSERTIONS ACTUALLY OBSERVED FAILING BEFORE THE FIX — four, and then
+    sixteen.** Against the tree with 020 present but the guard not yet updated:
+    `test_the_tolerated_base_tables_are_still_exactly_that`
+    (`'profiles' is now declared by ['020_declare_pre_existing_tables.sql'], so
+    the exemption is stale`), `test_the_present_but_undeclared_set_is_still_
+    exactly_that` (same name, same reason),
+    `test_the_recorded_production_column_sets_are_still_what_they_claim`
+    (`'profiles' is now declared by a CREATE TABLE … delete the entry`) and
+    `test_the_divergence_inventory_has_not_grown` (the `strategies.status`
+    conflict above) — **4 failed, 69 passed**. That is the stale-exemption
+    mechanism working: the suite refused to let the declaration land while the
+    exemptions that excused its absence were still there. Then, with 020
+    temporarily removed from the tree, the finished guard was re-run and **16
+    failed, 70 passed**, including every member of the new
+    `TestMigration020IsANoOpAgainstProduction` class and
+    `test_only_alembic_version_is_declared_by_nothing` — so the new assertions
+    are demonstrated to fail without the fix rather than claimed to
+  - **Gates.** `tests/test_schema_table_reference_drift.py` → **86 passed**;
+    `tests/test_database_isolation_level_control.py` → **23**;
+    `tests/test_pr_check_postgres_service.py` → **21**;
+    `tests/test_websocket_upgrade_gate.py` → **22**;
+    `tests/test_mounted_endpoint_projections.py` → **19**;
+    `tests/test_marketplace_eligibility_tenant_verdict.py` → **7**;
+    `tests/test_no_undefined_names.py` → **3**; the migration-parsing suites
+    `test_migration_tooling` + `test_no_dormant_schema_references` +
+    `test_schema_as_code_completeness` + `test_library_schema_contract` all
+    green; `flake8 --select=E9,F63,F7,F82` exit 0 on the one touched Python file;
+    `backend_app.main` imports with **351** routes
+  - **What this does NOT prove, stated rather than implied.** The Alembic chain
+    past `d97ffff9c3bb` has still never been run end to end — 020 removes the
+    `profiles` obstacle that made `add_foreign_keys_20260817.py` abort, and that
+    is a structural unlock, not an executed one. 020 itself has never been
+    applied to `public`, by design: it is proven to be a no-op there, and
+    production already has everything it declares. The scratch-schema proof
+    stubbed `auth.users` and `library_strategies` deliberately, so it does not
+    prove those two foreign keys are creatable — their existence in production
+    does. And three shapes are **flagged, not fixed**, because each would be an
+    ALTER against a live table: `processed_orders.user_id` is nullable, `anon`
+    holds full DML on all three tables, and `profiles` has four overlapping
+    policies where one would do
+  - _Requirements: `§Bug condition` by way of 2.5's principle (a schema object_
+    _that no source declares is a system that cannot state its own shape — a_
+    _rebuild would silently omit three populated tables and every reader of them_
+    _would fail with 42P01 against a fresh environment, which is an absence_
+    _presented as a working deployment) and 1.16 / 2.16 (12.6 and 13.21 carried_
+    _the database-level-serialisation half BLOCKED on the missing `strategies`_
+    _table specifically; `tests/test_strategy_lifecycle_concurrency.py` needs a_
+    _`strategies` table and 020 is the declaration it was waiting for — the_
+    _schema gap is closed, though the test has not been run against it here)_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`

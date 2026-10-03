@@ -152,15 +152,21 @@ HEALTH_PROBE_DECLARED_BY = "001_strategy_architecture.sql"
 #: Tables this application reads that NO migration in this repository
 #: declares, because they predate the numbered migration set - they were
 #: created in the Supabase project directly, before migrations lived here.
-#: Both are CONFIRMED PRESENT in the production `public` schema, which is the
-#: only reason they are tolerated: the guard below exists to catch a reference
-#: to a table that is ABSENT from production, and these two are not.
+#:
+#: NOW EMPTY. It held ``profiles`` and ``strategies``, and task 13.22 closed it
+#: by writing the declaration instead of carrying the exemption:
+#: :data:`MIGRATION_020_NAME` declares both, with the DDL captured from
+#: production's own catalogue. The set is kept - rather than deleted along with
+#: its entries - because it is the shape an exemption of this kind has to take,
+#: and :meth:`TestEveryReferencedTableIsDeclared.test_the_tolerated_base_tables_are_still_exactly_that`
+#: now asserts it is EMPTY, so a new entry has to be argued for rather than
+#: appended.
 #:
 #: `users` is deliberately NOT in this set. It was referenced and it does not
 #: exist, which is precisely the defect TestHealthCheckProbesARealTable pins.
 #: Adding a name here to silence a failure re-creates the defect - add the
 #: CREATE TABLE instead.
-PRE_MIGRATION_BASE_TABLES = frozenset({"profiles", "strategies"})
+PRE_MIGRATION_BASE_TABLES: frozenset = frozenset()
 
 #: The unmounted public signup form, and the module that owns its insert.
 WAITLIST_FORM = REPO_ROOT / "algo22-terminal" / "src" / "components" / "waitlist" / "WaitlistForm.jsx"
@@ -170,6 +176,85 @@ TERMINAL_SRC = REPO_ROOT / "algo22-terminal" / "src"
 #: The two heads `d97ffff9c3bb` forked into, and the merge that joins them.
 ALEMBIC_VERSIONS = REPO_ROOT / "backend_app" / "alembic" / "versions"
 EXPECTED_MERGED_HEADS = frozenset({"6f1b3d9c8a7e", "implement_rls_policies"})
+
+#: The migration task 13.22 adds, and the three relations it exists to declare.
+#: Unlike 018's three - which were ABSENT from production - all three of these
+#: are PRESENT and populated; 020 declares what was already there, so that a
+#: rebuild can reproduce it. It is a complete no-op against production.
+MIGRATION_020_NAME = "020_declare_pre_existing_tables.sql"
+MIGRATION_020 = REPO_ROOT / "backend_app" / "migrations" / MIGRATION_020_NAME
+TABLES_020 = ("profiles", "strategies", "processed_orders")
+
+#: Every base table in production's ``public`` schema, read off ``pg_tables``
+#: on a read-only session (PostgreSQL 17.6). 71 names, which is the count tasks
+#: 13.15 through 13.21 each re-verified.
+#:
+#: This is an ORACLE, not an allowlist: it is differenced against the PARSED
+#: declaration set so that
+#: :meth:`TestNothingInProductionIsDeclaredByNothing.test_only_alembic_version_is_declared_by_nothing`
+#: can state the whole of the provisioning claim in one assertion - every
+#: relation production has is declared somewhere in this repository, except
+#: ``alembic_version``, which Alembic creates for itself. Before 020 the
+#: difference was four names: ``alembic_version``, ``processed_orders``,
+#: ``profiles`` and ``strategies``.
+PRODUCTION_PUBLIC_TABLES = frozenset(
+    {
+        "alembic_version", "billing_invoices", "block_registry_snapshots",
+        "copilot_messages", "copilot_sessions", "dag_tasks",
+        "deployment_permissions", "exchange_connections", "exchange_keys",
+        "execution_records", "fills", "idempotency_keys", "invoices",
+        "library_ratings", "library_strategies",
+        "library_subscription_transitions", "library_subscriptions",
+        "marketplace_backtest_evidence", "marketplace_price_evaluations",
+        "marketplace_settlements",
+        "marketplace_submission_allowed_transitions",
+        "marketplace_submission_transitions", "marketplace_submissions",
+        "marketplace_subscription_allowed_transitions", "model_versions",
+        "notification_settings", "notifications",
+        "order_lifecycle_transitions", "orders", "paper_accounts",
+        "paper_balance_events", "paper_equity_snapshots", "paper_events",
+        "paper_fills", "paper_market_events", "paper_metrics",
+        "paper_order_allowed_transitions", "paper_orders", "paper_positions",
+        "paper_session_allowed_transitions", "paper_sessions",
+        "paper_trades", "payment_methods", "positions", "processed_orders",
+        "profiles", "reconciliation_mismatches", "referral_codes",
+        "referral_commissions", "referral_payouts", "referral_profiles",
+        "referral_relationships", "referral_wallets", "risk_settings",
+        "risk_settings_audit", "security_logs", "signals", "strategies",
+        "strategy_backtests", "strategy_deployments", "strategy_limits",
+        "strategy_research_reports", "strategy_versions", "subscriptions",
+        "support_tickets", "ticket_comments", "training_jobs",
+        "transaction_checkpoints", "transaction_records",
+        "transaction_rollbacks", "waitlist",
+    }
+)
+
+#: The ONE relation production has that nothing in this repository declares,
+#: and the only one that is not a defect: Alembic issues its own
+#: ``CREATE TABLE alembic_version`` from ``env.py``, so a declaration here
+#: would be a second, competing definition of its bookkeeping table.
+SELF_DECLARING_RELATIONS = frozenset({"alembic_version"})
+
+#: Relations declared ONLY by ``backend_app/alembic/versions/*.py`` and by no
+#: SQL migration - sixteen of them, counted in task 13.22. They are listed so
+#: that 020 can be asserted NOT to re-declare any of them: two declarations of
+#: one table is the divergence 016's header warns about and the one 13.15 found
+#: between ``006_reconcile_production_database.sql`` and
+#: ``referral_system_redesign.sql``.
+#:
+#: ``referrals`` is in this set AND in :data:`SQL_GUARDED_ABSENT_RELATIONS`,
+#: which is not a contradiction: it is declared in Alembic and is ABSENT from
+#: production (task 13.15), so it is Alembic-only AND missing. The other
+#: fifteen are present.
+ALEMBIC_ONLY_RELATIONS = frozenset(
+    {
+        "dag_tasks", "execution_records", "fills", "idempotency_keys",
+        "invoices", "library_ratings", "library_strategies", "orders",
+        "payment_methods", "positions", "reconciliation_mismatches",
+        "referrals", "subscriptions", "transaction_checkpoints",
+        "transaction_records", "transaction_rollbacks",
+    }
+)
 
 # --------------------------------------------------------------------------
 # Parsing helpers
@@ -446,9 +531,29 @@ class TestEveryReferencedTableIsDeclared:
     def test_the_tolerated_base_tables_are_still_exactly_that(self):
         """The allowlist cannot rot: each entry must still be referenced and still
         undeclared. If a migration starts declaring one, delete it from the set
-        rather than leaving a permanent hole in the guard."""
+        rather than leaving a permanent hole in the guard.
+
+        The set is now EMPTY, so the loop below is vacuous - which is exactly
+        the failure mode this file pins everywhere else. The emptiness is
+        therefore asserted POSITIVELY, together with the fact that replaced it:
+        both former entries are now declared by 020.
+        """
         declared = _declared_tables()
         references = _table_references()
+        assert PRE_MIGRATION_BASE_TABLES == frozenset(), (
+            "PRE_MIGRATION_BASE_TABLES is no longer empty: "
+            f"{sorted(PRE_MIGRATION_BASE_TABLES)}. Task 13.22 emptied it by "
+            f"adding {MIGRATION_020_NAME}, and a table this application reads "
+            "with no CREATE TABLE anywhere is the provisioning defect that "
+            "task, not a name to append here. Add the declaration."
+        )
+        for table in ("profiles", "strategies"):
+            assert MIGRATION_020_NAME in declared.get(table, set()), (
+                f"{table!r} left PRE_MIGRATION_BASE_TABLES on the strength of "
+                f"{MIGRATION_020_NAME} declaring it, and that declaration is "
+                f"gone - found {sorted(declared.get(table, set()))}. The "
+                "exemption and the declaration cannot both be absent."
+            )
         for table in sorted(PRE_MIGRATION_BASE_TABLES):
             assert table in references, (
                 f"{table!r} is in PRE_MIGRATION_BASE_TABLES but nothing under "
@@ -463,6 +568,274 @@ class TestEveryReferencedTableIsDeclared:
             "users must never be exempted: there is no public.users in this "
             "schema, which is the whole of the health_check defect."
         )
+
+
+# --------------------------------------------------------------------------
+# (a2) nothing production has is declared by nothing - task 13.22
+# --------------------------------------------------------------------------
+
+
+class TestNothingInProductionIsDeclaredByNothing:
+    """The whole of the provisioning claim, in one assertion.
+
+    Task 13.21 recorded that THIS REPOSITORY CANNOT PROVISION ITS OWN DATABASE:
+    production's 71 ``public`` tables exist only because they were applied
+    out-of-band, so there is no disaster-recovery rebuild and no way to stand up
+    staging from source. Differencing the parsed declaration set - SQL
+    migrations AND Alembic revisions - against the production roster named four
+    tables declared by NOTHING: ``alembic_version``, ``processed_orders``,
+    ``profiles`` and ``strategies``.
+
+    Task 13.22 declared the last three in
+    ``020_declare_pre_existing_tables.sql``. What remains is ``alembic_version``
+    alone, and that one is not a defect - Alembic creates it itself.
+
+    The assertion is stated as an EQUALITY rather than a subset so that it fails
+    in both directions: a new table appearing in production with no declaration
+    fails, and a declaration quietly disappearing fails too.
+    """
+
+    def test_only_alembic_version_is_declared_by_nothing(self):
+        declared = _declared_tables()
+        undeclared = PRODUCTION_PUBLIC_TABLES - set(declared)
+        assert undeclared == SELF_DECLARING_RELATIONS, (
+            "The set of production tables that NO migration and NO Alembic "
+            f"revision in this repository declares is {sorted(undeclared)}, "
+            f"not {sorted(SELF_DECLARING_RELATIONS)}.\n\n"
+            "If a name was ADDED: that table exists in the database and in no "
+            "file here, so a disaster-recovery rebuild silently omits it and "
+            "every reader of it fails with 42P01 against a fresh environment. "
+            "Add the CREATE TABLE - capture the DDL from the production "
+            "catalogue the way 020's header documents, rather than writing it "
+            "from the application's expectations.\n"
+            "If a name was REMOVED from the expected set: a declaration that "
+            "020 or an Alembic revision used to carry has gone.\n\n"
+            "Do NOT add a name to SELF_DECLARING_RELATIONS to go green. That "
+            "set has exactly one member for exactly one reason: Alembic issues "
+            "its own CREATE TABLE alembic_version from env.py, so declaring it "
+            "here would create a second, competing definition."
+        )
+
+    def test_alembic_version_is_genuinely_declared_by_nothing(self):
+        """The one exemption is real, not a typo that happens to pass."""
+        declared = _declared_tables()
+        for name in sorted(SELF_DECLARING_RELATIONS):
+            assert name not in declared, (
+                f"{name!r} is now declared by {sorted(declared[name])}. It is "
+                "exempt BECAUSE nothing declares it and Alembic creates it "
+                "itself; a declaration makes the exemption wrong rather than "
+                "satisfied. Remove the entry, or remove the CREATE TABLE."
+            )
+
+    def test_the_production_roster_is_the_size_it_was_measured_at(self):
+        """Guards the oracle: a truncated roster satisfies the equality above."""
+        assert len(PRODUCTION_PUBLIC_TABLES) == 71, (
+            f"PRODUCTION_PUBLIC_TABLES holds {len(PRODUCTION_PUBLIC_TABLES)} "
+            "names. 71 is the count tasks 13.15 through 13.22 each re-verified "
+            "against the server. Changing it means re-measuring, not editing."
+        )
+        for name in sorted(TABLES_020):
+            assert name in PRODUCTION_PUBLIC_TABLES, (
+                f"{name!r} is declared by {MIGRATION_020_NAME}, whose entire "
+                "justification is that production ALREADY HAS it, and it is "
+                "not in the production roster."
+            )
+
+    def test_020_does_not_redeclare_the_alembic_only_tables(self):
+        """Mixing them in would create the two-declarations-of-one-table
+        divergence 016's header warns about and 13.15 found over ``referrals``."""
+        declared_by_020 = (
+            _tables_declared_by_sql(MIGRATION_020) if MIGRATION_020.is_file() else set()
+        )
+        overlap = sorted(declared_by_020 & ALEMBIC_ONLY_RELATIONS)
+        assert not overlap, (
+            f"{MIGRATION_020_NAME} declares {overlap}, which Alembic already "
+            "declares. Two declarations of one table is how the "
+            "strategy_backtests.version divergence started and how "
+            "006_reconcile_production_database.sql came to disagree with "
+            "referral_system_redesign.sql over referrals. Those tables stay "
+            "Alembic's; backend_app/migrations/PROVISIONING_ORDER.md records "
+            "the order to apply the two systems in."
+        )
+
+    def test_the_alembic_only_roster_is_still_alembic_only(self):
+        """The roster cannot rot: every name must still be declared by an
+        Alembic revision and by no SQL migration."""
+        sql_declared: set = set()
+        for path in _sql_migration_files():
+            sql_declared |= _tables_declared_by_sql(path)
+        alembic_declared: set = set()
+        for path in _alembic_version_files():
+            alembic_declared |= _tables_declared_by_alembic(path)
+        for name in sorted(ALEMBIC_ONLY_RELATIONS):
+            assert name in alembic_declared, (
+                f"{name!r} is in ALEMBIC_ONLY_RELATIONS but no Alembic "
+                "revision declares it any more - remove the entry."
+            )
+            assert name not in sql_declared, (
+                f"{name!r} is in ALEMBIC_ONLY_RELATIONS and is now ALSO "
+                "declared by a SQL migration. That is the divergence this "
+                "roster exists to prevent: decide which system owns the table "
+                "and delete the other declaration."
+            )
+
+
+class TestMigration020IsANoOpAgainstProduction:
+    """020 declares three POPULATED production tables, which makes its
+    idempotency a different and stricter requirement than 018's.
+
+    018 created relations that were absent, so a second run only had to not
+    raise. 020's first run against production must already change nothing: the
+    tables, their indexes and their policies are all there, and 181 + 187 + 25
+    rows are sitting in them. Every statement is therefore guarded, and these
+    assertions read the guards off the file.
+    """
+
+    @pytest.mark.parametrize("table", TABLES_020)
+    def test_table_is_declared_by_020(self, table):
+        declared = (
+            _tables_declared_by_sql(MIGRATION_020) if MIGRATION_020.is_file() else set()
+        )
+        assert table in declared, (
+            f"{table} is not declared by {MIGRATION_020_NAME}. Nothing else in "
+            "this repository declares it - not a numbered SQL migration and "
+            "not an Alembic revision - so without this file the table exists "
+            "in production and in no source anywhere, which is the whole of "
+            "the finding task 13.22 records."
+        )
+
+    def test_every_create_in_020_is_guarded(self):
+        body = _strip_sql_comments(MIGRATION_020.read_text(encoding="utf-8"))
+        creates = _CREATE_TABLE.findall(body)
+        assert len(creates) == len(TABLES_020), (
+            f"expected {len(TABLES_020)} CREATE TABLE statements in "
+            f"{MIGRATION_020_NAME}, found {len(creates)}: {sorted(creates)}"
+        )
+        guarded = re.findall(r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS", body, re.IGNORECASE)
+        assert len(guarded) == len(creates), (
+            f"{len(creates) - len(guarded)} CREATE TABLE in "
+            f"{MIGRATION_020_NAME} is not IF NOT EXISTS. Production has all "
+            "three tables with live rows in them, so an unguarded CREATE "
+            "aborts the file with 42P07 instead of being the no-op it must be."
+        )
+        indexes = re.findall(r"CREATE\s+INDEX", body, re.IGNORECASE)
+        guarded_indexes = re.findall(
+            r"CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS", body, re.IGNORECASE
+        )
+        assert indexes and len(indexes) == len(guarded_indexes), (
+            f"{MIGRATION_020_NAME} has {len(indexes)} CREATE INDEX of which "
+            f"{len(guarded_indexes)} are IF NOT EXISTS; all must be."
+        )
+
+    def test_every_policy_in_020_is_guarded_on_pg_policies(self):
+        """PostgreSQL has no CREATE POLICY IF NOT EXISTS, so the guard is the
+        only thing standing between a re-run and a 42710 - and DROP POLICY
+        ... CREATE POLICY is not an option on a live table, because it would
+        leave a populated, RLS-enabled table policy-less in between."""
+        body = _strip_sql_comments(MIGRATION_020.read_text(encoding="utf-8"))
+        policies = re.findall(
+            r"CREATE\s+POLICY\s+(\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*)", body, re.IGNORECASE
+        )
+        assert len(policies) == 6, (
+            f"{MIGRATION_020_NAME} creates {len(policies)} policies; "
+            "production carries SIX across the three tables (four on profiles, "
+            f"one each on strategies and processed_orders): {sorted(policies)}"
+        )
+        guards = re.findall(r"FROM\s+pg_policies", body, re.IGNORECASE)
+        assert len(guards) >= len(policies), (
+            f"{MIGRATION_020_NAME} has {len(policies)} CREATE POLICY and only "
+            f"{len(guards)} pg_policies guards."
+        )
+        assert "DROP POLICY" not in body.upper(), (
+            f"{MIGRATION_020_NAME} contains a DROP POLICY. These three tables "
+            "are live and RLS-enabled; dropping a policy to recreate it opens "
+            "a window in which the table is policy-less."
+        )
+
+    def test_020_does_not_alter_or_drop_anything_that_already_exists(self):
+        """The constraint the whole file is built around: it only ADDS
+        declarations for objects that are already there."""
+        body = _strip_sql_comments(MIGRATION_020.read_text(encoding="utf-8")).upper()
+        # The DML verbs are matched at a STATEMENT HEAD, not as a substring:
+        # `Update own profile` is one of production's policy NAMES, so a bare
+        # "UPDATE " scan reports the policy this file must reproduce. That is
+        # the scan being wrong, not the file.
+        for pattern, label, why in (
+            (r"^\s*UPDATE\s+", "UPDATE", "would rewrite rows"),
+            (r"^\s*DELETE\s+FROM\b", "DELETE FROM", "would delete rows"),
+            (r"^\s*INSERT\s+INTO\b", "INSERT INTO",
+             "would add rows to a live table"),
+            (r"\bTRUNCATE\b", "TRUNCATE", "would delete every row"),
+            (r"\bDROP\s+TABLE\b", "DROP TABLE",
+             "would destroy a populated production table"),
+            (r"\bDROP\s+COLUMN\b", "DROP COLUMN",
+             "would destroy a populated production column"),
+            (r"\bALTER\s+COLUMN\b", "ALTER COLUMN",
+             "would rewrite a column of a live table"),
+            (r"\bCOMMENT\s+ON\b", "COMMENT ON",
+             "would write to the live catalogue, and none of the three tables "
+             "carries a comment in production"),
+        ):
+            assert not re.search(pattern, body, re.MULTILINE), (
+                f"{MIGRATION_020_NAME} contains {label}, which {why}. "
+                "This file declares what production already has and must be a "
+                "complete no-op against it."
+            )
+        # The only ALTERs permitted are the guarded ADD CONSTRAINT foreign keys
+        # and ENABLE ROW LEVEL SECURITY, which is a no-op where RLS is already
+        # on - and it is on, on all three tables.
+        alters = re.findall(r"ALTER\s+TABLE\s+\S+\s*\n?\s*(\w+(?:\s+\w+)*)", body)
+        assert alters, "no ALTER TABLE parsed at all - the scan has stopped matching"
+        for action in alters:
+            assert action.startswith("ADD CONSTRAINT") or action.startswith(
+                "ENABLE ROW LEVEL SECURITY"
+            ), (
+                f"{MIGRATION_020_NAME} issues ALTER TABLE ... {action!r}. Only "
+                "guarded ADD CONSTRAINT and ENABLE ROW LEVEL SECURITY are "
+                "permitted here."
+            )
+
+    def test_the_foreign_keys_are_guarded_on_their_referents(self):
+        """``auth.users`` is the platform's and ``library_strategies`` is
+        Alembic's, so neither is guaranteed to exist when 020 runs. An inline
+        REFERENCES would abort the whole file on a from-source rebuild."""
+        body = _strip_sql_comments(MIGRATION_020.read_text(encoding="utf-8"))
+        for referent in ("auth.users", "public.library_strategies"):
+            assert "to_regclass('%s')" % referent in body, (
+                f"{MIGRATION_020_NAME} does not guard on to_regclass("
+                f"'{referent}'). That referent is not owned by the numbered "
+                "SQL set, so the constraint that needs it has to be added "
+                "conditionally and the skip has to be announced."
+            )
+        assert len(re.findall(r"ADD\s+CONSTRAINT", body, re.IGNORECASE)) == 4, (
+            f"{MIGRATION_020_NAME} must add exactly four foreign keys: "
+            "profiles.id, strategies.user_id and processed_orders.user_id to "
+            "auth.users(id), and strategies.source_library_id to "
+            "library_strategies(id)."
+        )
+        assert "RAISE NOTICE" in body.upper(), (
+            f"{MIGRATION_020_NAME} skips a foreign key when its referent is "
+            "absent and must say so - a rebuild that produced a weaker schema "
+            "than production has to show it in its own log."
+        )
+
+    def test_020_records_how_its_ddl_was_obtained(self):
+        """Captured DDL and invented DDL are indistinguishable once written, so
+        the file has to say which it is. This is the claim a reviewer checks."""
+        header = MIGRATION_020.read_text(encoding="utf-8")[:12000]
+        for marker in (
+            "information_schema.columns",
+            "pg_get_constraintdef",
+            "pg_indexes",
+            "pg_policies",
+        ):
+            assert marker in header, (
+                f"{MIGRATION_020_NAME}'s header does not name {marker!r} as a "
+                "capture source. Without the capture method stated, a reader "
+                "cannot tell this DDL from DDL written out of the application's "
+                "expectations - which is what the audit documents did for "
+                "processed_orders."
+            )
 
 
 # --------------------------------------------------------------------------
@@ -932,9 +1305,12 @@ class TestWaitlistInsertPathTracksTheForm:
 #: Adding a name here to silence a failure re-creates the defect. The name
 #: belongs here ONLY if the relation is already in the database; otherwise add
 #: the CREATE TABLE.
+#: ``profiles`` and ``strategies`` LEFT THIS SET in task 13.22, which is the
+#: only correct way out of it: 020_declare_pre_existing_tables.sql now declares
+#: both, so there is a parsed CREATE TABLE to find and no exemption is needed.
+#: They were here with row counts as their evidence; the row counts are now in
+#: 020's header alongside the catalogue capture that produced its DDL.
 SQL_UNDECLARED_PRESENT_IN_PRODUCTION = {
-    "profiles": "pre-migration base table, 180 rows in production",
-    "strategies": "pre-migration base table, 187 rows in production",
     "execution_records": "pre-migration base table, 198 rows; 006 only ALTERs it",
     "library_strategies": "present (0 rows); declared only by Alembic e88f9911b5a2",
 }
@@ -1479,8 +1855,23 @@ class TestEverySqlMigrationRelationIsDeclared:
             )
 
     def test_the_python_and_sql_exemptions_agree_where_they_overlap(self):
-        """``profiles`` and ``strategies`` are exempt on both sides for the same
-        reason. If one side's justification changes, both must be revisited."""
+        """``profiles`` and ``strategies`` were exempt on both sides for the same
+        reason. If one side's justification changes, both must be revisited.
+
+        Both have now left BOTH sets - task 13.22 declared them - so the loop is
+        vacuous and the invariant that matters is asserted directly: neither
+        name may reappear in either exemption set while 020 declares it.
+        """
+        for name in ("profiles", "strategies"):
+            assert name not in PRE_MIGRATION_BASE_TABLES, (
+                f"{name!r} is back in PRE_MIGRATION_BASE_TABLES while "
+                f"{MIGRATION_020_NAME} declares it - one of the two is wrong."
+            )
+            assert name not in SQL_UNDECLARED_PRESENT_IN_PRODUCTION, (
+                f"{name!r} is back in SQL_UNDECLARED_PRESENT_IN_PRODUCTION "
+                f"while {MIGRATION_020_NAME} declares it - one of the two is "
+                "wrong."
+            )
         for name in PRE_MIGRATION_BASE_TABLES:
             assert name in SQL_UNDECLARED_PRESENT_IN_PRODUCTION, (
                 f"{name!r} is exempt for the Python guard but not the SQL guard. "
@@ -1976,26 +2367,20 @@ class TestFilterClausesAttachToAggregates:
 #: failure RE-CREATES the defect: the name belongs here only if production
 #: already has it, and a column production does not have needs a migration,
 #: not an entry.
+#: ``profiles`` (20 columns) and ``strategies`` (26) LEFT THIS ROSTER in task
+#: 13.22. They were recorded here because nothing declared the tables, so there
+#: was no parsed oracle to compare a read against; 020 now declares both FROM
+#: THE SAME CATALOGUE these column sets were read off, so the parsed oracle and
+#: the recorded one would be two copies of one measurement, free to drift
+#: apart. The parse wins, which is what
+#: ``test_the_recorded_production_column_sets_are_still_what_they_claim``
+#: demands when a table enters ``created``.
+#:
+#: ``library_strategies`` and ``library_ratings`` STAY. Both are declared only
+#: by Alembic (e88f9911b5a2), both are deliberately NOT re-declared by 020 -
+#: see :data:`ALEMBIC_ONLY_RELATIONS` - so neither has a parsed oracle and the
+#: recorded one is the only cover their columns have.
 PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
-    "profiles": frozenset(  # 20 columns
-        {
-            "available_discounts", "avatar_url", "balance", "billing_currency",
-            "bio", "created_at", "deployed_bots", "display_name", "email",
-            "full_name", "id", "is_frozen", "max_api_slots",
-            "ml_addons_purchased", "ml_strategies_built", "preferred_currency",
-            "subscription_tier", "telegram_id", "updated_at", "username",
-        }
-    ),
-    "strategies": frozenset(  # 26 columns
-        {
-            "archived_at", "backtest_result", "buy_logic", "created_at",
-            "current_version", "dag_config", "dag_hash", "dag_schema_version",
-            "dag_version", "environment", "exchange_id", "execution_order",
-            "id", "indicators", "is_active", "last_signal_at", "ml_model_path",
-            "name", "risk", "sell_logic", "source_library_id", "status",
-            "symbol", "timeframe", "updated_at", "user_id",
-        }
-    ),
     "library_strategies": frozenset(  # 52 columns
         {
             "author_id", "avg_rating", "backtest_end_date",
