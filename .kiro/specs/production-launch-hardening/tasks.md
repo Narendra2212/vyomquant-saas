@@ -3547,6 +3547,175 @@ exists to remove.
     _49.0.0 floor was fabricated assurance, not an absence)_
 
 
+- [ ] 13.25 SESSION JWTS WERE BEING WRITTEN TO CLOUDWATCH BY THE ACCESS LOG, AND THE
+  `?token=` ARM THAT PUT THEM THERE IS NOW DELETED — THE REMOVAL CONDITION TASK 8.2
+  WROTE DOWN WAS MEASURED AS MET, NOT ASSUMED
+  - **THE FINDING, AND WHY IT IS THE URL AND NOT THE LOGGER.** Uvicorn's access log
+    writes the full WebSocket request line *including the query string*. Any handshake
+    on the legacy `?token=` arm therefore put a live session JWT into
+    `/ecs/vyomquant-api` beside the user id and the client IP — replayable for as long
+    as the token was valid. Verbatim, token masked at the source:
+    `[2026-09-28 02:04:11 +0000] [41] [INFO] ('10.0.0.101', 29036) - "WebSocket
+    /ws/user/52384fe1-c1dd-4540-89e4-5c36dd8a2bf8?token=<JWT>" 403`. **Log redaction
+    was considered and refused**: it leaves the credential in the URL and makes the
+    control a log filter that has to stay correct forever, across browser history and
+    any `Referer` the URL reaches. Removing the credential from the URL is the
+    root-cause fix and is what task 8.2 designed. The replacement credential is safe in
+    a log by construction rather than by filtering — a ticket is opaque, single-use via
+    an atomic `getdel`, and lives ≤ 30 s, so a ticket in a log is already spent
+  - **THE MEASUREMENT THAT ESTABLISHED THE REMOVAL CONDITION.** `ws_routes.py`'s own
+    task 8.2 header named the condition ("kept accepting for ONE release only... once
+    the ticket client has shipped, delete the `token` query parameter and the `token`
+    branch"). Per-UTC-day handshake counts from `/ecs/vyomquant-api`, `?token=` against
+    `?ticket=`: **09-27 24/6, 09-28 39/12, 09-29 3/89, 09-30 0/0, 10-01 12/2,
+    10-02 2/136**. 09-27/28 is the pre-rollout window `websocketClient.js` documents —
+    `verify_ws_ticket` was not deployed and every socket fell back to the JWT. Since it
+    landed, **tickets dominate 136-to-2**, and both halves are confirmed working rather
+    than inferred: `[WS-Ticket] Issued ticket for user … (TTL=30s)` on the mint and
+    `[WS/Auth] Ticket redeemed for user …` on the redemption
+  - **THE RESIDUAL ~2/DAY IS THE ONE REAL COST, AND IT RECOVERS BY ITSELF.** Those are
+    not clients that cannot mint a ticket. They are sessions already pinned to the
+    legacy arm by the client-side `WS_TICKET_FALLBACK` shim, which switched once and —
+    in its own words — "sticks for the session, and is never switched back". Each such
+    session gets **one 4001 on its next socket**. It then recovers automatically, and
+    that was verified in the code rather than hoped for: `scheduleReconnect` re-enters
+    `_open` with `this.connectPath` (deliberately *not* `this.url`, which holds a spent
+    ticket), and `_open` mints a **fresh** ticket on every attempt. So a reconnect
+    cannot re-present a dead credential, and no second change was needed to make
+    recovery work — the re-mint was already correct. The cost is one dropped handshake
+    per stuck session, on the order of two a day
+  - **WHAT WAS REMOVED, SERVER SIDE.** `backend_app/api_ws/ws_routes.py`: the `token`
+    query parameter from **all nine** `@ws_router.websocket` routes, and the `token`
+    branch and parameter from both `_resolve_ws_credential` and `_resolve_ws_subject`.
+    The four `if not ticket and not token:` guards became `if not ticket:` — a
+    narrowing of what is admitted, never a widening. The task 8.2 header block was
+    rewritten to record that the grace period ended, on 2026-10-02, and on what
+    evidence; it no longer reads as a pending decision. `_validate_ws_token` keeps its
+    `token` argument and is exempted **by name**: it is not a route and not a resolver,
+    no route has called it for two tasks, and what it validates is a JWT presented in a
+    message *body*, which is not access-logged, not in browser history and not in a
+    `Referer`. It now shares a new `_subject_from_payload` helper with the ticket path
+    so the tenant-isolation cross-check still has exactly one implementation
+  - **WHAT WAS REMOVED, CLIENT SIDE.** `algo22-terminal/src/websocketClient.js`: the
+    whole `WS_TICKET_FALLBACK` block, the `WS_CREDENTIAL_MODE_TOKEN` branch in `_open`,
+    `_maybeFallBackToLegacyToken`, and its four pieces of bookkeeping
+    (`credentialMode`, `presentedCredential`, `socketOpened`,
+    `credentialFallbackLogged`) — **all four had exactly one reader, the shim's own
+    decision**, which is why none were kept. With the server arm gone the fallback
+    could only ever produce a socket the server refuses, so leaving it would have
+    turned a clean 4001 into a **retry loop** re-presenting an unredeemable credential
+    and writing the JWT to the access log on every lap. The file header was updated
+    rather than left describing a mechanism that no longer exists
+  - **THE ONE CONSEQUENCE THAT WAS NOT ANTICIPATED, AND IT NEEDS A DECISION.**
+    `/ws/strategy/{strategy_id}` was the single route whose authorisation needed more
+    than an identity: its ownership read ran **as the user, under their JWT**
+    (`create_request_supabase_async(token)`), so `strategies` RLS was what actually
+    enforced it. The ticket store holds **only the user id** — confirmed in
+    `verify_ws_ticket`, which returns `{"sub", "auth_method"}` and nothing else — so a
+    ticket cannot supply that JWT. Three options: (a) keep the arm for this one route —
+    refused, it is the arm that writes the JWT to CloudWatch and one route is enough to
+    keep the finding open; (b) drop to an unscoped read and compare `user_id`
+    server-side — refused *here*, because it swaps "RLS says it is theirs" for "we
+    compared two strings we were handed", and trading a control for a weaker one is a
+    decision for its own task rather than a side effect of a credential removal;
+    (c) **refuse, explicitly and by name** — taken. **What it costs was measured, not
+    assumed: nothing today.** `/ws/strategy/{strategy_id}` appears nowhere in
+    `algo22-terminal/src/`; it occurs only in two test files. The live equivalent is the
+    `strategy.{strategy_id}` channel subscription, authorised by
+    `websocket_auth._resolve_owned_channel_owner` over a server-side client with no JWT
+    in any URL. **The route stays registered** so a client still pointing at it gets a
+    clean, logged 4003 rather than a 404 that reads as a deploy failure, and its dead
+    body was deleted rather than left unreachable behind a `return`. **This is flagged
+    for the user, not closed:** reviving it means picking (b) or teaching the ticket
+    store to hold the session JWT — a new secret at rest, and `issue_ws_ticket` lives in
+    `routers/auth.py`, which this task was forbidden to touch
+  - **THE GUARD IS STRUCTURAL, AND IT WAS OBSERVED FAILING BEFORE THE CHANGE.** New
+    `tests/test_ws_token_query_credential_removed.py` (13 assertions) asks the **parse
+    tree**, not a text scan, because "token" appears in `ws_routes.py` in prose (the
+    header quotes the log line above), in `_decode_hs256_token` / `_validate_ws_token` /
+    `access_token`, and in log messages — a grep either false-positives on all of it or
+    gets tuned until it is vacuous. Run against `fe1dc6a3`'s source, the following
+    **were observed failing**: `test_no_route_declares_a_token_parameter` → all **9**
+    routes (`ws_candles, ws_dashboard, ws_orderbook, ws_pnl, ws_signal_trace,
+    ws_strategy, ws_telemetry, ws_ticker, ws_user`);
+    `test_no_route_reads_token_out_of_the_query_mapping` → the same 9 bodies;
+    `test_the_resolver_declares_no_token_parameter` and
+    `test_the_resolver_has_no_token_branch` → **both** `_resolve_ws_credential` and
+    `_resolve_ws_subject`; `test_the_exemption_is_still_exactly_the_documented_set` →
+    **12** functions taking `token` against the 1 allowed; and both header-prose
+    assertions. Two assertions guard the guard itself — the route roster is pinned at
+    **9** so the others cannot pass vacuously over an empty list, and every route must
+    still declare `ticket` so the removal cannot have left a route with no credential
+    at all
+  - **THE FAIL-CLOSED PATH WAS RE-PROVEN BEHAVIOURALLY, IN THE EXISTING SUITE.**
+    `tests/test_websocket_auth_fail_closed.py` extended rather than duplicated (38 → 57
+    assertions). `TestEveryRouteStillFailsClosedWithNoCredential` closes **4001 on all
+    nine** routes with no credential presented — the assertion a careless `if not
+    ticket:` edit breaks. `TestATokenQueryParameterIsNoLongerACredential` presents a
+    **valid, unexpired, correctly signed** JWT as `?token=` on all nine, which is the
+    only input that can distinguish "the arm is gone" from "the arm is there and the
+    token happened to be bad". **Observed against `fe1dc6a3`: 8 of the 9 admitted it**
+    — `DID NOT RAISE WebSocketDisconnect` on telemetry, ticker, orderbook, candles,
+    pnl, dashboard, strategy and signal-trace. That is the finding, reproduced as a
+    test. One positive case pins the whole class as non-vacuous: a resolvable ticket is
+    still admitted
+  - **FOUR PRE-EXISTING ASSERTIONS WERE RETARGETED, NONE WEAKENED.**
+    `test_ws_telemetry_valid_token` and `test_ws_ticker_valid_token` asserted that a
+    valid JWT in `?token=` **is admitted** — precisely the behaviour this task deletes —
+    so they now assert the same positive property over the credential that exists
+    (`*_valid_ticket`). The four `*_verification_exception` tests patched
+    `_decode_hs256_token`, which nothing on a handshake path reaches any more; they now
+    patch `verify_ws_ticket` with the assertion byte-identical (`code in (4003, 1008,
+    1000)` — a verifier that raises must close 4003, never admit). On the frontend,
+    `socketCredential.test.js` §5 was **inverted rather than deleted**: it used to pin
+    the shim's presence, and now pins its absence plus "no `token=` is built anywhere in
+    the client", comments stripped so the prose explaining the removal cannot satisfy or
+    break its own guard. Its third case is the behavioural replacement — a handshake
+    refused 4001 must be answered with a **fresh ticket**, and every attempt's ticket
+    must be distinct
+  - **GATES, ALL GREEN.** `tests/test_ws_token_query_credential_removed.py` +
+    `tests/test_websocket_upgrade_gate.py` + `tests/test_no_undefined_names.py` →
+    **38 passed** (13 + 22 + 3) in 286.50s;
+    `tests/test_schema_table_reference_drift.py` +
+    `tests/test_websocket_auth_fail_closed.py` → **143 passed** (86 + 57) in 124.16s;
+    `flake8 --select=E9,F63,F7,F82` clean on all three touched Python files.
+    `backend_app.main` imports and the route count is **351 — unchanged**, which is the
+    expected result because this task removed a *parameter*, not a route; all nine
+    `ws_router` sockets now expose `ticket` and none exposes `token` (the tenth
+    WebSocket route, `/api/dag/tasks/ws/{task_id}`, belongs to another router and was
+    not touched). Frontend: `socketCredential.test.js` **13 passed**; `singleSocket`,
+    `useConnectionStatus`, `useLiveChannel`, `topBar`, `standing-prose` → **116
+    passed**; `billingSocketLifecycle`, `signalTraceConnection`, `signalTraceRealtime`,
+    `builderRealtime`, `attack_frontend_full`, `useNotificationStream` → **183 passed**
+  - **THE PARALLEL WORKSTREAM'S FILES WERE NOT TOUCHED.** No edit to
+    `backend_app/routers/auth.py` — its staged SC-8 index entry is intact, and
+    `issue_ws_ticket` living there is exactly why option (b) above was left as a
+    decision rather than taken. Nor to `backend_app/backend/strategy_service.py`,
+    `backend_app/routers/strategy_operations.py`, `routers/billing.py`,
+    `core/billing_lifecycle.py`, `core/subscription_middleware.py` or
+    `backend_app/backend/ml_training_policy.py`. The commit is a pathspec commit over
+    exactly five paths
+  - **WHAT IS AND IS NOT PROVEN HERE.** Proven locally: no route accepts `token` in its
+    signature or its body, neither resolver has a token branch, a valid JWT as `?token=`
+    is refused on all nine routes where 8 of 9 previously admitted it, a missing
+    credential still closes 4001 on all nine, a resolvable ticket is still admitted, the
+    client builds no `token=` at all and re-mints on every reconnect, and 351 routes
+    stand. **Not proven here, and it is the real verification**: that no new `?token=`
+    line appears in `/ecs/vyomquant-api` after the next deploy. The user checks that
+  - _Requirements: 1.21 / 2.21 / 3.9 (2.21 asks that the socket credential not be a_
+    _replayable session JWT in a loggable URL; with the `token` arm deleted on all nine_
+    _routes and the client fallback deleted with it, there is no longer any path that_
+    _puts one there, so 2.21 is **closed at the server** and pending only the deploy_
+    _that carries it. 3.9's single-use ≤ 30 s ticket is unchanged and is now the only_
+    _credential. 1.21 is **PARTIAL by one named gap**: `/ws/strategy/{strategy_id}` is_
+    _refused rather than migrated, because its RLS-scoped ownership read cannot be_
+    _served by a ticket that carries only a subject — recorded above as a decision for_
+    _the user, with no live client affected) and `§Bug condition` by way of 2.5's_
+    _principle (an access log that records a credential alongside the identity it_
+    _authenticates is not a log of an event, it is a credential store nobody declared —_
+    _the exposure was real and measured at 39 JWTs in one day, not a theoretical one)_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`

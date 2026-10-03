@@ -136,13 +136,26 @@ class TestWebSocketAuthFailClosed:
         
         assert exc_info.value.code in (4001, 1008, 1000)
     
-    def test_ws_telemetry_valid_token(self, client, valid_token):
-        """Test /ws/telemetry accepts connection with valid token."""
-        try:
-            with client.websocket_connect(f"/ws/telemetry?token={valid_token}") as websocket:
-                pass
-        except WebSocketDisconnect as e:
-            pytest.fail(f"Valid token should not cause disconnect: {e}")
+    def test_ws_telemetry_valid_ticket(self, client):
+        """Test /ws/telemetry accepts connection with a valid ticket.
+
+        RETARGETED by production-launch-hardening task 13.25. This asserted that a valid
+        JWT in `?token=` was admitted — the behaviour the task deletes, because uvicorn
+        writes that query string to CloudWatch. The positive property is unchanged and
+        still asserted: a credential that resolves is admitted. Only the credential is
+        different.
+
+        `verify_ws_ticket` is patched rather than a real ticket minted because redemption
+        is an atomic `getdel` against Redis and there is no store in this environment.
+        This is the same boundary the four `*_verification_exception` tests below patch.
+        """
+        with patch('backend_app.api_ws.ws_routes.verify_ws_ticket') as mock_verify:
+            mock_verify.return_value = {"sub": "test_user_123", "auth_method": "ws_ticket"}
+            try:
+                with client.websocket_connect("/ws/telemetry?ticket=good_ticket"):
+                    pass
+            except WebSocketDisconnect as e:
+                pytest.fail(f"Valid ticket should not cause disconnect: {e}")
     
     def test_ws_ticker_no_token(self, client):
         """Test /ws/ticker/{symbol} rejects connection with no token."""
@@ -160,13 +173,18 @@ class TestWebSocketAuthFailClosed:
         
         assert exc_info.value.code in (4001, 1008, 1000)
     
-    def test_ws_ticker_valid_token(self, client, valid_token):
-        """Test /ws/ticker/{symbol} accepts connection with valid token."""
-        try:
-            with client.websocket_connect(f"/ws/ticker/BTC-USDT?token={valid_token}") as websocket:
-                pass
-        except WebSocketDisconnect as e:
-            pytest.fail(f"Valid token should not cause disconnect: {e}")
+    def test_ws_ticker_valid_ticket(self, client):
+        """Test /ws/ticker/{symbol} accepts connection with a valid ticket.
+
+        RETARGETED by task 13.25 — see `test_ws_telemetry_valid_ticket`.
+        """
+        with patch('backend_app.api_ws.ws_routes.verify_ws_ticket') as mock_verify:
+            mock_verify.return_value = {"sub": "test_user_123", "auth_method": "ws_ticket"}
+            try:
+                with client.websocket_connect("/ws/ticker/BTC-USDT?ticket=good_ticket"):
+                    pass
+            except WebSocketDisconnect as e:
+                pytest.fail(f"Valid ticket should not cause disconnect: {e}")
     
     def test_ws_orderbook_no_token(self, client):
         """Test /ws/orderbook/{symbol} rejects connection with no token."""
@@ -437,55 +455,205 @@ class TestWebSocketAuthFailClosed:
     
     def test_ws_telemetry_verification_exception(self, client):
         """Test /ws/telemetry rejects connection when verification throws exception."""
-        from backend_app.core.websocket_auth import _decode_hs256_token
-        
-        with patch('backend_app.api_ws.ws_routes._decode_hs256_token') as mock_decode:
-            mock_decode.side_effect = Exception("Verification failed unexpectedly")
+        # task 13.25 retargeted the patched boundary from `_decode_hs256_token` to
+        # `verify_ws_ticket`. The assertion is byte-identical: a credential verifier that
+        # raises must close 4003 rather than admit. Only the verifier changed, because
+        # `?token=` is no longer a credential any route accepts.
+        with patch('backend_app.api_ws.ws_routes.verify_ws_ticket') as mock_verify:
+            mock_verify.side_effect = Exception("Verification failed unexpectedly")
             
             with pytest.raises(WebSocketDisconnect) as exc_info:
-                with client.websocket_connect("/ws/telemetry?token=some_token") as websocket:
+                with client.websocket_connect("/ws/telemetry?ticket=some_ticket") as websocket:
                     pass
             
             assert exc_info.value.code in (4003, 1008, 1000)
     
     def test_ws_ticker_verification_exception(self, client):
         """Test /ws/ticker/{symbol} rejects connection when verification throws exception."""
-        from backend_app.core.websocket_auth import _decode_hs256_token
-        
-        with patch('backend_app.api_ws.ws_routes._decode_hs256_token') as mock_decode:
-            mock_decode.side_effect = Exception("Verification failed unexpectedly")
+        # task 13.25 retargeted the patched boundary from `_decode_hs256_token` to
+        # `verify_ws_ticket`. The assertion is byte-identical: a credential verifier that
+        # raises must close 4003 rather than admit. Only the verifier changed, because
+        # `?token=` is no longer a credential any route accepts.
+        with patch('backend_app.api_ws.ws_routes.verify_ws_ticket') as mock_verify:
+            mock_verify.side_effect = Exception("Verification failed unexpectedly")
             
             with pytest.raises(WebSocketDisconnect) as exc_info:
-                with client.websocket_connect("/ws/ticker/BTC-USDT?token=some_token") as websocket:
+                with client.websocket_connect("/ws/ticker/BTC-USDT?ticket=some_ticket") as websocket:
                     pass
             
             assert exc_info.value.code in (4003, 1008, 1000)
     
     def test_ws_orderbook_verification_exception(self, client):
         """Test /ws/orderbook/{symbol} rejects connection when verification throws exception."""
-        from backend_app.core.websocket_auth import _decode_hs256_token
-        
-        with patch('backend_app.api_ws.ws_routes._decode_hs256_token') as mock_decode:
-            mock_decode.side_effect = Exception("Verification failed unexpectedly")
+        # task 13.25 retargeted the patched boundary from `_decode_hs256_token` to
+        # `verify_ws_ticket`. The assertion is byte-identical: a credential verifier that
+        # raises must close 4003 rather than admit. Only the verifier changed, because
+        # `?token=` is no longer a credential any route accepts.
+        with patch('backend_app.api_ws.ws_routes.verify_ws_ticket') as mock_verify:
+            mock_verify.side_effect = Exception("Verification failed unexpectedly")
             
             with pytest.raises(WebSocketDisconnect) as exc_info:
-                with client.websocket_connect("/ws/orderbook/BTC-USDT?token=some_token") as websocket:
+                with client.websocket_connect("/ws/orderbook/BTC-USDT?ticket=some_ticket") as websocket:
                     pass
             
             assert exc_info.value.code in (4003, 1008, 1000)
     
     def test_ws_candles_verification_exception(self, client):
         """Test /ws/candles/{symbol}/{timeframe} rejects connection when verification throws exception."""
-        from backend_app.core.websocket_auth import _decode_hs256_token
-        
-        with patch('backend_app.api_ws.ws_routes._decode_hs256_token') as mock_decode:
-            mock_decode.side_effect = Exception("Verification failed unexpectedly")
+        # task 13.25 retargeted the patched boundary from `_decode_hs256_token` to
+        # `verify_ws_ticket`. The assertion is byte-identical: a credential verifier that
+        # raises must close 4003 rather than admit. Only the verifier changed, because
+        # `?token=` is no longer a credential any route accepts.
+        with patch('backend_app.api_ws.ws_routes.verify_ws_ticket') as mock_verify:
+            mock_verify.side_effect = Exception("Verification failed unexpectedly")
             
             with pytest.raises(WebSocketDisconnect) as exc_info:
-                with client.websocket_connect("/ws/candles/BTC-USDT/5m?token=some_token") as websocket:
+                with client.websocket_connect("/ws/candles/BTC-USDT/5m?ticket=some_ticket") as websocket:
                     pass
             
             assert exc_info.value.code in (4003, 1008, 1000)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  THE `token` QUERY CREDENTIAL IS GONE — production-launch-hardening 13.25
+#  Requirements 1.21, 2.21, 3.9.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  Added here rather than in a new file because this is the suite that already owns
+#  "what does a WebSocket route do with a credential it should refuse", and a second
+#  file asserting the same thing is a second place for the answer to drift.
+#
+#  TWO QUESTIONS, ONE PER CLASS. Removing a credential arm can fail in two opposite
+#  directions and both have to be closed:
+#
+#    * it can fail OPEN — the parameter is gone from the signature but something still
+#      resolves a JWT, so `?token=` keeps working and keeps being access-logged. That is
+#      `TestATokenQueryParameterIsNoLongerACredential`.
+#    * it can fail BROKEN — the removal takes the refusal with it, and a handshake with
+#      no credential is admitted instead of closed. That is
+#      `TestEveryRouteStillFailsClosedWithNoCredential`, and it is the assertion that
+#      matters most, because it is the one a careless `if not ticket:` edit breaks.
+#
+#  `tests/test_ws_token_query_credential_removed.py` proves the same removal
+#  STRUCTURALLY, over the parse tree. These two do it BEHAVIOURALLY, through a real
+#  handshake against the real app. Neither subsumes the other: the AST guard catches a
+#  parameter coming back in a diff that no test happens to exercise, and these catch a
+#  resolver that admits something its signature does not mention.
+
+#: Every route in `api_ws/ws_routes.py`, with the non-credential parameters each one
+#: requires, so a refusal is the credential's refusal and not FastAPI rejecting a
+#: missing `user_id` during the handshake.
+_TEST_USER_ID = "test_user_123"
+ALL_WS_ROUTES = [
+    "/ws/telemetry",
+    "/ws/ticker/BTC-USDT",
+    "/ws/orderbook/BTC-USDT",
+    "/ws/candles/BTC-USDT/5m",
+    f"/ws/user/{_TEST_USER_ID}",
+    f"/ws/pnl/{_TEST_USER_ID}",
+    f"/ws/dashboard?user_id={_TEST_USER_ID}",
+    f"/ws/strategy/stg_1?user_id={_TEST_USER_ID}",
+    f"/ws/signal-trace?user_id={_TEST_USER_ID}",
+]
+
+
+def _with_param(path: str, param: str) -> str:
+    return f"{path}{'&' if '?' in path else '?'}{param}"
+
+
+class TestEveryRouteStillFailsClosedWithNoCredential:
+    """A handshake presenting nothing must still be closed, on all nine routes."""
+
+    @pytest.fixture
+    def client(self):
+        from backend_app.main import app
+        return TestClient(app)
+
+    @pytest.mark.parametrize("path", ALL_WS_ROUTES)
+    def test_no_credential_is_refused(self, client, path):
+        """
+        The guard that task 13.25 narrowed. `if not ticket and not token:` became
+        `if not ticket:` on four routes, and the five that resolve through
+        `_resolve_ws_subject` lost the second keyword — both are reductions in what is
+        admitted, and this asserts the refusal itself survived the edit.
+
+        4001 is what the routes close with. 1008/1000/1006 are accepted because an ASGI
+        server turns a `close()` issued *before* `accept()` into an HTTP 403 on the
+        handshake, and the code the client observes then depends on the transport — the
+        same latitude every test above this line already allows.
+        """
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect(path):
+                pass
+
+        assert exc_info.value.code in (4001, 4003, 1008, 1006, 1000), (
+            f"{path} admitted a handshake that presented no credential, or closed with "
+            f"an unexpected code {exc_info.value.code}"
+        )
+
+
+class TestATokenQueryParameterIsNoLongerACredential:
+    """A **valid** session JWT in `?token=` must now be refused, on all nine routes.
+
+    This is the assertion that encodes the finding. A JWT that is cryptographically
+    good and unexpired is exactly the input that used to be admitted, so it is the only
+    input that can tell "the arm is gone" apart from "the arm is still here and the
+    token happened to be bad".
+    """
+
+    @pytest.fixture
+    def client(self):
+        from backend_app.main import app
+        return TestClient(app)
+
+    @pytest.fixture
+    def valid_token(self):
+        import time
+
+        import jwt
+
+        secret = os.getenv("SUPABASE_JWT_SECRET", "dev-secret-change-in-production")
+        return jwt.encode(
+            {
+                "sub": _TEST_USER_ID,
+                "email": "test@example.com",
+                "tenant_id": "tenant_123",
+                "role": "authenticated",
+                "aud": "authenticated",
+                "iss": "algo22-test",
+                "exp": int(time.time()) + 3600,
+            },
+            secret,
+            algorithm="HS256",
+        )
+
+    @pytest.mark.parametrize("path", ALL_WS_ROUTES)
+    def test_a_valid_jwt_in_the_token_parameter_is_refused(self, client, path, valid_token):
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect(_with_param(path, f"token={valid_token}")):
+                pass
+
+        assert exc_info.value.code in (4001, 4003, 1008, 1006, 1000), (
+            f"{path} ADMITTED a valid session JWT presented as `?token=`. That is the "
+            f"credential task 13.25 removed: uvicorn's access log writes the full "
+            f"request line including the query string, so admitting it puts a live JWT "
+            f"in CloudWatch beside the user id and the client IP."
+        )
+
+    def test_the_sanity_check_that_makes_the_above_non_vacuous(self, client):
+        """A resolvable ticket IS admitted on the same route.
+
+        Without this, every assertion in this class would also pass if the routes had
+        simply stopped working. One positive case pins that the refusals above are the
+        credential being refused rather than the route being dead.
+        """
+        with patch('backend_app.api_ws.ws_routes.verify_ws_ticket') as mock_verify:
+            mock_verify.return_value = {"sub": _TEST_USER_ID, "auth_method": "ws_ticket"}
+            try:
+                with client.websocket_connect("/ws/telemetry?ticket=good_ticket"):
+                    pass
+            except WebSocketDisconnect as e:
+                pytest.fail(f"a resolvable ticket must still be admitted: {e}")
 
 
 def run_all_tests():
