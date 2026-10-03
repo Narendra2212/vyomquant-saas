@@ -3175,8 +3175,11 @@ exists to remove.
     **zero `vq_*` schemas**, `profiles` **181** / `strategies` **187** /
     `processed_orders` **25** rows unchanged, server 17.6. Every race ran in a scratch
     schema dropped in the same process, and the catalogue reads were `SELECT`-only.
-    **021 has not been applied to `public`** — it is a declaration, and applying it is
-    an operator action against a live table
+    **021 had not been applied to `public` as of this point in the record** — it was a
+    declaration, and applying it is an operator action against a live table, not
+    something a task that only writes files can do. **That operator action has since
+    been taken, on 2026-10-03; the ADDENDUM at the end of this task is the record of
+    it**, and this sentence is superseded by it rather than contradicted
   - **CORRECTED STATUS, so task 14 has one answer and not three.** Clause **1.16** is
     **PROVEN — as a defect**, at both levels, and is no longer UNVERIFIED and no longer
     BLOCKED: its "deployed twice" half is **proven and FIXED** (021, regression-proved
@@ -3196,11 +3199,141 @@ exists to remove.
     `postgres:17-alpine`. What is established is that it passes against a real
     PostgreSQL 17.6 and that it needs nothing from `public`, which is the property that
     makes the CI claim structural rather than speculative. 021's index has been proved
-    to work in a scratch schema with production's column types, not in `public`. The
-    *application-level* read-decide-write is untouched: a single-threaded caller can
-    still issue a deploy that the database then refuses with `23505`, so the routers need
-    to translate that into a 409 — filed here, not fixed. And the running-but-deleted
-    half is a live P0 with no guard at all
+    to work in a scratch schema with production's column types, not in `public` —
+    **superseded by the ADDENDUM below, which applied it to `public` and proved the real
+    index bites there.** The *application-level* read-decide-write is untouched: a
+    single-threaded caller can still issue a deploy that the database then refuses with
+    `23505`, so the routers need to translate that into a 409 — filed here, not fixed,
+    and re-filed in the addendum as the named follow-up now that the `23505` is live. And
+    the running-but-deleted half is a live P0 with no guard at all
+  - **ADDENDUM, 2026-10-03 — 021 HAS NOW BEEN APPLIED TO `public`. The operator action
+    the bullets above deferred has been taken.** `uq_strategy_deployments_one_live`
+    exists on `public.strategy_deployments` as of **2026-10-03 07:38 UTC**, PostgreSQL
+    17.6, port 5432 session mode (13.21's channel). The committed file was **read off
+    disk and executed verbatim** — 8550 bytes of
+    `backend_app/migrations/021_strategy_deployment_live_uniqueness.sql`, not retyped and
+    not inlined — so what ran is what is committed. **This was the only write to `public`
+    in that action**; no table, column, constraint, trigger or row was otherwise altered
+    - **THE DECISION, AND IT WAS TAKEN WITH THE ROUGH EDGE KNOWN.** It was applied
+      *despite* the gap the bullet above files: the application layer does not translate
+      `23505` into a 409, so a duplicate deploy now surfaces as a **500 rather than a
+      clean conflict**. Three reasons, in order of weight. **(i) Silent state corruption
+      is worse than an ugly error.** Before this index a racing second deploy left two
+      live deployment rows and *nothing detected it* — R1 and R5 in the table above are
+      the same race with and without the index, and the difference is a refusal the
+      caller sees versus a fabricated state nobody sees. An ugly 500 is a bug report; a
+      second `running` row is a strategy trading twice with no record that it should not
+      be. **(ii) There is no blast radius today.** `public.strategy_deployments` holds
+      **0 rows**, so the new error path is unreachable in practice — nothing can collide
+      with nothing. **(iii) It is additive and reversible in one statement:**
+      `DROP INDEX uq_strategy_deployments_one_live`. No column changed type, nothing was
+      made NOT NULL, no data was rewritten
+    - **PREFLIGHT, ALL NINE ITEMS, AND THE APPLY WAS CONDITIONAL ON THEM.** Read-only
+      session, `VERDICT: PROCEED`: `public.strategy_deployments` **exists**; it holds
+      **0 rows** (unchanged since 13.23 measured it, so the risk calculus above still
+      holds and the duplicate check below is confirmatory rather than load-bearing);
+      `SELECT strategy_id, count(*) … WHERE status = ANY(<the nine live spellings>)
+      GROUP BY strategy_id HAVING count(*) > 1` returns **zero rows**, so there was no
+      existing duplicate for `CREATE UNIQUE INDEX` to choke on;
+      `uq_strategy_deployments_one_live` **did not already exist** (0 in `pg_indexes`);
+      baseline census **71 tables** in `public`, `profiles` **181** / `strategies`
+      **187** / `processed_orders` **25**, **zero `vq_*` schemas**, server 17.6. Had any
+      item failed the file would not have been executed
+    - **THE NOTICES THE MIGRATION EMITTED.** First run — one notice, no error, committed:
+      `NOTICE: 021: uq_strategy_deployments_one_live present — at most one live
+      deployment per strategy is now enforced by the database. A racing second deploy
+      fails with 23505 unique_violation.` That is SECTION 3's own closing `RAISE NOTICE`,
+      which means SECTION 3 took the `EXISTS` branch and not the `RAISE EXCEPTION` one.
+      SECTION 1's preflight raised nothing, as expected
+    - **THE `indexdef` AS PRODUCTION RENDERS IT, SO THE PREDICATE IS AUDITABLE.** Read
+      off `pg_indexes` after the fact, in full:
+      `CREATE UNIQUE INDEX uq_strategy_deployments_one_live ON
+      public.strategy_deployments USING btree (strategy_id) WHERE ((status)::text = ANY
+      ((ARRAY['deploying'::character varying, 'deployed'::character varying,
+      'pending'::character varying, 'queued'::character varying, 'starting'::character
+      varying, 'restarting'::character varying, 'running'::character varying,
+      'active'::character varying, 'paused'::character varying])::text[]))`
+    - **THE LIVE PREDICATE NAMES ALL NINE SPELLINGS — differenced against
+      `_STATUS_TO_BINDING_STATE` in both directions, off the SERVER and not off the
+      file.** `pg_get_expr(indpred, indrelid)` was parsed and compared with the dict read
+      out of `backend_app/backend/strategy_lifecycle.py` by `ast`: the dict carries **17**
+      spellings of which **9** map into `STOPPABLE_BINDING_STATES` (`DEPLOYING`,
+      `RUNNING`, `PAUSED`). Live set from the dict and set from the predicate are
+      **identical** — `active, deployed, deploying, paused, pending, queued, restarting,
+      running, starting` — **missing: none, extra: none**. The **8** terminal spellings
+      are correctly outside it: `canceled, cancelled, completed, crashed, error, failed,
+      stopped, stopping`. This is the server-side counterpart of
+      `test_the_index_predicate_covers_every_live_status_spelling`, which pins the same
+      thing against the migration source; both directions now hold at both ends
+    - **AND THAT COMPARISON WAS WRONG ON THE FIRST ATTEMPT, WHICH IS WHY IT IS CREDIBLE.**
+      The first pass extracted literals with `'([a-z_]+)'::text` — the shape the
+      *migration source* has. The server renders the casts as `::character varying`, so
+      the regex matched **zero** literals and the check reported `FAIL` with all nine
+      "missing". That is the same class of error as the vacuous-assertion failures the
+      Notes record, except it failed loudly instead of passing emptily. Narrowed to
+      `'([a-z_]+)'` over the predicate expression and re-run; both sides now carry 9 and
+      the script asserts **non-emptiness of both sets** before comparing, so it cannot go
+      vacuous
+    - **IT IS GENUINELY A *PARTIAL UNIQUE* INDEX, FROM `pg_index` AND NOT FROM THE DDL
+      TEXT.** `indisunique = True`, `indpred IS NOT NULL = True`,
+      `indisprimary = False`, `indisvalid = True`, `indnatts = 1`. So it is unique, it is
+      partial, it is not the primary key wearing another name, and it is valid rather
+      than an incomplete build
+    - **IDEMPOTENT AGAINST PRODUCTION, PROVED BY RUNNING IT A SECOND TIME.** The same
+      file executed again: **no error, committed**, two notices —
+      `NOTICE: relation "uq_strategy_deployments_one_live" already exists, skipping`
+      (`IF NOT EXISTS` doing its job) followed by SECTION 3's same closing notice. A
+      **notice, not an error**, which is what the file's header claims and is now
+      measured against the live server rather than asserted
+    - **THE INDEX ACTUALLY BITES, AND THE FORM CHOSEN WAS `public` + `ROLLBACK`.** Stated
+      plainly because the alternative was offered: the scratch-schema form was **not**
+      used, because 13.23's R5 already records it and it only ever exercises a *copy of
+      the index's shape*. What was in question here is whether the index **now in
+      `public`** bites, so three probes ran inside a single transaction in `public` that
+      was then **ROLLED BACK**, against a real `(strategy_id, user_id, version_id)` triple
+      satisfying all three FKs, all parameterized:
+      **(A)** first live row, `status='running'` → **ACCEPTED**;
+      **(B)** second live row for the same `strategy_id`, `status='deploying'` →
+      **REFUSED `23505`**, verbatim: `duplicate key value violates unique constraint
+      "uq_strategy_deployments_one_live" DETAIL: Key (strategy_id)=(c21212b6-e3e7-4a4e-
+      bd0b-89cf32192825) already exists.`;
+      **(C)** second row for the same `strategy_id` with a *terminal* `status='stopped'`
+      → **ACCEPTED**, which is the half that proves the predicate is **partial and not
+      blanket** — a strategy must still be able to accumulate finished deployments.
+      Note (B) used `deploying` against (A)'s `running`: two *different* legacy spellings
+      collided, so the nine-spelling predicate is doing work the three-spelling one would
+      not have. `ROLLBACK` issued; **a fresh connection re-confirms `public.
+      strategy_deployments` at 0 rows**
+    - **CENSUS, BEFORE AND AFTER, AND ONLY THE INDEX COUNT MOVED.** **71 tables** in
+      `public` → **71**; `profiles` **181** → **181**; `strategies` **187** → **187**;
+      `processed_orders` **25** → **25**; `strategy_deployments` **0 rows** → **0 rows**;
+      **zero `vq_*` schemas** → **zero**; server 17.6. Indexes on
+      `public.strategy_deployments` **6 → 7** and constraints **6 → 6** — which is the
+      whole intended effect, and confirms 13.23's finding that "the only UNIQUE one is
+      the primary key" is no longer true of this table
+    - **THE NAMED FOLLOW-UP, AND WHY IT WAS NOT LANDED IN THE SAME CHANGE.**
+      **Translate `23505` on `uq_strategy_deployments_one_live` into a `409 Conflict`.**
+      This **must land before strategies are deployed at scale** — today it is
+      unreachable (0 rows), but the first real concurrent deploy turns it into a 500 on a
+      path where the correct answer is a clean conflict the client can retry or report.
+      It was not done here, and the reason is mechanical rather than a judgement call:
+      the two files that own those paths —
+      `backend_app/backend/strategy_service.py` (`deploy_version`,
+      `transition_deployment`) and `backend_app/routers/strategy_operations.py` — are
+      **both still carrying the parallel workstream's uncommitted modifications**
+      (re-checked at the time of this addendum: `git --no-optional-locks status --short`
+      shows ` M` against both). A pathspec commit touching either would carry their
+      work-in-progress into this commit. So the choice was between landing the index
+      without the 409, or landing neither; the reasoning in the DECISION bullet above is
+      why it was the former
+    - **GATES RE-RUN AFTER THE APPLY, AS A REGRESSION CHECK RATHER THAN NEW WORK, AND
+      NOTHING MOVED.** `tests/test_strategy_lifecycle_concurrency_postgres.py` with no
+      `DATABASE_URL` → **2 passed / 7 skipped**, the source-level pair intact;
+      `tests/test_schema_table_reference_drift.py` → **86**;
+      `tests/test_no_undefined_names.py` → **3** (**89 together**). **86 did not move,
+      and it should not have** — 021 declares an index, not a table, so the declaration
+      parser's oracle is untouched by applying it. **No code was changed**: the only
+      tracked file this addendum's change touches is this `tasks.md`
   - _Requirements: 1.16 / 2.16 (BOTH halves now proven — the application-level half by_
     _`tests/test_strategy_lifecycle_concurrency.py`'s 21/40 and 12/12, re-run this task,_
     _and the database-level half by `tests/test_strategy_lifecycle_concurrency_postgres.py`'s_
