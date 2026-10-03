@@ -2968,6 +2968,251 @@ exists to remove.
     _schema gap is closed, though the test has not been run against it here)_
 
 
+- [ ] 13.23 CLAUSE 1.16 IS NO LONGER UNVERIFIED — it is a PROVEN P0 DEFECT at both
+  the application and the database level, half of it is now FIXED at the root cause,
+  and the other half is reported as a decision rather than half-implemented
+  - **FIRST, A CORRECTION, because two earlier records disagree and one of them is
+    wrong.** Task 13.21 recorded that `tests/test_strategy_lifecycle_concurrency.py`
+    "**stays BLOCKED**: it needs a `strategies` table, and no migration declares one".
+    **That attribution was mistaken.** The file touches no database at all: it drives
+    `_FakeSupabase`/`_Query`, an in-process `Dict[str, List[Dict]]` declared in the file
+    itself, and `grep` over it for `SessionLocal`, `DATABASE_URL`, `psycopg`,
+    `sqlalchemy` or `database` returns matches only in prose. It was runnable before
+    13.22 and is runnable now; 13.22's `strategies` declaration did not change its
+    status because its status was never schema-dependent. **Task 13.13's inventory had
+    it right** — "`test_strategy_lifecycle_concurrency` (2) are the DELIBERATE P0
+    proofs 12.6 records" — and so did **task 12.6**, which closed the application-level
+    half and named only the *database-level* half as BLOCKED. 13.21 generalised from
+    the two files beside it in that paragraph, both of which genuinely do need a server.
+    13.22's `_Requirements:_` line repeated the error. This task corrects both by
+    citation rather than by silently restating the record
+  - **SO WHAT 13.22 ACTUALLY UNBLOCKED, stated precisely.** Not the fake-database file —
+    the **database-level half**, which 12.6, 13.11, 13.21 and 13.22 all carried BLOCKED
+    and which needs real `strategies` and `strategy_deployments` tables to race two real
+    sessions against. Before 020 declared `strategies`, that world could not be built
+    from source, so the proof could not be written without inventing DDL. It can now.
+    That half is what this task closes
+  - **WHAT THE TWO DELIBERATE P0 PROOFS SAY, RUN THIS TASK, WITH THE COUNTEREXAMPLES
+    IN FULL.** `tests/test_strategy_lifecycle_concurrency.py` → **2 failed, 25 passed**
+    in 67s, no database, unchanged tree. They fail **because the defect is real**, which
+    is the first of the three outcomes and not an environment failure:
+    - `test_the_four_operations_can_land_running_but_deleted` →
+      `AssertionError: 21/40 interleavings violated Requirement 2.16`. Counterexample,
+      verbatim: `[gather-0] strategy str_12_6_target is archived
+      (archived_at='2026-10-03T06:49:04.069022+00:00') AND carries 1 live deployment(s)
+      ([('6b6ea6de-3f8f-40df-b5c7-d5d343a3673e', 'running')]) - running-but-deleted.`
+      **The state the strategy ended in: archived, with a `running` deployment still
+      attached.** The 21 are `gather-0` and every odd seed `gather-1` … `gather-39` —
+      i.e. all 20 seeds with `seed_running_deployment=False`, where `delete` and
+      `deploy` race alone, plus the first seeded one. The interleaving is: `archive`
+      reads the deployments table and sees none blocking → `deploy` reads
+      `strategies.archived_at` and sees NULL → both write
+    - `test_deploy_can_race_itself_into_a_double_deploy` →
+      `AssertionError: 12/12 interleavings produced a double deploy`. Counterexample,
+      verbatim: `[double-deploy-0] strategy str_12_6_target carries 2
+      simultaneously-live deployments ([('f9f32837-3ba1-4c6e-9deb-884e191d00b3',
+      'running'), ('a86236f4-e7b3-4eb3-901e-4468dec56bf6', 'running')]) - double
+      deploy.` **The state: two `running` deployment rows for one strategy.** Every
+      single seed, not a sample
+  - **AND NOW THE DATABASE-LEVEL HALF, ON A REAL SERVER, TWO REAL SESSIONS.** New
+    `tests/test_strategy_lifecycle_concurrency_postgres.py` — PostgreSQL 17.6, port
+    5432 session mode, a uniquely named scratch schema created and dropped in the same
+    run, `search_path` pinned, `public` never read or written, two genuine OS threads on
+    two genuine server backends released together off a `threading.Barrier` (13.11's
+    technique), each parked at a second barrier between its own read and its own write.
+    **9 passed.** Six races, and three of the six results are NEGATIVE findings that
+    determine the fix:
+
+    | # | race | isolation | outcome | verdict |
+    |---|---|---|---|---|
+    | R1 | deploy vs deploy | READ COMMITTED | both COMMIT, 2 live rows | **double deploy** |
+    | R2 | archive vs deploy | READ COMMITTED | both COMMIT, archived + 1 live | **running-but-deleted** |
+    | R3 | deploy vs deploy | SERIALIZABLE | **both still COMMIT**, 2 live rows | **double deploy** |
+    | R4 | archive vs deploy | SERIALIZABLE | archiver cancelled `40001` | legal |
+    | R5 | deploy vs deploy + partial unique index | READ COMMITTED | loser `23505` | legal |
+    | R6 | atomic `UPDATE … WHERE` archive vs deploy | READ COMMITTED | both COMMIT | **running-but-deleted** |
+
+  - **R3 IS THE FINDING THAT CHOSE THE MECHANISM, and it is a negative.** The
+    SERIALIZABLE control task 13.21 built — `core/db_isolation.isolated_session`, now
+    operative and verified — **does not prevent the double deploy.** Two INSERTs of two
+    *different* rows give SSI no read/write dependency cycle to cancel, because neither
+    write falsifies a predicate the other read. Measured, both sessions committed, two
+    live rows. So the isolation mechanism was available and is the wrong tool for this
+    half; that is a measurement, not a preference
+  - **R6 IS THE SECOND NEGATIVE, and it is why the other half is not fixed.** The
+    atomic `UPDATE … WHERE status = …` pattern task 13.11 proved for order cancellation
+    (`backend/transactional_execution_manager.py:863`, raising on `rowcount == 0`)
+    **does not transfer.** It works for cancellation because predicate and write are the
+    same row. Transplanted here as `UPDATE strategies SET archived_at = now() WHERE id
+    = ? AND user_id = ? AND archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM
+    strategy_deployments d WHERE d.strategy_id = strategies.id AND d.status IN (…))`,
+    the `NOT EXISTS` is evaluated against a snapshot taken before the concurrent INSERT
+    commits, so it sees nothing, the UPDATE matches, and **`rowcount` is 1, not 0** —
+    there is nothing for the caller to raise on. Textbook write skew across two tables
+  - **THE FIX THAT LANDED: `021_strategy_deployment_live_uniqueness.sql`, at the root
+    cause, in the database.** A partial unique index —
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_strategy_deployments_one_live ON
+    public.strategy_deployments (strategy_id) WHERE status IN (…)`. This is
+    `uq_paper_account_default`'s shape, already in this schema
+    (`CREATE UNIQUE INDEX uq_paper_account_default ON public.paper_accounts (user_id,
+    currency) WHERE (session_id IS NULL)`, read off `pg_indexes` in this task) and the
+    exact contrast `test_strategy_lifecycle_concurrency.py`'s own docstring named as the
+    thing `strategy_deployments` lacked. R5 is its regression proof: the losing INSERT
+    fails with `23505 duplicate key value violates unique constraint
+    "uq_strategy_deployments_one_live"`, one live row survives, at READ COMMITTED with
+    no isolation change and no application lock
+  - **THE PREDICATE NAMES NINE SPELLINGS, NOT THREE, and that was nearly a bug.**
+    `strategy_lifecycle._STATUS_TO_BINDING_STATE` maps nine `status` spellings onto the
+    three live states in `STOPPABLE_BINDING_STATES`: `deploying`, `deployed`, `pending`,
+    `queued`, `starting`, `restarting` → DEPLOYING; `running`, `active` → RUNNING;
+    `paused` → PAUSED. A predicate of `('deploying','running','paused')` would have left
+    six legacy spellings outside the index — a guard that looks present and is
+    bypassable. `test_the_index_predicate_covers_every_live_status_spelling` differences
+    the predicate against that dict in **both directions**, so neither a new live
+    spelling nor a terminal one creeping in can pass. The eight terminal spellings are
+    deliberately outside it: STOPPED is terminal by design and a strategy must be able
+    to accumulate finished deployments
+  - **SAFE TO APPLY, AND THAT WAS CHECKED BEFORE THE FILE WAS WRITTEN.**
+    `public.strategy_deployments` holds **0 rows** — counted against the live server,
+    alongside `public.strategies`' 187. `SELECT strategy_id, count(*) … HAVING count(*)
+    > 1` over the live statuses returns **0 strategies**, so there is no existing
+    duplicate for `CREATE UNIQUE INDEX` to choke on and no scan of consequence. Had a
+    duplicate existed the migration would not have been written: reconciling live
+    duplicate deployments is an operational decision, not a schema one. Not
+    `CONCURRENTLY` — it cannot run inside a transaction block, which would make the file
+    unusable through `scripts/apply_migrations.py`, and on an empty table the ordinary
+    lock costs nothing
+  - **WHAT PRODUCTION'S CATALOGUE SAYS, READ-ONLY, AND IT CONFIRMS THE GAP WAS REAL.**
+    `public.strategy_deployments`: 6 constraints — PK, three FKs, and two CHECKs
+    (`chk_sd_mode`, `chk_sd_live_needs_account`) — 6 indexes of which **the only UNIQUE
+    one is the primary key**, and 1 non-internal trigger,
+    `trigger_update_strategy_deployments_updated_at`, which touches a timestamp and
+    guards nothing. `public.strategies`: 3 constraints (PK + two FKs), 6 indexes, and
+    **zero** non-internal triggers; its only `archived_at` object is the non-unique
+    partial `idx_strategies_archived_at`. So nothing in the live schema spanned the two
+    tables and nothing limited live rows per strategy. The fake-database file inferred
+    that from the migrations; this read it off `pg_constraint`, `pg_indexes` and
+    `pg_trigger`
+  - **WHAT IS NOT FIXED, AND WHY IT IS A DECISION RATHER THAN A HALF-IMPLEMENTATION.**
+    *Running-but-deleted* stays a **proven P0 defect with a reproduction** (R2, plus
+    21/40 at the application level). It is an invariant spanning two tables, so no index
+    can hold it, and all three candidate mechanisms exceed this task:
+    (i) **SERIALIZABLE** works — R4 cancels the archiver with `40001 … Reason code:
+    Canceled on identification as a pivot, during commit attempt` — but task 13.21
+    established that **only `backend/paper/paper_repository.py` retries on `40001`**, so
+    routing the archive path through it without a retry layer converts a silent race
+    into a user-visible 500. A retry layer for the strategy paths is its own change.
+    (ii) **A trigger pair** on both tables would hold it, but production carries **zero**
+    triggers on `strategies` and adding one is a write against the live catalogue —
+    the same line 13.22 drew at `SET NOT NULL` and `ALTER COLUMN … TYPE`.
+    (iii) **`SELECT … FOR UPDATE` on the `strategies` row in both paths** is the
+    textbook answer and is not reachable here: both write paths go through the Supabase
+    client (`StrategyService.deploy_version` at
+    `backend/strategy_service.py:1468`, `transition_deployment` at `:1820`), and
+    PostgREST cannot express `FOR UPDATE`. It would mean moving those paths onto
+    SQLAlchemy — a lifecycle rewrite.
+    **Plus a hard practical blocker that is worth naming rather than discovering later:**
+    both paths live in `backend_app/backend/strategy_service.py`, which the parallel
+    workstream had **uncommitted modifications in** throughout this task
+    (`git status` shows ` M`, as it does for `routers/strategy_operations.py`). A
+    pathspec commit touching that file would carry their work-in-progress into this
+    commit. So the fix could not have been landed cleanly even had it been bounded
+  - **CI, AND THE MINIMUM THAT WAS ACTUALLY APPLIED.** `.github/workflows/01-pr-check.yml`'s
+    `database-tests` job now also runs `tests/test_strategy_lifecycle_concurrency_postgres.py`.
+    **The `Provision schema` step is UNCHANGED, and that is a decision with a measured
+    reason, not an omission.** The new file self-provisions: it creates its two tables
+    inside a scratch schema from the columns it parses out of the real declarations —
+    `020_declare_pre_existing_tables.sql` for `strategies`, `001_strategy_architecture.sql`
+    for `strategy_deployments` — and never reads `public`, so it runs against the bare
+    `postgres:17-alpine` with nothing added. Extending provisioning to give it
+    `public.strategies` instead would require applying 020 **first** (per
+    `PROVISIONING_ORDER.md` — nine files in the numbered set `ALTER` `profiles` or
+    `strategies`), and **020's SECTION 0 preflight `RAISE EXCEPTION`s** on any database
+    lacking the `authenticated` and `service_role` roles and the `auth.uid()` function,
+    which a vanilla PostgreSQL has none of; `001` then needs `auth.users` and
+    `exchanges` as FK referents. That is a Supabase shim plus a partial replay of the
+    numbered set — the from-scratch path `PROVISIONING_ORDER.md` documents and marks
+    **untested** — and with no local PostgreSQL and no Docker it could not have been
+    verified from here, so adding it would have been a structural claim about a job that
+    has never run. The reasoning is in the workflow beside the step, and
+    `test_the_concurrency_proof_needs_no_extra_provisioning_step` pins it so the absence
+    cannot later read as an oversight. **The `unit-tests` lane is untouched** — no
+    `DATABASE_URL`, still the SQLite fallback, and
+    `test_the_unit_tests_job_still_has_no_database_url` still passes
+  - **THE SKIP IS PER-TEST, NOT MODULE-LEVEL, ON PURPOSE.** The new file's two
+    source-level tests — that both tables are still declared, and that 021's predicate
+    matches `_STATUS_TO_BINDING_STATE` — carry **no** `@requires_postgres` and run in
+    the main lane. A module-level `pytestmark` would have taken them with the seven
+    races, and the drift guard would then only ever run in the one job that has a
+    server, which is how a guard stops guarding.
+    `test_the_unit_tests_lane_still_carries_the_source_level_half` asserts exactly seven
+    marks and no module-level assignment
+  - **TESTS, OBSERVED BEFORE AND AFTER.** `tests/test_strategy_lifecycle_concurrency.py`
+    → **2 failed / 25 passed** before this task and **unchanged after** — no assertion
+    was weakened, skipped or rewritten, and the application-level defect is still
+    reproduced, because 021 fixes the database and not the Python read-decide-write.
+    `tests/test_strategy_lifecycle_concurrency_postgres.py` → **9 passed** against the
+    real server with `DATABASE_URL` set, **2 passed / 7 skipped** without it (the two
+    being the source-level pair, which is the point of the per-test marks).
+    `tests/test_pr_check_postgres_service.py` → **21 → 26**;
+    `test_the_unit_tests_lane_still_carries_the_source_level_half` was **observed
+    failing first**, on its own explanatory comment: the assertion was written as
+    `"pytestmark" not in source`, which matched the paragraph explaining why there is no
+    `pytestmark`, so it was narrowed to a module-level assignment check — a real
+    false-positive caught by running it rather than by reading it
+  - **Gates.** `tests/test_schema_table_reference_drift.py` → **86**;
+    `tests/test_database_isolation_level_control.py` → **23**;
+    `tests/test_pr_check_postgres_service.py` → **26** (**135 together**);
+    `tests/test_websocket_upgrade_gate.py` → **22**;
+    `tests/test_mounted_endpoint_projections.py` → **19**;
+    `tests/test_marketplace_eligibility_tenant_verdict.py` → **7**;
+    `tests/test_no_undefined_names.py` → **3** (**51 together**);
+    `flake8 --select=E9,F63,F7,F82` exit 0 on both touched Python files;
+    `backend_app.main` imports with **351** routes; `01-pr-check.yml` parses under
+    `yaml.safe_load` with its five jobs intact. 86 is unchanged by 021 because 021
+    declares an index, not a table, so the declaration parser's oracle does not move
+  - **PRODUCTION RE-VERIFIED UNTOUCHED** after every run: **71 tables in `public`**,
+    **zero `vq_*` schemas**, `profiles` **181** / `strategies` **187** /
+    `processed_orders` **25** rows unchanged, server 17.6. Every race ran in a scratch
+    schema dropped in the same process, and the catalogue reads were `SELECT`-only.
+    **021 has not been applied to `public`** — it is a declaration, and applying it is
+    an operator action against a live table
+  - **CORRECTED STATUS, so task 14 has one answer and not three.** Clause **1.16** is
+    **PROVEN — as a defect**, at both levels, and is no longer UNVERIFIED and no longer
+    BLOCKED: its "deployed twice" half is **proven and FIXED** (021, regression-proved
+    by R5), its "deleted while running" half is **proven and OPEN as a P0 with a
+    reproduction**. Task **12.6**'s `[PARTIAL BLOCKER: database-level serialisation]` is
+    **discharged** — the database-level guarantee is now established, and what it
+    establishes is that it did not hold. 13.13's inventory line changes: of its **10**
+    "already-recorded environment gaps", the 2 from this file were never environment
+    gaps (13.13 said so itself and 13.21 overwrote it), so the environment-gap count is
+    **8**, and those 2 are now a proven P0 with a landed half-fix. The five partial
+    blockers task 14 lists lose one: **1.16's database-level serialisation is no longer
+    BLOCKED**, leaving 1.13's deployment path, 1.14's paper routes, 1.20's production log
+    audit and 1.42's heap measurement
+  - **What this does NOT prove, stated rather than implied.** The `database-tests` job
+    has still never executed — GitHub Actions cannot be driven from here — so **the next
+    CI run is the real verification** that the new file runs green on
+    `postgres:17-alpine`. What is established is that it passes against a real
+    PostgreSQL 17.6 and that it needs nothing from `public`, which is the property that
+    makes the CI claim structural rather than speculative. 021's index has been proved
+    to work in a scratch schema with production's column types, not in `public`. The
+    *application-level* read-decide-write is untouched: a single-threaded caller can
+    still issue a deploy that the database then refuses with `23505`, so the routers need
+    to translate that into a 409 — filed here, not fixed. And the running-but-deleted
+    half is a live P0 with no guard at all
+  - _Requirements: 1.16 / 2.16 (BOTH halves now proven — the application-level half by_
+    _`tests/test_strategy_lifecycle_concurrency.py`'s 21/40 and 12/12, re-run this task,_
+    _and the database-level half by `tests/test_strategy_lifecycle_concurrency_postgres.py`'s_
+    _six races on real sessions, which is the half 12.6, 13.11, 13.21 and 13.22 carried_
+    _BLOCKED; "no double deploy" is fixed at the root cause by 021, "no running-but-_
+    _deleted" is recorded as a proven P0 with its counterexample and reported as a_
+    _decision) and `§Bug condition` by way of 2.5's principle (a platform that accepts_
+    _two deploys of one strategy, or archives a strategy whose bot is still trading, is_
+    _reporting a state it is not in — the second `running` row and the `archived_at`_
+    _timestamp are both fabricated status, not an absence)_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`

@@ -233,10 +233,41 @@ jobs:
       # environment gap task 13.13 recorded for it is closed -- a PostgreSQL now exists in
       # this job and the file can be invoked against it by hand -- but the design conflict
       # is not, and resolving it is not this task's call. Task 13.21 names it.
+      # `test_strategy_lifecycle_concurrency_postgres.py` is new with task 13.23 and is
+      # the DATABASE-LEVEL half of clause 1.16 [P0] / 2.16, which tasks 12.6, 13.11,
+      # 13.21 and 13.22 all carried BLOCKED for want of a real server. Two genuine
+      # PostgreSQL sessions off a `threading.Barrier` -- the technique task 13.11 used
+      # for order cancellation -- racing `deploy` against `deploy` and `archive` against
+      # `deploy`. It is the regression proof for `021_strategy_deployment_live_
+      # uniqueness.sql`, whose partial unique index makes the losing deploy fail with
+      # `23505` instead of landing a second live deployment.
+      #
+      # IT NEEDS NO PROVISIONING STEP, AND THAT IS DELIBERATE RATHER THAN A SHORTCUT.
+      # The file builds `strategies` and `strategy_deployments` inside a uniquely named
+      # scratch schema it creates and drops, from the columns it parses out of the real
+      # declarations (020 for `strategies`, 001 for `strategy_deployments` -- both
+      # asserted present by its own source-level tests, which run in the `unit-tests`
+      # lane because they need no server). It never reads `public`. So it runs against
+      # the bare `postgres:17-alpine` above with nothing added.
+      #
+      # WHAT WAS CONSIDERED AND MEASURED INSTEAD. Provisioning `public.strategies` here
+      # so the file could use it would mean applying
+      # `020_declare_pre_existing_tables.sql` FIRST (per
+      # backend_app/migrations/PROVISIONING_ORDER.md -- nine files in the numbered set
+      # ALTER `profiles` or `strategies`), and 020's SECTION 0 preflight
+      # `RAISE EXCEPTION`s on any database lacking the `authenticated` and
+      # `service_role` roles and the `auth.uid()` function, which a vanilla PostgreSQL
+      # has none of. `001_strategy_architecture.sql` then needs `auth.users` and
+      # `exchanges` as foreign-key referents. That is a Supabase shim plus a partial
+      # replay of the numbered set -- the from-scratch provision PROVISIONING_ORDER.md
+      # documents and explicitly marks as untested. Adding it here unverified would be a
+      # structural claim about a job that has never run. The scratch schema makes the
+      # proof independent of all of it, so the provisioning step below is unchanged.
       - name: Run database-backed tests
         run: |
           pytest tests/test_database_isolation_level_postgres.py \
                  tests/test_atomic_order_cancellation_fix.py \
+                 tests/test_strategy_lifecycle_concurrency_postgres.py \
                  -v --tb=short \
                  --deselect tests/test_atomic_order_cancellation_fix.py::test_transaction_isolation_for_cancellation
 

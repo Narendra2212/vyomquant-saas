@@ -29,6 +29,7 @@ supposed to say. The most important assertion in the file is the negative one --
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 import yaml
@@ -293,6 +294,108 @@ def test_the_omissions_are_explained_in_the_workflow_itself(raw):
 def test_the_job_is_bounded(db_job):
     assert isinstance(db_job.get("timeout-minutes"), int)
     assert db_job["timeout-minutes"] <= 60
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TASK 13.23 -- the database-level half of clause 1.16 [P0] / 2.16.
+#
+# Tasks 12.6, 13.11, 13.21 and 13.22 all carried that half BLOCKED for want of a
+# real server. Task 13.21 put one in CI; this is the file that uses it for 1.16.
+# ══════════════════════════════════════════════════════════════════════════════
+
+CONCURRENCY_POSTGRES_FILE = "tests/test_strategy_lifecycle_concurrency_postgres.py"
+
+
+def test_the_database_level_concurrency_proof_runs(db_job):
+    """The whole point of task 13.23: clause 1.16's database-level half is no longer
+    BLOCKED, and the file that proves it is selected rather than merely present.
+    """
+    run = _step(db_job, "Run database-backed tests")["run"]
+    assert CONCURRENCY_POSTGRES_FILE in run, run
+
+
+def test_the_database_level_proof_is_not_deselected_anywhere(db_job):
+    """It asserts that two forbidden states REPRODUCE (running-but-deleted, double
+    deploy) plus that 021's index refuses the second live deployment. A deselect on
+    any of it would be the proof being switched off, so none is permitted.
+    """
+    run = _step(db_job, "Run database-backed tests")["run"]
+    # Every --deselect in the step, whatever its order, must name some other file.
+    deselected = re.findall(r"--deselect\s+(\S+)", run)
+    assert deselected, (
+        "no --deselect found at all; this assertion would be vacuous. The step is "
+        "expected to still carry the cancellation-test deselect task 13.21 added."
+    )
+    offenders = [d for d in deselected if d.startswith(CONCURRENCY_POSTGRES_FILE)]
+    assert not offenders, (
+        f"the database-level proof of clause 1.16 is being deselected: {offenders}"
+    )
+
+
+def test_the_concurrency_proof_needs_no_extra_provisioning_step(db_job, raw):
+    """It self-provisions a scratch schema, so the `Provision schema` step is
+    deliberately unchanged -- and the workflow has to SAY so.
+
+    Applying `020_declare_pre_existing_tables.sql` here would need the Supabase
+    `authenticated`/`service_role` roles and `auth.uid()` that its SECTION 0 preflight
+    hard-refuses without, and `001_strategy_architecture.sql` would then need
+    `auth.users` and `exchanges`. That is the from-scratch provision
+    PROVISIONING_ORDER.md marks untested. An unexplained absence of a provisioning
+    step reads as an oversight; this pins the explanation in place.
+    """
+    provision = _step(db_job, "Provision schema")["run"]
+    assert "020" not in provision, (
+        "the provisioning step now applies 020; if that is intended, the Supabase role "
+        "and auth.uid() shim its preflight requires must be applied with it"
+    )
+    assert "PROVISIONING_ORDER.md" in raw, (
+        "the workflow does not point a reader at the provisioning order it chose not "
+        "to replay"
+    )
+    assert "scratch schema" in raw, (
+        "the workflow does not explain why the new file needs no provisioning"
+    )
+
+
+def test_the_fix_the_proof_guards_is_in_the_tree(raw):
+    """021 is the fix the database-level proof exists to regression-test. If the
+    migration is deleted, the workflow comment pointing at it becomes a lie.
+    """
+    migration = os.path.join(
+        REPO, "backend_app", "migrations", "021_strategy_deployment_live_uniqueness.sql"
+    )
+    assert os.path.exists(migration), (
+        "021_strategy_deployment_live_uniqueness.sql is gone; the database-level "
+        "concurrency proof's index assertions have nothing to guard"
+    )
+    assert "021" in raw, "the workflow does not name the migration the new file proves"
+
+
+def test_the_unit_tests_lane_still_carries_the_source_level_half(db_job):
+    """The new file's two source-level tests (both tables are declared; 021's index
+    predicate covers every live status spelling) are NOT skipped at module level, so
+    they run in the `unit-tests` lane where DATABASE_URL is blank. A module-level
+    `pytestmark` would have taken them with the races and the drift guard would then
+    only ever run in the one job that has a server.
+    """
+    with open(os.path.join(REPO, CONCURRENCY_POSTGRES_FILE), encoding="utf-8") as handle:
+        source = handle.read()
+    # A module-level ASSIGNMENT, not the word -- the file discusses the choice in a
+    # comment, and matching that comment would make this assertion fire on the very
+    # explanation it exists to protect.
+    assignments = [
+        line
+        for line in source.splitlines()
+        if re.match(r"^pytestmark\s*=", line)
+    ]
+    assert not assignments, (
+        "a module-level pytestmark in the concurrency proof would skip its two "
+        f"source-level tests in the unit-tests lane too: {assignments}"
+    )
+    assert source.count("@requires_postgres") == 7, (
+        "expected exactly the seven database races to be marked; the two source-level "
+        "tests must stay unmarked"
+    )
 
 
 if __name__ == "__main__":
