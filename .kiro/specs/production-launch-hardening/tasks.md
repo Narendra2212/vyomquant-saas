@@ -3346,6 +3346,207 @@ exists to remove.
     _timestamp are both fabricated status, not an absence)_
 
 
+- [ ] 13.24 TWO OF THE THREE IN-IMAGE HIGH DEPENDABOT FINDINGS ARE CLOSED AT THE PIN,
+  THE THIRD IS LEFT PINNED ON PURPOSE, AND THE TARGET VERSIONS COME FROM THE
+  ADVISORIES RATHER THAN FROM A GUESS
+  - **WHERE THE NUMBERS CAME FROM, BECAUSE THIS IS THE PART THAT USUALLY GETS
+    INVENTED.** Task 13.12\* recorded 29 HIGH alerts with three of them in the running
+    image. This task re-read the live source instead of trusting that count:
+    `gh api --paginate /repos/Narendra2212/vyomquant-saas/dependabot/alerts?state=open`
+    → **195 open alerts**, raw JSON piped to a real `.py` file and decoded there
+    (`gh --jq` is unusable under PowerShell quoting; the response body came back
+    UTF-16). Of those: **cryptography 24 alerts, 12 HIGH**; **setuptools 8 alerts,
+    4 HIGH**; **starlette 28 alerts, 12 HIGH**; **pyjwt 16 alerts, 6 HIGH**. The
+    `first_patched_version` field on each alert is the authoritative floor and is what
+    the two pins below are set to. The repo-root `.dependabot_raw.jsonl` was checked
+    first and is **not** usable for this: every line carries only
+    `{ecosystem, name, scope, severity}` — no version range, no patched version — so it
+    can say *that* cryptography is HIGH but not *to what*
+  - **`cryptography`: FLOOR 49.0.0, CHOSEN 49.0.0 — THEY ARE THE SAME NUMBER.**
+    `43.0.0` → **`49.0.0`**. The 12 HIGH alerts resolve to three distinct floors:
+    `46.0.5` (CVE-2026-26007 / GHSA-r6ph-v2qm-q3c2, missing subgroup validation for
+    SECT curves, vulnerable `<= 46.0.4`), `48.0.1` (GHSA-537c-gmf6-5ccf, vulnerable
+    OpenSSL inside the wheels, vulnerable `>= 0.5.0, < 48.0.1`) and **`49.0.0`**
+    (CVE-2026-69249 / GHSA-jwv3-5hgf-82ww, duplicate self-signed intermediates cause
+    exponential X.509 path building, vulnerable `>= 42.0.0, < 49.0.0`). The highest
+    floor binds, so **49.0.0** is the minimum that clears all twelve — and because the
+    four non-HIGH floors are `43.0.1`, `44.0.1`, `46.0.6` and `48.0.1`, all of them
+    below it, 49.0.0 clears **all 24** open cryptography alerts, not just the HIGH ones.
+    `pip index versions cryptography` reports `50.0.2` as latest with
+    `50.0.2, 50.0.1, 50.0.0, 49.0.0` published above the floor. **49.0.0 was chosen
+    over 50.0.2 deliberately**: nothing in the advisory set requires 50.x, this package
+    is a compiled dependency under `pyjwt`, `python-jose`, `httpx`/`supabase` TLS and
+    this repo's own vault, and cryptography has removed public API across majors — the
+    smaller jump is the smaller behavioural risk. PyPI metadata confirms 49.0.0 is
+    installable in both environments that matter: `requires_python
+    !=3.9.0,!=3.9.1,>=3.9`, with `cp311-abi3` wheels for
+    `manylinux_2_28_x86_64` (the image is `python:3.11-slim`) and for `win_amd64`
+    (this shell is CPython 3.12.10)
+  - **`setuptools`: HIGH FLOOR 78.1.1, CHOSEN 78.1.1 — AND THE MEDIUM ABOVE IT IS
+    REFUSED FOR A NAMED REASON.** `75.6.0` → **`78.1.1`**. All 4 HIGH alerts are the
+    same advisory, CVE-2025-47273 / GHSA-5rjg-fvgr-3xxf (path traversal in
+    `PackageIndex.download` → arbitrary file write), vulnerable `< 78.1.1`,
+    `first_patched_version` **78.1.1**. The remaining 4 alerts are MEDIUM
+    CVE-2026-59890 / GHSA-h35f-9h28-mq5c (`MANIFEST.in` exclusion bypass in `sdist` via
+    NFC/NFD Unicode collision on macOS APFS), floor **83.0.0**. **83.0.0 is refused**,
+    and the reason is already written into `requirements-base.txt` above this pin:
+    `razorpay==1.4.1` does `import pkg_resources` at `razorpay/client.py:4`, setuptools
+    81 deprecated `pkg_resources` and **83.0.0 removed it**, so taking the MEDIUM makes
+    `import razorpay` raise `ModuleNotFoundError` and turns every checkout path into
+    `HTTPException(500, "Failed to initialize payment gateway.")`. 78.1.1 is therefore
+    the exact intersection of "clears the HIGH" and "razorpay still imports" — verified,
+    not assumed: under 78.1.1 `import pkg_resources` succeeds (with a
+    `DeprecationWarning`, so the deprecation is already live at 78.1.1 rather than
+    starting at 81) and `import razorpay` resolves to
+    `site-packages/razorpay/__init__.py`. The refused MEDIUM is additionally an
+    sdist-*authoring* bug on macOS and this package is build-time only in a Linux image
+    that builds no sdists
+  - **`starlette` / `fastapi`: LEFT PINNED, AND THIS IS THE DECISION, NOT AN OVERSIGHT.**
+    `starlette==0.41.0` carries **12 HIGH** of its 28 alerts, with floors reaching
+    `1.3.1` (CVE-2026-54283, `request.form()` limits silently ignored for
+    `x-www-form-urlencoded`). It is **not** bumped here. `fastapi==0.115.3` pins
+    `starlette<0.42.0,>=0.40.0`, so moving starlette to 1.3.1 is a two-major FastAPI
+    upgrade touching every route in a 351-route application — a framework migration,
+    not a pin bump. It stays scheduled as 13.12\*. The one starlette advisory whose
+    mechanism is reachable from the edge, CVE-2026-48710 (missing `Host` validation
+    poisoning `request.url.path`), is already blocked in front of the app: task 8.x
+    proved CloudFront answers **400** to a poisoned `Host`. `pip check` independently
+    surfaces the ceiling from the other direction —
+    `sse-starlette 3.5.0 has requirement starlette>=0.49.1, but you have starlette
+    0.41.0` — which is a *pre-existing* mismatch in this local environment (the pinned
+    `sse-starlette` is `2.1.3`), present identically before and after this change
+  - **`PyJWT`: UNTOUCHED, ALREADY ABOVE ITS HIGH FLOOR.** `PyJWT==2.14.0`. All 6 HIGH
+    pyjwt alerts have `first_patched_version` **2.14.0** (CVE-2026-102266,
+    -102267, -102271, -102272, -102273) — the pin is already the patched release an
+    earlier task landed. Two residual MEDIUMs remain above it (CVE-2026-101918, floor
+    `2.15.0`; CVE-2026-103001, `first_patched_version` **null** — no fix published
+    yet). Neither is HIGH, so neither is in this task's scope
+  - **THE REQUIREMENTS CHAIN, RE-VERIFIED LINE BY LINE, BECAUSE A BUMP THAT DOES NOT
+    REACH THE IMAGE FIXES NOTHING.** `Dockerfile` **L26** `COPY requirements-base.txt
+    requirements-cpu.txt ./` and **L27** `RUN pip install --no-cache-dir
+    --prefer-binary -r requirements-cpu.txt` — still exactly as earlier work recorded.
+    `requirements-cpu.txt` is **3 lines, not 2** (one small correction to the earlier
+    record): `-r requirements-base.txt`, `--extra-index-url
+    https://download.pytorch.org/whl/cpu`, `torch==2.3.1+cpu`. `requirements.txt` and
+    `backend_app/requirements.txt` *are* two lines each (`-r requirements-base.txt` /
+    `-r ../requirements-base.txt`, plus `torch==2.3.1`). So the single edit to
+    `requirements-base.txt` is the only edit needed and it reaches `/opt/venv`, which
+    **L48** `COPY --from=builder /opt/venv /opt/venv` carries into the production stage.
+    **Four Dependabot manifests are affected by the one edit** and the alert set
+    confirms it: cryptography CVE-2026-69249 is filed four times, once each against
+    `requirements-base.txt`, `requirements.txt`, `requirements-cpu.txt` and
+    `backend_app/requirements.txt`
+  - **A LATENT SECOND COPY OF THE OLD PIN, FOUND AND DELIBERATELY NOT TOUCHED.**
+    `aerora_quant_platform/backend_api/requirements.txt:14`,
+    `aerora_quant_platform/backend_api/requirements-dev.txt:15` and
+    `aerora_quant_platform/backend_api/api/requirements.txt:13` each still say
+    `cryptography==43.0.0`. They are **out of scope for an in-image finding and cannot
+    reach the image**: `.dockerignore:48` excludes `aerora_quant_platform/` from the
+    build context entirely, the production stage copies only `/opt/venv`,
+    `backend_app/`, `startup.sh` and `healthcheck.sh`, and Dependabot files **zero**
+    alerts against those three paths. Recorded here so the next reader does not mistake
+    the omission for a miss. `requirements-dev.txt` at the repo root pins neither package
+  - **WHAT WAS ACTUALLY OBSERVED AFTER INSTALLING THE NEW PINS.** `pip install
+    cryptography==49.0.0 setuptools==78.1.1` → `Successfully installed
+    cryptography-49.0.0 setuptools-78.1.1`, downgrading this environment's drifted
+    `cryptography 50.0.0` / `setuptools 83.0.0` to the pins
+    - **`pip check` is byte-identical before and after — 6 lines, and not one of them
+      names cryptography or setuptools.** Verbatim, both runs:
+      `opentelemetry-proto 1.25.0 has requirement protobuf<5.0,>=3.19, but you have
+      protobuf 5.29.6.` / `opentelemetry-sdk 1.25.0 has requirement
+      opentelemetry-api==1.25.0, but you have opentelemetry-api 1.44.0.` /
+      `opentelemetry-semantic-conventions 0.46b0 has requirement
+      opentelemetry-api==1.25.0, but you have opentelemetry-api 1.44.0.` /
+      `python-jose 3.4.0 has requirement pyasn1<0.5.0,>=0.4.1, but you have pyasn1
+      0.6.4.` / `sse-starlette 3.5.0 has requirement starlette>=0.49.1, but you have
+      starlette 0.41.0.` / `tensorflow-intel 2.16.1 has requirement protobuf... but you
+      have protobuf 5.29.6.` **Nothing in `requirements-base.txt` carries a conflicting
+      constraint on `cryptography`** — the resolver would have said so here, and the
+      only install-time warning was the same pre-existing `tensorflow-intel`/`protobuf`
+      mismatch
+    - **EVERY cryptography IMPORT PATH THIS REPO USES WAS EXERCISED, NOT JUST
+      IMPORTED.** `grep` for `from cryptography` / `import cryptography` under
+      `backend_app/` returns exactly two consumers:
+      `backend_app/core/credential_vault.py:32-34` (`fernet.Fernet`,
+      `hazmat.primitives.hashes`, `hazmat.primitives.kdf.pbkdf2.PBKDF2HMAC`) and
+      `backend_app/backend/api_key_vault.py:28` (`fernet.Fernet`, `InvalidToken`,
+      `MultiFernet`). All of them imported, then driven: a `PBKDF2HMAC`-SHA256/100k-
+      iteration derive feeding a `Fernet` encrypt→decrypt roundtrip; a two-key
+      `MultiFernet` decrypting a blob written under the *secondary* key (the rotation
+      property `tests/test_exchange_phase6c_adversarial_acceptance.py::test_adv_3`
+      depends on) while the primary alone raises `InvalidToken`; and
+      `CredentialVault()` itself constructed. Indirect consumers too: `PyJWT`
+      **RS256** and **ES256** encode/decode over real `rsa`/`ec` keys serialised through
+      `cryptography.hazmat.primitives.serialization`, `python-jose`'s
+      `jose.backends.cryptography_backend` round-tripping RS256, and the
+      `ssl`/`httpx 0.27.0` TLS path (`OpenSSL 3.0.16`). All passed
+    - **`backend_app.main` IMPORTS AND STILL EXPOSES 351 ROUTES** under cryptography
+      49.0.0 — asserted in a real `.py` file (`assert len(app.routes) == 351`), not a
+      shell comparison, and the assertion executed rather than being skipped
+  - **THE CRYPTO AND AUTH SUITES, FOUND BY GREP RATHER THAN GUESSED, RUN BEFORE AND
+    AFTER: 160 PASSED BOTH TIMES.** `grep tests/` for `cryptography`, `Fernet`,
+    `AESGCM`, `PBKDF2`, `credential_vault`, `api_key_vault` and for top-level
+    `import jwt` / `from jose` selected thirteen files, run as one invocation:
+    `test_credential_vault_key.py`, `test_credential_vault_strength.py`,
+    `test_exchange_vault_contract.py`, `test_exchange_vault_singleton.py`,
+    `test_exchange_phase6c_adversarial_acceptance.py`,
+    `test_exchange_credential_log_redaction.py`, `test_algorithm_confusion_fix.py`,
+    `test_admin_auth.py`, `test_bearer_auth_no_cookies.py`,
+    `test_auth_logging_sanitization.py`, `test_websocket_auth_fail_closed.py`,
+    `test_sc3_aal_claim_propagation.py`, `test_phase7b_auth_remediation.py`.
+    **Baseline (cryptography 50.0.0, setuptools 83.0.0): 160 passed in 57.09s.
+    After the pins (49.0.0 / 78.1.1): 160 passed in 19.73s.** Same count, same files,
+    zero failures, nothing skipped, xfailed or weakened. The baseline was taken first
+    on purpose: this environment had drifted *above* the pinned versions, so without it
+    a green run after the bump could not be distinguished from a green run that was
+    always green. The highest-risk consumer named in the brief,
+    `backend_app/core/credential_vault.py`, is covered by the first two files plus
+    `test_exchange_credential_log_redaction.py` and passes. No test asserts a literal
+    `cryptography==` or `setuptools==` string anywhere under `tests/`, so no test
+    needed editing to match the new pins — checked, not assumed
+  - **GATES, ALL GREEN, NUMBERS MATCHING THE RECORD EXACTLY.**
+    `tests/test_schema_table_reference_drift.py` + `tests/test_no_undefined_names.py`
+    → **89 passed** (86 + 3) in 101.43s;
+    `tests/test_database_isolation_level_control.py` +
+    `tests/test_pr_check_postgres_service.py` → **49 passed** (23 + 26) in 6.14s;
+    `tests/test_websocket_upgrade_gate.py` + `tests/test_mounted_endpoint_projections.py`
+    + `tests/test_marketplace_eligibility_tenant_verdict.py` → **48 passed**
+    (22 + 19 + 7) in 50.15s. **`flake8 --select=E9,F63,F7,F82` was not run, and the
+    honest reason is that it had nothing to run on**: this change touches **no Python
+    source at all** — only `requirements-base.txt` and this `tasks.md`
+  - **THE PARALLEL WORKSTREAM'S FILES WERE NOT TOUCHED.** No edit to
+    `backend_app/backend/strategy_service.py`,
+    `backend_app/routers/strategy_operations.py`, `backend_app/routers/auth.py`
+    (whose staged SC-8 index entry is intact), `backend_app/routers/billing.py`,
+    `backend_app/core/billing_lifecycle.py`,
+    `backend_app/core/subscription_middleware.py` or
+    `backend_app/backend/ml_training_policy.py`. The commit is a pathspec commit over
+    exactly two paths, `requirements-base.txt` and this file
+  - **WHAT IS AND IS NOT PROVEN HERE.** Proven locally: the new pins install, every
+    import path and both vault ciphers work under them, 160 crypto/auth assertions and
+    186 gate assertions pass, 351 routes stand. **Not proven here, and it is the real
+    verification**: that the advisories are *cleared in the image*. **`05 Security` on
+    the next CI run is what settles that** — Trivy scans the installed packages in
+    `/opt/venv`, and task 13.10's gate means **`03 Deploy` now blocks on it at
+    CRITICAL**. Expect the four cryptography and four setuptools manifest alerts to
+    close and the twelve starlette HIGHs to remain open by design
+  - _Requirements: 1.33 / 2.33 (2.33 asks that every critical and high alert on a_
+    _**runtime** dependency be "resolved or carry a recorded, justified exception naming_
+    _why it is not exploitable here" — this task resolves the two that are resolvable_
+    _(`cryptography` to its 49.0.0 floor, `setuptools` to its 78.1.1 floor) and files_
+    _the justified exception for the two that are not: `starlette`/`fastapi` (framework_
+    _migration, compensated at the CloudFront edge, scheduled as 13.12\*) and_
+    _`setuptools`' MEDIUM 83.0.0 floor (removes `pkg_resources`, breaks `import_
+    _razorpay`). 1.33's clause is also partly re-measured: it recorded **295** open_
+    _alerts, and the live query this task ran returns **195**, so the fleet has moved_
+    _— but 2.33's bar is zero unexcepted HIGH on runtime dependencies, and the_
+    _12 starlette HIGHs are excepted rather than zero, so 2.33 is **PARTIAL**, not_
+    _closed) and `§Bug condition` by way of 2.5's principle (a dependency manifest that_
+    _pins a version the vendor has published a fix for is reporting a security posture_
+    _the deployment does not have — the gap between `cryptography==43.0.0` and the_
+    _49.0.0 floor was fabricated assurance, not an absence)_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`

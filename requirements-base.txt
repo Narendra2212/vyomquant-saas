@@ -19,7 +19,18 @@ rq==1.16.2
 # --- Auth + Database -----------------------------------------------------
 supabase==2.7.4
 postgrest==0.16.8
-cryptography==43.0.0
+# 12 open HIGH Dependabot alerts sit on this package and it is IN THE RUNNING IMAGE.
+# The binding one is CVE-2026-69249 / GHSA-jwv3-5hgf-82ww (HIGH, duplicate self-signed
+# intermediates cause exponential X.509 path building - a DoS on every TLS handshake
+# that validates a chain), vulnerable `>= 42.0.0, < 49.0.0`, first_patched_version
+# 49.0.0. That is the highest HIGH floor of the 12; the others are 46.0.5
+# (CVE-2026-26007, SECT subgroup) and 48.0.1 (GHSA-537c-gmf6-5ccf, bundled OpenSSL), so
+# 49.0.0 clears all 24 open alerts on this package, HIGH and below. Pinned to the
+# advisory floor rather than the newest release (50.0.2) because this package is a
+# compiled dependency of pyjwt, python-jose, httpx/supabase TLS and
+# backend_app/core/credential_vault.py, and the smaller jump is the smaller behavioural
+# risk. See .kiro/specs/production-launch-hardening/tasks.md task 13.24.
+cryptography==49.0.0
 # CVE-2024-33663 (CRITICAL, algorithm confusion with OpenSSH ECDSA and other key
 # formats) is fixed in 3.4.0. Patch-level bump; see
 # .kiro/specs/production-launch-hardening/dependency-triage.md.
@@ -43,7 +54,20 @@ razorpay==1.4.1
 # makes `import razorpay` raise ModuleNotFoundError and every checkout path answer
 # HTTPException(500, "Failed to initialize payment gateway."). Pinned below the removal
 # until razorpay ships a release that no longer imports it.
-setuptools==75.6.0
+#
+# CVE-2025-47273 / GHSA-5rjg-fvgr-3xxf (HIGH, path traversal in
+# PackageIndex.download -> arbitrary file write) is vulnerable `< 78.1.1`,
+# first_patched_version 78.1.1. 78.1.1 is the advisory floor and it still ships
+# pkg_resources (importable, emits a DeprecationWarning, verified `import razorpay`
+# succeeds under it), so it clears the HIGH without reintroducing the razorpay
+# breakage described above.
+#
+# KNOWINGLY NOT TAKEN: CVE-2026-59890 / GHSA-h35f-9h28-mq5c (MEDIUM, MANIFEST.in
+# exclusion bypass in sdist via NFC/NFD collision on macOS APFS) needs 83.0.0, which is
+# the release that removes pkg_resources. Taking it breaks `import razorpay`. It is also
+# an sdist-authoring bug on macOS, and this package is build-time only in a Linux image
+# that builds no sdists. See .kiro/specs/production-launch-hardening/tasks.md task 13.24.
+setuptools==78.1.1
 
 # --- Exchange Connectivity -----------------------------------------------
 ccxt[async]==4.3.92
