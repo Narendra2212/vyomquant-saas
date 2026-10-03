@@ -44,6 +44,11 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
 
+# Task 13.21. The verified-isolation mechanism lives in its own leaf module (it imports
+# nothing from this package) so that core/database.py's no-pooling fallback -- which runs
+# precisely when THIS module failed to import -- can use the same mechanism.
+from backend_app.core.db_isolation import isolated_session
+
 # Base class for SQLAlchemy models
 Base = declarative_base()
 
@@ -303,28 +308,39 @@ class DatabasePool:
     
     def get_transactional_session(self, isolation_level: str = "SERIALIZABLE"):
         """
-        Get a database session with specific isolation level for financial transactions.
-        
+        Get a session VERIFIED to be running at ``isolation_level``.
+
+        Defaults to SERIALIZABLE, the level ``core/database.py`` assigns to
+        ``TransactionType.FINANCIAL``.
+
+        Task 13.21 replaced the mechanism here. This method used to issue a raw f-string
+        ``SET TRANSACTION ISOLATION LEVEL {isolation_level}`` through
+        ``Session.execute()`` wrapped in ``except Exception`` and a warning. On
+        SQLAlchemy 2.x a bare ``str`` is rejected with ``ArgumentError`` before it
+        reaches any server, so the statement never ran: every caller was handed a session
+        at the server default -- measured as ``read committed`` against production --
+        while the method's name said SERIALIZABLE.
+
+        The old ``if "sqlite" not in str(self._engine.url)`` guard went with it. The
+        ``isolation_level`` execution option is dialect-aware and is applied at
+        connection checkout, so there is nothing left to branch on, and the one dialect
+        that used to have the control skipped outright no longer does.
+
         Args:
-            isolation_level: The isolation level (default: SERIALIZABLE for financial ops)
-        
+            isolation_level: one of ``db_isolation.SUPPORTED_ISOLATION_LEVELS``.
+
         Returns:
-            Session with the specified isolation level
+            A session whose connection was asked for ``isolation_level`` and reported
+            that level back.
+
+        Raises:
+            IsolationLevelUnavailable: if the level cannot be applied, or cannot be
+                proven to be in effect. It is never downgraded to a warning.
         """
         if not self._initialized:
             self.initialize()
-        
-        # Create a session with transaction-level isolation
-        session = self._session_factory()
-        
-        # Set isolation level at the transaction level
-        if "sqlite" not in str(self._engine.url):
-            try:
-                session.execute(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}")
-            except Exception as e:
-                logger.warning(f"Failed to set isolation level {isolation_level}: {e}")
-        
-        return session
+
+        return isolated_session(self._session_factory, self._engine, isolation_level)
     
     @contextmanager
     def connection(self):

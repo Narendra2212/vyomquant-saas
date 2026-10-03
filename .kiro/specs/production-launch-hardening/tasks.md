@@ -2551,6 +2551,182 @@ exists to remove.
     _adjacent only in that it explains the `***` in the probe URL_
 
 
+- [ ] 13.21 The SERIALIZABLE isolation control had NEVER ONCE EXECUTED — advertised by an enum,
+  asserted by a test, and inoperative — and the test that would have caught it could not run
+  because CI had no PostgreSQL
+  - **Defect A, and it is measured, not inferred.** Three sites issued the isolation level as a
+    raw f-string statement: `core/database.py:140` in `get_db`, `core/database.py:161` in
+    `get_db_context`, and `core/database_pool.py:323` in
+    `DatabasePool.get_transactional_session` — each one
+    `session.execute(f"SET TRANSACTION ISOLATION LEVEL {level}")` wrapped in
+    `except Exception: logger.warning(f"Failed to set isolation level: {e}")`. Against the
+    production server (17.6), `get_transactional_session("SERIALIZABLE")` handed back a session
+    whose `SHOW transaction_isolation` answered **`read committed`**. The warning was the
+    statement's only trace, and nothing read the warning
+  - **Two independent reasons that mechanism could never have worked, both re-measured against
+    production in this task.** (1) *It never reached the server.* SQLAlchemy 2.x — pinned
+    `sqlalchemy==2.0.35` — rejects a bare `str` passed to `Session.execute()` with
+    `ArgumentError: Textual SQL expression 'SET TRANSACTION ISOLATION...' should be explicitly
+    declared as text(...)`. Reproduced on a live production session: the raw call raised
+    `ArgumentError`, and `SHOW transaction_isolation` on that same session immediately afterwards
+    still answered `read committed`. The `except Exception` swallowed a client-side type error,
+    so no amount of server-side correctness could have helped. (2) *Wrapping it in `text()` would
+    not have fixed it either.* On the same production session, `text("SET TRANSACTION ISOLATION
+    LEVEL SERIALIZABLE")` issued after one `SELECT 1` failed with
+    `InternalError: (psycopg2.errors.ActiveSqlTransaction) SET TRANSACTION ISOLATION LEVEL must
+    be called before any query`. A per-request `SET` on a pooled session is therefore fragile by
+    construction, not merely mis-typed: the only supported mechanism is the `isolation_level`
+    execution option, which SQLAlchemy applies at connection checkout, before any transaction
+    begins. That is the mechanism now used
+  - **Severity, stated honestly rather than overclaimed. NO LIVE MONEY PATH WAS RUNNING
+    DEGRADED.** `TransactionType.FINANCIAL` appears only inside `database.py` itself — nothing
+    under `backend_app/` passes it to `get_db` or `get_db_context` — and
+    `get_transactional_session` had **no callers anywhere in the tree**. Worse than uncalled: the
+    two `database.py` FINANCIAL branches live under `if not POOLING_AVAILABLE`, which is false in
+    every configuration that imports at all, so the exported `get_db` is `database_pool`'s, whose
+    signature is `()` and which cannot be asked for an isolation level. The control was
+    **advertised, asserted by `tests/test_transaction_isolation_serializable.py`, and had no
+    reachable caller**. That is a real defect — a safety control that is present in name only —
+    but it is not "money is at risk right now", and this record says so. Pinned by
+    `test_the_financial_branches_were_unreachable_and_still_route_through_the_pool`, so the claim
+    cannot quietly rot
+  - **The fix, and the decision to RAISE rather than warn.** New leaf module
+    `backend_app/core/db_isolation.py`: `isolated_session(session_factory, engine,
+    isolation_level)` applies the level through `engine.execution_options(isolation_level=...)`,
+    then reads it back off the session's own connection with `Connection.get_isolation_level()`
+    — a real round trip on PostgreSQL — and compares. A mismatch, an unrecognised level, or a
+    dialect refusal raises `IsolationLevelUnavailable` and **closes the session first** so the
+    honest failure does not become a connection leak. A caller that asked for SERIALIZABLE and
+    cannot have it must not continue believing it got it, so the `logger.warning` is gone from
+    all three sites rather than being made louder. It is a separate module on purpose:
+    `database.py`'s fallback path runs precisely when `database_pool` has failed to import, so
+    it cannot borrow the mechanism from there
+  - **All three call sites are wired — this is the part a previous attempt left undone.** An
+    earlier dispatch shipped `db_isolation.py` and its tests but imported the module from nowhere,
+    which left a module that *looked* like the fix sitting beside three unchanged defects. Now:
+    `get_transactional_session` is `return isolated_session(self._session_factory, self._engine,
+    isolation_level)`; `database.py`'s two branches route FINANCIAL through a local
+    `_financial_session()` that calls `isolated_session`; and the reachability gap is closed by a
+    new module-level `get_financial_db_context()`, which is the first entry point from which
+    `TransactionType.FINANCIAL` can actually be obtained. Against production it reports
+    `serializable`. `SessionLocalFinancial` and `SessionLocalReadOnly` are **deleted, not
+    repaired**: both were byte-for-byte `sessionmaker(bind=engine)`, identical to `SessionLocal`,
+    under names that promised a control they did not hold
+  - **The SQLite path is preserved, and here is exactly how.** The old
+    `if "sqlite" not in str(engine.url)` guards meant the control was *skipped outright* on
+    SQLite while the session was returned as though it had been applied. Those guards are gone —
+    the execution option is dialect-aware, so there is nothing to branch on. FINANCIAL works on
+    both backends because SQLite's dialect accepts SERIALIZABLE (it is SQLite's own default).
+    GENERAL and READ_ONLY are deliberately **not** routed through `isolated_session`:
+    `get_isolation_level` maps both to READ COMMITTED, which is already PostgreSQL's default, and
+    SQLite's dialect *rejects* READ COMMITTED with `ArgumentError` — so asking for it explicitly
+    would buy nothing on PostgreSQL and would break the SQLite lane outright. Taking the default
+    is the honest encoding of READ COMMITTED here. Verified against production after the fix: the
+    plain session still reports `read committed`, unchanged. `get_isolation_level()` and
+    `TransactionType` are untouched and still work
+  - **Defect B: there was no PostgreSQL anywhere in CI, and that is what hid defect A.** A
+    control whose test cannot run is a control with no test. `01-pr-check.yml`'s `unit-tests` job
+    had a `services:` block with `redis:7-alpine` and nothing else, so three files that reach a
+    database through `core.database.SessionLocal` could not run anywhere; task 13.13 carried them
+    as environment gaps. One of them is `tests/test_transaction_isolation_serializable.py` — the
+    test that was written to catch exactly defect A. A second, independent half of the same gap
+    was in `tests/conftest.py`, which blanked `DATABASE_URL` *unconditionally*: even where a
+    database existed, alembic would provision the schema and pytest would still run against
+    SQLite. Both halves are now closed — a `database-tests` job with `postgres:17-alpine`
+    (production reports `server_version 17.6`), and one narrow conftest opt-in,
+    `AERORA_TEST_DATABASE_URL`, which must be set *alongside* `DATABASE_URL` for it to survive
+  - **Why the PostgreSQL job is SEPARATE from the main lane, and not a `DATABASE_URL` on it.**
+    The 11,000+ tests that pass today pass against the SQLite fallback. Setting `DATABASE_URL` on
+    `unit-tests` would re-point every `SessionLocal()` in the suite at a real server in one move
+    — a far larger change than this task, with no way to distinguish a new PostgreSQL-specific
+    failure from a regression. The negative assertion
+    `test_the_unit_tests_job_still_has_no_database_url` is the load-bearing one in the new
+    workflow test file, and the conftest default stays "blank it" for the same reason
+  - **WHICH OF THE THREE BLOCKED FILES NOW RUN, AND WHICH DOES NOT.** (1)
+    `tests/test_atomic_order_cancellation_fix.py` **now runs** — the job provisions `orders` —
+    with its fourth test `test_transaction_isolation_for_cancellation` **deselected, not
+    rewritten**: it asserts that the plain, general `SessionLocal()` reports `serializable`, which
+    contradicts `core/database.py`'s own design, and only
+    `backend/paper/paper_repository.py` retries on PostgreSQL's `40001` serialization_failure, so
+    making the shared engine SERIALIZABLE would turn a dormant control into live "could not
+    serialize access" errors. Deselecting states the conflict; editing the assertion would erase
+    it. (2) `tests/test_transaction_isolation_serializable.py` is **not selected**, for the same
+    reason — all three of its tests make that same global-SERIALIZABLE assertion. Its
+    *environment* gap is closed (a PostgreSQL now exists and the file can be invoked against it
+    by hand); its *design* conflict is an open decision this task does not take. (3)
+    `tests/test_strategy_lifecycle_concurrency.py` **stays BLOCKED**: it needs a `strategies`
+    table, and **no migration declares one** — zero `create_table('strategies')` across
+    `backend_app/alembic/versions/*.py` and zero `CREATE TABLE … strategies` across
+    `backend_app/migrations/*.sql`, both counted in this task. **Task 12.6 and clause 1.16's
+    database-level-serialisation half therefore remain BLOCKED with that gap named.** No
+    `CREATE TABLE strategies` was invented to make a test green; a schema object that no
+    migration declares is a provisioning defect, not a test fixture
+  - **Two alembic discoveries, and a finding larger than this task: THE REPOSITORY CANNOT
+    PROVISION ITS OWN DATABASE.** The job runs `alembic upgrade d97ffff9c3bb` — the branchpoint,
+    and the revision whose `op.create_table('orders', …)` the cancellation tests need — and
+    **not `upgrade head`, because `upgrade head` cannot complete on an empty database**. (i)
+    `4ef23035a692_baseline.py`'s `upgrade()` contains **only DROPs**; its `CREATE TABLE`
+    statements are in `downgrade()`. Stopping one revision earlier would leave no `orders` table
+    at all. (ii) `add_foreign_keys_20260817.py` adds
+    `FOREIGN KEY (tenant_id) REFERENCES profiles(id)`, and **`profiles` has no `CREATE TABLE` in
+    any migration or SQL file in this repository**. Its per-statement `try/except Exception` does
+    not rescue it: PostgreSQL aborts the entire transaction on the first failed statement, so
+    everything after the swallow — *including alembic's own `UPDATE alembic_version`* — fails
+    with `InFailedSqlTransaction`. Consequence beyond CI, recorded here because nothing else
+    records it: **there is no disaster-recovery rebuild and no way to stand up staging from
+    source.** The live database's 71 `public` tables exist only because they were applied
+    out-of-band. That is its own launch blocker and is not fixed by this task
+  - **Tests, and what was ACTUALLY OBSERVED.** `tests/test_database_isolation_level_control.py`
+    → **23 passed**, no database needed: the `ArgumentError` is raised by SQLAlchemy itself, and
+    SQLite can carry both halves of the proof (SERIALIZABLE applies and reads back; READ
+    COMMITTED is refused by the dialect and therefore raises). It also pins the source directly —
+    neither module may reintroduce the raw statement or the swallowing warning — because the two
+    `database.py` sites sit in a branch no in-process test can reach, so reading the shipped
+    source is the only cover available for them. `tests/test_pr_check_postgres_service.py` → **21
+    passed** (**one of these failed first** and is the reason `conftest.py` is in this commit:
+    `test_the_conftest_still_blanks_database_url_by_default` failed against the tree the previous
+    attempt left, proving the opt-in half of defect B was never written).
+    `tests/test_database_isolation_level_postgres.py` → **7 skipped** locally by design, and its
+    assertions reproduced statement-by-statement against production: before —
+    `read committed`, raw string `ArgumentError`, `text()` mid-transaction `ActiveSqlTransaction`;
+    after — `serializable` on the first query *and* after one has run, `repeatable read` for the
+    non-default control (which is what rules out a false positive, SERIALIZABLE being plausible
+    as a server default), `serializable` from `get_financial_db_context`, `read committed` still
+    on the general session, and `IsolationLevelUnavailable` for a bad level. The **7 pre-existing
+    failures** in `test_atomic_order_cancellation_fix.py` + `test_transaction_isolation_serializable.py`
+    were confirmed unchanged by this task and are the environment gap itself —
+    `sqlite3.OperationalError: no such table: orders` and `near "SHOW": syntax error`
+  - **Gates.** New files **44 passed / 7 skipped**; `tests/test_websocket_upgrade_gate.py` →
+    **22**; `tests/test_schema_table_reference_drift.py` → **73**;
+    `tests/test_mounted_endpoint_projections.py` → **19**;
+    `tests/test_marketplace_eligibility_tenant_verdict.py` → **7**;
+    `tests/test_no_undefined_names.py` → **3** (**124 together**); the database/execution subset
+    found by grepping for `SessionLocal`/`database_pool`/`get_db` —
+    `test_database_pool.py` + `test_database_pool_math.py` + `test_get_db_dependency.py` +
+    `test_execution_environment_guard.py` → **50 passed** (the broad suite is ~11,000 tests and
+    was not run in full; this is the database-touching subset of it, named rather than implied);
+    `flake8 --select=E9,F63,F7,F82` exit 0 on all five touched Python files; `backend_app.main`
+    imports with **351** routes; `01-pr-check.yml` parses under `yaml.safe_load`. Production
+    re-verified untouched after the work: **71 tables in `public`, zero `vq_*` schemas**, server
+    17.6 — `SHOW` and the session-scoped isolation level touch no table
+  - **What this does not prove, stated rather than implied.** The `database-tests` job has never
+    executed: GitHub Actions cannot be driven from this environment, so **the next CI run is the
+    real verification** of the service container, the provisioning step and the two files it
+    selects. Everything asserted about that job here is structural — the file parses and the
+    wiring says what it must. The production measurements were taken through a direct session
+    (port 5432); they say nothing about behaviour under the pooler's transaction mode, where
+    session-scoped settings have different semantics. And the control is now *operative and
+    reachable* but still has **no production caller**: `get_financial_db_context` exists, works,
+    and is called by nothing outside tests. Deciding which money paths should use it is a
+    separate change
+  - _Requirements: 1.16 / 2.16 (the database-level serialisation half, carried BLOCKED by tasks_
+    _12.6 and 13.11 — a SERIALIZABLE session that genuinely works is the mechanism that half_
+    _needs, and it now exists; the clause stays BLOCKED only on the missing `strategies` table)_
+    _and `§Bug condition` by way of 2.5's principle (a control that cannot be applied SHALL NOT_
+    _let the caller continue believing it was — the pre-fix code answered "SERIALIZABLE" with a_
+    _`read committed` session and a warning, which is a fabricated status, not an absence)_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`

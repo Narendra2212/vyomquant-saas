@@ -15,7 +15,17 @@ STEP 8: TRANSACTION ISOLATION LEVEL STRATEGY
 import logging
 import os
 import backend_app.core.safety_config
+from contextlib import contextmanager
 from enum import Enum
+from typing import Optional
+
+# Task 13.21. `IsolationLevelUnavailable` is re-exported on purpose: a caller of
+# `get_financial_db_context` needs to be able to catch it without knowing that the
+# mechanism lives in a second module.
+from backend_app.core.db_isolation import (  # noqa: F401
+    IsolationLevelUnavailable,
+    isolated_session,
+)
 
 # Import from new pooling module
 try:
@@ -109,58 +119,81 @@ if not POOLING_AVAILABLE:
         bind=engine
     )
     
-    # Create separate session factories for different transaction types
-    SessionLocalFinancial = sessionmaker(
-        autocommit=False, 
-        autoflush=False, 
-        bind=engine
-    )
-    
-    SessionLocalReadOnly = sessionmaker(
-        autocommit=False, 
-        autoflush=False, 
-        bind=engine
-    )
+    # Task 13.21: SessionLocalFinancial and SessionLocalReadOnly used to be defined here.
+    # Both were `sessionmaker(bind=engine)` with no isolation level of any kind -- byte for
+    # byte the same object as SessionLocal above, under names that promised otherwise. The
+    # level is now applied per session by `db_isolation.isolated_session`, which is where
+    # it has to be applied (it is a connection-checkout option, not a factory setting), so
+    # the two look-alike factories are deleted rather than repaired.
     
     Base = declarative_base()
     
+    def _financial_session():
+        """A session verified to be at SERIALIZABLE, or an exception.
+
+        This is the fallback-path twin of `DatabasePool.get_transactional_session`.
+
+        Both this path and the pooled one used to issue a raw f-string
+        `SET TRANSACTION ISOLATION LEVEL ...` as a statement, inside
+        `except Exception: logger.warning(...)`. SQLAlchemy 2.x rejects a bare `str`
+        with `ArgumentError` before it reaches a server, so the statement never ran and
+        the caller got the server default -- `read committed`, measured against
+        production -- while the code read as though SERIALIZABLE were in force.
+
+        The `"sqlite" not in str(engine.url)` guard that used to wrap it is gone: the
+        execution option is dialect-aware, and SQLite's dialect accepts SERIALIZABLE
+        (it is SQLite's own default), so the SQLite lane keeps working without the
+        control being skipped behind a dialect test.
+        """
+        return isolated_session(
+            SessionLocal, engine, get_isolation_level(TransactionType.FINANCIAL)
+        )
+    
+    def _general_session():
+        """A plain session for GENERAL and READ_ONLY work.
+
+        Deliberately NOT routed through `isolated_session`. `get_isolation_level` maps
+        both of these to READ COMMITTED, which is already PostgreSQL's default, so
+        requesting it explicitly would buy nothing -- and would break the SQLite lane
+        outright, because SQLite's dialect rejects READ COMMITTED (`ArgumentError`),
+        which `isolated_session` correctly surfaces as `IsolationLevelUnavailable`.
+        Asking for nothing and getting the default is the honest encoding of
+        "READ COMMITTED" here; the control that was advertised and absent was
+        FINANCIAL = SERIALIZABLE, and that is the one now enforced.
+        """
+        return SessionLocal()
+    
     def get_db(transaction_type: TransactionType = TransactionType.GENERAL):
-        """FastAPI yield dependency for getting DB sessions with configurable isolation level."""
+        """FastAPI yield dependency for DB sessions at the isolation level requested.
+
+        A FINANCIAL session that cannot be proven to be SERIALIZABLE raises
+        `IsolationLevelUnavailable` out of the dependency rather than yielding a
+        downgraded session. FastAPI turns that into a 500, which is the correct outcome:
+        a money-critical request must not be served at the wrong isolation level.
+        """
         if transaction_type == TransactionType.FINANCIAL:
-            db = SessionLocalFinancial()
-        elif transaction_type == TransactionType.READ_ONLY:
-            db = SessionLocalReadOnly()
+            db = _financial_session()
         else:
-            db = SessionLocal()
+            db = _general_session()
         
         try:
-            # Set isolation level at transaction level for financial operations
-            if transaction_type == TransactionType.FINANCIAL and "sqlite" not in str(engine.url):
-                try:
-                    db.execute(f"SET TRANSACTION ISOLATION LEVEL {get_isolation_level(TransactionType.FINANCIAL)}")
-                except Exception as e:
-                    logger.warning(f"Failed to set isolation level: {e}")
             yield db
         finally:
             db.close()
 
     @contextmanager
     def get_db_context(transaction_type: TransactionType = TransactionType.GENERAL):
-        """Context manager for direct 'with' statement usage with configurable isolation level."""
+        """Context manager for direct 'with' statement usage, at the level requested.
+
+        As with `get_db`, a FINANCIAL session that cannot be proven to be SERIALIZABLE
+        raises before the block is entered instead of running the block degraded.
+        """
         if transaction_type == TransactionType.FINANCIAL:
-            db = SessionLocalFinancial()
-        elif transaction_type == TransactionType.READ_ONLY:
-            db = SessionLocalReadOnly()
+            db = _financial_session()
         else:
-            db = SessionLocal()
+            db = _general_session()
         
         try:
-            # Set isolation level at transaction level for financial operations
-            if transaction_type == TransactionType.FINANCIAL and "sqlite" not in str(engine.url):
-                try:
-                    db.execute(f"SET TRANSACTION ISOLATION LEVEL {get_isolation_level(TransactionType.FINANCIAL)}")
-                except Exception as e:
-                    logger.warning(f"Failed to set isolation level: {e}")
             yield db
         finally:
             db.close()
@@ -185,6 +218,47 @@ if POOLING_AVAILABLE:
 else:
     # Already defined above in fallback
     pass
+
+
+@contextmanager
+def get_financial_db_context(isolation_level: Optional[str] = None):
+    """The reachable entry point for money-critical work: a session VERIFIED to be at
+    SERIALIZABLE.
+
+    WHY THIS EXISTS. Before task 13.21 `TransactionType.FINANCIAL` had nowhere to go.
+    The two FINANCIAL branches in this module live under `if not POOLING_AVAILABLE`, and
+    `POOLING_AVAILABLE` is true in every configuration that imports at all -- so the
+    exported `get_db` is `database_pool`'s, whose signature takes no arguments and which
+    cannot be asked for an isolation level. `DatabasePool.get_transactional_session` had
+    no callers anywhere in the tree. The control was therefore advertised by an enum,
+    asserted by a test, and had no reachable caller. This function is the reachable one.
+
+    It is a context manager rather than a FastAPI dependency because the existing
+    FINANCIAL-capable `get_db` is unreachable and the pooled `get_db` takes no
+    arguments; adding a parameter to the pooled dependency would change the signature
+    every router in the tree depends on. A caller that wants it as a dependency can wrap
+    it in one line.
+
+    Args:
+        isolation_level: overrides the default, which is
+            `get_isolation_level(TransactionType.FINANCIAL)` -- SERIALIZABLE.
+
+    Yields:
+        A session whose connection reported the requested level back.
+
+    Raises:
+        IsolationLevelUnavailable: before the block is entered, if the level cannot be
+            applied or cannot be proven. The block does not run degraded.
+    """
+    level = isolation_level or get_isolation_level(TransactionType.FINANCIAL)
+    if POOLING_AVAILABLE:
+        session = get_db_pool().get_transactional_session(level)
+    else:
+        session = isolated_session(SessionLocal, engine, level)
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 # Health check function

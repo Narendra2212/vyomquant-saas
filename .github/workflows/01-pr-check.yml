@@ -87,6 +87,13 @@ jobs:
           pip install -r requirements-dev.txt
           pip install pytest pytest-asyncio pytest-cov
 
+      # DELIBERATELY NO `DATABASE_URL` HERE, and this is load-bearing (task 13.21).
+      # Without it `core/database_pool.py` falls back to `sqlite:///./algo22.db`, which is
+      # what the 11,000+ tests in this lane are measured against and what they must keep
+      # being measured against. The PostgreSQL service added for task 13.21 lives in its
+      # own `database-tests` job below rather than here, precisely so that pointing a
+      # DATABASE_URL at a real server cannot change the behaviour of this lane. Adding
+      # one here would silently re-route every `SessionLocal()` in the suite.
       - name: Run Unit Tests
         run: pytest tests/ -v --tb=short -k "not chaos and not load"
         env:
@@ -94,6 +101,144 @@ jobs:
           ENV: test
           AERORA_MODE: safe
           PYTHONPATH: .
+
+  # ───────────────────────────────────────────────────────────────────────────────
+  # production-launch-hardening task 13.21, defect B.
+  #
+  # WHY THIS JOB EXISTS. There was no PostgreSQL anywhere in CI -- the `unit-tests` job
+  # above has a `services:` block with redis and nothing else -- so three test files that
+  # need a real server through `backend_app.core.database.SessionLocal` could not run
+  # anywhere, and were carried in task 13.13's inventory as environment gaps. One of them,
+  # `tests/test_transaction_isolation_serializable.py`, is the test that would have caught
+  # defect A: the SERIALIZABLE isolation control had never once executed, because it was
+  # issued as a raw SQL string that SQLAlchemy 2.x rejects and the rejection was swallowed
+  # into a `logger.warning`. A control with a test that cannot run is a control with no
+  # test.
+  #
+  # WHY IT IS A SEPARATE JOB rather than a `DATABASE_URL` on `unit-tests`. The 11,000+
+  # tests that pass today pass against SQLite. Setting DATABASE_URL on that job would
+  # re-point every `SessionLocal()` in the suite at PostgreSQL in one move -- a far larger
+  # change than this task, and one with no way to tell a new PostgreSQL-specific failure
+  # from a regression. This job sets DATABASE_URL for the handful of files that require it
+  # and nothing else.
+  #
+  # WHAT IT PROVISIONS, AND WHY IT STOPS WHERE IT DOES. `alembic upgrade d97ffff9c3bb`,
+  # not `upgrade head`. `d97ffff9c3bb` is the branchpoint (`alembic history` confirms it)
+  # and the revision whose `op.create_table('orders', ...)` the cancellation tests need;
+  # the path to it from base is linear and unambiguous. `upgrade head` CANNOT provision a
+  # fresh database, and that was measured rather than assumed -- see task 13.21 for the
+  # transcript. The next revision on one branch, `add_foreign_keys_20260817.py`, adds
+  # `FOREIGN KEY (tenant_id) REFERENCES profiles(id)`, and `profiles` has no CREATE TABLE
+  # in any migration or SQL file in this repository. Its `try/except Exception` around
+  # each statement does not save it: PostgreSQL aborts the whole transaction on the first
+  # failed statement, so every statement after the swallow -- including alembic's own
+  # `UPDATE alembic_version` -- fails with `InFailedSqlTransaction`. Also note that
+  # `4ef23035a692_baseline.py`'s `upgrade()` only DROPs; its CREATE TABLEs are in
+  # `downgrade()`, so the baseline alone provisions nothing.
+  #
+  # `postgres:17-alpine` because production reports `server_version 17.6`. Matching the
+  # major version is the point; the password is a throwaway for an ephemeral service
+  # container on the runner's loopback interface and is not a credential for anything.
+  # ───────────────────────────────────────────────────────────────────────────────
+  database-tests:
+    name: Database Tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    needs: validate-code
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # TWO VARIABLES, TWO CONSUMERS, AND THE SECOND ONE IS NOT REDUNDANT.
+      # `DATABASE_URL` is what `backend_app/alembic/env.py` reads to set
+      # `sqlalchemy.url`, so the provisioning step needs it.
+      # `AERORA_TEST_DATABASE_URL` is what `tests/conftest.py` requires before it will
+      # let a DATABASE_URL survive into the test process: that conftest blanks
+      # DATABASE_URL at import time, deliberately, so that a `.env` placeholder cannot
+      # point the suite at a real server. Until task 13.21 it blanked it
+      # unconditionally, which is why these test files could not run even where a
+      # database existed. Setting only DATABASE_URL here would reproduce that: alembic
+      # would provision the schema and pytest would still run against SQLite.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      AERORA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      ENV: test
+      # `VYOMQUANT_MODE` and not `AERORA_MODE`: the latter still works but
+      # `core/safety_config.py` emits a deprecation warning telling callers to move.
+      VYOMQUANT_MODE: safe
+      PYTHONPATH: .
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements-cpu.txt
+            requirements-base.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+          pip install -r requirements-dev.txt
+          pip install pytest pytest-asyncio
+
+      # `backend_app/alembic/env.py` reads DATABASE_URL from the environment and feeds it
+      # to `sqlalchemy.url`, so no ini edit is needed. Stops at the branchpoint -- see the
+      # block comment above for why `head` is not reachable on an empty database.
+      - name: Provision schema
+        run: |
+          python -m alembic upgrade d97ffff9c3bb
+          python -m alembic current
+
+      # TWO FILES, AND ONE DELIBERATE OMISSION.
+      #
+      # `test_database_isolation_level_postgres.py` is new with task 13.21 and skips
+      # itself unless DATABASE_URL names a PostgreSQL server, so it is inert in the
+      # `unit-tests` lane and real here. It is the half of defect A's proof that SQLite
+      # cannot give: that `SHOW transaction_isolation` actually reports `serializable`.
+      #
+      # `test_atomic_order_cancellation_fix.py` needs the `orders` table, which the
+      # provisioning step above creates. Its fourth test,
+      # `test_transaction_isolation_for_cancellation`, is deselected and NOT because it is
+      # inconvenient: it asserts that the plain, general `SessionLocal()` reports
+      # `serializable`. `core/database.py`'s own design says the opposite -- FINANCIAL is
+      # SERIALIZABLE, GENERAL and READ_ONLY are READ COMMITTED -- and nothing outside
+      # `backend/paper/paper_repository.py` retries on PostgreSQL's `40001`
+      # serialization_failure, so making the shared engine SERIALIZABLE would turn a
+      # dormant control into live `could not serialize access` errors. The assertion is
+      # left exactly as written and the conflict is recorded in task 13.21 as an open
+      # decision. It is not relaxed, and it is not quietly passing either.
+      #
+      # `tests/test_transaction_isolation_serializable.py` is not selected for the same
+      # reason: all three of its tests make that same global-SERIALIZABLE assertion. The
+      # environment gap task 13.13 recorded for it is closed -- a PostgreSQL now exists in
+      # this job and the file can be invoked against it by hand -- but the design conflict
+      # is not, and resolving it is not this task's call. Task 13.21 names it.
+      - name: Run database-backed tests
+        run: |
+          pytest tests/test_database_isolation_level_postgres.py \
+                 tests/test_atomic_order_cancellation_fix.py \
+                 -v --tb=short \
+                 --deselect tests/test_atomic_order_cancellation_fix.py::test_transaction_isolation_for_cancellation
 
   docker-check:
     name: Docker Build Validation

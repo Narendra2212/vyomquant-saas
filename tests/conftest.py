@@ -25,8 +25,20 @@ os.environ["DEFAULT_EXCHANGE"] = "binance"
 # Set VYOMQUANT_MODE=safe to override .env file's paper mode and ensure SQLite fallback
 os.environ["VYOMQUANT_MODE"] = "safe"
 
-# Clear DATABASE_URL to prevent any .env or .env.example placeholder from being used
-os.environ["DATABASE_URL"] = ""
+# Clear DATABASE_URL to prevent any .env or .env.example placeholder from being used.
+#
+# Task 13.21 adds ONE opt-in. The `database-tests` job in `.github/workflows/01-pr-check.yml`
+# needs a real DATABASE_URL to reach its PostgreSQL service, but it also needs that URL to
+# survive this file -- and the default must stay "blank it", or all 11,000+ tests in the
+# SQLite lane become sensitive to whatever DATABASE_URL happens to be in the environment.
+# AERORA_TEST_DATABASE_URL is the second name that says "this one is deliberate": setting
+# DATABASE_URL alone still gets blanked here, so provisioning a schema does not silently
+# re-point every SessionLocal() in the suite at a real server.
+_EXPLICIT_TEST_DATABASE_URL = os.environ.get("AERORA_TEST_DATABASE_URL", "")
+if _EXPLICIT_TEST_DATABASE_URL:
+    os.environ["DATABASE_URL"] = _EXPLICIT_TEST_DATABASE_URL
+else:
+    os.environ["DATABASE_URL"] = ""
 
 # Must be set BEFORE any backend imports to override .env file
 
