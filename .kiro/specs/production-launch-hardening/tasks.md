@@ -3716,6 +3716,159 @@ exists to remove.
     _the exposure was real and measured at 39 JWTs in one day, not a theoretical one)_
 
 
+- [ ] 13.26 CLAUSE 1.20'S PRODUCTION LOG AUDIT WAS PERFORMED AGAINST THE LIVE LOG GROUP —
+  THE LOG SURFACE IS DISCHARGED, ITS ONE FINDING WAS 13.25'S AND IS ALREADY CLOSED, AND
+  TWO OF THE HANDED-OVER NUMBERS WERE WRONG
+  - **WHAT 1.20 ASKS, AND WHICH OF ITS THREE SURFACES THIS TASK TOUCHES.** 1.20 names
+    three places a credential could appear — the built bundle, the logs, and an API
+    response body — and says no audit establishes that none does. The **bundle** half
+    already had cover: `tests/test_no_secrets_in_bundle.py` (**7 assertions**) plus
+    `06-frontend-deploy.yml`'s own `service_role` grep. The **log** half had *redaction*
+    cover — `tests/test_log_redaction.py` (**362**),
+    `tests/test_exchange_credential_log_redaction.py`,
+    `tests/test_auth_logging_sanitization.py` — which proves the code paths redact, not
+    that the production log is clean. **This task is the piece that was missing: the
+    actual production logs, read.** The third surface is **not** addressed here and is
+    recorded below as the named remaining gap. Worth noting that 2.20's own *Proof:*
+    clause names only the bundle grep and a log-capture test, so the preservation
+    requirement is already narrower than the clause it serves
+  - **METHOD, AND THE TWO QUOTING TRAPS STACKED ON TOP OF EACH OTHER.**
+    `aws logs filter-log-events` against log group `/ecs/vyomquant-api`, region
+    `ap-southeast-1`, read-only, `--max-items 10` and a ≤ 72 h window per query — wider
+    windows time out. A filter term containing `:` or `/` must be **double-quoted inside
+    the pattern** or the API answers `InvalidParameterException`, which is why an
+    unquoted `postgresql://` failed on the first pass and had to be re-run as
+    `"postgresql://"`. **On PowerShell there is a second trap underneath the first**: the
+    embedded double quotes are stripped on the way to the native command, so the quoted
+    pattern has to be passed through `--%` stop-parsing — which in turn suppresses
+    variable expansion, so the epoch bounds must be inlined as literals. **No value was
+    ever displayed**: `eyJ[A-Za-z0-9_.-]{12,}` was replaced with a placeholder across the
+    whole raw response *before* anything was printed, so the masking cannot be bypassed
+    by a field this audit did not anticipate
+  - **THE ONE REAL FINDING IS 13.25'S AND IS ALREADY FIXED — BUT ITS DATES WERE WRONG.**
+    Pattern `eyJ` returns the uvicorn WebSocket access-log line, which carried a live
+    session JWT into CloudWatch beside the user id and the client IP. Verbatim, masked at
+    source: `[2026-10-01 20:45:06 +0000] [43] [INFO] ('10.0.0.101', 42908) - "WebSocket
+    /ws/user/9a0fbba4-b143-4c19-8005-c86cf64b6dc8?token=<JWT>" 403`. **Two corrections to
+    the handed-over measurement, both from re-reading the group rather than trusting the
+    summary.** (a) The newest `eyJ` hit is **2026-10-01 20:45:06 UTC**, *not* 2026-09-28
+    10:15 — the exposure ran three days later than recorded, across **two** distinct user
+    ids (`6e8a4c3b-…`, `9a0fbba4-…`), each in a burst of ~5 handshakes seconds apart.
+    (b) The "25 hits" figure is a **floor, not a total**: `--max-items 10` caps the page,
+    so every count in this audit reads `≥`, and a count sitting at the cap means "at
+    least 10", never "10". Every one of these handshakes answered **403** — the JWT
+    reaches the log whether or not the handshake is admitted, which is precisely why
+    refusing the credential was never the fix. 13.25 deleted the `?token=` arm that
+    produced the line, in commit `c60546c6`
+  - **THE DEPLOY IS CONFIRMED FROM TWO INDEPENDENT READS.** `aws ecs describe-services`
+    reports task definition `vyomquant-api:`**209**, running **1** / desired **1**,
+    `rolloutState` **COMPLETED**, deployment updated **2026-10-03 11:06:05 UTC**. The log
+    group corroborates it without reference to the ECS API: the incoming task logs
+    `WebSocket Redis Pub/Sub Bridge started` and
+    `ws_event_stream: WebSocket event streamer started` at **11:04:27 UTC**, and the
+    outgoing task logs `event streamer stopped` at **11:10:44 UTC**. `c60546c6` was
+    committed 10:46:17 UTC, so the rollout boundary sits about twenty minutes after the
+    commit — which is the boundary every post-deploy count below is measured against
+  - **THE CLEAN SWEEP, EVERY PATTERN NAMED SO THE AUDIT IS REPRODUCIBLE.** Over a
+    72-hour window each of these returned **zero**: `AKIA` (AWS access key id), `ASIA`
+    (AWS temporary key id), `"BEGIN PRIVATE KEY"` (PEM private key), `service_role` (the
+    Supabase service-role literal), `api_secret` (the exchange-credential field name),
+    `"postgresql://"` (a DSN with an embedded password), `SUPABASE_SERVICE_ROLE_KEY` (the
+    env var name). `sk_live_` and `sk_test_` (Stripe) returned zero over a 7-day window.
+    `AKIA` was re-run here as a spot check and confirmed at **0** over 2026-09-30 17:25 →
+    2026-10-03 17:29 UTC — which is also what establishes that the credentials, region and
+    log group used by every other query actually reach the live group, because **a zero
+    from a mis-addressed query is indistinguishable from a clean one**
+  - **TWO FALSE POSITIVES, AND THE SECOND INVALIDATES A PROBE THIS SPEC ALREADY RELIED
+    ON.** CloudWatch filter patterns do term matching, so a short fragment is not a usable
+    probe. (a) `re_`, intended to catch a Resend API key, hit **only** the string
+    `total_exposure_usdt` in the `questdb/questdb/*` streams — use a longer, distinctive
+    prefix. (b) **`?token=` is not a probe for the finding at all.** In CloudWatch filter
+    syntax a leading `?` is the **OR operator**, so `?token=` degrades to the bare term
+    `token=` — and over the post-rollout window its one and only hit was
+    `questdb/questdb/*` logging `[token=live_user_pnl~10]` from `i.q.c.v.ViewCompilerJob`,
+    a QuestDB view name, not a credential. **Any `?token=` count in this spec, 13.25's
+    per-day table included, is therefore an upper bound contaminated by QuestDB traffic
+    rather than a handshake count.** A usable probe must scope the stream to
+    `ecs/vyomquant-api/*` or anchor on the access-log shape (`"WebSocket "`); an auditor
+    who skips that will read a view name as a leaked JWT
+  - **THE GAP, AND IT IS WHY THIS TASK DOES NOT CLOSE 2.21'S DEPLOY HALF.** The
+    post-deploy confirmation that no NEW `?token=` line appears is **still not
+    established, and the zero is VACUOUS.** Measured over 2026-10-03 11:06 → 17:29 UTC,
+    the **6.4 hours since the rollout completed**: `?ticket=` **0**; `?token=` only the
+    QuestDB false positive above; and `WebSocket` **9** hits of which **not one is a
+    handshake** — eight are streamer start/stop lifecycle lines, and the ninth,
+    `"WebSocket /ws/telemetry" 403` at **10:48:27 UTC**, *predates* the rollout by
+    eighteen minutes and carried no query string at all. **No socket handshake has
+    reached revision 209**, so the `?token=` zero proves absence of traffic, not absence
+    of the credential — exactly what 13.25's "what is and is not proven" bullet
+    anticipated. **What settles it** is re-running the triple once there is traffic, with
+    the stream scoped per the false positive above: a `?token=` zero means something only
+    when the `?ticket=` and handshake-line counts are **non-zero**. Until then this is
+    pending real traffic and must not be reported as proven
+  - **THE RESPONSE-BODY SURFACE IS NOT COVERED, AND TWO TESTS THAT LOOK LIKE COVER ARE
+    VACUOUS.** Established by reading; nothing here asserts it. `tests/test_exchange_vault_contract.py`
+    has **no** response-body assertion — it pins the vault's encrypt/store contract and,
+    in the opposite direction, that `ExchangeKeysRequest` *retains* `api_key` /
+    `secret_key`. `tests/test_exchange_credential_log_redaction.py` is entirely `caplog`,
+    a log surface. **The two that read as cover and are not**:
+    `tests/test_exchange_connection_security.py::test_connection_metadata_redaction` and
+    `tests/test_exchange_connection_e2e.py::test_e2e_schema_to_preflight_flow` both assert
+    `api_key` / `secret_key` / `password` are absent **from a dict literal the test itself
+    wrote** — the author picks the keys, then asserts those keys are missing — and the
+    first file's docstring claims "Stored secrets never leak in
+    GET /api/exchanges/connections" while never calling that route. Genuine response-body
+    scans do exist, on **other** surfaces:
+    `tests/sandbox_lifecycle/test_deterministic_sandbox.py` (the deploy response and the
+    signal-trace list and detail), `tests/test_asset_discovery.py` (`/api/assets`),
+    `tests/test_support_feature_e2e.py` (ticket detail),
+    `tests/test_task_13_2_signal_trace_detail.py` (`api_secret`),
+    `tests/test_notifications_feature_e2e.py` (notification metadata),
+    `tests/test_model_versioning.py` (the public model projection). **None of them is a
+    credential-bearing route.** Those are `GET /api/exchanges` (`list_exchanges`) and
+    `GET /api/exchanges/connections` (`list_user_connections`), and nothing asserts over
+    either one's real body. Reading the handler suggests it is clean *by construction* —
+    `_EXCHANGE_KEYS_PROJECTION = "exchange_id, created_at"`, so the `encrypted_*` columns
+    are never selected, and `masked_key` is built from the **exchange id** rather than
+    from the key — but that is a reading of one route family, in a file the parallel
+    workstream currently holds staged, and it says nothing about the other 350 routes.
+    **Recorded as the named remaining gap: 1.20's response-body half. No test suite was
+    written for it here**
+  - **GATES, NOTHING MOVED AND NOTHING WAS EXPECTED TO.**
+    `tests/test_no_secrets_in_bundle.py` + `tests/test_log_redaction.py` +
+    `tests/test_no_undefined_names.py` → **372 passed** (7 + 362 + 3) in 120.66s. This
+    task changes no code, so the run is a regression check on the two halves of 1.20 that
+    already had cover, not a demonstration of anything new
+  - **NO CODE CHANGE, NO PRODUCTION WRITE, AND THE PARALLEL WORKSTREAM'S FILES WERE NOT
+    TOUCHED.** Every AWS call was read-only (`logs filter-log-events`, `ecs list-clusters`,
+    `ecs list-services`, `ecs describe-services`). No edit to
+    `backend_app/backend/strategy_service.py`,
+    `backend_app/routers/strategy_operations.py`, `backend_app/routers/auth.py` (its
+    staged SC-8 index entry is intact), `routers/billing.py`,
+    `core/billing_lifecycle.py`, `core/subscription_middleware.py` or
+    `backend_app/backend/ml_training_policy.py`. `backend_app/routers/exchange.py` was
+    **read** for the projection above and not written. The commit is a pathspec commit
+    over exactly one path, this file
+  - **THE CORRECTED STATUS FOR TASK 14'S FIVE PARTIAL BLOCKERS.** Of 1.13's deployment
+    path, 1.14's paper routes, 1.16's database-level serialisation, 1.20's production log
+    audit and 1.42's heap measurement: **1.16 was discharged by 13.23**, and **1.20's log
+    half is discharged here**. What remains BLOCKED is **1.13, 1.14, 1.42 and 1.20's
+    response-body half** — four, not five, with 1.20 now partial by one named surface
+    rather than wholly outstanding
+  - _Requirements: 1.20 / 2.20 (1.20 is **PARTIAL by one named surface**: the bundle half_
+    _had cover before this task, the log half is discharged by it — the live group was read_
+    _for every credential shape named above and the only hit was 13.25's already-deleted_
+    _`?token=` line — and the response-body half has **no cover and no evidence either_
+    _way**, recorded rather than implied clean. 2.20's own *Proof:* names only the bundle_
+    _grep and a log-capture test, so satisfying 2.20 does not satisfy 1.20 and the gap sits_
+    _in the requirement as much as in the tests. 2.21's server half stays closed by 13.25;_
+    _its **deploy** half is NOT closed here, because the post-rollout zero is vacuous for_
+    _want of traffic) and `§Bug condition` by way of 2.20's principle (an audit that has_
+    _not been performed is not evidence of absence — and a zero from a probe that cannot_
+    _match the thing it is looking for, `?token=` against QuestDB's `[token=…]` or `re_`_
+    _against `total_exposure_usdt`, is worse than no measurement, because it reads as one)_
+
+
 - [ ] 14. Checkpoint — ensure all tests pass
   - Every task-1 exploration test passes against `F'`; every task-2 preservation test still passes
   - Every P0 and P1 clause carries a named regression test that failed against `F` and passes against `F'`
