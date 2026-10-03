@@ -50,10 +50,25 @@ const WS_BASE = CONFIG.wsBaseUrl;
  *
  * TICKETS ARE NOW THE ONLY SOCKET CREDENTIAL — task 13.25 closed the one-release grace.
  * `?token=` was still accepted by the server while this shipped, and the deploy-ordering
- * shim below used to fall back to it. Production CloudWatch settled it: on 2026-10-02 the
- * split was 136 ticket handshakes to 2 token handshakes, against 24/6 and 39/12 in the
- * 09-27/28 window before `verify_ws_ticket` was deployed. The server arm and the shim were
- * removed together, so there is no longer any path in this file that puts a JWT in a URL.
+ * shim below used to fall back to it. Production CloudWatch settled it, but only once the
+ * query was scoped properly: `/ecs/vyomquant-api` is a multi-stream group, so the bare
+ * term `token=` run across all of it also matches QuestDB lines logging a view name as
+ * `[token=…]`. Scoped with `--log-stream-name-prefix ecs/vyomquant-api` and counting only
+ * messages containing `WebSocket /`, the JWT-bearing handshakes per UTC day were
+ * **3 / 33 / 13 / 10 / 0 / 0** across 09-27, 09-28, 09-29, 10-01, 10-02, 10-03 — a peak of
+ * 33 on 09-28 decaying to **zero on 10-02, two days before the arm was deleted**. The
+ * newest one in the whole group is dated 2026-10-01 20:45:06 UTC, which an independent
+ * `eyJ` probe confirms to the second. Ticket handshakes over the same window and the same
+ * scoping run to at least 200 (the page cap), ≥ 91 of them on 10-02 alone.
+ *
+ * An earlier version of this header read "136 ticket handshakes to 2 token handshakes" on
+ * 2026-10-02, "against 24/6 and 39/12" on 09-27/28. Those came from the unscoped term and
+ * were never handshake counts on either side; task 13.27 records the correction. The
+ * corrected figures make the same case more strongly — the legacy arm was already dead
+ * traffic.
+ *
+ * The server arm and the shim were removed together, so there is no longer any path in
+ * this file that puts a JWT in a URL.
  */
 const WS_TICKET_URL = `${CONFIG.apiBaseUrl}/api/auth/ws-ticket`;
 
@@ -85,10 +100,15 @@ const readSessionToken = () => {
  *
  * WHAT CARRIES THE RECOVERY NOW. Nothing new: `_open` mints a fresh ticket on every
  * attempt, and `scheduleReconnect` re-enters `_open` with `this.connectPath`, so a
- * reconnect never re-presents a spent credential — it asks for a new one. A session that
- * was already stuck in `token` mode when this shipped gets ONE 4001 on its next socket
- * and then recovers on the next backoff tick, because this bundle has no `token` mode to
- * be stuck in.
+ * reconnect never re-presents a spent credential — it asks for a new one.
+ *
+ * AND NOTHING NEEDED RECOVERING. An earlier version of this note said a session already
+ * stuck in `token` mode when this shipped "gets ONE 4001 on its next socket" before
+ * recovering. **There were no stuck sessions.** The corrected measurement above puts
+ * `token=` handshakes at zero on 10-02 and 10-03, before the arm was deleted, so the shim
+ * had switched nothing that was still live and the removal cost no user a dropped
+ * handshake. The re-mint path above is what would have carried such a session had one
+ * existed, and it is correct either way — but it was never called on to.
  *
  * The `credentialMode` / `presentedCredential` / `socketOpened` / `credentialFallbackLogged`
  * bookkeeping went with it. It had exactly one reader — the shim's own decision — so

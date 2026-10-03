@@ -268,7 +268,35 @@ class TestTheHeaderRecordsTheClosure:
             "the header still reads as a pending decision"
         )
         # The evidence, so the removal is auditable without going back to CloudWatch.
-        assert "2026-10-02" in text and "136-to-2" in text, (
-            "the header must name when the grace period ended and the measurement that "
-            "established the removal condition"
+        #
+        # Pinned on DATED facts and on the scoping that makes them trustworthy, rather
+        # than on one count. This assertion used to require the string "136-to-2", and
+        # that figure turned out to be an artefact of an unscoped CloudWatch term over a
+        # multi-stream log group — so the test was pinning a false number into the build.
+        # Task 13.27 records the correction. A date and a stated method are what survive
+        # a re-measurement; a bare count is exactly what did not.
+        assert "2026-10-02" in text, (
+            "the header must name when the grace period ended"
         )
+        assert "2026-10-01 20:45:06" in text, (
+            "the header must carry the timestamp of the NEWEST JWT-bearing handshake in "
+            "the log group. That date is the evidence the removal rests on - the "
+            "exposure is dated, and it stopped before the arm was deleted - and it is "
+            "corroborated by two independent probes (`token=` and `eyJ`)"
+        )
+        assert "log-stream-name-prefix" in text, (
+            "the header must record that the handshake count was SCOPED to the API's own "
+            "log streams. `/ecs/vyomquant-api` is a multi-stream group and an unscoped "
+            "term counts QuestDB `[token=<view>]` lines as handshakes; without the "
+            "scoping stated, the per-day table above is not auditable (task 13.27)"
+        )
+        assert "THERE WAS NO RESIDUAL" in text, (
+            "the header must record that the legacy arm carried NO traffic when it was "
+            "deleted. It used to claim a residual ~2/day of sessions each paying one "
+            "4001 - an overstated, user-visible cost that never occurred - and that "
+            "claim reverting is the regression worth catching (task 13.27)"
+        )
+        # NOT asserted: that the string "136-to-2" is absent. The header quotes the
+        # withdrawn figure deliberately, to mark it withdrawn, so a negative text scan
+        # fires on the correction itself. The three positive assertions above already
+        # fail if the block reverts - none of their strings exists in the old text.

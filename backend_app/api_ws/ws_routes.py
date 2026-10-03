@@ -310,27 +310,67 @@ async def _check_connection_health():
 #  string*, so a `?token=` handshake put a live session JWT into CloudWatch beside the
 #  user id and the client IP:
 #
-#    [2026-09-28 02:04:11 +0000] [41] [INFO] ('10.0.0.101', 29036) -
-#      "WebSocket /ws/user/52384fe1-…-5c36dd8a2bf8?token=<JWT>" 403
+#    [2026-10-01 20:45:06 +0000] [43] [INFO] ('10.0.0.101', 42908) -
+#      "WebSocket /ws/user/9a0fbba4-…-c86cf64b6dc8?token=<JWT>" 403
 #
-#  WHAT ESTABLISHED THE REMOVAL CONDITION. Per-UTC-day handshake counts from
-#  `/ecs/vyomquant-api`, `?token=` against `?ticket=`: 09-27 24/6, 09-28 39/12,
-#  09-29 3/89, 09-30 0/0, 10-01 12/2, 10-02 2/136. 09-27/28 is the pre-rollout window
-#  — `verify_ws_ticket` was not deployed and every socket fell back to the JWT. Since
-#  it landed, tickets dominate 136-to-2, and both halves are confirmed live in the
-#  logs (`[WS-Ticket] Issued ticket for user … (TTL=30s)` on the mint,
-#  `[WS/Auth] Ticket redeemed for user …` on the redemption).
+#  That line is the NEWEST such handshake in the group: 2026-10-01 20:45:06 UTC. The
+#  exposure is dated, and it stopped before the arm was deleted.
 #
-#  THE RESIDUAL ~2/DAY, STATED RATHER THAN HIDDEN. Those are not clients that cannot
-#  mint a ticket; they are sessions already stuck on the legacy arm by the client-side
-#  `WS_TICKET_FALLBACK` shim, which switched once and — in its own words — "sticks for
-#  the session, and is never switched back". That shim is deleted in the same change
-#  (`algo22-terminal/src/websocketClient.js`). Each such session gets one 4001 on its
-#  next socket, after which the browser reconnects and mints a ticket, so recovery is
-#  automatic and costs one dropped handshake. Redacting the access log instead was
-#  rejected: redaction leaves the credential in the URL and depends on a log filter
-#  staying correct forever, whereas a ticket that appears in a log is single-use and
-#  already spent.
+#  WHAT ESTABLISHED THE REMOVAL CONDITION, AND HOW IT WAS SCOPED. The count that
+#  matters is "JWT-bearing handshakes per UTC day", and the only way to get it out of
+#  `/ecs/vyomquant-api` is to scope the query to the API's own streams and then
+#  classify each hit. `/ecs/vyomquant-api` is a MULTI-STREAM group — the API task and
+#  QuestDB both write into it — so the term `token=` run across the whole group also
+#  matches `questdb/questdb/*` lines where `i.q.c.v.ViewCompilerJob` logs
+#  `[token=live_user_pnl~13]`, a view name. The measurement below therefore passes
+#  `--log-stream-name-prefix ecs/vyomquant-api` and counts only messages containing
+#  `WebSocket /`:
+#
+#    term `token=`, 7-day window, `--log-stream-name-prefix ecs/vyomquant-api`,
+#    `--max-items 200`  ->  71 hits: 59 `WebSocket /` handshake lines, 12 other.
+#    The same term over `questdb/*` returns 10 — the contaminant, and none of them
+#    a handshake.
+#
+#    JWT-BEARING HANDSHAKES PER UTC DAY
+#      09-27   3
+#      09-28  33   <- the peak
+#      09-29  13
+#      10-01  10
+#      10-02   0   <- zero, two days BEFORE the arm was deleted
+#      10-03   0
+#
+#  THE EARLIER FIGURE IN THIS BLOCK WAS WRONG, AND IT IS WORTH SAYING WHY. It read
+#  `09-27 24/6, 09-28 39/12, 09-29 3/89, 09-30 0/0, 10-01 12/2, 10-02 2/136` and
+#  "tickets dominate 136-to-2". Both sides came from the same unscoped term over the
+#  whole group, so both were counting QuestDB view names among the handshakes. There
+#  was no residual 2 on 10-02; there was nothing. See task 13.27.
+#
+#  IT CROSS-CHECKS AGAINST AN INDEPENDENT PATTERN. `eyJ` — the JWT header prefix,
+#  nothing to do with the word "token" — scoped the same way returns **59 hits with
+#  the same per-day split and the same newest timestamp**, 2026-10-01 20:45:06 UTC.
+#  Two different patterns, counted independently, agree line for line.
+#
+#  THE TICKET SIDE, MEASURED THE SAME WAY AND REPORTED AS A FLOOR. Term `ticket=`,
+#  same prefix, same `WebSocket /` classification: **200 hits, all 200 of them
+#  handshake lines** — which is the `--max-items 200` cap, so every ticket number is
+#  a floor and not a total. Within that page, 10-02 alone carries **≥ 91** ticket
+#  handshakes against **0** token handshakes. Both halves are confirmed live rather
+#  than inferred (`[WS-Ticket] Issued ticket for user … (TTL=30s)` on the mint,
+#  `[WS/Auth] Ticket redeemed for user …` on the redemption, each ≥ 200 in the same
+#  window). The token count, by contrast, is a true total: 71 is under the cap, so
+#  the zeros on 10-02 and 10-03 are real zeros and not a paging artefact.
+#
+#  THERE WAS NO RESIDUAL, AND THE REMOVAL COST NOTHING. This block used to describe a
+#  "residual ~2/day" of sessions pinned to the legacy arm by the client-side
+#  `WS_TICKET_FALLBACK` shim, each paying one 4001 on its next socket. **No such
+#  sessions existed.** `token=` handshakes had already reached zero on 10-02 and
+#  stayed there through 10-03, two full days before the arm was deleted, so there was
+#  no live traffic on it to break and the removal was free. The shim is deleted in the
+#  same change (`algo22-terminal/src/websocketClient.js`) because with the server arm
+#  gone it could only ever produce a socket nothing can redeem — not because anything
+#  was still using it. Redacting the access log instead was rejected: redaction leaves
+#  the credential in the URL and depends on a log filter staying correct forever,
+#  whereas a ticket that appears in a log is single-use and already spent.
 #
 #  A TICKET IS CONSUMED whether or not the connection goes on to be accepted — that is
 #  what single-use means.

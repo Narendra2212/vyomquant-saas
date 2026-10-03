@@ -3563,27 +3563,46 @@ exists to remove.
     root-cause fix and is what task 8.2 designed. The replacement credential is safe in
     a log by construction rather than by filtering — a ticket is opaque, single-use via
     an atomic `getdel`, and lives ≤ 30 s, so a ticket in a log is already spent
-  - **THE MEASUREMENT THAT ESTABLISHED THE REMOVAL CONDITION.** `ws_routes.py`'s own
-    task 8.2 header named the condition ("kept accepting for ONE release only... once
-    the ticket client has shipped, delete the `token` query parameter and the `token`
-    branch"). Per-UTC-day handshake counts from `/ecs/vyomquant-api`, `?token=` against
-    `?ticket=`: **09-27 24/6, 09-28 39/12, 09-29 3/89, 09-30 0/0, 10-01 12/2,
-    10-02 2/136**. 09-27/28 is the pre-rollout window `websocketClient.js` documents —
-    `verify_ws_ticket` was not deployed and every socket fell back to the JWT. Since it
-    landed, **tickets dominate 136-to-2**, and both halves are confirmed working rather
+  - **THE MEASUREMENT THAT ESTABLISHED THE REMOVAL CONDITION — SUPERSEDED BY 13.27,
+    WHICH IS WHERE THE REAL NUMBERS ARE.** `ws_routes.py`'s own task 8.2 header named
+    the condition ("kept accepting for ONE release only... once the ticket client has
+    shipped, delete the `token` query parameter and the `token` branch"). **What this
+    bullet originally recorded, and it was wrong:** per-UTC-day handshake counts from
+    `/ecs/vyomquant-api`, `?token=` against `?ticket=`, as *"09-27 24/6, 09-28 39/12,
+    09-29 3/89, 09-30 0/0, 10-01 12/2, 10-02 2/136"*, concluding *"tickets dominate
+    136-to-2"*. **Both sides of that table are withdrawn.** They were handed to this
+    task by the orchestrator, which had run the bare term `token=` across the whole log
+    group with **no `--log-stream-name-prefix`** — so the counts included
+    `questdb/questdb/*` lines where `i.q.c.v.ViewCompilerJob` logs `[token=<view>]`.
+    Not a defect in this task's work: it acted on a measurement it was given and had no
+    way to see inside. **The corrected measurement**, scoped with
+    `--log-stream-name-prefix ecs/vyomquant-api` and classified on whether the message
+    contains `WebSocket /`: JWT-bearing handshakes per UTC day **09-27 3, 09-28 33,
+    09-29 13, 10-01 10, 10-02 0, 10-03 0**, out of 71 scoped hits (59 handshakes, 12
+    other) against 10 QuestDB hits. Ticket handshakes measured the same way run to the
+    `--max-items 200` page cap and are therefore a **floor**: ≥ 200 over the window,
+    ≥ 91 on 10-02 alone against **zero** token handshakes. The token side is a true
+    total (71 < 200), so its zeros are real. Both halves still confirmed working rather
     than inferred: `[WS-Ticket] Issued ticket for user … (TTL=30s)` on the mint and
-    `[WS/Auth] Ticket redeemed for user …` on the redemption
-  - **THE RESIDUAL ~2/DAY IS THE ONE REAL COST, AND IT RECOVERS BY ITSELF.** Those are
-    not clients that cannot mint a ticket. They are sessions already pinned to the
-    legacy arm by the client-side `WS_TICKET_FALLBACK` shim, which switched once and —
-    in its own words — "sticks for the session, and is never switched back". Each such
-    session gets **one 4001 on its next socket**. It then recovers automatically, and
-    that was verified in the code rather than hoped for: `scheduleReconnect` re-enters
-    `_open` with `this.connectPath` (deliberately *not* `this.url`, which holds a spent
-    ticket), and `_open` mints a **fresh** ticket on every attempt. So a reconnect
-    cannot re-present a dead credential, and no second change was needed to make
-    recovery work — the re-mint was already correct. The cost is one dropped handshake
-    per stuck session, on the order of two a day
+    `[WS/Auth] Ticket redeemed for user …` on the redemption, each ≥ 200 in the same
+    window. **The condition was met with more room than this bullet claimed, not less**
+  - **THERE WAS NO RESIDUAL. THIS BULLET ORIGINALLY OVERSTATED A USER-VISIBLE COST THAT
+    DID NOT OCCUR.** **What it said:** *"THE RESIDUAL ~2/DAY IS THE ONE REAL COST, AND
+    IT RECOVERS BY ITSELF"* — that the ~2/day were sessions already pinned to the legacy
+    arm by the client-side `WS_TICKET_FALLBACK` shim, which "sticks for the session, and
+    is never switched back", and that **each such session gets one 4001 on its next
+    socket**. **That is false, and it is the most important of the three corrections
+    because it is the one that overstates harm to users.** There was no ~2/day: the "2"
+    on 10-02 was QuestDB view-name traffic, not handshakes. `token=` handshakes reached
+    **zero on 10-02 and stayed there through 10-03**, two full days before the arm was
+    deleted, so there were **no sessions pinned to the legacy arm at all** and the
+    removal cost **nothing** — not one dropped handshake. What survives of this bullet
+    is only the code reading, which is still correct and is now simply unexercised:
+    `scheduleReconnect` re-enters `_open` with `this.connectPath` (deliberately *not*
+    `this.url`, which holds a spent ticket) and `_open` mints a **fresh** ticket on every
+    attempt, so a reconnect could not have re-presented a dead credential had there been
+    one to re-present. No second change was needed to make recovery work, and no
+    recovery was needed. See 13.27
   - **WHAT WAS REMOVED, SERVER SIDE.** `backend_app/api_ws/ws_routes.py`: the `token`
     query parameter from **all nine** `@ws_router.websocket` routes, and the `token`
     branch and parameter from both `_resolve_ws_credential` and `_resolve_ws_subject`.
@@ -3713,7 +3732,10 @@ exists to remove.
     _the user, with no live client affected) and `§Bug condition` by way of 2.5's_
     _principle (an access log that records a credential alongside the identity it_
     _authenticates is not a log of an event, it is a credential store nobody declared —_
-    _the exposure was real and measured at 39 JWTs in one day, not a theoretical one)_
+    _the exposure was real and measured, not a theoretical one. The figure first recorded_
+    _here was "39 JWTs in one day", which came from the same unscoped probe; the scoped_
+    _count is **33 on 2026-09-28**, and 59 JWT-bearing handshakes in total across the_
+    _window. Smaller, and still a credential store nobody declared — see 13.27)_
 
 
 - [ ] 13.26 CLAUSE 1.20'S PRODUCTION LOG AUDIT WAS PERFORMED AGAINST THE LIVE LOG GROUP —
@@ -3791,7 +3813,18 @@ exists to remove.
     per-day table included, is therefore an upper bound contaminated by QuestDB traffic
     rather than a handshake count.** A usable probe must scope the stream to
     `ecs/vyomquant-api/*` or anchor on the access-log shape (`"WebSocket "`); an auditor
-    who skips that will read a view name as a leaked JWT
+    who skips that will read a view name as a leaked JWT. **FORWARD POINTER, so no reader
+    stops at "unreliable": this bullet diagnosed the contamination but left no number in
+    its place. Task 13.27 ran the usable probe** — the bare term `token=` with
+    `--log-stream-name-prefix ecs/vyomquant-api` and each hit classified on whether its
+    message contains `WebSocket /` — **and the real per-UTC-day handshake counts are
+    09-27 3, 09-28 33, 09-29 13, 10-01 10, 10-02 0, 10-03 0** (71 scoped hits: 59
+    handshakes, 12 other; 10 QuestDB hits, which is the contaminant measured directly).
+    The `?token=` counts in this spec are no longer merely unreliable — they are
+    **replaced**, and the replacement cross-checks against this task's own `eyJ` read:
+    scoped identically, `eyJ` returns 59 hits with the same per-day split and the same
+    newest timestamp, **2026-10-01 20:45:06 UTC**, matching the 10 handshakes this task
+    already dated to 10-01
   - **THE GAP, AND IT IS WHY THIS TASK DOES NOT CLOSE 2.21'S DEPLOY HALF.** The
     post-deploy confirmation that no NEW `?token=` line appears is **still not
     established, and the zero is VACUOUS.** Measured over 2026-10-03 11:06 → 17:29 UTC,
@@ -3867,6 +3900,157 @@ exists to remove.
     _not been performed is not evidence of absence — and a zero from a probe that cannot_
     _match the thing it is looking for, `?token=` against QuestDB's `[token=…]` or `re_`_
     _against `total_exposure_usdt`, is worse than no measurement, because it reads as one)_
+
+
+- [ ] 13.27 THE `?token=` HANDSHAKE TABLE 13.25 ACTED ON WAS AN UNSCOPED PROBE COUNTING
+  QUESTDB VIEW NAMES — IT IS NOW RE-MEASURED PROPERLY, THREE QUOTED CLAIMS ARE WITHDRAWN,
+  AND 13.25'S DECISION STANDS ON BETTER EVIDENCE THAN IT HAD
+  - **THE BAD PROBE, EXACTLY WHAT IT WAS.** The orchestrator passed the **bare term**
+    `token=` as the CloudWatch filter pattern — labelled `?token=` in its output, which
+    is how the mislabelling survived review — against log group `/ecs/vyomquant-api`
+    with **no `--log-stream-name-prefix`**. `/ecs/vyomquant-api` is a **multi-stream**
+    group: the API task and QuestDB both write into it. So the probe counted
+    `questdb/questdb/*` lines where `i.q.c.v.ViewCompilerJob` logs
+    `view state is missing, probably dropped concurrently [token=live_user_pnl~13]` —
+    a **view name** — as if they were handshakes. 13.26 diagnosed this but left no
+    number in place of the ones it invalidated; this task supplies them. **The error is
+    the orchestrator's, not 13.25's**: 13.25 was handed a table and had no way to see
+    inside it
+  - **THE CORRECTED METHOD, STATED SO IT IS REPRODUCIBLE.** Same bare term `token=`,
+    7-day window (2026-09-26 17:58 → 2026-10-03 17:58 UTC), `--max-items 200`,
+    region `ap-southeast-1`, read-only — plus the two things the first probe lacked:
+    **`--log-stream-name-prefix ecs/vyomquant-api`** to leave QuestDB's streams out, and
+    **classification of every hit on whether its message contains `WebSocket /`** so an
+    access-log handshake line is distinguished from any other line that happens to carry
+    the term. `eyJ[A-Za-z0-9_.-]{12,}` was masked across the response before anything was
+    printed
+  - **WHAT THE SCOPED PROBE RETURNS.** 71 hits in the API streams → **59 `WebSocket /`
+    handshake lines, 12 other** (the 12 are all 09-28 and are source lines carrying
+    `access_token=`, not handshakes). The same term over `questdb/*` returns **10**,
+    which measures the contaminant directly rather than inferring it. JWT-bearing
+    handshakes per UTC day:
+
+    | UTC day | handshakes |
+    |---|---|
+    | 09-27 | 3 |
+    | 09-28 | **33** (peak) |
+    | 09-29 | 13 |
+    | 10-01 | 10 |
+    | 10-02 | **0** |
+    | 10-03 | **0** |
+
+    71 is **under** the 200 cap, so this is a true total and the zeros are real zeros,
+    not a paging artefact — which is the one thing that has to be true for the whole
+    argument to hold
+  - **IT CROSS-CHECKS AGAINST AN INDEPENDENT PATTERN, AND MORE TIGHTLY THAN EXPECTED.**
+    `eyJ` — the JWT header prefix, with no relationship to the word "token" — scoped the
+    same way returns **59 hits, the same per-day split (3 / 33 / 13 / 10 / 0 / 0), and
+    the same newest timestamp, 2026-10-01 20:45:06 UTC**. 13.26 had established that
+    newest date from the `eyJ` side alone; the two probes now agree **line for line**,
+    not merely on the newest hit. Two patterns, two different mechanisms, one story
+  - **THE TICKET SIDE, MEASURED IDENTICALLY AND REPORTED AS A FLOOR.** Term `ticket=`,
+    same prefix, same `WebSocket /` classification: **200 hits, all 200 of them handshake
+    lines** — zero contamination, but that is the `--max-items 200` cap, so **every
+    ticket figure here is a floor and not a total**, exactly the `≥` discipline 13.26
+    imposed on its own counts. Within that page 10-02 alone carries **≥ 91** ticket
+    handshakes against **0** token handshakes. The mint and redeem lines each return
+    ≥ 200 over the window (`[WS-Ticket] Issued ticket for user … (TTL=30s)`,
+    `[WS/Auth] Ticket redeemed for user …`). Stated this way the ticket side supports the
+    conclusion without pretending to a precision the cap denies
+  - **THE THREE CLAIMS WITHDRAWN, AND WHERE EACH WAS CORRECTED.**
+    1. **"136-to-2" / the `24/6, 39/12, 3/89, 0/0, 12/2, 2/136` table.** There was no 2.
+       Corrected in `ws_routes.py`'s task 8.2 header (table replaced, scoping stated,
+       old figure quoted as withdrawn with the reason), in
+       `algo22-terminal/src/websocketClient.js`'s header (same), and in **13.25's own
+       measurement bullet by amendment** — the old table is quoted, marked withdrawn,
+       and the corrected one given beside it, per 13.23's ADDENDUM convention.
+    2. **"tickets dominate 136-to-2" as the removal justification.** The `?ticket=` half
+       came from the same unscoped probe and was equally unreliable. **Not** replaced
+       with a bare swapped-in number: re-measured with the scoping and classification
+       above and reported as a floor, with the method named.
+    3. **"THE RESIDUAL ~2/DAY IS THE ONE REAL COST" / "sessions already pinned to the
+       legacy arm … each gets one 4001 on its next socket".** **There were no such
+       sessions.** `token=` handshakes were already at zero for two full days before the
+       arm was deleted, so the removal cost **nothing at all** — not one dropped
+       handshake. This is the most important correction because it is the one that
+       **overstated a user-visible cost that never occurred**. Corrected in
+       `ws_routes.py` (the "THE RESIDUAL ~2/DAY" paragraph rewritten as "THERE WAS NO
+       RESIDUAL, AND THE REMOVAL COST NOTHING"), in `websocketClient.js` (the
+       "gets ONE 4001" sentence replaced by "AND NOTHING NEEDED RECOVERING", keeping the
+       re-mint reading as correct but unexercised), and in 13.25's residual bullet by
+       amendment
+  - **THE 13.25 DECISION STANDS, AND IS BETTER SUPPORTED THAN BEFORE.** The corrected
+    evidence is **stronger**, not weaker: the JWT exposure peaked at **33** handshakes on
+    09-28, decayed through 13 on 09-29 and 10 on 10-01, and reached **0 on 10-02 and
+    10-03 — before the removal**. The removal condition task 8.2 wrote down ("once the
+    ticket client has shipped, delete the `token` query parameter and the `token` branch")
+    was met with room to spare, and the legacy arm was **dead traffic by the time it was
+    deleted**. No behaviour is changed by this task: the `token` arm stays deleted, the
+    client shim stays deleted
+  - **THE GENERAL LESSON, BECAUSE THIS SPEC HAS NOW HIT IT THREE TIMES.** An **unscoped
+    CloudWatch term over a multi-stream log group measures the wrong thing** — it
+    measures the union of every service writing to that group, and the answer is a number
+    about the group rather than about the service. And more generally: **a probe that
+    cannot distinguish its target from unrelated traffic reads as a measurement while
+    being noise.** `token=` matching QuestDB's `[token=<view>]` is the same class of
+    error as 13.26's `re_` matching `total_exposure_usdt`, and the same class as a count
+    sitting at its `--max-items` cap being read as a total. The defence is cheap and is
+    what this task did: **scope the stream, then classify each hit against the shape of
+    the thing you are actually counting** (`WebSocket /` for a handshake), and check
+    whether the count is at the cap before calling it a total. A number with no stated
+    scope is not evidence
+  - **WHAT WAS CORRECTED IN THE TEST, AND IT WAS NOT WEAKENED.**
+    `tests/test_ws_token_query_credential_removed.py::test_the_grace_period_is_recorded_as_ended`
+    asserted `"136-to-2" in text`, which **pinned the false figure into the build** — the
+    guard would have failed if anyone corrected the header. Re-pointed at the facts that
+    survive a re-measurement: `2026-10-02` (when the grace ended, unchanged),
+    **`2026-10-01 20:45:06`** (the newest JWT-bearing handshake — dated, and corroborated
+    by two independent probes), and **`log-stream-name-prefix`** (that the count is
+    recorded as *scoped*, without which the per-day table is not auditable). A fourth
+    assertion was **added** — `"THERE WAS NO RESIDUAL" in text` — because the withdrawn
+    residual is the claim whose return would matter most. **A `"136-to-2" not in text`
+    guard was written first and observed failing, which is the lesson again in
+    miniature:** the corrected header *quotes* the old figure in order to mark it
+    withdrawn, so a negative text scan fires on the correction itself — the same trap
+    13.25 recorded for grep-based guards over this file ("a grep either false-positives
+    on all of it or gets tuned until it is vacuous"). It was dropped rather than tuned,
+    with the reason left in the test: none of the three positive strings exists in the
+    old text, so a revert fails anyway. The file's other assertions are about structure
+    and were not moved, and the collected count is unchanged at **13** — the new checks
+    live inside the existing test
+  - **GATES, ALL GREEN.** `tests/test_ws_token_query_credential_removed.py` **13 passed**;
+    `tests/test_websocket_auth_fail_closed.py` **57 passed**;
+    `tests/test_no_undefined_names.py` **3 passed**; `flake8 --select=E9,F63,F7,F82`
+    clean on both touched Python files; `backend_app.main` imports with **351** routes —
+    unchanged, as expected for a comment-only change. Frontend
+    `tests/unit/lib/socketCredential.test.js` **13 passed**, run because
+    `websocketClient.js` was edited (its §5 case strips comments before scanning, so a
+    header that discusses `token=` cannot satisfy or break its own guard — which is
+    precisely why this correction was safe to make in prose). **That run needed
+    `--fileParallelism=false` passed explicitly**, exactly as this file's Notes warn: the
+    first attempt died with `[vitest-pool-runner]: Timeout waiting for worker to respond`
+    and reported "no tests", which is a host constraint and not a test failure — another
+    instance of a green-looking zero that measured nothing
+  - **NO PRODUCTION WRITE, AND THE PARALLEL WORKSTREAM'S FILES WERE NOT TOUCHED.** Every
+    AWS call was read-only `logs filter-log-events`, each `--max-items 200` over a ≤ 7-day
+    window with the API stream prefix, and no matched message was printed without masking
+    `eyJ[A-Za-z0-9_.-]{12,}` first. No edit to
+    `backend_app/backend/strategy_service.py`,
+    `backend_app/routers/strategy_operations.py`, `backend_app/routers/auth.py`,
+    `backend_app/routers/exchange.py`, `routers/billing.py`,
+    `core/billing_lifecycle.py`, `core/subscription_middleware.py` or
+    `backend_app/backend/ml_training_policy.py`; the untracked
+    `tests/test_reconciliation_worker_claims_match_behaviour.py` was left alone. The
+    commit is a pathspec commit over exactly four paths
+  - _Requirements: 1.20 / 2.20 / 1.21 / 2.21 (no requirement status changes. 2.21's server_
+    _half stays closed by 13.25 and its deploy half stays open per 13.26 — this task_
+    _corrects the **evidence** 13.25 cited, not what was built. 1.20's log half stays_
+    _discharged, and this task tightens it: the audit now has a scoped, classified,_
+    _double-sourced handshake count where it previously had a contaminated one) and_
+    _`§Bug condition` by way of 2.20's principle, applied to this spec's own record rather_
+    _than to the system (a measurement quoted without its scope is a claim, not evidence —_
+    _and a wrong number that overstates a user-visible cost is not a safe error to leave_
+    _standing just because the decision it justified was right)_
 
 
 - [ ] 14. Checkpoint — ensure all tests pass
