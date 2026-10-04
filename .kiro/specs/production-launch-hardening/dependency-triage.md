@@ -661,3 +661,70 @@ not exist in the repository — checked by direct file search rather than assume
 included in the count above since a file cannot meaningfully diff against its own in-progress edit.)
 No other file changed. No Python manifest touched. No other npm package upgraded, even though `npm
 install` surfaces other already-outdated packages in this tree unrelated to this task.
+
+---
+
+### 8. `react-router` 7.18.4 — the npm advisory cluster — RUNTIME — JUSTIFIED EXCEPTION, NOT BUMPED
+
+**This is the last runtime finding in `.dependabot_raw.jsonl` that had no verdict here.** The dump
+carries eight npm findings; seven are `scope=development` — `shell-quote` (critical), `shell-quote`
+(high), `brace-expansion`, `browserslist`, `@vitest/mocker`, `baseline-browser-mapping`, `vitest` —
+and exactly one is `scope=runtime`: `react-router`, HIGH. By this document's own standard under
+task 10.5, that one needed resolving or an exception, and had neither.
+
+**A bump is not available.** It is installed at 7.18.4, transitively from
+`react-router-dom: ^7.18.4`, and no newer release closes the open advisory — the maintainer
+discussion on GHSA-qwww-vcr4-c8h2 records `npm audit fix` and `npm audit fix --force` both failing
+for exactly that reason. So the honest answer is a reachability verdict, in the form section 6 takes
+for `cryptography`.
+
+**The advisory cluster requires a server-side execution mode.** Every open HIGH on react-router 7.x
+is scoped to Framework Mode, RSC Mode, or SSR:
+
+| Advisory | Requires |
+| --- | --- |
+| CVE-2026-42342 / GHSA-8x6r-g9mw-2r78 | Framework Mode — DoS via unbounded path expansion in the `__manifest` endpoint |
+| CVE-2026-42211 / GHSA-49rj-9fvp-4h2h | Framework Mode — arbitrary constructor invocation via vendored turbo-stream |
+| GHSA-qwww-vcr4-c8h2 | RSC Mode — CSRF bypass |
+| CVE-2026-21884 / GHSA-8v8x-cx79-35w7 | SSR — XSS in `<ScrollRestoration>`'s `getKey`/`storageKey` |
+| CVE-2026-53666 | SSR hydration — constructor injection via `deserializeErrors()` |
+| GHSA-chx6-hx7r-mcp5 | follows CVE-2026-42342; the advisory states it does **not** affect declarative mode (`<BrowserRouter>`) or data mode (`createBrowserRouter`/`<RouterProvider>`) |
+
+Content was rephrased for compliance with licensing restrictions. Sources:
+[GHSA-8x6r-g9mw-2r78](https://github.com/advisories/GHSA-8x6r-g9mw-2r78),
+[GHSA-49rj-9fvp-4h2h](https://github.com/advisories/GHSA-49rj-9fvp-4h2h),
+[GHSA-8v8x-cx79-35w7](https://github.com/advisories/GHSA-8v8x-cx79-35w7),
+[GHSA-qwww-vcr4-c8h2](https://advisories.gitlab.com/npm/react-router/GHSA-qwww-vcr4-c8h2/),
+[CVE-2026-53666](https://advisories.gitlab.com/npm/react-router/CVE-2026-53666/),
+[GHSA-chx6-hx7r-mcp5](https://psirt.com/de/advisory/GHSA-chx6-hx7r-mcp5),
+[remix-run/remix discussion 11647](https://github.com/remix-run/remix/discussions/11647).
+
+**`algo22-terminal` has none of those modes, measured rather than assumed:**
+
+- No `react-router.config.*` anywhere in the frontend — Framework Mode is not configured.
+- No `@react-router/dev` and no `@remix-run/*` in `dependencies`, `devDependencies` or
+  `peerDependencies` — Framework Mode cannot be configured without one.
+- `"build": "vite build"` — static assets, no SSR build step, no `react-router build`.
+- `src/main.jsx` mounts with `ReactDOM.createRoot`, not `hydrateRoot` — nothing is
+  server-rendered and nothing is hydrated, which is what CVE-2026-53666 needs.
+- `src/main.jsx` routes with `<BrowserRouter>` — declarative mode, the mode
+  GHSA-chx6-hx7r-mcp5 names as unaffected.
+- `<ScrollRestoration>` is rendered nowhere under `src/` — checked across every `.js`/`.jsx`/`.ts`/
+  `.tsx` file, not only the entry point, because it could be mounted from any route.
+- There is no `__manifest` endpoint, because that is a Framework Mode server route and this
+  application has no server.
+
+**Not bumped.** No release closes the advisory, and every advisory in the cluster needs a
+server-side mode this application does not have. That is a justified exception by this document's
+standard, not an unverified deferral.
+
+**The exception is guarded, which is the part that makes it durable.**
+`tests/test_react_router_exception_premises.py` pins all six premises plus a non-vacuity check, so
+adopting Framework Mode, adding an SSR build, switching to `hydrateRoot`, rendering
+`<ScrollRestoration>`, or pulling in `@react-router/dev` fails a test that names this section. A
+justified exception that nothing re-checks is indistinguishable from an ignored alert; this one
+cannot be inherited after the thing it depended on changed.
+
+**Revisit when** react-router publishes a release that closes GHSA-qwww-vcr4-c8h2, or when this
+frontend adopts any server-rendered mode — whichever comes first. The seven development-scope npm
+findings are out of scope for task 10.5's runtime standard and are not excepted here.
