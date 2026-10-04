@@ -180,6 +180,96 @@ jobs:
           PYTHONPATH: .
 
   # ───────────────────────────────────────────────────────────────────────────────
+  # THE LANE ABOVE TESTS A POSTURE PRODUCTION NEVER RUNS IN.
+  #
+  # `AERORA_MODE: safe` there (and `VYOMQUANT_MODE: safe` in `database-tests`) means
+  # `SafetyMonitor.check_execution_allowed` refuses EVERY operation:
+  #
+  #     env_mode = get_vyomquant_mode("safe").lower()
+  #     if env_mode == "safe":
+  #         return "[BLOCKED] EXECUTION BLOCKED: VYOMQUANT_MODE=safe ..."
+  #
+  # Production is not in that posture. `ecs-task-definition-full.json` sets
+  # `VYOMQUANT_MODE=paper`, so `backend_app/main.py` calls
+  # `ExecutionFlags.enable_paper_trading()` at import, which sets
+  # `PAPER_TRADING_ENABLED`, `STRATEGY_SIGNAL_EXECUTION` and `ALLOW_ML_INFERENCE` to True
+  # and `LIVE_TRADING_ENABLED` / `BACKTEST_CAN_SUBMIT_ORDERS` to False. So every execution
+  # path above is exercised with execution BLOCKED, and the per-operation flags that
+  # actually govern production are never reached.
+  #
+  # That gap was measured rather than assumed, and the measurement is the reason this job
+  # is narrow. Running the execution-critical files under `VYOMQUANT_MODE=paper` gives
+  # 274 passed, 1 xfailed, 0 failed - the same result as `safe`. These files are
+  # mode-agnostic today, so this job is not here to fix a known break; it is here so that
+  # a future change which is mode-DEPENDENT fails in CI rather than in production.
+  #
+  # NARROW ON PURPOSE. Re-running all 12,000 tests in a second posture would roughly
+  # double the lane's 52-minute measured runtime for a property only the execution paths
+  # have. This slice is ~8 minutes and covers the funnel guard, the branch-point
+  # assertion, the paper/live separation, the DAG engine's ML gate and the paths that
+  # claim an exchange. Add a file here when it starts depending on the execution posture.
+  # ───────────────────────────────────────────────────────────────────────────────
+  paper-mode-tests:
+    name: Execution Tests (production posture)
+    runs-on: ubuntu-latest
+    needs: static-audit
+    timeout-minutes: 30
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements-cpu.txt
+            requirements-base.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+          pip install -r requirements-dev.txt
+          pip install pytest pytest-asyncio
+
+      # No DATABASE_URL, for the same reason the lane above has none: SQLite is what
+      # these files are measured against. The only variable that differs from
+      # `unit-tests` is the execution mode, which is the entire point of the job.
+      - name: Run execution tests in paper mode
+        run: |
+          pytest tests/test_simulated_orders_reach_the_simulator.py \
+                 tests/test_execution_environment_guard.py \
+                 tests/test_execution_engine_mode_matches_its_branch.py \
+                 tests/test_execution_environment_is_stated_not_defaulted.py \
+                 tests/test_execution_paths_that_claim_an_exchange.py \
+                 tests/test_paper_live_separation.py \
+                 tests/test_single_execution_pipeline.py \
+                 tests/test_execution_correctness.py \
+                 tests/test_dag_engine_port_addressing.py \
+                 tests/test_ml_executor_does_not_fabricate_predictions.py \
+                 -v --tb=short
+        env:
+          REDIS_URL: redis://localhost:6379
+          ENV: test
+          VYOMQUANT_MODE: paper
+          PYTHONPATH: .
+
+  # ───────────────────────────────────────────────────────────────────────────────
   # production-launch-hardening task 13.21, defect B.
   #
   # WHY THIS JOB EXISTS. There was no PostgreSQL anywhere in CI -- the `unit-tests` job
