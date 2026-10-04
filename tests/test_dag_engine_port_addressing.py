@@ -69,6 +69,76 @@ BARS = 80
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _ml_inference_is_permitted_for_these_tests(monkeypatch):
+    """Let the graph's terminal ``xgboost`` node run, because these tests are about ports.
+
+    WHY THIS IS NEEDED AT ALL. ``feature_graph`` below builds
+    ``ohlcv_feed -> <feature nodes> -> xgboost -> gt -> action`` because that is the
+    smallest graph the validator accepts - the ML node is structural, present so the graph
+    has a path to an ACTION, not because any assertion here reads its prediction.
+
+    ``MLExecutor`` consults ``SafetyMonitor.check_execution_allowed("ml_inference")``, and
+    that refuses EVERY operation whenever ``VYOMQUANT_MODE`` is ``safe``:
+
+        env_mode = get_vyomquant_mode("safe").lower()
+        if env_mode == "safe":
+            return f"[BLOCKED] EXECUTION BLOCKED: VYOMQUANT_MODE=safe ..."
+
+    ``safe`` is the default - of that call and of `01-pr-check.yml`'s `unit-tests` job -
+    so the refusal is the normal state everywhere, and the per-operation
+    ``ALLOW_ML_INFERENCE`` flag below it is never even reached. (Flipping that flag was
+    the first attempt here and changed nothing, for exactly that reason.)
+
+    The refusal used to be answered by publishing ``pd.Series(0.5)`` for every bar - which
+    a downstream ``>= 0.5`` comparator reads as a positive prediction on every bar - and
+    ``MLExecutor`` now raises ``MLInferenceUnavailable`` instead. The engine's contract for
+    a node failure is to trace it and re-raise, which
+    ``test_a_node_failure_is_traced_and_re_raised`` in this very file asserts, so the
+    exception aborts the run before any upstream port assertion can be made. 25 tests here
+    failed for a reason that has nothing to do with what they test.
+
+    SO THE EXECUTOR IS STUBBED, NOT THE SAFETY GATE. Permitting ``ml_inference`` was the
+    second attempt and it only moved the refusal one line down, to
+    ``"received no feature series on any input"`` - because a FEATURE node publishes a
+    ``FeatureMatrix`` and ``MLExecutor`` collects only ``isinstance(value, pd.Series)``
+    inputs. It cannot consume a feature matrix. That is not a gap in this fixture;
+    ``MLExecutor``'s own docstring records four measured reasons it "CANNOT PRODUCE A
+    MODEL-DERIVED PREDICTION", including an always-empty ``model_registry`` and a
+    ``self._get_feature_schema`` that is defined nowhere in the repository.
+
+    A node the engine documents as unable to run is exactly what a stub is for. These
+    tests need the run to COMPLETE so they can read ``node_outputs`` for the nodes
+    UPSTREAM of it, and the graph needs the node present to validate at all. The stub
+    publishes a float series on the node's index, which is what the declared return type
+    says and what the downstream ``gt`` comparator expects; no assertion in this file
+    reads its value.
+
+    THIS IS NOT PRETENDING ML WORKS. The thing it replaces published
+    ``pd.Series(0.5)`` for every bar, which the comparator read as a positive prediction
+    on every bar - that was the P1-04 defect, and a strategy's signals were being derived
+    from it. A zero series makes the node produce no signal, which is the honest answer
+    for an executor that has no model.
+
+    ``monkeypatch`` undoes it at teardown, which matters more than it looks: executor
+    classes are process-wide, and leaving one patched would hand every later test in the
+    session a stubbed ML node. That is the leak shape ``tests/conftest.py``'s
+    ``_restore_shared_redis_singleton`` and ``_entitlement_state_is_per_test`` fixtures
+    exist for, and the one a ``with patch(...)`` inside a gathered coroutine caused in
+    ``tests/test_strategy_lifecycle_concurrency.py``.
+    """
+    from backend_app.backend import dag_engine as engine_module
+
+    def _no_opinion(self, node, inputs, market_data):
+        index = getattr(market_data, "index", None)
+        if index is None:
+            return pd.Series(dtype="float64")
+        return pd.Series(np.zeros(len(index), dtype="float64"), index=index)
+
+    monkeypatch.setattr(engine_module.MLExecutor, "execute", _no_opinion)
+    yield
+
+
 @pytest.fixture(scope="module")
 def reg():
     """The real assembled registry. Assembly is ~150 ms, so it is shared."""
