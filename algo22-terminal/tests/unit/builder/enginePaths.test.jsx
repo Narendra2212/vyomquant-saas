@@ -172,6 +172,38 @@ vi.mock('../../../src/design/errorLine', async (importOriginal) => {
   return { ...actual, errorLine, default: errorLine };
 });
 
+// ---------------------------------------------------------------------------
+// The one request this file used to make for real, and why that failed the RUN rather
+// than any test.
+//
+// `test_measured_DataPipelineContext_fetches_data_and_computes_nothing` is the only test
+// here that mounts `DataPipelineProvider`, and mounting it runs
+// `registryClient.loadTimeframes()`. That reaches `conditionalGet(REGISTRY_TIMEFRAMES_PATH)`
+// -> a real axios GET, which in jsdom with no server behind it emits an
+// `AggregateError` from `jsdom/living/xhr`. That test's own comment already said so and
+// concluded "it is not a failure of this test" -- correct about the assertion, and the
+// assertion still passes.
+//
+// It is not harmless, though. Vitest 4 counts it as an UNHANDLED ERROR, prints "Vitest
+// caught 1 unhandled error during the test run. This might cause false positive tests",
+// and exits NON-ZERO. `01-pr-check.yml` runs `npx vitest --run`, so the frontend job
+// fails on it with every test reported as passing -- which is the hardest kind of red to
+// attribute.
+//
+// `importOriginal` keeps the rest of the client exactly as it is: `resetRegistryClient`
+// below is the real one, and so is every snapshot/descriptor reader the other tests use.
+// Only the network hop is replaced, and it resolves to the client's own current snapshot
+// so the provider observes the same shape the real call would have published.
+// ---------------------------------------------------------------------------
+
+vi.mock('../../../src/lib/registryClient', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadTimeframes: vi.fn(async () => actual.getTimeframeSnapshot()),
+  };
+});
+
 import { IndicatorEngineProvider, useIndicatorEngine } from '../../../src/contexts/IndicatorEngineContext';
 import { LogicEngineProvider, useLogicEngine } from '../../../src/contexts/LogicEngineContext';
 import { StrategyEngineProvider, useStrategyEngine } from '../../../src/contexts/StrategyEngineContext';

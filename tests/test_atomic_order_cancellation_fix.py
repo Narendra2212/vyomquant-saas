@@ -5,7 +5,24 @@ Tests that order cancellation uses atomic UPDATE with WHERE clause including sta
 to prevent race conditions where concurrent cancellation attempts could both proceed.
 
 This test verifies the fix for the critical order cancellation race condition issue.
+
+EVERY TEST IN THIS FILE SKIPS unless ``DATABASE_URL`` names a PostgreSQL server.
+
+The SQL here is PostgreSQL throughout -- ``NOW()``, ``data->>'status'`` on a ``JSON``
+column, and ``IS DISTINCT FROM`` -- and the module inserts into ``orders`` without
+creating it, relying on a schema the ``database-tests`` job provisions. On the SQLite
+fallback used by the ``unit-tests`` job in ``.github/workflows/01-pr-check.yml`` all four
+tests failed with ``no such table: orders``. An atomic ``UPDATE`` predicate is the
+property under test and SQLite cannot express it, so there is nothing to port.
+
+This file is already named in the ``database-tests`` job, which is where it runs. Note
+that the job ``--deselect``-s ``test_transaction_isolation_for_cancellation`` for a
+documented design reason, so with this guard in place that one test runs in neither job;
+``tests/test_sqlite_lane_is_greenable.py`` asserts that gap explicitly rather than
+leaving it to be discovered.
 """
+
+import os
 
 import pytest
 import threading
@@ -14,6 +31,14 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from backend_app.core.database import SessionLocal
 from backend_app.backend.transactional_execution_manager import ReplaySafeTransaction
+
+pytestmark = pytest.mark.skipif(
+    not os.getenv("DATABASE_URL", "").startswith(("postgresql", "postgres://")),
+    reason=(
+        "needs a real PostgreSQL through DATABASE_URL; provided by the database-tests "
+        "job in .github/workflows/01-pr-check.yml, skipped in the SQLite lane"
+    ),
+)
 
 
 def test_atomic_order_cancellation():

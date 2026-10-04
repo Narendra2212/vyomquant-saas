@@ -645,32 +645,65 @@ class TestFrontendBillingApiModule:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _billing_jsx_code() -> str:
+    """``Billing.jsx`` with its COMMENTS REMOVED, or a skip if the frontend is absent.
+
+    WHY THE STRIPPING MATTERS, AND IT IS NOT TIDINESS. ``Billing.jsx`` opens with a ~400
+    line ``/** ... */`` header that documents the page's history and quotes every label it
+    ever carried, including the title-cased ones Requirement 3.1 replaced:
+
+        7 commands - *Update Payment Method* (:448), *Manage Billing* (:612), *Resume
+          Subscription* (:658), *Cancel Subscription* (:668), ...
+
+    So ``"Cancel Subscription" in source`` was TRUE while the rendered button read
+    "Cancel subscription" -- the assertion passed on the comment that records its own
+    obsolescence, and would have gone on passing if the button were deleted outright.
+    ``"Resume Subscription"`` was the same claim, and failed only because the header
+    happens to wrap that one across two lines.
+
+    These are source-text tests either way, which is a weak instrument for a React page --
+    ``algo22-terminal/tests/unit/`` is where the rendered output is asserted. Reading code
+    rather than prose is what makes them worth keeping at all.
+    """
+    import os
+    import re
+
+    path = os.path.join(
+        os.path.dirname(__file__),
+        "..", "algo22-terminal", "src", "pages", "Billing.jsx"
+    )
+    if not os.path.exists(path):
+        pytest.skip("Frontend path not found")
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+
+    # Block comments first, so a `//` inside one cannot be mistaken for a line comment.
+    source = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+    # Then whole-line `//` comments. Anchored to the line start so a `https://` inside a
+    # string literal is untouched.
+    source = re.sub(r"(?m)^[ \t]*//.*$", "", source)
+    return source
+
+
 class TestBillingJsxUI:
     def test_billing_jsx_has_cancel_button(self):
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "algo22-terminal", "src", "pages", "Billing.jsx"
+        code = _billing_jsx_code()
+
+        assert "cancelSubscription" in code
+        # Case-insensitive: Requirement 3.1 moved commands to sentence case, and which
+        # case a label carries is the design system's call, not this test's.
+        assert "cancel subscription" in code.lower(), (
+            "Billing.jsx has no Cancel subscription control in its CODE (the header "
+            "comment that quotes the old title-cased label is stripped before this runs)"
         )
-        if not os.path.exists(path):
-            pytest.skip("Frontend path not found")
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        assert "Cancel Subscription" in source
-        assert "cancelSubscription" in source
 
     def test_billing_jsx_has_resume_button(self):
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "algo22-terminal", "src", "pages", "Billing.jsx"
+        code = _billing_jsx_code()
+
+        assert "resumeSubscription" in code
+        assert "resume subscription" in code.lower(), (
+            "Billing.jsx has no Resume subscription control in its CODE"
         )
-        if not os.path.exists(path):
-            pytest.skip("Frontend path not found")
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        assert "Resume Subscription" in source
-        assert "resumeSubscription" in source
 
     def test_billing_jsx_payment_failure_card(self):
         """Billing.jsx must show payment failure card when status is past_due."""
@@ -714,19 +747,40 @@ class TestBillingJsxUI:
         assert "subscription_status" in source or "subscriptionStatus" in source
         assert "data.subscription_status" in source
 
-    def test_billing_jsx_websocket_reconnects(self):
-        """Billing.jsx must reconnect WebSocket after close."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "algo22-terminal", "src", "pages", "Billing.jsx"
+    def test_billing_jsx_reconnects_through_the_shared_socket_client(self):
+        """Reconnection is the shared client's, and this page must NOT reimplement it.
+
+        THIS TEST USED TO ASSERT THE DEFECT. It required `connectWebSocket` and
+        `setTimeout` in the source -- the page's own `new WebSocket` plus its own
+        reconnect scheduled from inside `onclose`. Billing.jsx's header records why that
+        was wrong: `onclose` is exactly what the effect's cleanup fires, so tearing the
+        page down was the event that armed the next connection, with no id to clear.
+
+        production-launch-hardening task 8.1 deleted both and took a refcounted hold on
+        the one shared session connection instead (`websocketClient.js`), which owns
+        capped jittered backoff and distinguishes an intentional `release` from a dropped
+        connection. So the page reconnects MORE reliably than before, through code it does
+        not duplicate -- and the old assertion would now fail a correct implementation.
+
+        Inverted accordingly: the hold must be present and a second socket implementation
+        must not. `algo22-terminal/tests/unit/pages/billingSocketLifecycle.test.jsx` is
+        where the lifecycle itself is driven.
+        """
+        code = _billing_jsx_code()
+
+        assert "wsClient" in code, "Billing.jsx no longer uses the shared socket client"
+        assert "acquire(" in code, (
+            "Billing.jsx does not acquire a refcounted hold on the shared connection"
         )
-        if not os.path.exists(path):
-            pytest.skip("Frontend path not found")
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        assert "connectWebSocket" in source
-        assert "setTimeout" in source
+        assert "subscribeChannel(" in code, (
+            "Billing.jsx does not subscribe to the billing channel"
+        )
+
+        assert "new WebSocket" not in code, (
+            "Billing.jsx constructs its own WebSocket again. The shared client owns the "
+            "connection and its backoff; a second socket reintroduces the reconnect loop "
+            "task 8.1 removed."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

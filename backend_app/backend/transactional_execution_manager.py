@@ -124,6 +124,82 @@ class TransactionOperation:
 # REPLAY-SAFE TRANSACTION
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════
+#  JSON ACCESS, RENDERED FOR THE BOUND DIALECT — ONE DEFINITION
+#
+#  The `orders`, `positions` and `fills` tables each store their payload in a single
+#  `data JSON` column (alembic/versions/d97ffff9c3bb_execution_schema_rebuild.py), so every
+#  query against a field inside one has to extract it. This module used to do that with
+#  `json_extract(data, '$.symbol')` at four statements.
+#
+#  `json_extract` IS A SQLITE FUNCTION. PostgreSQL has no such function, and production is
+#  PostgreSQL 17.6 — migration 020's header records the live catalogue, and the ECS task
+#  definition supplies a `postgresql://` DATABASE_URL. Every one of those statements would
+#  have raised UndefinedFunction against the only database that matters.
+#
+#  Nothing caught it because `tests/conftest.py` blanks DATABASE_URL and the 11,000+ test
+#  lane runs on SQLite, where `json_extract` is correct. The one engine that could report
+#  the defect is the one the suite does not use.
+#
+#  Hence one renderer, chosen by the SESSION'S OWN dialect rather than by a module-level
+#  assumption, so the same code is right on both. Regression:
+#  tests/test_json_extract_dialect_portability.py
+# ══════════════════════════════════════════════════════════════════════════
+
+#: A JSON key this renderer will interpolate. Keys in use are literals written here
+#: (`symbol`, `quantity`), never request values — but this function builds SQL by
+#: interpolation, so the shape is constrained rather than trusted.
+_JSON_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def json_text(column: str, key: str, dialect: str) -> str:
+    """SQL extracting ``key`` from the JSON ``column``, as TEXT, for ``dialect``.
+
+    PostgreSQL gets ``column ->> 'key'``; everything else gets
+    ``json_extract(column, '$.key')``, which is SQLite's spelling and the one the test lane
+    runs on. Both yield a value comparable against a bound string parameter and parseable
+    by ``float()``, which is all four call sites need.
+
+    ``->>`` rather than ``jsonb_extract_path_text`` because the column is declared
+    ``sa.JSON()``, i.e. PostgreSQL ``json`` and not ``jsonb``; ``->>`` is defined on both,
+    the ``jsonb_``-prefixed functions are not.
+
+    Raises:
+        ValueError: ``key`` is not a plain identifier, or ``column`` is not. Refused before
+            any SQL is built, so a caller cannot construct an injection through this.
+    """
+    if not _JSON_KEY_RE.match(str(column or "")):
+        raise ValueError(
+            f"json_text refuses the column name {column!r}: it is interpolated into SQL "
+            f"and must be a plain identifier"
+        )
+    if not _JSON_KEY_RE.match(str(key or "")):
+        raise ValueError(
+            f"json_text refuses the JSON key {key!r}: it is interpolated into SQL and must "
+            f"be a plain identifier. Pass the field name alone, not a JSON path."
+        )
+
+    if str(dialect or "").lower() == "postgresql":
+        return f"{column} ->> '{key}'"
+    return f"json_extract({column}, '$.{key}')"
+
+
+def _session_dialect(db: Any) -> str:
+    """The bound dialect's name, or ``"sqlite"`` when it cannot be determined.
+
+    Same accessor ``core/models/execution_record.claim_execution`` uses for the same reason.
+    Defaults to SQLite rather than PostgreSQL: an unbound session in this repository is a
+    test session, and rendering PostgreSQL-only operators into a SQLite statement would fail
+    the test lane loudly for no benefit.
+    """
+    try:
+        bind = getattr(db, "bind", None)
+        name = getattr(getattr(bind, "dialect", None), "name", None)
+        return str(name) if name else "sqlite"
+    except Exception:  # noqa: BLE001 - a dialect that cannot be read is treated as SQLite
+        return "sqlite"
+
+
 class ReplaySafeTransaction:
     """Replay-safe transaction manager."""
     
@@ -608,8 +684,14 @@ class TransactionalExecutionManager:
             def get_local_qty(sym: str) -> float:
                 if sym in pos_cache:
                     return pos_cache[sym]
+                _d = _session_dialect(self.db)
+                _qty = json_text("data", "quantity", _d)
+                _sym = json_text("data", "symbol", _d)
                 row = self.db.execute(
-                    text("SELECT json_extract(data, '$.quantity') FROM positions WHERE json_extract(data, '$.symbol') = :symbol AND tenant_id = :tid"),
+                    text(
+                        f"SELECT {_qty} FROM positions "
+                        f"WHERE {_sym} = :symbol AND tenant_id = :tid"
+                    ),
                     {"symbol": sym, "tid": str(self.tenant_id)}
                 ).fetchone()
                 pos_cache[sym] = float(row[0]) if row and row[0] is not None else 0.0
@@ -658,8 +740,12 @@ class TransactionalExecutionManager:
                     current_qty = get_local_qty(symbol)
                     new_qty = current_qty + qty
                     
+                    _sym_sql = json_text("data", "symbol", _session_dialect(self.db))
                     pos_row_check = self.db.execute(
-                        text("SELECT id FROM positions WHERE json_extract(data, '$.symbol') = :symbol AND tenant_id = :tid"),
+                        text(
+                            f"SELECT id FROM positions "
+                            f"WHERE {_sym_sql} = :symbol AND tenant_id = :tid"
+                        ),
                         {"symbol": symbol, "tid": str(self.tenant_id)}
                     ).fetchone()
                     
@@ -700,8 +786,12 @@ class TransactionalExecutionManager:
                     # If local_qty != ex_qty, there is actual drift, so we force it to ex_qty.
                     final_qty = ex_qty if local_qty != ex_qty else local_qty
                     
+                    _sym_sql = json_text("data", "symbol", _session_dialect(self.db))
                     local_pos_row = self.db.execute(
-                        text("SELECT id, data FROM positions WHERE json_extract(data, '$.symbol') = :symbol AND tenant_id = :tid"),
+                        text(
+                            f"SELECT id, data FROM positions "
+                            f"WHERE {_sym_sql} = :symbol AND tenant_id = :tid"
+                        ),
                         {"symbol": symbol, "tid": str(self.tenant_id)}
                     ).fetchone()
                     
@@ -1048,8 +1138,12 @@ class TransactionalExecutionManager:
                 
             # We assume position id is the symbol for simplicity, or we query by symbol
             # Let's query by symbol directly in data
+            _sym_sql = json_text("data", "symbol", _session_dialect(self.db))
             position_row = self.db.execute(
-                text("SELECT id, data FROM positions WHERE tenant_id = :tenant_id AND json_extract(data, '$.symbol') = :symbol"),
+                text(
+                    f"SELECT id, data FROM positions "
+                    f"WHERE tenant_id = :tenant_id AND {_sym_sql} = :symbol"
+                ),
                 {"tenant_id": str(self.tenant_id), "symbol": symbol}
             ).fetchone()
             

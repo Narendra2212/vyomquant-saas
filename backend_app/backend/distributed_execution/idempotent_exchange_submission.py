@@ -212,6 +212,8 @@ class IdempotentExchangeSubmission:
             
             # Submit to exchange via Canonical ExecutionEngine Gateway
             try:
+                from backend_app.backend.execution_environment import \
+                    ExecutionEnvironment
                 from backend_app.core.execution_engine import ExecutionEngine
                 from decimal import Decimal
                 from uuid import UUID
@@ -242,7 +244,15 @@ class IdempotentExchangeSubmission:
                             "exchange."
                         ),
                     }
-                engine = ExecutionEngine(portfolio_state=portfolio_state)
+                # LIVE: this module is called `idempotent_exchange_submission`, this
+                # block is commented "Submit to exchange", and the value it returns is
+                # named `exchange_order_id`. An engine built for LIVE with no exchange
+                # executor refuses at the branch point instead of falling through to the
+                # paper branch and returning a simulated fill.
+                engine = ExecutionEngine(
+                    portfolio_state=portfolio_state,
+                    execution_environment=ExecutionEnvironment.LIVE,
+                )
 
                 res = await engine.execute_trade(
                     tenant_id=parsed_tenant,
@@ -254,17 +264,50 @@ class IdempotentExchangeSubmission:
                     metadata={"client_order_id": client_order_id, "signal_id": signal_id}
                 )
 
-                exchange_order_id = res.execution_id or f"exchange_{uuid.uuid4().hex[:16]}"
-                
+                # THE VENUE'S ORDER ID, OR NONE.
+                #
+                # This was `res.execution_id or f"exchange_{uuid.uuid4().hex[:16]}"`.
+                # Neither half of that is an exchange order id: `execution_id` is this
+                # system's own deterministic idempotency key, and the fallback is a
+                # random hex string generated here. A caller reconciling against the
+                # venue, or cancelling by id, had nothing usable and no way to tell.
+                #
+                # The real id is on the fill. `_execute_trade_internal` puts the
+                # exchange's `exchange_order_id` in `order_id` on its live branch, and
+                # `execute_with_idempotency` nests that dict under `trade_result`.
+                # Regression: tests/test_execution_paths_that_claim_an_exchange.py
+                fill = (res.details or {}).get("trade_result") or {}
+                venue_order_id = fill.get("order_id") if res.success else None
+
+                if not res.success or not venue_order_id:
+                    logger.error(
+                        "Submission %s did not reach an exchange: %s. Reporting a "
+                        "failure with no exchange_order_id rather than minting one.",
+                        client_order_id,
+                        res.message or res.status,
+                    )
+                    return {
+                        "success": False,
+                        "error": "exchange_submission_failed",
+                        "client_order_id": client_order_id,
+                        "exchange_order_id": None,
+                        "message": (
+                            res.message
+                            or res.status
+                            or "The order was not submitted to an exchange."
+                        ),
+                        "details": res.details or {},
+                    }
+
                 result = {
-                    "success": res.success,
+                    "success": True,
                     "client_order_id": client_order_id,
-                    "exchange_order_id": exchange_order_id,
+                    "exchange_order_id": venue_order_id,
                     "submitted_at": datetime.now(timezone.utc).isoformat(),
                     "details": res.details or {}
                 }
-                
-                logger.info(f"Order submitted idempotently via Gateway: {client_order_id} -> {exchange_order_id}")
+
+                logger.info(f"Order submitted idempotently via Gateway: {client_order_id} -> {venue_order_id}")
                 return result
                 
             except Exception as e:

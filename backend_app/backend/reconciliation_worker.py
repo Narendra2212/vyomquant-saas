@@ -11,14 +11,13 @@ ARCHITECTURE:
   │                     (Runs every 5 seconds)                       │
   │                                                                 │
   │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐        │
-  │   │  Fetch      │    │  Compare    │    │  Correct    │        │
-  │   │  Exchange   │───▶│  Local vs   │───▶│  Local      │        │
-  │   │  State      │    │  Exchange   │    │  State      │        │
+  │   │  Fetch      │    │  Compare    │    │  Report     │        │
+  │   │  Exchange   │───▶│  Local vs   │───▶│  the        │        │
+  │   │  State      │    │  Exchange   │    │  Mismatch   │        │
   │   │             │    │             │    │             │        │
-  │   │ • Orders    │    │ • Orders    │    │ • Update    │        │
-  │   │ • Positions │    │ • Positions │    │ • Reconcile │        │
+  │   │ • Orders    │    │ • Orders    │    │ • Record    │        │
+  │   │ • Positions │    │ • Positions │    │ • Log       │        │
   │   │ • Balances  │    │ • Balances  │    │ • Alert     │        │
-  │   └─────────────┘    └─────────────┘    └─────────────┘        │
   │                                                                 │
   │   Every 5 seconds:                                              │
   │   1. Fetch open orders from exchange                           │
@@ -27,43 +26,73 @@ ARCHITECTURE:
   │   4. Compare with local StateService                            │
   │   5. IF mismatch:                                              │
   │      - Log discrepancy                                          │
-  │      - Update local state                                       │
-  │      - Emit reconciliation event                                │
+  │      - Record it on the ReconciliationResult                    │
   │      - Alert if significant drift                               │
-  │                                                                 │
-  │   EXPECTED RESULT:                                              │
-  │   ✔ Local always matches exchange                              │
-  │   ✔ No hidden drift                                            │
-  │   ✔ Automatic self-healing                                     │
   │                                                                 │
   └─────────────────────────────────────────────────────────────────┘
 
-RECONCILIATION SCENARIOS:
+THIS WORKER DETECTS DRIFT. IT DOES NOT CORRECT IT.
+--------------------------------------------------
+Stage three of the diagram above used to be titled after correcting local state, the step
+list used to promise that it updated local state, and this section used to claim the
+result was that local always matched the exchange, that there was no hidden drift, and
+that healing was automatic.
+
+None of that was true, and the gap was not small. Correction was supposed to happen through
+a state-service wrapper class defined inside `_reconcile_user_exchange`, whose six mutating
+methods - create_fill, remove_fill, create_order, cancel_order, create_position,
+update_position - were each a single log line announcing what the worker would have done.
+That class was instantiated as a bare expression statement, never bound, never passed to
+`ReconciliationEngine.reconcile`, and collected immediately; and its read methods called
+private helpers off `self` that belong to the WORKER, so they would have raised
+AttributeError if anything had ever called them. The stubs have been deleted so that this
+module no longer looks like it self-heals.
+
+What the worker really provides is DETECTION: it fetches exchange state, compares it with
+`StateService`, and returns a `ReconciliationResult` whose `mismatches` list names each
+discrepancy with its type, severity and both sides of the disagreement. That is useful and
+it is what callers get.
+
+Correction is NOT IMPLEMENTED, deliberately rather than pending. Deciding what to do when
+the exchange and the local ledger disagree about an open position is money-critical and
+unanswered here: which side is authoritative, whether a correction may itself place or
+cancel an order, and what becomes of PnL already reported to the trader. Those need an
+owner, not a default.
+
+Also worth knowing before relying on this module: NOTHING STARTS IT. The module-level
+singleton `reconciliation_worker = ReconciliationWorker()` is constructed with no
+arguments, so `self.reconciliation_engine` is None and the fill-reconciliation branch
+never executes; and the only importer anywhere is
+`backend_app/core/order_state_engine.py`, which does
+`_ = (reconciliation_worker, ...)` to bind the name and discard it. No entrypoint -
+`main.py`, `worker.py`, `startup.sh`, `docker-compose.yml`, Procfile - runs the loop.
+
+DRIFT SCENARIOS THIS WORKER REPORTS (and does not repair):
 
   1. Order State Mismatch:
      Exchange: Order filled (status: closed)
      Local:    Order open (status: pending)
-     Action:   Update local order to filled
+     Reported: MismatchType.ORDER_STATUS
 
   2. Position Size Mismatch:
      Exchange: Position 1.5 BTC
      Local:    Position 1.0 BTC
-     Action:   Update local position, recalculate PnL
+     Reported: position size discrepancy, with both sides
 
   3. Missing Order:
      Exchange: Order exists
      Local:    Order not found
-     Action:   Sync order from exchange to local
+     Reported: MismatchType.ORDER_MISSING_LOCAL
 
   4. Ghost Order:
      Exchange: Order not found (cancelled/unknown)
      Local:    Order shows as open
-     Action:   Mark local order as cancelled
+     Reported: MismatchType.ORDER_MISSING_EXCHANGE
 
   5. Balance Drift:
      Exchange: Available 10.5 BTC
      Local:    Available 10.0 BTC
-     Action:   Update balance, investigate cause
+     Reported: balance discrepancy
 
 METRICS:
   - reconciliation_runs_total: Counter of reconciliation runs
@@ -100,16 +129,43 @@ except ImportError:
         CANCELLED = "cancelled"
         REJECTED = "rejected"
 
+# ── These two probes used to be unable to fail ────────────────────────────
+# Both were written as
+#
+#     try:
+#     #     import ccxt.async_support as ccxt
+#         CCXT_AVAILABLE = True
+#     except ImportError:
+#         CCXT_AVAILABLE = False
+#
+# with the import commented out. A `try` whose body is only an assignment cannot raise
+# ImportError, so the `except` branch was unreachable and the flag was a constant `True`
+# dressed as a capability probe: the module asserted ccxt was loaded having not loaded it,
+# and left no `ccxt` name bound.
+#
+# That is load-bearing, not cosmetic. `CCXT_AVAILABLE` is the guard on both exchange reads
+# (`_fetch_exchange_orders`, `_fetch_exchange_positions`), so with it pinned True the
+# `not CCXT_AVAILABLE` half was dead and each guard rested entirely on its `hasattr`
+# check. A deployment without ccxt would still have been told it had it.
+#
+# Both imports are restored, so the flags now mean what they say. Measured: both are
+# importable in this environment, so nothing about behaviour here changes - which is
+# exactly why there was no reason to leave them commented.
+# Regression: tests/test_reconciliation_worker_claims_match_behaviour.py
 try:
-#     import ccxt.async_support as ccxt
+    import ccxt.async_support as ccxt
+
     CCXT_AVAILABLE = True
 except ImportError:
+    ccxt = None
     CCXT_AVAILABLE = False
 
 try:
-#     from backend_app.core.reconciliation_engine import ReconciliationEngine
+    from backend_app.core.reconciliation_engine import ReconciliationEngine
+
     RECONCILIATION_ENGINE_AVAILABLE = True
 except ImportError:
+    ReconciliationEngine = None
     RECONCILIATION_ENGINE_AVAILABLE = False
 
 logger = logging.getLogger("ReconciliationWorker")
@@ -338,77 +394,40 @@ class ReconciliationWorker(WorkerBase):
             # Use ReconciliationEngine if available for fill-level reconciliation
             if self.reconciliation_engine and self.enable_fill_reconciliation:
                 try:
-                    # Create a mock exchange client wrapper for the ReconciliationEngine
-                    class ExchangeClientWrapper:
-                        def __init__(self, client):
-                            self.client = client
-                        
-                        async def get_orders(self, user_id):
-                            return await self._fetch_exchange_orders(self.client)
-                        
-                        async def get_positions(self, user_id):
-                            return await self._fetch_exchange_positions(self.client)
-                        
-                        async def get_fills(self, user_id):
-                            # Fetch fills from exchange (if available)
-                            if CCXT_AVAILABLE and hasattr(self.client, 'fetch_my_trades'):
-                                return await self.client.fetch_my_trades()
-                            return []
-                    
-                    # Create a mock state service wrapper
-                    class StateServiceWrapper:
-                        def __init__(self):
-                            pass
-                        
-                        async def get_orders(self, tenant_id, user_id):
-                            local_orders = await self._fetch_local_orders(user_id)
-                            orders_list = []
-                            for k, v in local_orders.items():
-                                order_dict = {"order_id": k}
-                                if hasattr(v, 'to_dict'):
-                                    order_dict.update(v.to_dict())
-                                else:
-                                    order_dict.update(v)
-                                orders_list.append(order_dict)
-                            return orders_list
-                        
-                        async def get_positions(self, tenant_id, user_id):
-                            local_positions = await self._fetch_local_positions(user_id)
-                            positions_list = []
-                            for k, v in local_positions.items():
-                                pos_dict = {"symbol": k}
-                                if hasattr(v, 'to_dict'):
-                                    pos_dict.update(v.to_dict())
-                                else:
-                                    pos_dict.update(v)
-                                positions_list.append(pos_dict)
-                            return positions_list
-                        
-                        async def get_fills(self, tenant_id, user_id):
-                            # Fetch fills from local state (if available)
-                            return []
-                        
-                        async def create_fill(self, tenant_id, data):
-                            logger.info(f"[ReconciliationWorker] Would create fill: {data}")
-                        
-                        async def remove_fill(self, tenant_id, data):
-                            logger.info(f"[ReconciliationWorker] Would remove fill: {data}")
-                        
-                        async def create_order(self, tenant_id, data):
-                            logger.info(f"[ReconciliationWorker] Would create order: {data}")
-                        
-                        async def cancel_order(self, tenant_id, data):
-                            logger.info(f"[ReconciliationWorker] Would cancel order: {data}")
-                        
-                        async def create_position(self, tenant_id, data):
-                            logger.info(f"[ReconciliationWorker] Would create position: {data}")
-                        
-                        async def update_position(self, tenant_id, data):
-                            logger.info(f"[ReconciliationWorker] Would update position: {data}")
-                    
-                    ExchangeClientWrapper(client)
-                    StateServiceWrapper()
-                    
+                    # ── TWO WRAPPER CLASSES WERE DEFINED AND DISCARDED HERE ────────
+                    # `ExchangeClientWrapper` and `StateServiceWrapper` were declared
+                    # inside this function and then instantiated as bare expression
+                    # statements:
+                    #
+                    #     ExchangeClientWrapper(client)
+                    #     StateServiceWrapper()
+                    #
+                    # Neither result was bound to a name, neither was passed to
+                    # `reconcile` below - which takes three identifiers and nothing else -
+                    # and both were collected immediately. The same evaluate-and-discard
+                    # shape as the legacy backtest route's bare
+                    # `payload.get("stop_loss_pct", 0.02)`.
+                    #
+                    # `StateServiceWrapper` was where every state correction was supposed
+                    # to happen, and all six of its mutating methods - create_fill,
+                    # remove_fill, create_order, cancel_order, create_position,
+                    # update_position - were a single `logger.info("Would ...")` line. They
+                    # could not have run even if wired: its read methods called
+                    # `self._fetch_local_orders(...)` and the exchange wrapper's called
+                    # `self._fetch_exchange_orders(...)`, which are methods of the WORKER,
+                    # not of the wrappers, so each would have raised AttributeError on
+                    # first use.
+                    #
+                    # Deleted rather than repaired. What to do when the exchange and the
+                    # local ledger disagree about an open position is a money-critical
+                    # design question - which side wins, whether a correction may itself
+                    # place an order, what becomes of PnL already reported - and answering
+                    # it inside a cleanup pass would be worse than the honest gap.
+                    # Removing the stubs removes the APPEARANCE of an implementation; it
+                    # removes no capability, because there was none.
+                    #
+                    # Regression: tests/test_reconciliation_worker_claims_match_behaviour.py
+                    #
                     # Run ReconciliationEngine
                     engine_result = await self.reconciliation_engine.reconcile(
                         tenant_id=user_id,

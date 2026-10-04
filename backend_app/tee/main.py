@@ -6,6 +6,7 @@ import os
 from aiohttp import web
 
 # Import legacy engine components to execute locally within this process
+from backend_app.backend.ml_node_types import detect_ml_nodes
 from backend_app.core.cache import redis_manager
 from backend_app.core.fleet_manager import get_fleet_manager
 from supabase import create_client
@@ -74,9 +75,15 @@ async def process_start_bot(payload: dict):
     elif isinstance(blueprint.get("nodes"), list):
         nodes = blueprint["nodes"]
     
-    # Check for ML/DL nodes
-    ml_nodes = [n for n in nodes if n.get("type", "").lower() in ["ml", "dl"]]
-    
+    # Check for ML/DL nodes.
+    #
+    # The shared vocabulary, not an inlined `["ml", "dl"]`. This gate used to miss the
+    # `ml_dl` and `ml_model` spellings, which `routers/strategies.py` has always counted
+    # as model blocks - so a strategy declaring a model it did not have was refused on
+    # the router's deploy path and started here. See backend/ml_node_types.py.
+    # Regression: tests/test_ml_node_detection_is_one_vocabulary.py
+    ml_nodes = detect_ml_nodes(nodes)
+
     if ml_nodes and not blueprint.get("ml_model_path"):
         logger.error(f"TEE deployment blocked: Strategy {strategy_id} contains ML/DL nodes but no trained model reference")
         return False
@@ -87,9 +94,26 @@ async def process_start_bot(payload: dict):
         logger.info(f"Skipping deployment for {strategy_id}, lock held by another TEE instance.")
         return True # Acknowledge anyway, it's being handled
         
+    # The deployment's mode must travel with the command. A payload that does not state it
+    # is refused rather than defaulted: defaulting is what made every live deployment run
+    # as paper (`blueprint.get("paper_trading", True)` in master_executor), and a TEE that
+    # guessed would be guessing about real money. The lock is released so another instance
+    # is not blocked by a command this one could not act on.
+    # Regression: tests/test_live_deployment_mode_propagation.py
+    if "paper_trading" not in payload:
+        logger.error(
+            f"TEE deployment blocked: the start_bot command for strategy {strategy_id} "
+            f"carries no 'paper_trading' mode, so whether it was authorised to trade live "
+            f"is unestablished. No bot was started."
+        )
+        await release_lock(strategy_id)
+        return False
+
     logger.info(f"Starting bot for user {user_id} on {symbol} (Strategy: {strategy_id})")
     fleet = get_fleet_manager()
-    success, msg = await fleet.start_bot(user_id, symbol, blueprint)
+    success, msg = await fleet.start_bot(
+        user_id, symbol, blueprint, paper_trading=bool(payload["paper_trading"])
+    )
     if success:
         logger.info(f"Bot started successfully: {msg}")
         active_locks[strategy_id] = (user_id, symbol)

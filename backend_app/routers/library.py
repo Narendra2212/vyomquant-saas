@@ -41,6 +41,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, validator
 
+from backend_app.backend.ml_node_types import detect_ml_nodes
 from backend_app.core.auth_middleware import decode_token_local
 from backend_app.core.dependencies import (bearer_scheme, get_admin_user,
                                            get_current_user)
@@ -2388,8 +2389,12 @@ async def clone_strategy(
     if isinstance(source.get("buy_logic"), dict):
         nodes = source["buy_logic"].get("_nodes", [])
     
-    # Check for ML/DL nodes
-    ml_nodes = [n for n in nodes if n.get("type", "").lower() in ["ml", "dl"]]
+    # Check for ML/DL nodes, using the SHARED vocabulary rather than an inlined
+    # ["ml", "dl"]. This gate used to miss the `ml_dl` and `ml_model` spellings that
+    # `routers/strategies.py` has always counted as model blocks.
+    # See backend/ml_node_types.py.
+    # Regression: tests/test_ml_node_detection_is_one_vocabulary.py
+    ml_nodes = detect_ml_nodes(nodes)
     
     if ml_nodes and not source.get("ml_model_path"):
         raise HTTPException(
@@ -2402,6 +2407,32 @@ async def clone_strategy(
         )
 
     # 7. Insert clone into strategies table
+    #
+    # ── `ml_model_path` IS DELIBERATELY NOT COPIED ────────────────────────────────
+    # It used to be, as `"ml_model_path": source.get("ml_model_path")`, which put the
+    # AUTHOR's filesystem path onto the CLONING USER's strategy row. `BotRunner` reads
+    # that column off the blueprint and hands it to `joblib.load`, so user B's bot process
+    # deserialised the bytes of user A's model artifact. Cross-tenant, and not something
+    # path containment can fix: `ml_models.resolve_model_artifact_path` confines a path to
+    # the model artifact root, which is exactly where every other tenant's model also
+    # lives.
+    #
+    # It also bypassed the exchange this repository built for precisely this. A model
+    # artifact is reached through `model_versions`, whose rows carry `user_id`, whose
+    # `artifact_uri` is omitted from every public projection (`public_model_version`), and
+    # whose downloads go through `sign_artifact_token` / `verify_artifact_token` with a
+    # short TTL and an ownership check. Copying a raw path sidesteps all of it.
+    #
+    # WHAT THE CLONER GETS, AND WHAT THEY DO NOT. They get the graph, the logic trees, the
+    # indicators and the risk configuration - the strategy. They do not get the author's
+    # trained weights, which are the author's and are per-user by the registry's own
+    # schema. An ML strategy therefore arrives needing training before it can be deployed,
+    # and the response below says so rather than letting the author discover it as an
+    # `ML_MODEL_MISSING` refusal at deploy time.
+    #
+    # The gate above is unaffected: it reads `source.get("ml_model_path")`, so a listing
+    # whose strategy has model nodes and no model is still refused outright.
+    # Regression: tests/test_ml_model_path_containment.py
     clone_payload = {
         "user_id": user_id,
         "name": f"[Clone] {lib_entry['name']}",
@@ -2412,7 +2443,6 @@ async def clone_strategy(
         "sell_logic": source.get("sell_logic"),
         "risk": source.get("risk"),
         "indicators": source.get("indicators"),
-        "ml_model_path": source.get("ml_model_path"),
         "source_library_id": lib_id,
         "status": "stopped",
         "created_at": now_ts,
@@ -2477,9 +2507,24 @@ async def clone_strategy(
     except Exception as e:
         logger.warning(f"Redis cache invalidation failed: {e}")
 
+    # The author's trained model is not part of the clone (see the `clone_payload`
+    # comment), so a cloned ML strategy needs its own training before it can deploy.
+    # Stated here, in the success response, rather than surfacing later as an
+    # `ML_MODEL_MISSING` refusal the cloner has no explanation for. `requires_training` is
+    # a boolean so a client can branch on it without parsing the message.
+    requires_training = bool(ml_nodes)
+    message = "Strategy cloned into your builder. Ready to customise."
+    if requires_training:
+        message = (
+            "Strategy cloned into your builder. It contains model blocks, and the "
+            "author's trained model is not part of the clone - train it before "
+            "deploying."
+        )
+
     return {
         "new_strategy_id": new_strategy_id,
-        "message": "Strategy cloned into your builder. Ready to customise.",
+        "message": message,
+        "requires_training": requires_training,
     }
 
 

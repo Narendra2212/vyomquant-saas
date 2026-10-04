@@ -37,6 +37,8 @@ from backend_app.core.subscription_dependencies import (
     require_optimization,
 )
 from backend_app.core.subscription_engine import Resource, SubscriptionEngine
+from backend_app.backend.ml_node_types import ML_NODE_TYPES, detect_ml_nodes
+from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.core.event_bus import publish_command, PublishError
 from backend_app.core.rate_limit import limiter
 import ccxt
@@ -93,24 +95,88 @@ async def _persist_trained_model_path(sb: Any, user_id: str, strategy_id: str, m
 # ═══════════════════════════════════════════════════════════════════════════
 
 #: The schema version 1 ``node["type"]`` spellings that denote a model block.
-#: Kept as an explicit set, not an enum, so :func:`_detect_ml_nodes` keeps reading
-#: stored version 1 blueprints byte-for-byte as before; the canonical vocabulary
-#: folds all of these into the single ``ML_DL`` category.
-_LEGACY_ML_NODE_TYPES: frozenset = frozenset({"ml", "dl", "ml_dl", "ml_model"})
+#:
+#: MOVED, NOT REDEFINED. This set used to be declared here, and three other gates -
+#: ``strategy_service.deploy_strategy``, ``library.clone_strategy`` and ``tee/main.py`` -
+#: each inlined their own ``["ml", "dl"]`` instead, so a node typed ``ml_dl`` or
+#: ``ml_model`` was refused on this router's deploy and resume paths and invisible to the
+#: other three. The definition now lives in ``backend/ml_node_types.py``, below the
+#: routers, where all four can share it; this alias is kept because this module's own
+#: tests and comments refer to it by name.
+#: Regression: tests/test_ml_node_detection_is_one_vocabulary.py
+_LEGACY_ML_NODE_TYPES: frozenset = ML_NODE_TYPES
 
 
 def _detect_ml_nodes(nodes: List[Dict]) -> List[Dict]:
     """
     Detect ML/DL nodes in a DAG.
-    
+
     Returns list of ML/DL nodes with their model_id requirements.
+
+    Delegates to the shared detector so this router cannot drift from the other three
+    gates. The shared one also tolerates a malformed ``nodes`` - the version this
+    replaced did ``node.get("type", "")`` on every element and would raise
+    ``AttributeError`` on a node whose ``type`` was a number, which stored blueprints can
+    legitimately contain.
     """
-    ml_nodes = []
-    for node in nodes:
-        node_type = node.get("type", "").lower()
-        if node_type in _LEGACY_ML_NODE_TYPES:
-            ml_nodes.append(node)
-    return ml_nodes
+    return detect_ml_nodes(nodes)
+
+
+def _assert_model_path_storable(ml_model_path: Any) -> None:
+    """Refuse an ``ml_model_path`` this platform would never be allowed to load.
+
+    P1-06. The authoritative control is at the LOAD boundary
+    (``ml_models.resolve_model_artifact_path``, called by every
+    ``load_model_to_memory``), because that is where deserialisation happens and it also
+    covers values already stored and values copied in by the clone paths. This is the
+    second half: refusing the write means the author finds out at save time, with a 422
+    naming the field, instead of at boot time through a log line nobody reads.
+
+    That distinction matters here more than usual. ``fleet_manager._boot_and_run`` catches
+    a boot failure, drops the bot and returns - but the deploy handler has already
+    responded 200 and already written ``strategies.status``, so a refusal discovered at
+    load time leaves the row reading ``running`` with nothing running.
+
+    ``must_exist=False``: a strategy may legitimately be saved before its model is
+    trained, and containment is decidable without the file. No ``extra_roots``: those
+    exist for a block's own server-chosen ``models_dir``, and nothing reachable from a
+    request body may widen the permitted set.
+
+    ``None`` and absence are fine - most strategies carry no model.
+
+    Raises
+        :class:`HTTPException` 422 ``ML_MODEL_PATH_INVALID``.
+    """
+    if ml_model_path is None:
+        return
+
+    from backend_app.backend.ml_models import (
+        MODEL_ARTIFACT_EXTENSIONS,
+        MODEL_ARTIFACT_ROOT_ENV,
+        UnsafeModelPath,
+        resolve_model_artifact_path,
+    )
+
+    try:
+        resolve_model_artifact_path(ml_model_path, must_exist=False)
+    except UnsafeModelPath as e:
+        logger.warning(
+            "[STRATEGIES] Refused an ml_model_path that could not be stored: %s", e
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "ML_MODEL_PATH_INVALID",
+                "message": (
+                    "ml_model_path must name a model artifact inside this server's "
+                    f"model directory (configured by {MODEL_ARTIFACT_ROOT_ENV}) and "
+                    f"carry one of {sorted(MODEL_ARTIFACT_EXTENSIONS)}. Models are "
+                    "produced by training, not supplied by the client."
+                ),
+                "field": "ml_model_path",
+                "reason": str(e),
+            },
+        )
 
 
 def _validate_ml_models_present(blueprint: Dict) -> None:
@@ -1140,6 +1206,10 @@ async def create_strategy(
             compiled.plan.warmup_bars,
         )
 
+    # P1-06: refused before the row is built, so an unstorable path writes nothing. The
+    # column is handed to `joblib.load` by the live bot; see `_assert_model_path_storable`.
+    _assert_model_path_storable(body.get("ml_model_path"))
+
     data = {
         "user_id": user["id"],
         "name": body.get("name", "Unnamed Strategy"),
@@ -1623,6 +1693,15 @@ async def update_strategy(
             }
         )
 
+    # P1-06, and this route is the wider half of that defect. `update_payload = dict(body)`
+    # below carries EVERY key the caller sent straight into the UPDATE — there is no
+    # column allowlist, and the only other field-specific guard in this handler is the
+    # `status` one above. So `{"ml_model_path": "/etc/passwd"}` was stored as sent, on a
+    # column the live bot hands to `joblib.load`. Checked before the payload is assembled,
+    # so a refusal writes nothing. See `_assert_model_path_storable`.
+    if "ml_model_path" in body:
+        _assert_model_path_storable(body.get("ml_model_path"))
+
     # ── The graph half ───────────────────────────────────────────────────────
     # Compiled BEFORE the update is issued, so an invalid graph is refused having changed
     # nothing at all — the same ordering `create_strategy` relies on (Requirements 3.5, 3.6).
@@ -1884,13 +1963,39 @@ async def deploy_bot(
     try:
         if use_tee:
             logger.info(f"[STRATEGIES] Delegating deployment of {strategy_id} to TEE")
+            # The mode travels WITH the command. Both consumers
+            # (`workers/command_worker.py`, `tee/main.py`) now refuse a start_bot command
+            # that does not state it, so omitting it would start nothing rather than start
+            # something in an unestablished mode.
+            #
+            # `True`, for the same reason as the local branch below: this endpoint resolves
+            # no Deployment_Binding and travels no Requirement 13 gate, so nothing here
+            # establishes that live trading was authorised.
+            # Regression: tests/test_live_deployment_mode_propagation.py
             await publish_command(
                 "start_bot", 
-                {"user_id": user["id"], "symbol": symbol, "blueprint": blueprint}
+                {
+                    "user_id": user["id"],
+                    "symbol": symbol,
+                    "blueprint": blueprint,
+                    "paper_trading": True,
+                }
             )
         else:
             logger.info(f"[STRATEGIES] Executing deployment of {strategy_id} locally (Legacy Mode)")
-            success, message = await fleet.start_bot(user["id"], symbol, blueprint)
+            # FORCED PAPER, and not a placeholder.
+            #
+            # This endpoint resolves no Deployment_Binding: it binds no exchange account, no
+            # risk configuration and no mode, and it travels none of the Requirement 13
+            # gates — which is precisely why the frontend was re-pointed off it to
+            # `POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy`.
+            # With nothing establishing that live trading was authorised for this strategy,
+            # on this account, the only honest mode is paper. The gated endpoint is where a
+            # live deployment is made.
+            # Regression: tests/test_live_deployment_mode_propagation.py
+            success, message = await fleet.start_bot(
+                user["id"], symbol, blueprint, paper_trading=True
+            )
 
             if not success:
                 await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
@@ -2944,6 +3049,13 @@ def backtest_internal(payload: dict):
                 "positions": {},
                 "daily_pnl": "0",
             },
+            # BACKTEST: this is the legacy route's portfolio simulation and builds no
+            # exchange executor. Stated explicitly because the engine now refuses a
+            # branch that disagrees with what it was built for - a backtest engine that
+            # somehow acquired an executor would place real orders against historical
+            # signals.
+            # Regression: tests/test_execution_engine_mode_matches_its_branch.py
+            execution_environment=ExecutionEnvironment.BACKTEST,
         )
         risk = RiskEngine(
             initial_capital=initial_capital,
@@ -3639,7 +3751,14 @@ async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_use
     msg = "Resumed successfully"
     
     if hasattr(fleet, "start_bot"):
-        bot_started, msg = await fleet.start_bot(user["id"], symbol, dag_config)
+        # FORCED PAPER. This path resumes from a `strategies` row, which carries no mode
+        # column — the mode lives on `strategy_deployments` and is resolved by the binding
+        # gates, neither of which this handler consults. A resume that cannot establish the
+        # strategy was authorised to trade live must not start it live.
+        # Regression: tests/test_live_deployment_mode_propagation.py
+        bot_started, msg = await fleet.start_bot(
+            user["id"], symbol, dag_config, paper_trading=True
+        )
         if not bot_started:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fleet failed to resume strategy bot: {msg}")
             

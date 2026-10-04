@@ -41,6 +41,7 @@ from backend_app.backend.indicators_backend import (adx, atr,
                                                     stochastic, supertrend,
                                                     trix, vortex_indicator,
                                                     williams_r, wma)
+from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.backend.ml_models import create_ml_block
 from backend_app.core.risk_manager import RiskVerdict, TradeRequest
 from backend_app.backend.strategy_builder import StrategyEngine
@@ -79,11 +80,48 @@ class BotRunner:
     """
 
     def __init__(
-        self, user_id: str, symbol: str, strategy_blueprint: dict, global_state
+        self,
+        user_id: str,
+        symbol: str,
+        strategy_blueprint: dict,
+        global_state,
+        *,
+        paper_trading: bool,
     ):
         self.user_id = user_id
         self.symbol = symbol
         self.blueprint = strategy_blueprint
+
+        # ── THE MODE. REQUIRED, KEYWORD-ONLY, AND NOT READ FROM THE BLUEPRINT ──
+        #
+        # This used to be `self.blueprint.get("paper_trading", True)`, evaluated inside
+        # `_recover_live_state`. NOTHING IN THE CODEBASE EVER WROTE THAT KEY — a repo-wide
+        # search found it at that one read site and nowhere else, and nowhere in the
+        # frontend as a payload field. So the default won on every deployment, and the
+        # entire live path was recorded without being run: `deploy_version` passed every
+        # Requirement 13 gate, checked the LIVE_TRADING entitlement, required and resolved
+        # an exchange account, persisted `strategy_deployments.mode = 'live'`, moved the row
+        # and the version lifecycle to RUNNING — and the runtime returned at the top of the
+        # paper branch before the credentials were even decrypted.
+        #
+        # It failed SAFE, which is why nothing caught fire. But a trader who believes they
+        # are live is not safe, and a platform that reports a live deployment it did not
+        # perform is making a claim it cannot support.
+        #
+        # REQUIRED rather than defaulted, for the reason the defect demonstrates: a default
+        # is what let an absent value decide a money-critical mode with nothing saying so.
+        # `ExecutionEngine.__init__` already refuses an absent `portfolio_state` on the same
+        # grounds. A caller that forgets the mode is now a TypeError at the call site.
+        #
+        # Regression: tests/test_live_deployment_mode_propagation.py
+        if not isinstance(paper_trading, bool):
+            raise ValueError(
+                f"BotRunner requires paper_trading as an explicit bool; got "
+                f"{paper_trading!r}. The mode decides whether this bot can place real "
+                f"orders, so it is resolved by the caller that evaluated the deployment "
+                f"binding and is never inferred here."
+            )
+        self.paper_trading = paper_trading
 
         # ── Global singletons (shared across all bots) ───────────────────
         self.vault = global_state.vault
@@ -141,7 +179,9 @@ class BotRunner:
         from backend_app.backend.data_seeking_engine import DataEngine
         from backend_app.core.execution_engine import ExecutionEngine
 
-        is_paper = self.blueprint.get("paper_trading", True)
+        # The mode this bot was CONSTRUCTED with, not one derived from the blueprint. See
+        # the constructor for what reading it from the blueprint did.
+        is_paper = self.paper_trading
 
         # FIX 2: Paper trading fast-path — skip ALL real CCXT calls.
         # Real exchange I/O can take 30-270s and kills the Gunicorn worker.
@@ -167,7 +207,15 @@ class BotRunner:
                 slippage=0.0005,
                 risk_manager=self.risk_manager,
                 portfolio_state=portfolio_state,
-                exchange_executor=None
+                exchange_executor=None,
+                # PAPER, stated rather than implied by the `exchange_executor=None`
+                # above. That null used to be the only thing keeping this engine's
+                # orders off a real exchange; the engine now refuses the live branch
+                # outright when it was built for paper, so hoisting this construction
+                # or passing an executor by mistake is a refusal instead of a real
+                # order. Regression:
+                # tests/test_execution_engine_mode_matches_its_branch.py
+                execution_environment=ExecutionEnvironment.PAPER,
             )
             logger.info(f"[PAPER] Bot {self.user_id}/{self.symbol} ready (paper mode).")
             return
@@ -224,7 +272,13 @@ class BotRunner:
             slippage=0.0005,
             risk_manager=self.risk_manager,
             portfolio_state=portfolio_state,
-            exchange_executor=exchange_exec
+            exchange_executor=exchange_exec,
+            # LIVE. This branch has already decrypted the account's keys and built a
+            # real exchange executor, so the engine is told so - and the engine now
+            # refuses to fall through to its paper branch if the executor is ever
+            # missing, rather than simulating the fill and reporting it as executed.
+            # Regression: tests/test_execution_engine_mode_matches_its_branch.py
+            execution_environment=ExecutionEnvironment.LIVE,
         )
 
         # 4. Warm up the Numba circular buffer with historical OHLCV
@@ -502,6 +556,38 @@ class BotRunner:
 
                     # ── Execute trade through unified engine ────────────────
                     # execution_engine.execute_with_idempotency is now async
+                    #
+                    # THE MODE TRAVELS WITH THE ORDER (P0-05).
+                    # This call used to omit `execution_environment`, so the parameter's
+                    # `ExecutionEnvironment.LIVE` default applied and
+                    # `assert_live_environment` - which exists to refuse PAPER - passed
+                    # every order through, including a paper bot's. The audit trail then
+                    # recorded a paper order as LIVE, and the only thing keeping it off a
+                    # real exchange was the `exchange_executor=None` on the paper engine.
+                    #
+                    # `self.paper_trading` is a required keyword-only constructor
+                    # argument precisely so this is always established, and it was not
+                    # being passed on. It is now.
+                    #
+                    # WHAT THIS MEANS FOR A PAPER BOT, STATED PLAINLY: the order is
+                    # REFUSED here, and that is Requirement 13.9 working as written -
+                    # "IF the live order path receives an order whose originating
+                    # Execution_Environment is `PAPER`, THEN THE live order path SHALL
+                    # reject the order before issuing any exchange call ... and SHALL
+                    # record the rejection in the Audit_Log." `assert_live_environment`
+                    # audits before it raises, so the record is kept.
+                    #
+                    # A paper bot therefore stops producing simulated executions through
+                    # this funnel. Per Requirement 13.3 it should never have been doing
+                    # so: "WHEN a Paper_Session emits an order intent, THE Paper_Session
+                    # SHALL route that order intent to the Paper_Simulator, AND SHALL NOT
+                    # enqueue, forward or copy that order intent onto the live order
+                    # path." The Paper_Simulator is `backend/paper/paper_simulator.py`
+                    # and is reached by the Paper_Session runtime, not from here. Routing
+                    # this loop's paper mode there is the remaining work; refusing is the
+                    # correct interim state because the alternative is a mislabelled
+                    # order on the live funnel.
+                    # Regression: tests/test_execution_environment_is_stated_not_defaulted.py
                     result = await self.execution_engine.execute_with_idempotency(
                         tenant_id=uuid.UUID(self.user_id),
                         strategy_id=self.blueprint.get("strategy_id", "default"),
@@ -509,7 +595,12 @@ class BotRunner:
                         side=side,
                         size=qty,
                         price=Decimal(str(price)),
-                        source="bot_runner"
+                        source="bot_runner",
+                        execution_environment=(
+                            ExecutionEnvironment.PAPER
+                            if self.paper_trading
+                            else ExecutionEnvironment.LIVE
+                        ),
                     )
 
                     # ── Record execution result ─────────────────────────────

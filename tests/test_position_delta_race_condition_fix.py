@@ -5,7 +5,27 @@ Tests that position delta calculations are protected against race conditions
 using row-level locking (SELECT FOR UPDATE) to prevent position drift.
 
 This test verifies the fix for the critical race condition in position updates.
+
+THE TWO SERVER-BACKED TESTS IN THIS FILE SKIP unless ``DATABASE_URL`` names a PostgreSQL
+server; the two arithmetic tests below them still run everywhere.
+
+``SELECT ... FOR UPDATE`` is the property under test and SQLite has no row locks -- its
+parser rejects the clause (``near "FOR": syntax error``). The ``unit-tests`` job in
+``.github/workflows/01-pr-check.yml`` has no ``DATABASE_URL`` by design, so
+``SessionLocal()`` there is the ``sqlite:///./algo22.db`` fallback and
+``test_position_update_row_level_locking`` failed on every run.
+
+The guard is applied per test rather than as a module-level ``pytestmark`` because
+``test_fill_delta_calculation_correctness`` and ``test_position_update_idempotency`` need
+no database and must keep running in the SQLite lane. This is the same shape
+``tests/test_strategy_lifecycle_concurrency_postgres.py`` uses for the same reason.
+
+See ``tests/test_sqlite_lane_is_greenable.py``, which asserts both that this guard exists
+and that this file is named in the ``database-tests`` job, so skipping here cannot quietly
+become running nowhere.
 """
+
+import os
 
 import pytest
 import threading
@@ -17,7 +37,17 @@ from backend_app.core.database import SessionLocal
 from backend_app.backend.order_watchdog import OrderWatchdog
 from backend_app.core.models.execution_record import ExecutionRecordModel, ExecutionStatus
 
+requires_postgres = pytest.mark.skipif(
+    not os.getenv("DATABASE_URL", "").startswith(("postgresql", "postgres://")),
+    reason=(
+        "needs a real PostgreSQL through DATABASE_URL for SELECT ... FOR UPDATE; "
+        "provided by the database-tests job in .github/workflows/01-pr-check.yml, "
+        "skipped in the SQLite lane"
+    ),
+)
 
+
+@requires_postgres
 def test_position_update_row_level_locking():
     """
     FIN-CRITICAL-002: Verify that position updates use row-level locking.
@@ -42,12 +72,31 @@ def test_position_update_row_level_locking():
         session.close()
 
 
+@requires_postgres
 def test_concurrent_position_update_safety():
     """
     FIN-CRITICAL-002: Test that concurrent position updates are safe.
-    
+
     This test simulates concurrent reconciliation workers processing the same
     order to verify that row-level locking prevents duplicate position updates.
+
+    THIS TEST ASSERTED NOTHING UNTIL THE ASSERTIONS AT THE BOTTOM WERE ADDED. It
+    collected every exception into ``errors``, printed a count, and ended. On SQLite all
+    five workers failed with ``near "FOR": syntax error`` and the test still reported
+    success -- it would have passed against a database with no ``positions`` table, no
+    row locks and no concurrency control of any kind. The two assertions below are what
+    make the run meaningful, and ``@requires_postgres`` is what stops them from failing
+    in the SQLite lane where the statement cannot be parsed at all.
+
+    WHAT THIS ESTABLISHES AND WHAT IT DOES NOT. ``FOR UPDATE`` without ``NOWAIT`` or
+    ``SKIP LOCKED`` blocks rather than erroring, and there is a single lock target, so a
+    correct server serialises all five workers and none of them fails: ``errors`` empty
+    and five results is the right expectation, and a deadlock or a rejected lock request
+    now reds the test instead of being counted as "handled". What it does not establish
+    is that any row was actually locked -- ``positions`` may be empty in the provisioned
+    schema, and ``SELECT ... FOR UPDATE`` matching zero rows succeeds while locking
+    nothing. Proving mutual exclusion needs a seeded row and an interleaving check; that
+    is a larger test than this one and is not claimed here.
     """
     results = []
     errors = []
@@ -90,12 +139,16 @@ def test_concurrent_position_update_safety():
     for thread in threads:
         thread.join()
     
-    # Verify no deadlocks or lock acquisition failures
-    # Note: Some lock conflicts are expected and should be handled gracefully
-    print(f"✓ Concurrent position updates completed: {len(results)} successful, {len(errors)} handled")
-    
-    # The test passes if we don't have catastrophic failures
-    # Some lock conflicts are expected and should be handled by the system
+    # Verify no deadlocks or lock acquisition failures. `FOR UPDATE` without NOWAIT or
+    # SKIP LOCKED blocks instead of erroring and there is one lock target, so a correct
+    # server serialises all five workers and none of them raises.
+    assert errors == [], (
+        f"concurrent FOR UPDATE position updates should all succeed by blocking, but "
+        f"{len(errors)} of 5 workers failed: {errors}"
+    )
+    assert sorted(results) == [0, 1, 2, 3, 4], (
+        f"all 5 workers should have acquired the lock and committed; got {sorted(results)}"
+    )
 
 
 def test_fill_delta_calculation_correctness():

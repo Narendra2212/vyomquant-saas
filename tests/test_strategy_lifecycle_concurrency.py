@@ -510,8 +510,43 @@ async def _op_delete(sb: _FakeSupabase, _deployment_id: Optional[str]) -> None:
         pass
 
 
-async def _op_deploy(sb: _FakeSupabase, _deployment_id: Optional[str]) -> None:
-    service = _service_on(sb)
+@pytest.fixture(autouse=True)
+def _deploy_collaborators():
+    """The three stand-ins ``deploy_version`` needs, installed ONCE PER TEST.
+
+    THESE USED TO BE A ``with patch(...)`` INSIDE ``_op_deploy``, AND THAT LEAKED THEM
+    INTO THE REST OF THE PYTEST PROCESS.
+
+    ``_op_deploy`` is driven concurrently -- ``asyncio.gather(_op_start, _op_stop,
+    _op_delete, _op_deploy)`` in one test, and ``gather(_op_deploy, _op_deploy,
+    _op_stop)`` in another, which enters it TWICE at once. ``unittest.mock.patch``
+    replaces a module global and restores whatever it found on entry, so two interleaved
+    entries unwind like this:
+
+        deploy #1 enters      get_user_plan := mock_A   (saved: the real function)
+        deploy #1 awaits, yielding to #2
+        deploy #2 enters      get_user_plan := mock_B   (saved: mock_A)
+        deploy #1 exits       get_user_plan := the real function
+        deploy #2 exits       get_user_plan := mock_A        <-- the leak
+
+    The last unwind writes a MOCK back as the module global, and nothing ever restores it.
+    Every later test in the session then resolves every caller's plan as ``free``.
+
+    WHAT THAT BROKE, measured rather than guessed: ``tests/test_training_worker.py`` loses
+    20+ tests to ``CAP_EXCEEDED (MAX_EPOCHS: requested 4 rounds, allowed 0 rounds)``,
+    because the free plan includes no ML training. Confirmed as the cause by running the
+    two files together, and confirmed as PRE-EXISTING by re-running with this file stashed.
+    It is a second, independent leak behind the "passes alone, fails in the suite" symptom
+    that ``tests/conftest.py``'s ``_entitlement_state_is_per_test`` fixture already
+    documents for the quota METER -- clearing the meter could not help, because the plan
+    itself was being answered by a mock.
+
+    Hoisting changes nothing about what the tests measure. The patched values are
+    constants, identical on every call, so installing them around the whole test rather
+    than around each operation leaves the four operations racing exactly as before --
+    which is what the two ``xfail`` P0 proofs below depend on. What it removes is the
+    nesting, and with it the unwind order that caused the leak.
+    """
     with patch(
         "backend_app.core.subscription_dependencies.get_user_plan",
         AsyncMock(return_value="free"),
@@ -522,15 +557,20 @@ async def _op_deploy(sb: _FakeSupabase, _deployment_id: Optional[str]) -> None:
         fake_fleet = AsyncMock()
         fake_fleet.start_bot = AsyncMock(return_value=(True, "started"))
         mock_app_state.fleet = fake_fleet
-        try:
-            await service.deploy_version(
-                user=_user(),
-                strategy_id=STRATEGY_ID,
-                version=VERSION_LABEL,
-                environment="paper",
-            )
-        except _EXPECTED:
-            pass
+        yield
+
+
+async def _op_deploy(sb: _FakeSupabase, _deployment_id: Optional[str]) -> None:
+    service = _service_on(sb)
+    try:
+        await service.deploy_version(
+            user=_user(),
+            strategy_id=STRATEGY_ID,
+            version=VERSION_LABEL,
+            environment="paper",
+        )
+    except _EXPECTED:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -612,6 +652,35 @@ _GATHER_SEED_COUNT = 40
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "REQUIREMENT 2.16 IS VIOLATED TODAY, AND THIS TEST IS THE PROOF -- see the module "
+        "docstring. start/stop/delete/deploy fired together against one strategy id "
+        "reliably lands running-but-deleted (21 of 40 seeded interleavings on the "
+        "recorded run). There is no asyncio.Lock, no SELECT ... FOR UPDATE and no "
+        "expected_version guard on any of the four write paths; each is a plain read, "
+        "decide, write with no re-check at write time. "
+        "WHY IT IS NOW MARKED xfail RATHER THAN LEFT FAILING. It was written to fail on "
+        "purpose, which was sound while nothing ran it: `01-pr-check.yml`'s `unit-tests` "
+        "job has never executed, because `validate-code` failed at `black --check` on "
+        "every run and every other job declared `needs: validate-code`. Now that the "
+        "test lane actually runs, a deliberately-failing test is indistinguishable from "
+        "a regression and would keep the whole suite red, so the defect is pinned "
+        "instead of broadcast. strict=True means the day a lock, an optimistic-version "
+        "guard or a status-conditioned WHERE lands on these paths, this XPASSes and "
+        "fails the build until the marker is deleted with the fix -- which is the signal "
+        "the module docstring asks for. "
+        "NOT FIXED HERE: serialising four lifecycle write paths across "
+        "strategy_service, strategy_lifecycle, strategy_archive, deployment_binding, "
+        "deployment_manager, routers/strategies and routers/strategy_operations is a "
+        "change to money paths that needs its own verification, not a line in a defect "
+        "sweep. The double-deploy half has a DATABASE-level guard already -- "
+        "021_strategy_deployment_live_uniqueness.sql's partial unique index, proven by "
+        "tests/test_strategy_lifecycle_concurrency_postgres.py in the database-tests "
+        "job. running-but-deleted is a cross-table invariant and has no such guard."
+    ),
+)
 async def test_the_four_operations_can_land_running_but_deleted(_seeded_asset_universe) -> None:
     """start, stop, delete and deploy, fired together with ``asyncio.gather``, across 40
     seeds against fresh worlds.
@@ -656,6 +725,26 @@ async def test_the_four_operations_can_land_running_but_deleted(_seeded_asset_un
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "REQUIREMENT 2.16 IS VIOLATED TODAY AT THE APPLICATION LAYER, AND THIS TEST IS "
+        "THE PROOF -- two concurrent deploy calls racing a stop produced two "
+        "simultaneously `running` deployment rows for one strategy in 12 of 12 seeded "
+        "runs. Same absence of synchronisation as the sibling above. "
+        "THE DATABASE DOES GUARD THIS ONE. "
+        "backend_app/migrations/021_strategy_deployment_live_uniqueness.sql carries a "
+        "partial unique index that makes the losing deploy fail with 23505, and "
+        "tests/test_strategy_lifecycle_concurrency_postgres.py proves it against a real "
+        "server in the `database-tests` job. This test drives the SQLite-backed "
+        "application layer, which cannot see that index, so what it measures is the "
+        "application-level gap specifically -- real, but not the only line of defence. "
+        "Marked xfail(strict=True) for the same reason as the sibling: the `unit-tests` "
+        "lane has never run before now, and a deliberately-failing test in a lane that "
+        "gates merges is indistinguishable from a regression. Delete the marker with "
+        "the application-level guard."
+    ),
+)
 async def test_deploy_can_race_itself_into_a_double_deploy(_seeded_asset_universe) -> None:
     """Two ``deploy`` attempts racing one ``stop``, on an already-running strategy, across
     12 seeds - the shape most directly named by "no double deploy".

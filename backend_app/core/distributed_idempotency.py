@@ -199,6 +199,46 @@ def _is_production() -> bool:
     return os.getenv("ENV", "development").lower() == "production"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE PROCESSING-LOCK MARKER — ONE DEFINITION
+#
+#  A value stored under an idempotency key is one of two things: a completed result (JSON),
+#  or a lock saying "a worker is mid-flight on this". Telling them apart is a prefix test,
+#  and that test is made in FOUR languages' worth of places: three Python f-strings here,
+#  a `startswith` in `core/cache/redis_manager.py`'s in-memory `eval_lua`, and a
+#  `string.sub` in the Lua script below.
+#
+#  They disagreed. The Lua compared `string.sub(current_value, 1, 7)` — seven characters,
+#  `"process"` — against the ten-character literal `'processing'`. Those can never be
+#  equal, so `~=` was TRUE for every non-nil value: a live lock was returned as a cached
+#  result, the script's own `return {0, false}` branch became unreachable, and the caller
+#  reported an ordinary contended lock as "Invalid cached value" after `json.loads` raised
+#  on it. It failed safe only by accident of that exception.
+#
+#  Nothing caught it because the in-memory `eval_lua` IGNORES its `script` argument and
+#  reimplements the decision in Python — correctly. So every test on this path measured the
+#  mock while the production script went unexecuted.
+#
+#  Hence one definition, passed INTO the script as an argument rather than restated inside
+#  it, with the compared length derived from it by Lua's `#` operator. A future edit cannot
+#  reintroduce a length that disagrees with the prefix, because there is no longer a length
+#  to edit. Regression: tests/test_idempotency_lua_prefix_agreement.py
+# ══════════════════════════════════════════════════════════════════════════
+
+#: What identifies a stored value as a processing lock rather than a result.
+#:
+#: Deliberately WITHOUT the colon. Two lock forms exist: the bare ``"processing"`` written by
+#: older callers (``check_idempotency`` still recognises it explicitly) and
+#: ``"processing:<owner_token>"`` written by the lock acquirers below. A marker without the
+#: colon is a prefix of both, so one test covers both forms — which is also exactly what the
+#: in-memory mock's ``startswith('processing')`` already did.
+PROCESSING_LOCK_MARKER = "processing"
+
+#: What a NEW lock is written as. The owner token is appended so a releaser can prove the
+#: lock is its own (see :meth:`DistributedIdempotency.release_processing`).
+PROCESSING_LOCK_PREFIX = f"{PROCESSING_LOCK_MARKER}:"
+
+
 class DuplicateOrderError(Exception):
     """
     Raised when a duplicate order is detected via idempotency check.
@@ -347,7 +387,9 @@ class DistributedIdempotencyLayer:
             # Key exists - decode value
             value_str = existing_value.decode() if isinstance(existing_value, bytes) else str(existing_value)
             
-            if value_str == "processing" or value_str.startswith("processing:"):
+            if value_str == PROCESSING_LOCK_MARKER or value_str.startswith(
+                PROCESSING_LOCK_PREFIX
+            ):
                 # Another pod/worker is currently processing this request
                 logger.info(f"STEP 2: Request {key} is being processed by another pod")
                 return IdempotencyResult(
@@ -434,19 +476,26 @@ class DistributedIdempotencyLayer:
             Tuple of (cached_result: Optional[dict], lock_acquired: bool)
         """
         key = self._generate_key(tenant_id, client_order_id, exchange_id)
-        lock_payload = f"processing:{owner_token}"
+        lock_payload = f"{PROCESSING_LOCK_PREFIX}{owner_token}"
         
         # Redis Lua script for atomic check-and-set
+        #
+        # `lock_marker` arrives as ARGV[3] and the compared length is `#lock_marker`, so the
+        # prefix and the number of characters tested against it are the SAME value. The
+        # previous form hardcoded `1, 7` against the literal `'processing'` (10 characters),
+        # which made the comparison constant and the final branch unreachable. See the
+        # PROCESSING-LOCK MARKER block above.
         lua_script = """
         local key = KEYS[1]
         local lock_payload = ARGV[1]
         local processing_ttl = ARGV[2]
+        local lock_marker = ARGV[3]
         
         -- Check if key exists
         local current_value = redis.call('GET', key)
         
         -- If key exists and is a completed result, return it
-        if current_value and string.sub(current_value, 1, 7) ~= 'processing' then
+        if current_value and string.sub(current_value, 1, #lock_marker) ~= lock_marker then
             return {1, current_value}  -- Return cached result
         end
         
@@ -456,7 +505,7 @@ class DistributedIdempotencyLayer:
             return {0, lock_payload}  -- Lock acquired
         end
         
-        -- Key exists and is processing - lock not acquired
+        -- Key exists and is processing - lock not acquired. Reachable now; it was not.
         return {0, false}
         """
         
@@ -464,7 +513,7 @@ class DistributedIdempotencyLayer:
             result = await redis_manager.eval_lua(
                 lua_script,
                 keys=[key],
-                args=[lock_payload, str(self.PROCESSING_TTL)]
+                args=[lock_payload, str(self.PROCESSING_TTL), PROCESSING_LOCK_MARKER]
             )
             
             # Parse Lua script result
@@ -513,7 +562,7 @@ class DistributedIdempotencyLayer:
         from uuid import uuid4
         token = owner_token or str(uuid4())
         key = self._generate_key(tenant_id, client_order_id, exchange_id)
-        lock_payload = f"processing:{token}"
+        lock_payload = f"{PROCESSING_LOCK_PREFIX}{token}"
         
         try:
             res = await redis_manager.set(key, lock_payload, ex=self.PROCESSING_TTL, nx=True)
@@ -546,7 +595,7 @@ class DistributedIdempotencyLayer:
         unintentionally deleting another worker's new lock if TTL expired.
         """
         key = self._generate_key(tenant_id, client_order_id, exchange_id)
-        expected_val = f"processing:{owner_token}"
+        expected_val = f"{PROCESSING_LOCK_PREFIX}{owner_token}"
         try:
             curr_val = await redis_manager.get(key)
             if curr_val is None:

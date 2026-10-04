@@ -111,6 +111,17 @@ BACKTEST_PAYLOAD_EMITTED_KEYS = frozenset(
 )
 
 
+class BacktestEngineUnavailable(RuntimeError):
+    """The simulation could not be performed, so no result is returned.
+
+    Distinct from ``ValueError``, which this engine already uses for inputs it refuses (too
+    few bars, zero signals, an unrecognised timeframe) and which ``strategy_operations``
+    maps onto 422 ``BACKTEST_NOT_RUNNABLE``. This one is not the caller's fault: the
+    environment cannot run a backtest at all, so it is a ``RuntimeError`` and should surface
+    as a 5xx rather than being reported to a user as a bad request.
+    """
+
+
 class BacktestEngine:
 
     def __init__(
@@ -245,75 +256,43 @@ class BacktestEngine:
             )
 
         if not has_vbt:
-            # Fallback pandas calculation when vectorbt is not installed
-            n = len(price_data)
-            returns = price_data.pct_change().fillna(0)
-            
-            # Convert tech_long / tech_short to Series
-            long_s = pd.Series(tech_long, index=price_data.index).astype(bool)
-            short_s = pd.Series(tech_short, index=price_data.index).astype(bool)
-            
-            position = long_s.astype(int) - short_s.astype(int)
-            position = position.cumsum().clip(0, 1)
-            strategy_returns = position.shift(1).fillna(0) * returns - (long_s.astype(int) * self.fees)
-            cum_returns = (1 + strategy_returns).cumprod()
-            
-            if len(cum_returns) > 0:
-                final_val = float(cum_returns.iloc[-1])
-            else:
-                final_val = 1.0
-            
-            final_equity = float(self.initial_capital * final_val)
-            total_return_pct = float((final_val - 1) * 100)
-            
-            trades_count = int(long_s.sum())
-            win_count = int((strategy_returns > 0).sum())
-            win_rate = (win_count / trades_count) if trades_count > 0 else 0.0
-            
-            std_ret = strategy_returns.std()
-            sharpe = (strategy_returns.mean() / std_ret * (252 ** 0.5)) if std_ret > 0 else 0.0
-            
-            peak = cum_returns.cummax()
-            dd = (cum_returns - peak) / peak
-            max_dd = float(abs(dd.min()) * 100)
-
-            # ── The win/loss split on this path ───────────────────────────
-            # This branch extracts no per-trade records (``trades`` is ``[]`` below), so the
-            # split cannot come from per-trade net P&L the way the VectorBT path's does. It
-            # is derived instead from the two figures this branch already publishes -
-            # ``win_rate_pct`` and ``total_trades`` determine it by definition - so the three
-            # agree with each other. Emitted here as well as on the primary path because a
-            # key present on only one engine path is exactly how the equity curve came to be
-            # path-dependent, and a deployment without VectorBT runs this one.
-            total_trades_reported = max(trades_count, 1)
-            winning_trades = min(
-                int(round(win_rate * total_trades_reported)), total_trades_reported
+            # ── REFUSE. The fallback that used to live here FABRICATED a result. ──
+            #
+            # It returned a complete payload with the same keys and types as a real one, so
+            # nothing downstream could tell them apart — and `backtest_runtime` persists
+            # whatever it receives into `strategy_backtests`, whose `backtest_*` columns
+            # `routers/library.py`'s publish path copies onto a `library_strategies` row,
+            # which `listing_projection` then serves as a listing's PUBLIC
+            # `performance_summary` and `risk_metrics`. So the invented figures did not stay
+            # in the backtest; they were publishable as a strategy's measured track record.
+            #
+            # What it invented:
+            #   profit_factor      the literal 1.5, derived from nothing
+            #   sortino_ratio      sharpe * 1.1 — Sortino is not a multiple of Sharpe
+            #   total_fees_paid    trades_count * fee_rate * initial_capital, an estimate
+            #                      in the field the real path fills from portfolio.stats()
+            #   trades             [], so winning/losing counts were back-derived from a
+            #                      win rate rather than from per-trade net P&L
+            #   win_rate_pct       winning BARS / trade COUNT. On a 120-bar series with one
+            #                      trade and 70 up-bars this reported 7000.0 percent.
+            # And it applied no stop-loss, no take-profit, no slippage and no spread, while
+            # the real path passes sl_stop/tp_stop/slippage to vbt.Portfolio.from_signals.
+            #
+            # Refusing is safe: `vectorbt==0.26.2` is pinned in requirements-base.txt, so
+            # this branch is unreachable in any correctly provisioned environment. One where
+            # it IS reachable has broken dependencies — a case where an error is the useful
+            # answer and an invented track record is the harmful one.
+            # Regression: tests/test_backtest_engine_refuses_without_vectorbt.py
+            raise BacktestEngineUnavailable(
+                "vectorbt is not importable, so this backtest cannot be simulated. No "
+                "result is returned: the previous fallback produced a plausible but "
+                "fabricated one (a literal profit factor, a Sortino derived as Sharpe x "
+                "1.1, an estimated fee total, a win rate computed over bars rather than "
+                "trades, and no stop-loss, take-profit, slippage or spread), and those "
+                "figures are persisted to strategy_backtests and republished as a "
+                "marketplace listing's performance. Install the pinned dependency "
+                "(vectorbt==0.26.2, requirements-base.txt) and re-run."
             )
-
-            results = {
-                "total_return_pct": round(total_return_pct, 4),
-                "final_equity": round(final_equity, 4),
-                # Emitted on this path too, and for a reason beyond symmetry: the runtime's
-                # ``recovery_factor`` and ``average_trade`` are derived from it, and a
-                # deployment without VectorBT runs this branch. A key present on only one
-                # engine path is how the equity curve came to be path-dependent (:243).
-                "total_pnl": round(float(final_equity - self.initial_capital), 4),
-                "win_rate_pct": round(win_rate * 100, 4),
-                "max_drawdown_pct": round(max_dd, 4),
-                "total_trades": total_trades_reported,
-                "winning_trades": winning_trades,
-                "losing_trades": total_trades_reported - winning_trades,
-                "profit_factor": 1.5 if trades_count > 0 else 0.0,
-                "sharpe_ratio": round(sharpe, 4),
-                "sortino_ratio": round(sharpe * 1.1, 4),
-                "calmar_ratio": round(total_return_pct / (max_dd + 0.01), 4),
-                "total_fees_paid": round(float(trades_count * self.fees * self.initial_capital), 4),
-                "expectancy": round(float(total_return_pct / max(trades_count, 1)), 4),
-            }
-            equity_curve = [{"timestamp": str(ts), "equity": float(val * self.initial_capital)} for ts, val in cum_returns.items()]
-            results["equity_curve"] = equity_curve
-            results["trades"] = []  # Fallback has no detailed trade data
-            return results, equity_curve
 
         # ── Align arrays to price_data length ────────────────────────────
         n = len(price_data)
@@ -338,27 +317,82 @@ class BacktestEngine:
         tech_long = tech_long.astype(bool)
         tech_short = tech_short.astype(bool)
         
-        # Position-aware entry/exit logic
-        # Exits only execute when position is open
+        # ── POSITION-AWARE ENTRY/EXIT SELECTION ───────────────────────────
+        # Act on an entry only when flat, and on an exit only when long. That was always
+        # the stated intent -- the two comments inside the loop below are the originals --
+        # but it was expressed as
+        #
+        #     position   = entries_raw.cumsum() - exits_raw.cumsum()
+        #     tech_long  = entries_raw & (position == 0)
+        #     tech_short = exits_raw   & (position > 0)
+        #
+        # and that is wrong twice over.
+        #
+        # FIRST, `cumsum` at bar i includes bar i. On the bar an entry fired the entry had
+        # already been counted, so `position >= 1` and `position == 0` was false: EVERY
+        # ENTRY WAS DISCARDED. On the bar an exit fired against one open position the exit
+        # had been counted too, giving `position == 0`, so `position > 0` was false and
+        # every exit was discarded as well. Nothing reached
+        # `vbt.Portfolio.from_signals`, `np.all(np.isnan(sizes))` held, and the engine
+        # raised "Strategy generated 0 signals" -- which `execute_backtest` answers as
+        # 422 BACKTEST_NOT_RUNNABLE. The canonical backtest route therefore could not
+        # return a result for any strategy that opens with an entry, which is every
+        # ordinary long strategy. Measured over 240 bars with a long every 8th bar and a
+        # short on the next: 30 entries and 30 exits in, 0 and 0 out.
+        #
+        # The one shape that got through was a series emitting an exit BEFORE its first
+        # entry, because the leading exit made the two cumsums equal at the first entry
+        # bar. `tests/test_backtest_key_contract.py::_conditions` is built that way and
+        # its docstring records the ordering as "mandatory, not stylistic" -- it was
+        # working around this line.
+        #
+        # SECOND, and the reason shifting the cumsum by one bar is not the fix either: the
+        # counter is built from the RAW signals, so a signal that gets discarded still
+        # moves it. A leading exit arriving while flat is dropped, yet still decrements the
+        # running total, biasing it to -1 for the rest of the series so that `position == 0`
+        # never holds again. Whether a signal is acted on depends on the position, and the
+        # position depends on which signals were acted on; a cumulative sum over the raw
+        # inputs cannot express that. It is sequential by nature, so it is written
+        # sequentially here. At most 10,000 bars reach this point (`backtest_runtime`'s
+        # fetch limit), which is microseconds next to the simulation that follows.
+        # Regression: tests/test_backtest_signal_path_integrity.py
         entries_raw = tech_long.copy()
         exits_raw = tech_short.copy()
-        
-        # Create position state tracking
-        position = entries_raw.cumsum() - exits_raw.cumsum()
-        
-        # Valid entries: only when no position open
-        tech_long = entries_raw & (position == 0)
-        
-        # Valid exits: only when position is open
-        tech_short = exits_raw & (position > 0)
-        
-        # Cleanup
-        tech_long = tech_long.fillna(False)
-        tech_short = tech_short.fillna(False)
-        
-        # Ensure boolean type
-        tech_long = tech_long.astype(bool)
-        tech_short = tech_short.astype(bool)
+
+        entry_flags = entries_raw.to_numpy(dtype=bool, copy=True)
+        exit_flags = exits_raw.to_numpy(dtype=bool, copy=True)
+        kept_entries = np.zeros(n, dtype=bool)
+        kept_exits = np.zeros(n, dtype=bool)
+        holding = False
+        for bar in range(n):
+            # Valid entries: only when no position open
+            if entry_flags[bar] and not holding:
+                kept_entries[bar] = True
+                holding = True
+            # Valid exits: only when position is open
+            #
+            # `elif`, so a bar carrying BOTH an entry and an exit resolves to whichever
+            # one the current position admits -- the entry when flat, the exit when long --
+            # rather than to both. The DAG path cannot produce such a bar, because
+            # `backtest_runtime` derives `entries = signals > 0` and `exits = signals < 0`
+            # from one series, but a direct caller of this engine can, and silently
+            # counting it as an open and a close on the same bar would be worse than
+            # picking one and saying so.
+            elif exit_flags[bar] and holding:
+                kept_exits[bar] = True
+                holding = False
+
+        tech_long = pd.Series(kept_entries, index=entries_raw.index)
+        tech_short = pd.Series(kept_exits, index=exits_raw.index)
+
+        logger.info(
+            "[BACKTEST] Position filter: entries %d -> %d, exits %d -> %d (%s at series end)",
+            int(entry_flags.sum()),
+            int(kept_entries.sum()),
+            int(exit_flags.sum()),
+            int(kept_exits.sum()),
+            "holding" if holding else "flat",
+        )
         
         logger.info(f"[DEBUG] price_data index: {price_data.index[:5].tolist()}")
         logger.info(f"[DEBUG] tech_long index: {tech_long.index[:5].tolist()}")
@@ -369,28 +403,88 @@ class BacktestEngine:
         logger.info(f"[DEBUG] Position-aware exit signals: {tech_short.sum()}")
 
         # ── ML Predictions ────────────────────────────────────────────────
-        if model_path and str(model_path).strip() and os.path.exists(model_path):
+        # `has_model` is carried rather than inferred from the array below, because the
+        # absence of a model used to be encoded as `np.ones(n)` and that sentinel was
+        # indistinguishable from a model that predicted 1.0 everywhere. The gate needs to
+        # know which it is; see the next block.
+        has_model = bool(
+            model_path and str(model_path).strip() and os.path.exists(model_path)
+        )
+        if has_model:
             ml_predictions = self._generate_ml_predictions(
                 model_path, feature_matrix[-n:]
             )
         else:
-            ml_predictions = np.ones(n, dtype=float)
+            ml_predictions = None
 
         # ── Position Sizing ───────────────────────────────────────────────
         sizes = np.full(n, np.nan, dtype=float)  # NaN = hold
         trade_size = params.get("trade_size_pct", 0.10)
-        ml_threshold = float(np.clip(params.get("ml_threshold", 0.80), 0.5, 0.99))
 
-        long_mask = tech_long & (ml_predictions >= ml_threshold)
-        short_mask = tech_short & (ml_predictions <= (1.0 - ml_threshold))
+        # ── THE ML GATE IS NOT IN FORCE WITHOUT A MODEL ───────────────────
+        # It used to be applied unconditionally against `ml_predictions = np.ones(n)`,
+        # the stand-in for "no ML opinion". The long leg passed (1.0 >= 0.80) but the
+        # short leg read
+        #
+        #     short_mask = tech_short & (ml_predictions <= (1.0 - ml_threshold))
+        #
+        # which with predictions of 1.0 needs `ml_threshold <= 0`, and the threshold was
+        # clipped to [0.5, 0.99]. So EVERY EXIT SIGNAL THE STRATEGY PRODUCED WAS
+        # DISCARDED, at every permitted threshold, on every backtest -- `backtest_runtime`
+        # passes `model_path=""` on its only call, so no backtest has ever had a model.
+        # Positions could then only be closed by the stop-loss or the take-profit, which
+        # `backtest_runtime` also hardcodes. A 240-bar run with 30 entry and 30 exit
+        # signals reported 16 trades and +4.41%, and not one of those trades was closed by
+        # the strategy's own sell logic.
+        #
+        # Worse than a wrong number: the payload is persisted to `strategy_backtests`, and
+        # `routers/library.py`'s publish path copies those columns onto `library_strategies`
+        # for `listing_projection` to serve as a listing's public track record. So the
+        # figures for a strategy whose exits were thrown away were publishable as measured
+        # performance.
+        #
+        # A sentinel for "no information" must not veto anything. With no model the
+        # technical conditions stand on their own, which is what a backtest of a
+        # non-ML strategy means. Nothing about the gate changes when a model IS loaded.
+        # Regression: tests/test_backtest_signal_path_integrity.py
+        if has_model:
+            ml_threshold = float(np.clip(params.get("ml_threshold", 0.80), 0.5, 0.99))
+            long_mask = np.asarray(tech_long & (ml_predictions >= ml_threshold), dtype=bool)
+            short_mask = np.asarray(
+                tech_short & (ml_predictions <= (1.0 - ml_threshold)), dtype=bool
+            )
+        else:
+            long_mask = np.asarray(tech_long, dtype=bool)
+            short_mask = np.asarray(tech_short, dtype=bool)
+
+        logger.info(
+            "[BACKTEST] ML gate %s: entries %d -> %d, exits %d -> %d",
+            "applied" if has_model else "NOT APPLIED (no model supplied)",
+            int(np.asarray(tech_long, dtype=bool).sum()),
+            int(long_mask.sum()),
+            int(np.asarray(tech_short, dtype=bool).sum()),
+            int(short_mask.sum()),
+        )
 
         sizes = np.where(long_mask, trade_size, sizes)
         sizes = np.where(short_mask, -trade_size, sizes)
 
         if np.all(np.isnan(sizes)):
+            # The old message advised "try lowering the ML threshold", which was
+            # unreachable advice on the path that produced this error: with no model no
+            # threshold admits an exit, and the threshold is not consulted at all now.
+            # Naming the counts instead, so the reader can see whether the strategy
+            # produced nothing or whether something downstream removed it.
             raise ValueError(
-                "Strategy generated 0 signals. "
-                "Try lowering the ML threshold or relaxing technical conditions."
+                "Strategy generated 0 signals. The strategy produced "
+                f"{int(np.asarray(tech_long, dtype=bool).sum())} entry and "
+                f"{int(np.asarray(tech_short, dtype=bool).sum())} exit signals that were "
+                "open/close-consistent"
+                + (
+                    f", and the ML gate at threshold {ml_threshold} admitted none of them."
+                    if has_model
+                    else " -- relax the technical conditions or widen the date range."
+                )
             )
 
         # ── VectorBT Execution ────────────────────────────────────────────
@@ -410,10 +504,20 @@ class BacktestEngine:
         logger.info(f"[BACKTEST] Minimum trade size: ${self.min_trade_size:.2f}")
         
         # Log realistic execution parameters
+        # These lines describe what is ACTUALLY passed to vbt.Portfolio.from_signals below.
+        #
+        # They used to claim two cost models that were not in force. "Slippage applied:
+        # random.uniform(0.999, 1.001)" named `_apply_realistic_slippage`, which is defined
+        # and never called — VectorBT applies the deterministic `slippage=` argument
+        # instead. And "Spread applied: ..." named `_apply_spread`, likewise never called:
+        # `self.spread` reaches no simulation at all, so no spread is modelled. A log line
+        # asserting a cost model the run does not use is the same fabrication as an invented
+        # metric, in a different output stream.
+        # Regression: tests/test_backtest_engine_refuses_without_vectorbt.py
         print(f"💰 Equity: ${initial_equity:.2f}")
         print(f"💸 Fee applied: {self.fees:.4f} ({self.fees*100:.2f}%)")
-        print("📉 Slippage applied: random.uniform(0.999, 1.001)")
-        print(f"📊 Spread applied: {self.spread:.4f} ({self.spread*100:.2f}%)")
+        print(f"📉 Slippage applied by VectorBT: {self.slippage:.4f} ({self.slippage*100:.2f}%)")
+        print("📊 Spread: NOT modelled on this path (self.spread reaches no simulation)")
         
         # Convert sizes to entry/exit signals for from_signals
         entries = sizes > 0

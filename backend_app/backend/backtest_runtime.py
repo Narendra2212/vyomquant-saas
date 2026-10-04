@@ -45,6 +45,170 @@ from backend_app.backend.backtest_service import BacktestService
 logger = logging.getLogger("BacktestRuntime")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  PER-TRADE RISK  (P1-07)
+#
+#  These three quantities decide the simulation: ``trade_size_pct`` becomes
+#  ``size=..., size_type="percent"`` on ``vbt.Portfolio.from_signals``, and the
+#  other two become ``sl_stop`` and ``tp_stop``. They were written into
+#  ``run_backtest`` as bare literals, so every backtest simulated 10% of
+#  capital per trade behind a 5% stop and a 15% target no matter what the
+#  strategy was configured to do.
+#
+#  The LIVE path reads the same three off the strategy's own ``risk`` block
+#  (``strategy_builder.StrategyEngine.run_logic``), so the backtester was
+#  reporting the track record of a strategy that would not be the one trading.
+#  For a runtime whose stated purpose is to run the same pipeline as the live
+#  path, that is the defect.
+#
+#  WHERE THE CONFIG LIVES. On ``strategies.risk`` (JSONB, migration 020), not
+#  on the version. ``strategy_versions`` has no risk column and its
+#  ``blueprint`` holds a serialized ``StrategyGraph`` -
+#  ``CompiledVersion.canonical_columns`` asserts its keys are exactly the ten
+#  ``CANONICAL_VERSION_COLUMNS``, none of them risk-bearing. The backtest route
+#  already holds the strategy row, because ``get_strategy`` selects ``*``.
+#
+#  Regression: tests/test_backtest_risk_configuration_provenance.py
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The keys read off ``strategies.risk``. These are the LIVE path's own spellings, taken
+#: from ``strategy_builder.StrategyEngine.run_logic``, which subscripts
+#: ``risk_cfg["position_size_pct"]`` and reads ``.get("stop_loss_pct")`` /
+#: ``.get("take_profit_pct")``. Declared as constants so the backtester cannot drift onto
+#: a second spelling of the same column and silently disagree with the live runtime again.
+#: Note the asymmetry is real and deliberate: the column says ``position_size_pct`` while
+#: the simulator's parameter is ``trade_size_pct``.
+RISK_KEY_TRADE_SIZE = "position_size_pct"
+RISK_KEY_STOP_LOSS = "stop_loss_pct"
+RISK_KEY_TAKE_PROFIT = "take_profit_pct"
+
+#: What a backtest applies when the strategy declares nothing. These are the values that
+#: were hardcoded, kept verbatim so that repairing the plumbing moves no existing result.
+#:
+#: WHY DEFAULTS RATHER THAN A REFUSAL. The live path refuses the tick outright when
+#: ``position_size_pct`` is absent, and copying that here would be wrong:
+#: ``strategies.risk`` is ``DEFAULT '{}'::jsonb`` and is unvalidated free-form JSON written
+#: straight from the client dict at three call sites, so a refusal would switch backtesting
+#: off for every strategy that has never set a risk block. A default that is REPORTED, with
+#: its provenance, is a different thing from a literal that is hidden - see
+#: :func:`resolve_backtest_risk`.
+DEFAULT_TRADE_SIZE_PCT = 0.10
+DEFAULT_STOP_LOSS_PCT = 0.05
+DEFAULT_TAKE_PROFIT_PCT = 0.15
+
+#: The ML confidence floor. Not part of the strategy's risk block: it gates signals against
+#: model predictions, and ``run_backtest`` supplies no model, in which case
+#: ``backtesting_engine`` does not apply the gate at all.
+DEFAULT_ML_THRESHOLD = 0.80
+
+#: Provenance labels for :func:`resolve_backtest_risk`.
+RISK_SOURCE_STRATEGY = "strategy"
+RISK_SOURCE_DEFAULT = "default"
+
+#: Configuration fields ``BacktestExecuteRequest`` accepts, and that reach no simulation on
+#: this path. Declared here, beside the runtime that would have to change for any of them to
+#: start working, rather than assembled in the router.
+#:
+#: The route's docstring used to describe its ``configuration`` echo as "the configuration
+#: that was actually applied, so a client can show what produced the numbers rather than what
+#: it hoped it sent". That was true of three of its seven fields. The echo itself is an
+#: accurate record of what was SUBMITTED and is unchanged; this is the disclosure that makes
+#: the difference legible, and the route reports it alongside.
+CONFIGURATION_FIELDS_NOT_APPLIED: Dict[str, str] = {
+    "spread": (
+        "reaches BacktestEngine.spread and stops there; no spread is modelled by "
+        "vbt.Portfolio.from_signals, as backtesting_engine's own log line now states"
+    ),
+    "risk_per_trade": (
+        "reaches RiskEngine.risk_per_trade, which is read only by "
+        "RiskEngine.calculate_position_size; the backtest never calls it. Per-trade sizing "
+        "comes from the strategy's risk.position_size_pct instead - see applied_risk"
+    ),
+    "max_drawdown": (
+        "evaluated once via RiskEngine.can_trade() before any trade is simulated, on an "
+        "engine whose current_equity still equals its peak_equity; nothing updates equity "
+        "during a backtest, so it is not a during-run limit"
+    ),
+    "daily_loss_limit": (
+        "evaluated once via RiskEngine.can_trade() before any trade is simulated, on an "
+        "engine whose daily_loss is still zero; nothing records a loss during a backtest, "
+        "so it is not a during-run limit"
+    ),
+}
+
+
+def resolve_backtest_risk(risk_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The per-trade risk a backtest will apply, and where each number came from.
+
+    Resolves field by field rather than all-or-nothing, because ``strategies.risk`` is
+    unvalidated free-form JSON and a half-filled block is a normal state, not an error. A
+    strategy that sets only ``position_size_pct`` gets its size honoured and documented
+    defaults for the two stops, and the result says exactly that.
+
+    Parameters
+    ----------
+    risk_config
+        The strategy's ``risk`` dict, or ``None``/``{}`` when it has none. A
+        non-mapping is treated as absent and logged, rather than raising: the column has
+        no schema, so a string or a list in it is a data condition rather than a bug here.
+
+    Returns
+    -------
+    dict
+        ``trade_size_pct``, ``stop_loss_pct``, ``take_profit_pct``, plus a ``source``
+        sub-dict mapping each of those three to :data:`RISK_SOURCE_STRATEGY` or
+        :data:`RISK_SOURCE_DEFAULT`. The caller passes the three values to the simulator
+        and reports the whole dict, so what is reported cannot drift from what was run.
+
+    Notes
+    -----
+    A value present but not coercible to a float is treated as absent and logged. Silently
+    passing a string through to ``vbt.Portfolio.from_signals`` would fail deep inside the
+    simulation, and substituting a default without saying so is the behaviour this function
+    exists to end.
+    """
+    source: Dict[str, str] = {}
+    resolved: Dict[str, Any] = {}
+
+    if risk_config is not None and not isinstance(risk_config, dict):
+        logger.warning(
+            "[BACKTEST] strategies.risk is a %s, not an object; applying documented "
+            "defaults for all per-trade risk",
+            type(risk_config).__name__,
+        )
+        risk_config = None
+
+    config = risk_config or {}
+
+    for param, key, default in (
+        ("trade_size_pct", RISK_KEY_TRADE_SIZE, DEFAULT_TRADE_SIZE_PCT),
+        ("stop_loss_pct", RISK_KEY_STOP_LOSS, DEFAULT_STOP_LOSS_PCT),
+        ("take_profit_pct", RISK_KEY_TAKE_PROFIT, DEFAULT_TAKE_PROFIT_PCT),
+    ):
+        raw = config.get(key)
+        if raw is None:
+            resolved[param] = default
+            source[param] = RISK_SOURCE_DEFAULT
+            continue
+        try:
+            resolved[param] = float(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "[BACKTEST] strategies.risk.%s is %r, which is not a number; applying "
+                "the documented default %s",
+                key,
+                raw,
+                default,
+            )
+            resolved[param] = default
+            source[param] = RISK_SOURCE_DEFAULT
+        else:
+            source[param] = RISK_SOURCE_STRATEGY
+
+    resolved["source"] = source
+    return resolved
+
+
 #: The keys BOTH producers compute, and which producer owns each. ``backtesting_engine``'s
 #: ``results`` and :meth:`BacktestRuntime._calculate_performance_metrics` overlap on exactly
 #: these three, and until this was declared the overlap was resolved by the argument order of a
@@ -319,6 +483,7 @@ class BacktestRuntime:
         end_date: str,
         exchange_instance,
         *,
+        strategy_risk: Optional[Dict[str, Any]],
         registry: Any = None,
     ) -> Dict:
         """Backtest a stored version from its persisted plan.
@@ -331,6 +496,22 @@ class BacktestRuntime:
 
         Market identity comes from the graph's DATA nodes, so nothing here falls back to
         ``BTC/USDT`` / ``15m`` (SB-06).
+
+        Parameters
+        ----------
+        strategy_risk
+            The strategy's ``strategies.risk`` dict, which carries the per-trade risk the
+            LIVE path applies. KEYWORD-ONLY AND WITHOUT A DEFAULT, deliberately: the
+            per-trade risk used to be three literals inside :meth:`run_backtest`, and a
+            default here would be the same defect one layer up - a caller that forgot to
+            pass it would get a silently different simulation from the one the strategy
+            will trade. ``None`` is accepted and means "this strategy has no risk block",
+            which is the common case because the column defaults to ``'{}'``; it resolves
+            to documented defaults that the result reports. See
+            :func:`resolve_backtest_risk`.
+
+            The value cannot be read from ``version_row``: ``strategy_versions`` has no
+            risk column. It comes from the strategy row the route has already loaded.
         """
         from backend_app.backend.strategy_dag.schema import BlockCategory
 
@@ -364,6 +545,15 @@ class BacktestRuntime:
             "dag_hash": loaded.dag_hash,
             "warmup_bars": loaded.plan.warmup_bars,
             "plan_reused": loaded.reused,
+            # The strategy's per-trade risk, carried on the package the same way market
+            # identity is. `run_backtest` reads it through `resolve_backtest_risk`.
+            # Metadata rather than a second `run_backtest` parameter because
+            # `optimization_engine` calls `run_backtest` directly at six sites through
+            # `_modify_package_parameters`, which deepcopies the package and updates
+            # `execution_graph.metadata` - so a package built here carries its risk into
+            # every optimisation trial, while an added positional argument would have had
+            # to be threaded through all six by hand.
+            "risk": strategy_risk,
         }
         if timeframes:
             metadata["timeframe"] = timeframes[0]
@@ -509,6 +699,33 @@ class BacktestRuntime:
                 entries = pd.Series(False, index=df.index)
                 exits = pd.Series(False, index=df.index)
             
+            # ── The STRATEGY'S per-trade risk, not three literals ─────────────
+            # This block used to read
+            #
+            #     "trade_size_pct": 0.10,
+            #     "stop_loss_pct":  0.05,
+            #     "take_profit_pct": 0.15,
+            #
+            # so every backtest ever run simulated 10% of capital per trade behind a 5%
+            # stop and a 15% target, whatever the strategy was configured to do. The live
+            # path reads those same three off the strategy's `risk` block, so a backtest
+            # and a live deployment of one strategy applied different risk and the
+            # backtest's figures described something that would not trade.
+            #
+            # Resolved field by field with documented, REPORTED defaults - see
+            # `resolve_backtest_risk` for why a missing block defaults rather than refuses.
+            # Regression: tests/test_backtest_risk_configuration_provenance.py
+            applied_risk = resolve_backtest_risk(strategy_package.metadata.get("risk"))
+            logger.info(
+                "[BACKTEST] Per-trade risk applied: size=%s (%s) stop=%s (%s) target=%s (%s)",
+                applied_risk["trade_size_pct"],
+                applied_risk["source"]["trade_size_pct"],
+                applied_risk["stop_loss_pct"],
+                applied_risk["source"]["stop_loss_pct"],
+                applied_risk["take_profit_pct"],
+                applied_risk["source"]["take_profit_pct"],
+            )
+
             # Run VectorBT backtest
             stats, returned_equity_curve = await self.vectorbt_engine.run_backtest_async(
                 ohlcv_list=ohlcv_data,
@@ -518,10 +735,10 @@ class BacktestRuntime:
                 tech_short_condition=exits.values,
                 params={
                     "timeframe": timeframe,
-                    "trade_size_pct": 0.10,
-                    "ml_threshold": 0.80,
-                    "stop_loss_pct": 0.05,
-                    "take_profit_pct": 0.15
+                    "trade_size_pct": applied_risk["trade_size_pct"],
+                    "ml_threshold": DEFAULT_ML_THRESHOLD,
+                    "stop_loss_pct": applied_risk["stop_loss_pct"],
+                    "take_profit_pct": applied_risk["take_profit_pct"],
                 }
             )
 
@@ -610,11 +827,27 @@ class BacktestRuntime:
             )
             
             logger.info(f"[BACKTEST] Completed backtest {backtest_id} in {execution_time:.2f}s")
-            
+
             return {
                 "backtest_id": backtest_id,
                 "status": "completed",
-                "results": results
+                "results": results,
+                # ── What per-trade risk this run actually simulated ────────────
+                # Reported from the same dict the simulator was handed, so it cannot
+                # drift from the run. Carried on the ENVELOPE rather than inside
+                # `results`, because `results` is the engine's measured payload - its key
+                # set is pinned by `BACKTEST_PAYLOAD_EMITTED_KEYS` and persisted to
+                # `strategy_backtests`, and configuration is not a measurement.
+                #
+                # `source` says, per field, whether the number came from the strategy or
+                # from a documented default. Without it a client cannot distinguish "this
+                # strategy risks 10% per trade" from "this strategy has never been
+                # configured and we assumed 10%", which is the distinction the hardcoded
+                # literals destroyed.
+                "applied_risk": applied_risk,
+                # The accepted-but-unapplied configuration fields, so a caller can tell a
+                # control from a decoration. See CONFIGURATION_FIELDS_NOT_APPLIED.
+                "configuration_not_applied": dict(CONFIGURATION_FIELDS_NOT_APPLIED),
             }
             
         except Exception as e:

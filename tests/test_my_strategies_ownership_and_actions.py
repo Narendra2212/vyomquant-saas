@@ -824,42 +824,31 @@ PHANTOM_COLUMNS = {
 
 #: Requested columns that no migration in this repository creates, each with the reason its
 #: existence is nonetheless believed. Every entry is a claim the migration files cannot check.
-OUT_OF_REPO_COLUMNS = {
-    ("strategies", "id"): (
-        "base column of public.strategies, which has no CREATE TABLE in either migration "
-        "directory. Evidenced by the production failure itself: the failing target list named "
-        "`id` and `name` BEFORE `description`, and Postgres reported 42703 for `description`, "
-        "so the two ahead of it resolved."
-    ),
-    ("strategies", "name"): (
-        "base column of public.strategies; same evidence as `id` - it resolved ahead of the "
-        "column that raised 42703."
-    ),
-    ("strategies", "symbol"): (
-        "base column of public.strategies. NOT provable from the migration files. Documented as "
-        "part of the table in docs/history/PROJECT_ARCHITECTURE.md ('name, symbol, timeframe, "
-        "buy_logic, ... status') - a list that notably does NOT include `description` - and read "
-        "on the live GET /api/strategies path."
-    ),
-    ("strategies", "timeframe"): (
-        "base column of public.strategies; same evidence as `symbol`."
-    ),
-    ("strategies", "created_at"): (
-        "base column of public.strategies; NOT provable from the migration files. Read on the "
-        "live GET /api/strategies path, which ORDERs BY it."
-    ),
-    ("strategies", "updated_at"): (
-        "base column of public.strategies; NOT provable from the migration files. Round trip 1 "
-        "ORDERs BY it, and the ordering is how Requirement 12.1's list is sequenced."
-    ),
-}
-# Deliberately NOT in the map, and worth recording:
+#:
+#: EMPTY, AND THAT IS THE POINT. It held six entries - ``strategies.{id, name, symbol,
+#: timeframe, created_at, updated_at}`` - each excused on the grounds that
+#: "public.strategies has no CREATE TABLE in either migration directory", with evidence
+#: assembled from a production 42703, an architecture document and the behaviour of the
+#: live GET /api/strategies path.
+#:
+#: That is no longer true. ``backend_app/migrations/020_declare_pre_existing_tables.sql``
+#: declares the table - ``CREATE TABLE IF NOT EXISTS public.strategies (...)`` with all
+#: six of those columns - so every one of them is now provable from the migration files,
+#: and none needs an out-of-repo excuse. ``test_no_out_of_repo_entry_is_stale`` is the
+#: test that said so, by name, and it was failing on all six until this map was emptied.
+#:
+#: Left in place rather than deleted because the escape hatch is still the right shape:
+#: a projection may one day read a column this repository genuinely cannot prove exists,
+#: and when it does, the entry goes here with its evidence instead of the guard being
+#: weakened. An empty map means the stronger thing - every column every projection
+#: requests is created by a migration in this repository.
+OUT_OF_REPO_COLUMNS: Dict[Tuple[str, str], str] = {}
+# Also created in-repo, and worth recording because it is what the guard rests on:
+#   * strategies.{id,name,symbol,timeframe,created_at,updated_at,is_active,dag_config}
+#       - backend_app/migrations/020_declare_pre_existing_tables.sql
 #   * library_subscriptions.{id,library_id,status} - migrations/006_reconcile_production_database.sql
 #   * library_subscriptions.{period_expiry,renewal_enabled} - backend_app/migrations/008
 #   * paper_sessions.{id,listing_id,source_strategy_id,session_state} - backend_app/migrations/009
-# All five of round trip 2's own columns and all four of round trip 3's are created in-repo, so
-# neither sibling projection needs an unverifiable claim. Only ``strategies`` does, because only
-# ``strategies`` has no CREATE TABLE here.
 
 
 def _blank_sql_comments(sql: str) -> str:
@@ -1147,9 +1136,25 @@ class TestEveryOwnedColumnIsOneSomethingCreates:
         strategies = _columns_the_migrations_create("strategies")
         assert strategies.get("status") == "001_strategy_architecture.sql"
         assert strategies.get("archived_at") == "005a_strategy_archive.sql"
-        # From the ROOT migrations/ directory, not backend_app/migrations/ - the reason both are
-        # scanned.
-        assert strategies.get("is_active") == "006_reconcile_production_database.sql"
+        # `strategies.is_active` USED TO BE THE ROOT-DIRECTORY PROOF HERE, attributed to
+        # migrations/006_reconcile_production_database.sql. It is not any more, and the
+        # reason is the whole point of the change below:
+        # backend_app/migrations/020_declare_pre_existing_tables.sql now carries
+        # `CREATE TABLE IF NOT EXISTS public.strategies (...)`, so every base column of
+        # that table is created in-repo. `_columns_the_migrations_create` scans
+        # backend_app/migrations/ first and uses `setdefault`, so 020 wins the
+        # attribution for all of them.
+        assert strategies.get("is_active") == "020_declare_pre_existing_tables.sql"
+
+        # THE ROOT-DIRECTORY PROOF, MOVED TO A COLUMN 020 DOES NOT DECLARE.
+        # `migrations/` is scanned as well as `backend_app/migrations/`, and
+        # `library_strategies.subscriber_count` is added only by
+        # migrations/006_reconcile_production_database.sql - so if the root directory
+        # were dropped from `_MIGRATION_DIRS`, this is what would notice. Measured:
+        # after 020, no `strategies` column is root-only any more, which is why this
+        # assertion had to move tables rather than change filenames.
+        library = _columns_the_migrations_create("library_strategies")
+        assert library.get("subscriber_count") == "006_reconcile_production_database.sql"
 
         sessions = _columns_the_migrations_create("paper_sessions")
         for column in ("id", "listing_id", "source_strategy_id", "session_state"):

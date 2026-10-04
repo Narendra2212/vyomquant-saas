@@ -5,6 +5,7 @@ import sys
 from decimal import Decimal
 from typing import Any
 
+from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.core.execution_engine import ExecutionEngine
 
 # Add path so we can import core
@@ -39,7 +40,14 @@ def create_engine(fee_rate=0.001, slippage=0.0000, initial_equity=10000000.0):
     engine = ExecutionEngine(
         fee_rate=fee_rate,
         slippage=slippage,
-        portfolio_state={'total_equity': initial_equity}
+        portfolio_state={'total_equity': initial_equity},
+        # BACKTEST. This module is a validation harness: it prints a markdown pass/fail
+        # report and overrides `apply_slippage` below for determinism. It builds no
+        # exchange executor and is not a trading path, so the environment is readable
+        # from the code rather than guessed - which is why this site is declared and the
+        # three in execution_router / distributed_execution are not.
+        # Regression: tests/test_execution_paths_that_claim_an_exchange.py
+        execution_environment=ExecutionEnvironment.BACKTEST,
     )
     # Override apply_slippage for deterministic testing
     engine.apply_slippage = lambda price, side: q(price)

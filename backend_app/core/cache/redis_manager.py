@@ -148,8 +148,19 @@ class MockRedisClient:
         
         current_value = self._store.get(key)
         
-        # Check if key exists and is a completed result
-        if current_value and not str(current_value).startswith('processing'):
+        # Check if key exists and is a completed result.
+        #
+        # This mock IGNORES `script` and decides in Python, so whenever its predicate and
+        # the real Lua script's disagree, every test on this path measures the mock and the
+        # production script goes unexecuted. That is precisely how the script's
+        # `string.sub(current_value, 1, 7) ~= 'processing'` survived — seven characters
+        # compared against a ten-character literal, constant-true, with this mock quietly
+        # doing the right thing beside it. The marker is imported from the one module that
+        # defines it so the two cannot drift again.
+        # Regression: tests/test_idempotency_lua_prefix_agreement.py
+        from backend_app.core.distributed_idempotency import PROCESSING_LOCK_MARKER
+
+        if current_value and not str(current_value).startswith(PROCESSING_LOCK_MARKER):
             return [1, current_value]  # Return cached result
         
         # If key doesn't exist, set processing lock

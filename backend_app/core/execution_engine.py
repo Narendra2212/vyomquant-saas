@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -8,7 +9,14 @@ import uuid
 from uuid import UUID
 
 from backend_app.backend.execution_environment import (
-    ExecutionEnvironment, assert_live_environment)
+    ExecutionEnvironment, assert_live_environment,
+    assert_simulation_environment_matches, parse_execution_environment)
+
+#: Sentinel distinguishing "the caller omitted the environment" from "the caller passed
+#: None". The first is the legacy path and is left unenforced; the second is a caller bug
+#: and is refused. A plain ``None`` default could not tell them apart, and conflating them
+#: is exactly how the guard at ``execute_with_idempotency`` ended up disarmed.
+_ENVIRONMENT_UNSTATED = object()
 from backend_app.core.database import SessionLocal
 from backend_app.core.metrics import execution_metrics
 from backend_app.core.models.execution_record import (
@@ -16,6 +24,34 @@ from backend_app.core.models.execution_record import (
 from backend_app.core.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
+
+
+#: The only environments in which a ``test_``-prefixed strategy_id is accepted by
+#: :meth:`ExecutionEngine._validate_strategy_exists` without a matching database row.
+#:
+#: Deliberately narrower than the sets elsewhere in this codebase. ``core/rate_limit.py``
+#: treats ``safe``/``paper``/``ambiguous`` as dev, and ``core/auth_middleware.py`` also
+#: accepts ``development``/``dev``/``local``; neither set is appropriate here, because what
+#: this one governs is whether a LIVE order may be attributed to a strategy nobody can show
+#: exists. Two spellings, both of which only a test lane sets.
+_SYNTHETIC_STRATEGY_ID_ENVS = frozenset({"testing", "test"})
+
+
+def _synthetic_strategy_ids_allowed() -> bool:
+    """Whether the ``test_`` strategy_id convention is in force.
+
+    FAILS CLOSED. An unset, empty or unrecognised ``ENV`` returns ``False``, so a
+    deployment that never configured one is protected rather than exposed — the opposite of
+    the rate limiter's default, and the right direction for a control that decides whether
+    an order is tied to a real strategy.
+
+    Read from the environment on every call rather than cached at import: the test suite
+    sets ``ENV`` in ``tests/conftest.py`` at import time but individual tests also
+    ``monkeypatch.setenv`` it, and a cached value would make the gate depend on module
+    import order.
+    """
+    env = (os.environ.get("ENV") or os.environ.get("ENVIRONMENT") or "").strip().lower()
+    return env in _SYNTHETIC_STRATEGY_ID_ENVS
 """
 Production-grade Execution Engine for Paper Trading
 Simulates order execution, tracks positions, and computes PnL
@@ -99,7 +135,7 @@ class ExecutionEngine:
     - Commission simulation
     """
     
-    def __init__(self, fee_rate: float = 0.001, slippage: float = 0.0005, risk_manager: Optional[RiskManager] = None, portfolio_state: Optional[Dict] = None, exchange_executor: Optional[Any] = None):
+    def __init__(self, fee_rate: float = 0.001, slippage: float = 0.0005, risk_manager: Optional[RiskManager] = None, portfolio_state: Optional[Dict] = None, exchange_executor: Optional[Any] = None, *, execution_environment: Any = _ENVIRONMENT_UNSTATED):
         """
         Initialize ExecutionEngine with fee, slippage, and risk management.
         
@@ -111,8 +147,75 @@ class ExecutionEngine:
             slippage: Slippage as fraction (default: 0.0005 = 0.05%)
             risk_manager: RiskManager instance for guardrails (creates new if None)
             portfolio_state: Real portfolio data with 'total_equity' field (REQUIRED)
+            execution_environment: What this engine EXISTS FOR - ``LIVE``, ``PAPER`` or
+                ``BACKTEST``. Keyword-only. STATED IS ENFORCED; omitted is not.
+
+                WHY IT IS NOT REQUIRED, HAVING BEEN WRITTEN THAT WAY FIRST. There are 71
+                construction sites across this repository - 23 in ``tests/``, 8 in
+                ``backend_app/``, 14 in the ``scripts/`` attack suite and 26 in
+                ``connection_layer/``. Making it mandatory turns every one of those into
+                a ``TypeError`` at construction, which is a far wider contract change
+                than the leak it closes and would break live execution paths to protect
+                them.
+
+                Of the 8 in ``backend_app/``, 6 now state it -- ``master_executor``
+                (PAPER and LIVE), ``dag_risk_integration`` (PAPER),
+                ``routers/strategies`` (BACKTEST), ``validate_financials`` (BACKTEST),
+                and both ``distributed_execution`` modules (LIVE). The one that does not
+                is ``execution_router``, whose endpoint cannot succeed for unrelated
+                reasons. ``tests/test_execution_engine_mode_matches_its_branch.py`` holds
+                that list.
+
+                So an omitted environment behaves exactly as before: the branch below is
+                selected by the ``exchange_executor`` null check alone and nothing new
+                refuses. An environment that IS stated is enforced at the branch point.
+                That makes this an incremental control - each site that starts stating it
+                gains the protection, and no site loses anything by not having been
+                updated yet. ``tests/test_execution_engine_mode_matches_its_branch.py``
+                enumerates the sites that do not state it, so the number can be driven
+                down and cannot quietly grow.
+
+                An explicitly supplied ``None`` is REFUSED rather than treated as
+                omitted. A caller that passes something meant to be an environment and
+                hands over nothing has a bug, and silently downgrading that to
+                "unenforced" is how the funnel-entry guard got disarmed in the first
+                place.
+
+                WHY IT IS HERE AND NOT ONLY ON THE CALL. ``_execute_trade_internal``
+                chooses between placing a real order and simulating one by asking
+                whether ``exchange_executor`` happens to be non-None, and nothing used
+                to check that the branch it took was the branch this engine was built
+                for. Two leaks followed, and the environment guard at
+                ``execute_with_idempotency`` could not see either: at the time, no caller
+                passed it an environment, so its ``LIVE`` default made it believe every
+                order was live. Two doors state it now, but every caller that omits it
+                still gets the default, which is why this control is separate - it reads
+                what the engine was BUILT for rather than what a caller remembered to
+                pass:
+
+                * A PAPER engine that acquires an executor places a REAL order.
+                  ``BotRunner``'s paper fast-path relies on ``exchange_executor=None``,
+                  and that null was the only thing standing in the way.
+                * A LIVE engine with NO executor falls through to the paper branch,
+                  simulates the fill and returns success with a ``paper_`` order id - so
+                  a trader is told their live order executed while nothing reached an
+                  exchange.
+
+                Recorded here so the branch point can assert the two agree. NOT
+                defaulted, for the reason the funnel-entry guard demonstrates: a default
+                turns "nobody said" into "this engine may place real orders". Unstated is
+                a third state, distinct from both, and it is the only one left
+                unenforced.
+
+                A synthetic paper balance is already required to be passed explicitly
+                (see ``portfolio_state`` below); the mode it belongs to is the same kind
+                of fact and is treated the same way wherever a caller states it.
+                Regression: tests/test_execution_engine_mode_matches_its_branch.py
         
         Raises:
+            ValueError: If execution_environment is supplied but is outside
+                BACKTEST/PAPER/LIVE - including an explicit ``None``. Omitting it
+                entirely is allowed and leaves the engine unstated.
             ValueError: If portfolio_state is not provided or missing required fields
         """
         # Step 1: The portfolio state is REQUIRED, exactly as this method docstring says.
@@ -135,6 +238,30 @@ class ExecutionEngine:
         # deliberately passes {total_equity: 10000.0} for its paper branch and says so;
         # that keeps working. What is refused is arriving with NOTHING and being handed
         # a number nobody chose.
+        # Step 0: what this engine exists for, when the caller says.
+        #
+        # `None` here means UNSTATED, and an unstated engine behaves exactly as it did
+        # before this parameter existed - see the docstring for why mandating it was
+        # backed out. A STATED environment is resolved through the SHARED parser, so this
+        # class cannot invent a fourth spelling or become more permissive than
+        # `assert_live_environment` about what "LIVE" looks like, and an unparseable
+        # value is refused rather than coerced.
+        if execution_environment is _ENVIRONMENT_UNSTATED:
+            self.execution_environment = None
+        else:
+            self.execution_environment = parse_execution_environment(
+                execution_environment
+            )
+            if self.execution_environment is None:
+                raise ValueError(
+                    f"ExecutionEngine was given execution_environment="
+                    f"{execution_environment!r}, which is not one of "
+                    f"{[member.value for member in ExecutionEnvironment]}. It decides "
+                    f"whether this engine may place a real order, so it is refused "
+                    f"rather than coerced or downgraded to unstated. Omit the argument "
+                    f"entirely if the mode genuinely is not established here."
+                )
+
         if not portfolio_state:
             raise ValueError(
                 "ExecutionEngine requires portfolio_state: it sets initial_capital, "
@@ -225,10 +352,44 @@ class ExecutionEngine:
                 `ExecutionEnvironment.LIVE`; `PAPER`, `BACKTEST`, `None` and any
                 out-of-set value are refused by `assert_live_environment` before any
                 other work (marketplace-subscriptions-paper-trading Requirements
-                13.9, 13.10). The default is `LIVE` because this engine had exactly one
-                environment before the parameter existed - it is the pre-existing call
-                convention of every live caller, written down. The guard itself never
-                defaults: an explicitly supplied absent or unrecognised value raises.
+                13.9, 13.10). The guard itself never defaults: an explicitly supplied
+                absent or unrecognised value raises.
+
+                ⚠️ THE DEFAULT BELOW DISARMS THAT GUARD FOR ANY CALLER THAT OMITS IT,
+                AND THE JUSTIFICATION IT USED TO CARRY WAS WRONG. It argued that the
+                LIVE default merely wrote down what every caller of this engine already
+                meant, on the grounds that the engine had only ever had one environment.
+                That was not true of the caller that matters.
+                `BotRunner._recover_live_state` constructs an `ExecutionEngine` on BOTH
+                paths - the paper fast-path builds one with a synthetic
+                `{"total_equity": 10000.0}` portfolio and `exchange_executor=None` before
+                returning, the live path builds one with a real executor - and the shared
+                tick loop in `BotRunner._inner_loop` made the single
+                `execute_with_idempotency` call for both modes WITHOUT stating the
+                environment. For a while NO caller in the repository passed this
+                argument, so a PAPER order entered this funnel, the default labelled it
+                LIVE, `assert_live_environment` passed it, and it was recorded with an
+                audit trail that said LIVE. What stopped it reaching an exchange was the
+                `exchange_executor=None` on the paper engine - a null dependency, not a
+                control.
+
+                FIXED AT THE TWO DOORS THAT HAD A STATED ANSWER TO GIVE:
+                  * `BotRunner._inner_loop` passes
+                    `PAPER if self.paper_trading else LIVE`. A paper bot's order is now
+                    refused here, which is Requirement 13.9 working as written; the
+                    refusal is audited before the raise. Requirement 13.3 says that
+                    order intent should have gone to the Paper_Simulator and never
+                    reached this funnel at all - routing it there is still open.
+                  * `execute_trade` forwards `self.execution_environment`, so an engine
+                    built for PAPER or BACKTEST no longer has its orders relabelled LIVE
+                    by this default on the way through the wrapper.
+
+                STILL UNGUARDED: every caller that omits the argument, because "said
+                nothing" and "said LIVE" are indistinguishable here. The default was not
+                changed to a refusing sentinel because 70 of the 71 funnel call sites in
+                this repository omit it - making omission fatal would break working
+                paths rather than protect them. The sites are driven down one at a time.
+                See tests/test_execution_environment_is_stated_not_defaulted.py.
         
         Returns:
             Dict with execution result:
@@ -247,21 +408,66 @@ class ExecutionEngine:
                 `BACKTEST` (Requirement 13.9). Audited before the raise.
         """
         # ═══════════════════════════════════════════════════════════════════
-        # 🔴 STEP 0: EXECUTION ENVIRONMENT GUARD - the live path is LIVE only
+        # 🔴 STEP 0: EXECUTION ENVIRONMENT GUARD
         # ═══════════════════════════════════════════════════════════════════
-        # First statement of the only entry point to live execution, so it precedes every
-        # other check, every repository and session handle, and the exchange_executor /
-        # CCXT call in `_execute_trade_internal`. A PAPER or BACKTEST order therefore
-        # cannot reach an exchange, and cannot move a balance on the way to being refused
-        # (Requirements 13.9, 13.10). It raises rather than returning a `blocked` result:
-        # a returned verdict can be dropped by a caller, and dropping this one places a
-        # real order for a simulated intent.
-        await assert_live_environment(
-            execution_environment,
-            actor_id=str(tenant_id),
-            strategy_id=str(strategy_id) if strategy_id else None,
-            symbol=symbol,
+        # First statement of this method, so it precedes every other check, every
+        # repository and session handle, and the exchange_executor / CCXT call in
+        # `_execute_trade_internal`. A refused order therefore cannot reach an exchange
+        # and cannot move a balance on the way to being refused (Requirements 13.9,
+        # 13.10). It raises rather than returning a `blocked` result: a returned verdict
+        # can be dropped by a caller, and dropping this one places a real order for a
+        # simulated intent.
+        #
+        # WHICH GUARD, AND WHY THERE ARE TWO.
+        # Requirement 13.9 is a rule about THE LIVE ORDER PATH - "IF the live order path
+        # receives an order whose originating Execution_Environment is `PAPER`, THEN THE
+        # live order path SHALL reject the order BEFORE ISSUING ANY EXCHANGE CALL". The
+        # live order path is the path that can issue one. `execution_environment.py`'s own
+        # module docstring places `assert_live_environment` so that "there is no live
+        # order path that reaches an exchange without passing it".
+        #
+        # A DECLARED SIMULATOR cannot issue an exchange call: it states PAPER or BACKTEST
+        # and holds no `exchange_executor`, and the branch-point assertion below refuses
+        # it the live branch if it ever acquires one. Applying the live-path guard to it
+        # refused `BotRunner`'s paper mode - which is how every bot started by
+        # `routers/strategies.py` runs, `paper_trading=True` hardcoded at both deploy
+        # sites - and stopped paper trading on the platform outright.
+        #
+        # So a declared simulator is guarded for AGREEMENT instead: 13.10 still applies in
+        # full, LIVE is refused (which the live-path guard could not do for it), and only
+        # the engine's own environment is admitted. Everything else - an engine holding an
+        # executor, an engine stating LIVE, and an engine that stated nothing at all -
+        # keeps `assert_live_environment` unchanged. That last clause is what makes this
+        # not a weakening: 65 of the 71 construction sites state nothing, and every one of
+        # them is still on the live-path guard.
+        #
+        # The full (engine, executor, order) matrix is enumerated in the regression test.
+        # Exactly one row reaches `place_order`: engine LIVE, executor present, order LIVE.
+        # Regression: tests/test_simulated_orders_reach_the_simulator.py
+        _engine_environment = getattr(self, 'execution_environment', None)
+        _holds_executor = getattr(self, 'exchange_executor', None) is not None
+        _is_declared_simulator = (
+            _engine_environment in (
+                ExecutionEnvironment.PAPER, ExecutionEnvironment.BACKTEST
+            )
+            and not _holds_executor
         )
+
+        if _is_declared_simulator:
+            await assert_simulation_environment_matches(
+                execution_environment,
+                engine_environment=_engine_environment,
+                actor_id=str(tenant_id),
+                strategy_id=str(strategy_id) if strategy_id else None,
+                symbol=symbol,
+            )
+        else:
+            await assert_live_environment(
+                execution_environment,
+                actor_id=str(tenant_id),
+                strategy_id=str(strategy_id) if strategy_id else None,
+                symbol=symbol,
+            )
 
         import time, threading
         start_time = time.time()
@@ -498,8 +704,70 @@ class ExecutionEngine:
         This method performs the actual trade execution without idempotency checks.
         All idempotency logic is handled by the wrapper.
         """
+        # ═══════════════════════════════════════════════════════════════════
+        # THE BRANCH MUST BE THE BRANCH THIS ENGINE WAS BUILT FOR
+        # ═══════════════════════════════════════════════════════════════════
+        # The selection below is a null check on a constructor argument, and until this
+        # block existed nothing verified that the branch it chose matched the engine's
+        # purpose. The guard at `execute_with_idempotency` cannot cover this: no caller
+        # passes it an environment, so its `ExecutionEnvironment.LIVE` default makes it
+        # believe every order is live, whichever branch actually runs.
+        #
+        # Both directions are refused, and both are real:
+        #
+        #   PAPER/BACKTEST engine holding an executor -> it would place a REAL order.
+        #     `BotRunner`'s paper fast-path depends on `exchange_executor=None`, so that
+        #     null is all that stands between simulated intent and `place_order`.
+        #
+        #   LIVE engine holding no executor -> it would fall through to the paper branch,
+        #     simulate the fill, and return success with a `paper_` order id and a
+        #     plausible price. The caller records a filled trade and the trader is told
+        #     their live order executed while nothing reached an exchange. This is the
+        #     more dangerous direction, because it fails silently and optimistically.
+        #
+        # Returned as a (False, reason) refusal rather than raised, because that is this
+        # method's established contract with `execute_with_idempotency` - every other
+        # failure here returns the same shape, and raising would bypass the caller's
+        # exposure rollback.
+        # Regression: tests/test_execution_engine_mode_matches_its_branch.py
+        # Only an engine that STATED its environment is held to it. An unstated one is
+        # left exactly as it was - 65 of the 71 construction sites in this repository do
+        # not state it yet, and failing them here would be breaking execution to protect
+        # it. See the constructor docstring.
+        _has_executor = (
+            hasattr(self, 'exchange_executor') and self.exchange_executor is not None
+        )
+        _stated = getattr(self, 'execution_environment', None) is not None
+        _is_live = self.execution_environment is ExecutionEnvironment.LIVE
+
+        if _stated and _has_executor and not _is_live:
+            logger.critical(
+                "Refusing execution %s: engine built for %s holds an exchange executor, "
+                "so this order would be placed on a real exchange.",
+                execution_id,
+                self.execution_environment.value,
+            )
+            return False, (
+                f"Execution environment mismatch: this engine was built for "
+                f"{self.execution_environment.value} but holds an exchange executor, so "
+                f"the order would reach a live exchange. Refused."
+            )
+
+        if _stated and _is_live and not _has_executor:
+            logger.critical(
+                "Refusing execution %s: engine built for LIVE has no exchange executor, "
+                "so the order would be simulated and reported as filled.",
+                execution_id,
+            )
+            return False, (
+                "Execution environment mismatch: this engine was built for LIVE but has "
+                "no exchange executor, so the order would be simulated on the paper "
+                "branch and returned as a successful fill. Refused rather than "
+                "reporting a trade that never reached an exchange."
+            )
+
         # LIVE EXECUTION PATH
-        if hasattr(self, 'exchange_executor') and self.exchange_executor is not None:
+        if _has_executor:
             try:
                 from backend_app.core.global_safety import generate_validation_token
                 from backend_app.core.models.pydantic_models import OrderSide
@@ -1284,7 +1552,13 @@ class ExecutionEngine:
         if strategy_id.lower() in blocked_ids:
             return False
 
-        if str(strategy_id).startswith("test_"):
+        # The synthetic-id convention this suite drives the funnel with, gated on the
+        # environment. It used to be unconditional and ahead of the query, which made this
+        # whole step — the only one in `execute_with_idempotency` that ties a trade to a
+        # real, OWNED strategy — bypassable by naming convention on the live path. The gate
+        # fails closed, so an unset ENV disables it.
+        # Regression: tests/test_strategy_validation_test_prefix_gate.py
+        if str(strategy_id).startswith("test_") and _synthetic_strategy_ids_allowed():
             return True
             
         try:
@@ -1302,7 +1576,14 @@ class ExecutionEngine:
                 
                 if result is not None:
                     return True
-                return str(strategy_id).startswith("test_")
+                # Same gate as above. This second site is why the branch above is not
+                # simply deleted: a test-lane id whose row genuinely does not exist is
+                # still admitted here, and both sites have to agree or the behaviour
+                # depends on whether the query happened to find something.
+                return (
+                    str(strategy_id).startswith("test_")
+                    and _synthetic_strategy_ids_allowed()
+                )
             finally:
                 db.close()
         except Exception as e:
@@ -1323,8 +1604,40 @@ class ExecutionEngine:
     ) -> ExecutionResult:
         """
         Unified trade execution interface. Delegates to execute_with_idempotency.
+
+        THE ENGINE'S OWN ENVIRONMENT TRAVELS WITH THE ORDER.
+
+        This wrapper is the second door into the live funnel -- five production callers
+        in ``backend_app`` use it (``dag_risk_integration``, ``execution_router``,
+        ``signal_service`` and both ``distributed_execution`` modules) -- and it used to
+        drop the environment entirely. The funnel's ``ExecutionEnvironment.LIVE`` default
+        then applied, so an order from an engine explicitly constructed for ``PAPER``
+        (``dag_risk_integration``'s fallback) or ``BACKTEST``
+        (``routers/strategies.py``) entered the live path labelled ``LIVE`` and
+        ``assert_live_environment`` -- which exists to refuse exactly that -- passed it.
+        Same defect as the one fixed in ``BotRunner._inner_loop``, different door.
+
+        ``execute_trade`` deliberately takes NO ``execution_environment`` argument of its
+        own: what an engine exists for is not a per-call option a caller may override,
+        because overriding it is the defect with extra steps.
+
+        AND ONLY WHAT IT WAS TOLD. An engine constructed without an environment has
+        ``self.execution_environment is None``, and forwarding that ``None`` would make
+        ``assert_live_environment`` refuse the order (Requirement 13.10). 70 of the 71
+        construction sites in this repository omit the argument, so omission stays
+        silent and their behaviour is unchanged. Stated is enforced; omitted is not --
+        the same rule ``__init__`` applies, for the same reason.
+
+        Regression: tests/test_execution_environment_is_stated_not_defaulted.py
         """
         parsed_tenant = UUID(str(tenant_id)) if isinstance(tenant_id, (str, UUID)) else tenant_id
+
+        stated_environment = getattr(self, "execution_environment", None)
+        environment_kwargs = (
+            {} if stated_environment is None
+            else {"execution_environment": stated_environment}
+        )
+
         res = await self.execute_with_idempotency(
             tenant_id=parsed_tenant,
             strategy_id=strategy_id,
@@ -1333,6 +1646,7 @@ class ExecutionEngine:
             size=size,
             price=price,
             source="bot_runner",
+            **environment_kwargs,
         )
         is_success = res.get("status") in ("completed", "skipped_completed")
         return ExecutionResult(

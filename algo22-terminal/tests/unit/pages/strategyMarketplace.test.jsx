@@ -75,7 +75,30 @@ const { library } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../../../src/api', () => ({ default: { library } }));
+// `isAuthenticated` IS PART OF THIS MOCK'S OBLIGATION, and leaving it out did not fail
+// these tests -- it failed the RUN.
+//
+// `StrategyMarketplace` renders entitlement-gated controls through `useEntitlements`,
+// whose `load()` opens with `if (!isAuthenticated())` (`src/hooks/useEntitlements.js:99`).
+// A `vi.mock` factory replaces the whole module, so an export it omits does not fall
+// through to the real one: accessing it throws `[vitest] No "isAuthenticated" export is
+// defined on the "../../../src/api" mock`. That happens inside the hook's async `load`,
+// so it surfaced as an UNHANDLED REJECTION rather than a failed assertion -- 57 of them
+// in this file alone. Every test here passed while the entitlements hook was broken on
+// every render, which is the "false positive tests" case Vitest's own warning names, and
+// `npx vitest --run` exits non-zero on it, so the frontend CI job fails with nothing
+// reported as failing.
+//
+// `false`, not `true`, and that is the behaviour-preserving choice rather than a
+// convenient one. `load()`'s anonymous branch publishes an ANONYMOUS snapshot and makes
+// no request; the authenticated branch reads `/api/billing/entitlements`, which this mock
+// does not provide, so `true` would trade 57 rejections for a different set. Anonymous is
+// also the state these tests were already effectively in -- by throwing -- so the hook now
+// reaches it the way production does.
+vi.mock('../../../src/api', () => ({
+  default: { library },
+  isAuthenticated: () => false,
+}));
 
 import StrategyMarketplace from '../../../src/pages/StrategyMarketplace';
 import { ApiError } from '../../../src/apiClient';

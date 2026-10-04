@@ -42,8 +42,19 @@ class FleetManager:
         }
 
     async def start_bot(
-        self, user_id: str, symbol: str, blueprint: dict
+        self, user_id: str, symbol: str, blueprint: dict, *, paper_trading: bool
     ) -> Tuple[bool, str]:
+        """Spawn one bot.
+
+        ``paper_trading`` is REQUIRED and keyword-only. It is the deployment's resolved
+        mode, decided by the caller that evaluated the binding, and it is what decides
+        whether this bot can reach a real exchange. There is deliberately no default: the
+        defect this parameter exists to close was `BotRunner` reading the mode from a
+        blueprint key nothing wrote and defaulting it to paper, so every live deployment was
+        recorded as live and run as paper.
+
+        Regression: tests/test_live_deployment_mode_propagation.py
+        """
         bot_key = self._bot_key(user_id, symbol)
 
         async with self._lock:  # FIX FM-3
@@ -79,6 +90,7 @@ class FleetManager:
                     symbol=symbol,
                     strategy_blueprint=blueprint,
                     global_state=app_state,
+                    paper_trading=paper_trading,
                 )
             except Exception as e:
                 logger.error(f"Bot construction failed [{bot_key}]: {e}")

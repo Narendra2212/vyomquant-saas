@@ -20,7 +20,16 @@ from fastapi import Request, APIRouter, Depends, HTTPException, Query, Response,
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend_app.backend.strategy_service import get_strategy_service, StrategyStatus, StrategyEnvironment, DeployPrerequisiteError
+from backend_app.backend.strategy_service import (
+    BLUEPRINT_STARTABLE_KEYS,
+    DEPLOY_PARAMS_NOT_APPLIED,
+    DeployBlueprintIncomplete,
+    DeployParameterNotApplicable,
+    DeployPrerequisiteError,
+    StrategyEnvironment,
+    StrategyStatus,
+    get_strategy_service,
+)
 from backend_app.backend.metrics_service import get_metrics_service
 from backend_app.backend.backtest_service import get_backtest_service
 # from backend_app.backend.subscription_service import get_subscription_service  # DEPRECATED: Use library.py for subscriptions
@@ -64,6 +73,142 @@ from backend_app.core.crash_recovery import (
 
 router = APIRouter()
 logger = logging.getLogger("StrategyOperationsRouter")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# OWNERSHIP GATE FOR THE TELEMETRY READS
+#
+# The six metrics endpoints below — performance, equity-curve, monthly-returns,
+# daily-returns, execution-metrics, risk-metrics — are the only resource reads in this
+# router that do NOT read `strategies`. They read a telemetry store (QuestDB) through
+# `MetricsService`, and every query that module builds is keyed on `strategy_id` alone:
+#
+#     FROM strategy_performance WHERE strategy_id = '{safe_sid}'
+#     FROM strategy_risk        WHERE strategy_id = '{safe_sid}'
+#     FROM executions           WHERE strategy_id = '{safe_sid}'
+#
+# Each of those methods *declares* a `user_id` parameter and none of them uses it. That is
+# why these six needed their own gate: there is no RLS policy behind them. For every other
+# read in this file the request-scoped PostgREST client applies the `strategies` policy, so
+# a missing handler-level check still yields nothing; here a missing check yields the other
+# tenant's drawdown, exposure, position limits and kill-switch state.
+#
+# The fix is applied at the handler rather than inside `MetricsService` on purpose. The
+# telemetry tables have no schema definition anywhere in this repository and no writer in
+# it either, so whether `strategy_performance` / `strategy_risk` / `strategy_realtime`
+# even carry a `user_id` column cannot be established from the code — and adding a
+# predicate on a column that may not exist would turn a silent disclosure into a broken
+# read for the owner. Resolving ownership against `strategies`, which demonstrably does
+# carry `user_id` and is RLS-protected, closes the hole without guessing at a schema.
+# Narrowing the `MetricsService` queries themselves remains worth doing as defence in
+# depth, and needs the QuestDB schema confirmed first.
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The one body both unresolved arms answer with. Written once so the two cannot drift into
+#: telling a client two different things about the same condition, and carrying no driver
+#: text — the detail is logged for an operator instead (Requirement 22.9's rule applied here).
+_OWNERSHIP_UNRESOLVED_DETAIL = {
+    "error": "STRATEGY_OWNERSHIP_UNRESOLVED",
+    "message": "Strategy ownership could not be verified. Please retry in a few moments.",
+}
+
+
+async def _assert_owns_strategy(
+    user: dict,
+    strategy_id: str,
+    *,
+    restricted_operation: Any = None,
+) -> None:
+    """Refuse unless ``strategy_id`` belongs to the authenticated caller.
+
+    Called as the FIRST statement of each metrics handler, before the metrics service is
+    resolved and before any telemetry read is issued. A refusal that still issued the read
+    would already have loaded another tenant's rows into this process.
+
+    Args:
+        restricted_operation: an optional ``subscriber_operation_guard.RestrictedOperation``.
+            When supplied, a caller who turns out NOT to own the strategy is first offered
+            to the subscriber guard: if they hold an entitling Subscription to a Listing of
+            this strategy, and the operation names an action Requirement 12.4 forbids them,
+            the guard raises its own audited 403 ``MARKETPLACE_OPERATION_NOT_PERMITTED``
+            instead of this function's 404. Passed rather than always applied, because it
+            issues service-role reads and must not run on the owner's own path — the
+            established shape in this file (``get_version_history``,
+            ``compare_versions``, ``preview_node``), where the guard is consulted only once
+            the handler has already decided to refuse.
+
+    Raises:
+        MarketplaceError: **403** for an entitled subscriber, when ``restricted_operation``
+            is supplied. Carries the catalogue code and writes one audit record. Callers
+            must not catch this into a 500 — the metrics handlers raise it outside their
+            own ``try`` so they cannot.
+        HTTPException: **404** ``STRATEGY_NOT_FOUND`` when the ownership read completed and
+            matched nothing. Deliberately the same answer a non-existent id gets, and
+            deliberately not a 403: a distinguishable refusal confirms the strategy exists
+            and turns the endpoint into an existence oracle (Requirement 21.4, the
+            convention the version and node-preview handlers in this file already follow).
+            **503** ``STRATEGY_OWNERSHIP_UNRESOLVED`` when the read did not complete.
+            "Could not find out" is not "you do not own it" — answering 404 there would
+            tell an owner their own strategy does not exist because a read broke.
+    """
+    from backend_app.backend.strategy_service import StrategyOwnershipUnresolved
+
+    service = await get_strategy_service()
+    try:
+        owns = await service.owns_strategy(user=user, strategy_id=strategy_id)
+    except StrategyOwnershipUnresolved as exc:
+        # The expected unresolved outcome. Logged with the detail, answered without it:
+        # the message carries driver text (a sqlstate, a column name).
+        logger.error(
+            "Strategy ownership could not be resolved for %s (user %s): %s",
+            strategy_id,
+            (user or {}).get("id"),
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=_OWNERSHIP_UNRESOLVED_DETAIL,
+        )
+    except Exception as exc:  # noqa: BLE001 - see below; the outcome is defined and safe
+        # ANY other failure of the ownership read means the same thing: ownership is not
+        # established. This is not a swallow — the outcome is defined, it is the refusing
+        # one, and it is logged with a traceback. It is here rather than left to propagate
+        # because this gate stands in front of a telemetry read that has no RLS behind it:
+        # an unhandled error would become a bare 500, which is a worse answer for the same
+        # fact, and a future change inside `owns_strategy` that raised something new would
+        # otherwise lose the honest 503. It cannot mask a refusal, because the 404 below is
+        # raised outside this block.
+        logger.error(
+            "Strategy ownership read raised an unexpected error for %s (user %s): %s",
+            strategy_id,
+            (user or {}).get("id"),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=_OWNERSHIP_UNRESOLVED_DETAIL,
+        )
+
+    if not owns:
+        # Requirement 12.7, on the branch that is already refusing. An entitled subscriber
+        # gets the guard's audited 403; everybody else falls through to the 404 below, and
+        # that fall-through is what keeps the stranger's answer indistinguishable from a
+        # non-existent id (Requirement 21.4).
+        if restricted_operation is not None:
+            await _subscriber_guard.refuse_if_entitled_subscriber(
+                user,
+                strategy_id=strategy_id,
+                operation=restricted_operation,
+            )
+
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "STRATEGY_NOT_FOUND",
+                "message": f"Strategy {strategy_id} not found",
+            },
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -498,6 +643,41 @@ async def deploy_strategy(request: Request,
                 "missing_prerequisite": e.missing_prerequisite,
             }
         )
+    except DeployParameterNotApplicable as e:
+        # 422, and above the ValueError branch deliberately. The request is well-formed
+        # and the caller is entitled; it simply names a control this endpoint cannot
+        # honour (see strategy_service.DEPLOY_PARAMS_NOT_APPLIED - all four have nowhere
+        # to be stored). Falling through to the generic handler would report a 500 for a
+        # caller-correctable request, and falling through to the ValueError branch would
+        # report it as a validation failure of a field that is in fact valid.
+        logger.info(
+            "Deploy of strategy %s refused an unapplicable parameter: %s", strategy_id, e
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "DEPLOY_PARAMETER_NOT_APPLICABLE",
+                "message": str(e),
+                "not_applied": sorted(DEPLOY_PARAMS_NOT_APPLIED),
+            }
+        )
+    except DeployBlueprintIncomplete as e:
+        # 409, the same status DEPLOY_PREREQUISITE_NOT_MET uses, and for the same reason:
+        # a state conflict about the stored artifact rather than a bad request. The
+        # strategy exists and the caller owns it; its blueprint cannot start a bot.
+        logger.info(
+            "Deploy of strategy %s refused: blueprint cannot start a bot: %s",
+            strategy_id,
+            e,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "DEPLOY_BLUEPRINT_INCOMPLETE",
+                "message": str(e),
+                "required_blueprint_keys": list(BLUEPRINT_STARTABLE_KEYS),
+            }
+        )
     except ValueError as e:
         err_msg = str(e)
         logger.warning(f"Validation/quota error deploying strategy {strategy_id}: {err_msg}")
@@ -736,6 +916,11 @@ async def get_strategy_performance(request: Request,
         internal service method reached the wire. The detail is logged server-side and the
         public body carries the stable code and a fixed sentence instead.
     """
+    # Ownership first, and OUTSIDE the `try` below: that `except Exception` has no
+    # `except HTTPException: raise` ahead of it, so a 404 raised inside it would be
+    # relabelled as a 500 PERFORMANCE_FETCH_FAILED.
+    await _assert_owns_strategy(user, strategy_id)
+
     try:
         metrics_service = await get_metrics_service()
         
@@ -782,6 +967,9 @@ async def get_strategy_equity_curve(request: Request,
         internal service method reached the wire. The detail is logged server-side and the
         public body carries the stable code and a fixed sentence instead.
     """
+    # Ownership first, and outside the `try` — see get_strategy_performance above.
+    await _assert_owns_strategy(user, strategy_id)
+
     try:
         metrics_service = await get_metrics_service()
         
@@ -831,6 +1019,9 @@ async def get_strategy_monthly_returns(request: Request,
         internal service method reached the wire. The detail is logged server-side and the
         public body carries the stable code and a fixed sentence instead.
     """
+    # Ownership first, and outside the `try` — see get_strategy_performance above.
+    await _assert_owns_strategy(user, strategy_id)
+
     try:
         metrics_service = await get_metrics_service()
         
@@ -879,6 +1070,9 @@ async def get_strategy_daily_returns(request: Request,
         internal service method reached the wire. The detail is logged server-side and the
         public body carries the stable code and a fixed sentence instead.
     """
+    # Ownership first, and outside the `try` — see get_strategy_performance above.
+    await _assert_owns_strategy(user, strategy_id)
+
     try:
         metrics_service = await get_metrics_service()
         
@@ -929,6 +1123,9 @@ async def get_strategy_execution_metrics(request: Request,
         internal service method reached the wire. The detail is logged server-side and the
         public body carries the stable code and a fixed sentence instead.
     """
+    # Ownership first, and outside the `try` — see get_strategy_performance above.
+    await _assert_owns_strategy(user, strategy_id)
+
     try:
         metrics_service = await get_metrics_service()
         
@@ -979,6 +1176,30 @@ async def get_strategy_risk_metrics(request: Request,
         internal service method reached the wire. The detail is logged server-side and the
         public body carries the stable code and a fixed sentence instead.
     """
+    # Ownership first, and outside the `try` — see get_strategy_performance above. This is
+    # the route the marketplace spec's own defect registry recorded as resolving no
+    # ownership at all ("the worst-answering of the fifteen: the other fourteen fabricated
+    # a 404, this one discloses"); the gate is that fix.
+    #
+    # The second half of Requirement 12.7 for this route, passed to the gate so it runs
+    # only on the branch that is already refusing: a caller holding an ENTITLING
+    # Subscription is not a stranger, and `view_risk_config` is one of the actions
+    # Requirement 12.4 forbids them, so they get the stable 403 and an audited refusal
+    # instead of the stranger's 404. `STRATEGY_READ` is the operation that already covers
+    # `view_risk_config` — exactly the probe key the registry records
+    # (`view_risk_config.risk_metrics`).
+    #
+    # Only this route passes it. The five performance routes above keep the ownership 404
+    # and nothing more: whether a subscriber may see how the strategy they pay for has
+    # performed is a product question, and Requirement 12.4's forbidden-action list does
+    # not name those reads. Guarding them on that reading would be a decision this change
+    # is not entitled to make.
+    await _assert_owns_strategy(
+        user,
+        strategy_id,
+        restricted_operation=_subscriber_guard.STRATEGY_READ,
+    )
+
     try:
         metrics_service = await get_metrics_service()
         
@@ -1405,12 +1626,35 @@ async def execute_backtest(request: Request,
     -----------------------------------------
     No job id, no polling: the response carries ``backtest_id``, ``status`` and the full
     ``results`` — what ``BacktestRuntime.run_backtest``'s own contract already describes —
-    plus the version that was run and the configuration that was actually applied, so a
-    client can show what produced the numbers rather than what it hoped it sent.
+    plus the version that was run and the configuration the request submitted.
+
+    WHAT ``configuration`` IS, AND WHAT IT IS NOT
+    ---------------------------------------------
+    It is the configuration that was **submitted**: the request body's seven fields, echoed
+    back verbatim. It used to be described here as "the configuration that was actually
+    applied, so a client can show what produced the numbers rather than what it hoped it
+    sent", and that was true of three of the seven. ``initial_capital``, ``commission`` and
+    ``slippage`` reach ``vbt.Portfolio.from_signals`` as ``init_cash``, ``fees`` and
+    ``slippage``. The other four reach no simulation at all, each for its own reason, and
+    those reasons are now reported rather than described in prose — see
+    ``backtest_runtime.CONFIGURATION_FIELDS_NOT_APPLIED``, which the response carries as
+    ``configuration_not_applied``.
+
+    The echo is deliberately NOT pruned. A record of what the caller asked for is worth
+    having, and removing fields would turn a misleading label into missing information.
+    What changed is that the response no longer implies submitted means applied.
+
+    ``applied_risk`` is the other half of that correction: the per-trade position size and
+    the two stops the simulation actually used, reported from the same dict the simulator
+    was handed, each annotated with whether it came from the strategy's own
+    ``strategies.risk`` block or from a documented default. Those three were hardcoded in
+    the runtime, which meant a backtest and a live deployment of one strategy applied
+    different risk — the live path reads them off that same ``risk`` block.
 
     Responses
-        **200** ``{backtest_id, status, results, strategy_id, version_id, version,
-        configuration, ignored_fields}``.
+        **200** ``{backtest_id, status, results, applied_risk,
+        configuration_not_applied, strategy_id, version_id, version, configuration,
+        ignored_fields}``.
         **404** ``STRATEGY_NOT_FOUND``, or ``BACKTEST_VERSION_UNAVAILABLE`` for a version
         that is not this strategy's.
         **409** ``STRATEGY_ARCHIVED`` (Requirement 3.3).
@@ -1515,6 +1759,22 @@ async def execute_backtest(request: Request,
             start_date=body.start_date,
             end_date=body.end_date,
             exchange_instance=exchange_instance,
+            # ── The strategy's own per-trade risk ──────────────────────────
+            # `strategies.risk` carries the position size and the two stops that the LIVE
+            # path reads (`strategy_builder.StrategyEngine.run_logic`). The backtester
+            # hardcoded 10%/5%/15% instead, so a backtest and a live deployment of the
+            # same strategy applied different risk.
+            #
+            # This dict was already in hand and was not being used: `get_strategy` above
+            # selects `*`, and step 2 reads `owned["strategy"]` for the archive gate. It
+            # cannot come off `version_row` - `strategy_versions` has no risk column.
+            #
+            # Passed even when absent. The parameter is keyword-only with no default, so
+            # a future caller cannot omit it and silently get a different simulation;
+            # `None` resolves to documented defaults that the response reports under
+            # `applied_risk`.
+            # Regression: tests/test_backtest_risk_configuration_provenance.py
+            strategy_risk=(owned.get("strategy") or {}).get("risk"),
         )
     except HTTPException:
         raise

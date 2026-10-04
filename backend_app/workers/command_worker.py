@@ -68,9 +68,27 @@ class CommandWorker(WorkerBase):
                                 f"Rejecting start_bot for user {user_id}: "
                                 f"Subscription status is '{sub_status}' (blocked)"
                             )
+                        elif "paper_trading" not in payload:
+                            # A start_bot command that does not state its mode is not
+                            # actionable. Reading it with a default is exactly the defect
+                            # that made every live deployment run as paper
+                            # (`blueprint.get("paper_trading", True)` in master_executor),
+                            # so this refuses instead of guessing — and refusing means no
+                            # bot, which is the safe direction.
+                            # Regression: tests/test_live_deployment_mode_propagation.py
+                            logger.error(
+                                "Rejecting start_bot for user %s: the command carries no "
+                                "'paper_trading' mode. The publisher must state whether "
+                                "this deployment was authorised to trade live; no bot was "
+                                "started.",
+                                user_id,
+                            )
                         else:
                             await app_state.fleet.start_bot(
-                                payload["user_id"], payload["symbol"], payload["blueprint"]
+                                payload["user_id"],
+                                payload["symbol"],
+                                payload["blueprint"],
+                                paper_trading=bool(payload["paper_trading"]),
                             )
                     elif action == "stop_bot":
                         await app_state.fleet.stop_bot(

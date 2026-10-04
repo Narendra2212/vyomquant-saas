@@ -14,7 +14,49 @@ env:
   NODE_VERSION: '20'
 
 jobs:
-  validate-code:
+  # ───────────────────────────────────────────────────────────────────────────────
+  # THIS JOB WAS SPLIT IN TWO, AND THAT IS THE WHOLE POINT OF THE CHANGE.
+  #
+  # It used to be one `validate-code` job running the import audit, the dependency audit,
+  # flake8, `black --check backend_app` and `isort --check-only backend_app`. Every other
+  # job in this workflow declares `needs: validate-code`.
+  #
+  # `black --check backend_app` FAILS, and has failed on every run of this workflow. The
+  # measurement, taken against the tree as it stands: 350 of the 382 files under
+  # `backend_app/` would be reformatted, and 142 have import order isort disagrees with.
+  # There is no `pyproject.toml`, no `setup.cfg`, no `.isort.cfg` and no `tox.ini` anywhere
+  # in the repository, so both tools run on pure defaults against a codebase that was never
+  # formatted with them.
+  #
+  # `gh run list --workflow 01-pr-check.yml` returns five runs and five failures, the
+  # oldest from 2026-08-29. `gh run view` on the most recent shows `Code Quality & Static
+  # Audit` passing the import audit, the dependency audit and flake8, then failing at
+  # `Black Format Check` with `Isort Check` skipped -- and `Unit & Integration Tests`,
+  # `Database Tests (PostgreSQL)` and `Docker Build Validation` absent from the job list
+  # entirely, because `needs:` never let them start.
+  #
+  # So the consequence is not a style backlog. It is that THE 11,869-TEST BACKEND SUITE HAS
+  # NEVER EXECUTED IN CI, and neither has the PostgreSQL lane that task 13.21 built or the
+  # Docker validation. A cosmetic check was standing in front of every substantive one.
+  #
+  # The fix keeps both checks and changes what they can block:
+  #   `static-audit`  -- import audit, dependency audit, flake8. Blocking, and what the
+  #                      test jobs now depend on. These are correctness checks: flake8 is
+  #                      scoped to E9/F63/F7/F82 (syntax errors and undefined names) and
+  #                      currently reports 0.
+  #   `format-check`  -- black and isort, `continue-on-error: true`. Nothing depends on it.
+  #                      It reports the backlog on every run instead of blocking on it.
+  #
+  # NOT FIXED BY REFORMATTING, DELIBERATELY. `black backend_app` would rewrite 350 files in
+  # one commit, conflicting with every branch in flight, and `isort backend_app` would
+  # reorder imports in 142 more -- in a codebase where module import order has side effects
+  # (`backend/ml_models.py` probes tensorflow and joblib at import; `core/rate_limit.py`
+  # raises at import when REDIS_URL is absent outside dev). That is a project with its own
+  # verification, not a step on the way to a launch, and it buys no launch safety. Adopting
+  # the formatting is the intended follow-up: format a directory at a time, drop
+  # `continue-on-error`, and the ratchet is back.
+  # ───────────────────────────────────────────────────────────────────────────────
+  static-audit:
     name: Code Quality & Static Audit
     runs-on: ubuntu-latest
 
@@ -33,7 +75,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
-          pip install flake8 black isort mypy bandit pytest pytest-asyncio
+          pip install flake8 mypy bandit pytest pytest-asyncio
 
       - name: Automated Import & AST Audit
         run: python scripts/import_audit.py backend_app
@@ -44,16 +86,51 @@ jobs:
       - name: Flake8 Check
         run: flake8 backend_app --count --select=E9,F63,F7,F82 --show-source --statistics
 
+  format-check:
+    name: Format Backlog (report only)
+    runs-on: ubuntu-latest
+    # REPORT ONLY. See the block comment above static-audit for the measurement and for why
+    # this is not blocking yet. The step-level `continue-on-error` keeps the diff visible in
+    # the log; the job-level one keeps the workflow green so the test jobs are what decides
+    # whether a pull request is mergeable.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Pinned, unlike the original unpinned `pip install black isort`. An unpinned
+      # formatter changes its own output between releases, so the size of the backlog this
+      # job reports would move without anyone editing a file.
+      - name: Install formatters
+        run: |
+          python -m pip install --upgrade pip
+          pip install black==24.8.0 isort==5.13.2
+
       - name: Black Format Check
-        run: black --check backend_app
+        continue-on-error: true
+        run: black --check --diff backend_app
 
       - name: Isort Check
-        run: isort --check-only backend_app
+        continue-on-error: true
+        run: isort --check-only --diff backend_app
 
   unit-tests:
     name: Unit & Integration Tests
     runs-on: ubuntu-latest
-    needs: validate-code
+    needs: static-audit
+    # This job had NO timeout, which was harmless only while it never ran. It is about to
+    # run 12,000+ tests for the first time, and GitHub's default is 360 minutes -- so a
+    # single hung test would burn six hours of runner time per pull request before
+    # anything reported. Task 13.13 measured the whole suite at 52 minutes; 90 leaves
+    # most of that again as headroom while still killing a genuine hang in reasonable
+    # time. Raise it from a MEASURED run, not from a failure.
+    timeout-minutes: 90
 
     services:
       redis:
@@ -143,7 +220,7 @@ jobs:
   database-tests:
     name: Database Tests (PostgreSQL)
     runs-on: ubuntu-latest
-    needs: validate-code
+    needs: static-audit
     timeout-minutes: 20
 
     services:
@@ -263,10 +340,25 @@ jobs:
       # documents and explicitly marks as untested. Adding it here unverified would be a
       # structural claim about a job that has never run. The scratch schema makes the
       # proof independent of all of it, so the provisioning step below is unchanged.
+      # `tests/test_position_delta_race_condition_fix.py` is added here because its two
+      # server-backed tests now carry a `requires_postgres` skip. Before that skip they
+      # were collected by the `unit-tests` lane and `test_position_update_row_level_
+      # locking` failed there on every run -- `SELECT ... FOR UPDATE` is the property
+      # under test and SQLite's parser rejects the clause. Skipping it out of that lane
+      # without naming it here would have left the FIN-CRITICAL-002 row-locking control
+      # verified by nothing, so the two changes belong together.
+      # `test_concurrent_position_update_safety` is in the same file and needed a second
+      # repair to be worth running: it collected every exception into a list, printed a
+      # count and asserted nothing, so it passed on SQLite with all five workers failing
+      # on that same syntax error. It now asserts no worker failed.
+      # The file's other two tests are self-contained `Decimal` arithmetic, need no
+      # server, and stay in the `unit-tests` lane.
+      # `positions` comes from the provisioning step above (`d97ffff9c3bb`).
       - name: Run database-backed tests
         run: |
           pytest tests/test_database_isolation_level_postgres.py \
                  tests/test_atomic_order_cancellation_fix.py \
+                 tests/test_position_delta_race_condition_fix.py \
                  tests/test_strategy_lifecycle_concurrency_postgres.py \
                  -v --tb=short \
                  --deselect tests/test_atomic_order_cancellation_fix.py::test_transaction_isolation_for_cancellation
@@ -274,7 +366,7 @@ jobs:
   docker-check:
     name: Docker Build Validation
     runs-on: ubuntu-latest
-    needs: validate-code
+    needs: static-audit
 
     steps:
       - name: Checkout code

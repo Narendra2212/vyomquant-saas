@@ -20,14 +20,36 @@ ExecutionEnvironmentError         base of the two refusals below
 UnresolvedExecutionEnvironment    Requirement 13.10: absent or out-of-set, never LIVE
 ExecutionEnvironmentMismatch      Requirement 13.9: resolved, but not LIVE
 assert_live_environment(env)      the live-path guard (Requirements 13.9, 13.10)
+assert_simulation_environment_matches(env, engine_environment=...)
+                                  the agreement guard for a path that cannot reach an
+                                  exchange (Requirement 13.10, plus engine agreement)
 
-The guard, and why it looks like this
--------------------------------------
-``assert_live_environment`` is called at exactly one place - the top of
+The guards, and why they look like this
+---------------------------------------
+Both are called from exactly one place - the top of
 ``core/execution_engine.ExecutionEngine.execute_with_idempotency``, ahead of every
 existing check and ahead of the ``exchange_executor``/CCXT call in
-``_execute_trade_internal`` - so there is no live order path that reaches an exchange
-without passing it.
+``_execute_trade_internal``. That method reads two attributes and nothing else before
+choosing between them, so there is no path through the funnel that does work before a
+verdict.
+
+``assert_live_environment`` guards THE LIVE ORDER PATH, which is what Requirement 13.9 is
+a rule about: every engine that holds an ``exchange_executor``, every engine that states
+``LIVE``, and every engine that states nothing at all. The last group is the large one -
+65 of the 71 construction sites in the repository - so this remains the guard that runs
+for almost every call.
+
+``assert_simulation_environment_matches`` guards a DECLARED SIMULATOR: an engine that
+states ``PAPER`` or ``BACKTEST`` and holds no executor, which therefore cannot issue the
+exchange call 13.9 exists to prevent. Applying the live-path guard there refused
+``BotRunner``'s paper mode - the way every bot started by ``routers/strategies.py`` runs -
+and stopped paper trading. It is not a relaxation: 13.10 applies unchanged, ``LIVE`` is
+refused (which the live-path guard could not do for such an engine), and only the engine's
+own environment is admitted. See
+``tests/test_simulated_orders_reach_the_simulator.py``, which enumerates the full
+(engine, executor, order) matrix.
+
+Everything below about the live-path guard applies to both.
 
 * It **raises**; it does not return a verdict. A returned verdict can be dropped by a
   caller that forgets to read it, and the cost of dropping this one is a real order placed
@@ -287,6 +309,97 @@ async def assert_live_environment(
     return ExecutionEnvironment.LIVE
 
 
+async def assert_simulation_environment_matches(
+    env: Any,
+    *,
+    engine_environment: ExecutionEnvironment,
+    actor_id: str = "system",
+    strategy_id: Optional[str] = None,
+    symbol: Optional[str] = None,
+    execution_id: Optional[str] = None,
+    audit_logger: Any = None,
+) -> ExecutionEnvironment:
+    """Refuse anything that does not AGREE with what this simulator was built for.
+
+    The counterpart of :func:`assert_live_environment`, for an execution path that cannot
+    reach an exchange: an ``ExecutionEngine`` that states ``PAPER`` or ``BACKTEST`` and
+    holds no ``exchange_executor``. ``execute_with_idempotency`` chooses between the two,
+    and chooses this one only for an engine that satisfies both conditions.
+
+    WHY A SECOND GUARD EXISTS. ``assert_live_environment`` is the guard for the live order
+    path, and Requirement 13.9 is a rule about the live order path -- "IF the live order
+    path receives an order whose originating Execution_Environment is `PAPER`, THEN THE
+    live order path SHALL reject the order **before issuing any exchange call**". A
+    declared simulator issues no exchange call: it has no executor, and since the branch
+    point in ``_execute_trade_internal`` it cannot hold one and keep simulating either.
+    Applying the live-path guard to it refused ``BotRunner``'s paper mode, which is how
+    every bot started by ``routers/strategies.py`` runs, and stopped paper trading
+    outright.
+
+    WHAT IS NOT RELAXED:
+
+    * Requirement 13.10 applies in full. An absent or out-of-set environment raises
+      :class:`UnresolvedExecutionEnvironment` and is never defaulted to ``LIVE``. A
+      simulator is not a loophole through which an unlabelled order becomes acceptable.
+    * ``LIVE`` is refused here, which the live-path guard could not do. An engine built to
+      simulate that receives a ``LIVE`` order would simulate the fill and return success
+      with a ``paper_`` order id, telling a trader their live order executed. That is the
+      more dangerous direction and this is the earliest point it can be stopped.
+    * Agreement is required, not merely "non-live". A ``BACKTEST`` order on a ``PAPER``
+      engine is refused: two simulators with different accounting are not
+      interchangeable.
+
+    So the set of orders this admits is exactly one value -- ``engine_environment`` -- and
+    every refusal is audited through the same path as 13.9's, because it is the same
+    class of event: an order reached an execution path that is not its own.
+
+    Returns the resolved environment, so a call site can bind it rather than re-parsing.
+
+    Raises
+    ------
+    UnresolvedExecutionEnvironment
+        ``env`` is absent or outside the three values (Requirement 13.10).
+    ExecutionEnvironmentMismatch
+        ``env`` resolved, but is not ``engine_environment``. Audited before the raise.
+
+    Regression: tests/test_simulated_orders_reach_the_simulator.py
+    """
+    resolved = parse_execution_environment(env)
+
+    if resolved is None:
+        logger.error(
+            "Simulated order path refused an order with an unresolved "
+            "Execution_Environment: received=%r engine=%s strategy_id=%s symbol=%s. "
+            "Not defaulted to LIVE (Requirement 13.10).",
+            env,
+            ExecutionEnvironment(engine_environment).value,
+            strategy_id,
+            symbol,
+        )
+        raise UnresolvedExecutionEnvironment(env)
+
+    if resolved is not engine_environment:
+        await _record_mismatch(
+            resolved,
+            actor_id=str(actor_id or "system"),
+            strategy_id=strategy_id,
+            symbol=symbol,
+            execution_id=execution_id,
+            audit_logger=audit_logger,
+        )
+        logger.error(
+            "Simulated order path refused a %s order: this engine was built for %s. "
+            "strategy_id=%s symbol=%s. No exchange call was issued.",
+            resolved.value,
+            ExecutionEnvironment(engine_environment).value,
+            strategy_id,
+            symbol,
+        )
+        raise ExecutionEnvironmentMismatch(resolved)
+
+    return resolved
+
+
 __all__ = [
     "ExecutionEnvironment",
     "EXECUTION_ENVIRONMENTS",
@@ -296,4 +409,5 @@ __all__ = [
     "ExecutionEnvironmentMismatch",
     "parse_execution_environment",
     "assert_live_environment",
+    "assert_simulation_environment_matches",
 ]

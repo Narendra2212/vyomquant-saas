@@ -77,6 +77,199 @@ def _safe_filename(user_id: str, strategy_name: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+#  MODEL ARTIFACT PATH CONTAINMENT  (P1-06)
+#
+#  WHAT THIS CLOSES
+#  ----------------
+#  `strategies.ml_model_path` is a free-text column written straight from a
+#  request body on two routes - `POST /api/strategies` stores
+#  `body.get("ml_model_path")` verbatim, and `PUT /api/strategies/{id}` does
+#  `update_payload = dict(body)` with no column allowlist at all - and
+#  `BotRunner._recover_live_state` hands it to `load_model_to_memory`, which
+#  deserialised it with `joblib.load`. Unpickling runs the payload's
+#  `__reduce__`, so that was arbitrary code execution in the process holding
+#  the tenant's decrypted exchange API keys.
+#
+#  There was no validation of any kind on that path: no `realpath`, no base
+#  directory, no symlink check, no extension check, no allowlist. The only
+#  inspection of the name was `create_ml_block`'s substring dispatch on the
+#  basename, which ends in "Unknown model type ... Defaulting to XGBoost" and
+#  accepts anything.
+#
+#  WHY `SafeModelLoader` WAS NOT ALREADY THE CONTROL
+#  -------------------------------------------------
+#  It computes a SHA-256 and caches it, but compares it only when the caller
+#  supplies `expected_checksum` - and `load_model_to_memory` passes only
+#  `validate_integrity=True`, so the comparison never happened. Worse,
+#  `validate_integrity` runs AFTER `joblib.load`: by the time it could object,
+#  the pickle has already executed. A post-load check cannot be a pre-load
+#  control. This gate therefore runs before the loader is called at all.
+#
+#  WHY NOT INSIDE `SafeModelLoader` ITSELF
+#  ---------------------------------------
+#  `SafeModelLoader.load_model` is shared with the GOVERNED path
+#  (`model_readiness`, `model_versioning`), where the path comes from a
+#  `model_versions.artifact_uri` row resolved through an `ArtifactStore` whose
+#  root is chosen per deployment and is a temporary directory under test.
+#  Containment belongs where the client-influenced value arrives, which is
+#  `load_model_to_memory` - the only function reached from
+#  `strategies.ml_model_path`, and one the governed path never calls.
+#
+#  WHAT THIS DOES NOT CLOSE
+#  ------------------------
+#  Another tenant's artifact lives under the same root, so containment alone
+#  does not stop `library.py`'s clone path from copying author A's
+#  `ml_model_path` onto user B's row. That needs the artifact resolved through
+#  `model_versions` with an ownership check - which is exactly what the
+#  governed path does and what this legacy column bypasses. Recorded in
+#  tests/test_ml_model_path_containment.py rather than left implied.
+#
+#  Regression: tests/test_ml_model_path_containment.py
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The same environment variable the governed store uses
+#: (`model_versioning.ARTIFACT_ROOT_ENV`), named independently here so this module
+#: does not import that one on the hot trading path.
+MODEL_ARTIFACT_ROOT_ENV = "STRATEGY_MODEL_ARTIFACT_DIR"
+
+#: Where artifacts live when the environment names nothing. `user_strategies` is the
+#: blocks' own `models_dir` default and the directory each block `os.makedirs` on
+#: construction, so it is the de facto root whether or not anything is configured. It is
+#: RELATIVE, and so resolved against the worker's current directory - the same basis the
+#: existing `models_dir` default has always used.
+DEFAULT_MODEL_ARTIFACT_DIRS: Tuple[str, ...] = ("user_strategies",)
+
+#: Extensions a model artifact may carry. `.pkl`/`.joblib` are what
+#: `model_versioning.ARTIFACT_EXTENSIONS` writes; `.keras`/`.h5` are the Keras formats the
+#: sequence and autoencoder blocks load. Anything else - `.so`, `.py`, no extension at all
+#: - is not a model this platform produces.
+MODEL_ARTIFACT_EXTENSIONS: frozenset = frozenset({".pkl", ".joblib", ".keras", ".h5"})
+
+
+class UnsafeModelPath(ValueError):
+    """A model path names a file this platform may not load.
+
+    Deliberately distinct from ``FileNotFoundError``, which the loaders already raise:
+    "you may not name that" and "it is not there" are different answers, and conflating
+    them would let a containment refusal be mistaken for a missing artifact and
+    "fixed" by creating the file.
+    """
+
+
+def model_artifact_roots() -> Tuple[str, ...]:
+    """The directories a model artifact may be loaded from, fully resolved.
+
+    Resolved with ``realpath`` so containment is decided on real locations rather than on
+    the spelling of a path. Order is configured-root first, then the defaults;
+    duplicates are dropped so a configuration that merely restates the default does not
+    produce two identical roots.
+    """
+    candidates: List[str] = []
+    configured = os.environ.get(MODEL_ARTIFACT_ROOT_ENV, "").strip()
+    if configured:
+        candidates.append(configured)
+    candidates.extend(DEFAULT_MODEL_ARTIFACT_DIRS)
+
+    resolved: List[str] = []
+    for candidate in candidates:
+        real = os.path.realpath(os.path.abspath(candidate))
+        if real not in resolved:
+            resolved.append(real)
+    return tuple(resolved)
+
+
+def _is_within(path: str, root: str) -> bool:
+    """Whether ``path`` is ``root`` or sits beneath it.
+
+    ``commonpath`` rather than ``startswith``: a prefix comparison would accept
+    ``/var/models_evil`` for the root ``/var/models``. It raises ``ValueError`` for paths
+    on different Windows drives, which is a definite "not contained".
+    """
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
+def resolve_model_artifact_path(
+    candidate: Any,
+    *,
+    extra_roots: Tuple[str, ...] = (),
+    must_exist: bool = True,
+) -> str:
+    """The real path of ``candidate``, or a refusal. Never deserialises anything.
+
+    Parameters
+    ----------
+    candidate
+        The stored ``ml_model_path``, or a path a block composed from it. Any
+        non-string, or a blank string, is a refusal rather than a crash: the column is
+        unconstrained JSON-adjacent free text and may hold anything.
+    extra_roots
+        Additional permitted roots. Used by the blocks to name their own ``models_dir``,
+        which is a Python default argument (``"user_strategies/"``, or ``"test_models/"``
+        from ``core/live_engine.py``) and never reachable from a request body. A caller
+        must not pass client input here.
+    must_exist
+        ``True`` on the load path. ``False`` on the write path, where a save may legitimately
+        precede training - containment is decidable without the file being there.
+
+    Returns
+    -------
+    str
+        The resolved absolute path. Callers should use THIS value rather than the input,
+        so that what was checked is what gets opened; passing the original string on
+        would leave a window between the check and the use.
+
+    Raises
+    ------
+    UnsafeModelPath
+        Not a usable string, not an artifact extension, or not inside any permitted root.
+    FileNotFoundError
+        Contained and well-formed, but absent, and ``must_exist`` was set. Kept as
+        ``FileNotFoundError`` because that is what the loaders raised before this gate
+        existed.
+    """
+    if not isinstance(candidate, str) or not candidate.strip():
+        raise UnsafeModelPath(
+            f"model path must be a non-empty string, got {type(candidate).__name__} "
+            f"{candidate!r}"
+        )
+
+    raw = candidate.strip()
+    # `realpath` collapses `..` AND follows symlinks, so a link planted inside a root but
+    # pointing out of it is judged on its target. Normalising text alone would not.
+    resolved = os.path.realpath(os.path.abspath(raw))
+
+    extension = os.path.splitext(resolved)[1].lower()
+    if extension not in MODEL_ARTIFACT_EXTENSIONS:
+        raise UnsafeModelPath(
+            f"{raw!r} does not name a model artifact: extension {extension or '(none)'} "
+            f"is not one of {sorted(MODEL_ARTIFACT_EXTENSIONS)}"
+        )
+
+    roots = list(model_artifact_roots())
+    for extra in extra_roots:
+        if not extra:
+            continue
+        real_extra = os.path.realpath(os.path.abspath(extra))
+        if real_extra not in roots:
+            roots.append(real_extra)
+
+    if not any(_is_within(resolved, root) for root in roots):
+        raise UnsafeModelPath(
+            f"{raw!r} resolves to {resolved!r}, which is outside every permitted model "
+            f"artifact root {roots}. A model must live under the configured "
+            f"{MODEL_ARTIFACT_ROOT_ENV} or {list(DEFAULT_MODEL_ARTIFACT_DIRS)}."
+        )
+
+    if must_exist and not os.path.isfile(resolved):
+        raise FileNotFoundError(f"Model file not found: {resolved}")
+
+    return resolved
+
+
+# ══════════════════════════════════════════════════════════════════════════
 #  THE UNGOVERNED-TRAINING GUARD
 #
 #  WHAT THIS CLOSES
@@ -198,10 +391,19 @@ class TreeStrategyBlock(ABC):
         FIX ML-3: Store the path so the caller knows which version is live.
         
         SAFETY: Uses SafeModelLoader for checksum validation and corruption detection.
+
+        CONTAINMENT FIRST. `strategy_path` arrives from `strategies.ml_model_path`, which
+        is written straight from a request body, and the next statement deserialises it.
+        The existence check this replaces was the ONLY check, and existence is not a
+        safety property - `/etc/passwd` exists. `resolve_model_artifact_path` refuses
+        anything outside the model artifact root before any loader is called, and returns
+        the resolved path so that what was checked is what gets opened.
+        See the MODEL ARTIFACT PATH CONTAINMENT section above (P1-06).
         """
-        if not os.path.exists(strategy_path):
-            raise FileNotFoundError(f"Model file not found: {strategy_path}")
-        
+        strategy_path = resolve_model_artifact_path(
+            strategy_path, extra_roots=(self.models_dir,), must_exist=True
+        )
+
         if ML_SAFETY_AVAILABLE:
             self.active_model = SafeModelLoader.load_model(
                 strategy_path,
@@ -593,11 +795,26 @@ class DeepLearningStrategyBlock(ABC):
         FIX ML-3: Pinned to the specific base_name version at startup.
         
         SAFETY: Uses SafeModelLoader for checksum validation and DeviceManager for GPU/CPU fallback.
+
+        CONTAINMENT FIRST, for the same reason as the tree block. Taking a BASE NAME
+        rather than a path confines nothing: `os.path.join` discards its first argument
+        when the second is absolute, so a `strategy_base_name` of `/etc/passwd` produces
+        `/etc/passwd.keras`, and `..` segments walk out of `models_dir` normally. Both
+        composed paths are therefore resolved and checked, and the scaler is a `.pkl`
+        going to `joblib.load` just like the tree model. (P1-06)
         """
         import tensorflow as tf
 
-        model_path = os.path.join(self.models_dir, f"{strategy_base_name}.keras")
-        scaler_path = os.path.join(self.models_dir, f"{strategy_base_name}_scaler.pkl")
+        model_path = resolve_model_artifact_path(
+            os.path.join(self.models_dir, f"{strategy_base_name}.keras"),
+            extra_roots=(self.models_dir,),
+            must_exist=False,
+        )
+        scaler_path = resolve_model_artifact_path(
+            os.path.join(self.models_dir, f"{strategy_base_name}_scaler.pkl"),
+            extra_roots=(self.models_dir,),
+            must_exist=False,
+        )
 
         if not os.path.exists(model_path) or not os.path.exists(scaler_path):
             raise FileNotFoundError(
@@ -971,12 +1188,28 @@ class AutoencoderStrategyBlock:
         os.makedirs(self.models_dir, exist_ok=True)
 
     def load_model_to_memory(self, strategy_base_name: str):
+        """Load the autoencoder, its scaler and its threshold.
+
+        CONTAINMENT FIRST, same argument as the two blocks above: a base name joined onto
+        `models_dir` is not confined to it, and all three of these paths are
+        deserialised - two of them by `joblib.load`. (P1-06)
+        """
         import tensorflow as tf
 
-        model_path = os.path.join(self.models_dir, f"{strategy_base_name}.keras")
-        scaler_path = os.path.join(self.models_dir, f"{strategy_base_name}_scaler.pkl")
-        threshold_path = os.path.join(
-            self.models_dir, f"{strategy_base_name}_threshold.pkl"
+        model_path = resolve_model_artifact_path(
+            os.path.join(self.models_dir, f"{strategy_base_name}.keras"),
+            extra_roots=(self.models_dir,),
+            must_exist=False,
+        )
+        scaler_path = resolve_model_artifact_path(
+            os.path.join(self.models_dir, f"{strategy_base_name}_scaler.pkl"),
+            extra_roots=(self.models_dir,),
+            must_exist=False,
+        )
+        threshold_path = resolve_model_artifact_path(
+            os.path.join(self.models_dir, f"{strategy_base_name}_threshold.pkl"),
+            extra_roots=(self.models_dir,),
+            must_exist=False,
         )
 
         for p in [model_path, scaler_path, threshold_path]:

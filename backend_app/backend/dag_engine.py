@@ -1218,41 +1218,110 @@ class IndicatorExecutor(NodeExecutor):
         return by_port
 
 
+class MLInferenceUnavailable(RuntimeError):
+    """An ML node cannot produce a prediction, so it produces nothing.
+
+    A ``RuntimeError`` subclass on purpose: :class:`MLExecutor` already raised bare
+    ``RuntimeError`` for a missing model and callers catch that, so subclassing keeps every
+    existing handler working while giving "ML cannot run on this path" its own identity.
+
+    It exists because the alternative in place before it was to publish ``0.5``. See
+    :meth:`MLExecutor.execute`.
+    """
+
+
 class MLExecutor(NodeExecutor):
-    """Execute ML prediction nodes."""
-    
+    """Execute ML prediction nodes on the legacy loose-dict path.
+
+    THIS EXECUTOR CANNOT PRODUCE A MODEL-DERIVED PREDICTION, and now says so instead of
+    substituting a number. Four independent reasons, all measured:
+
+    * ``model_registry`` is always empty. It defaults to ``{}`` and all three
+      instantiations in the repository -- one in ``dag_engine``, two in
+      ``dag_engine_parallel`` -- pass nothing. No code anywhere populates it.
+    * ``self._get_feature_schema(model, feature_df)`` was called and is defined nowhere
+      in the repository, so a run that got past the registry raised ``AttributeError``.
+    * the post-prediction block tested ``if None.isna().any().any()``, an
+      ``AttributeError`` on ``NoneType``, swallowed by a bare ``except Exception`` that
+      re-raised it as "Model prediction failed" -- a diagnostic blaming the model for a
+      typo.
+    * that same block ended ``return None`` rather than ``return result``, with the real
+      ``return result`` and the observability calls stranded after it, unreachable.
+
+    WHAT WAS DANGEROUS, AND WHAT CHANGED. Two branches returned
+    ``pd.Series(0.5, index=market_data.index)`` BEFORE the registry was consulted: one when
+    ``SafetyMonitor`` blocked ``ml_inference``, one when no feature inputs arrived. The
+    comment called 0.5 a "neutral signal", but it is published as this node's output series
+    and flows into whatever comparator the strategy wired downstream -- and
+    ``(output >= 0.5)`` is true on every bar. So an ML node with no model, in a process
+    where execution was blocked, voted yes on every bar with nothing in any log to say the
+    value was manufactured. There is no neutral constant for a comparison whose threshold
+    the node does not know, so there is no number to substitute, so this refuses.
+
+    Which branch fired depended on ``VYOMQUANT_MODE``:
+    ``safe`` (the default when the variable is unset) blocked inference and produced the
+    constant; ``paper``/``live`` let it through to the empty registry and raised. Failing
+    open in the *safer*-sounding mode is the wrong way round.
+
+    WHAT IS NOT DONE HERE. Inference is not implemented. Wiring the registry, supplying a
+    feature schema and repairing the tail would turn a path that has never produced a real
+    prediction into one that drives trades -- a feature with an owner, not a defect fix.
+    The governed plan path already handles this correctly and is untouched:
+    ``DAGEngine.execute_plan`` gates on ``state.model_versions`` through
+    ``model_readiness.model_ready`` and marks the node ``AWAITING_MODEL``, holding it
+    dormant rather than inventing a value.
+
+    Regression: tests/test_ml_executor_does_not_fabricate_predictions.py
+    """
+
     def __init__(self, model_registry: Optional[Dict] = None):
         self.model_registry = model_registry or {}
-    
+
     def execute(self, node: Dict, inputs: Dict[str, Any], market_data: pd.DataFrame) -> pd.Series:
-        """Execute ML node with strict validation."""
+        """Refuse, with the most specific reason available. Never returns a constant."""
         node_id = node.get("id", "unknown")
         model_id = node.get("model_id", "default")
-        node.get("confidence_threshold", 0.7)
-        
-        # �️ STRICT INPUT CONTRACT VALIDATION
+
+        # STRICT INPUT CONTRACT VALIDATION
         try:
             validate_node_inputs(inputs, node_id)
         except DAGExecutionError as e:
-            logger.critical(f"🚫 Node '{node_id}' input validation failed: {e}")
+            logger.critical(f"Node '{node_id}' input validation failed: {e}")
             raise
-        
-        # �� SYSTEM FREEZE: Check if ML inference is allowed
+
+        # SYSTEM FREEZE: is ML inference allowed in this process at all?
         safety_check = SafetyMonitor.check_execution_allowed("ml_inference")
         if safety_check:
-            logger.critical(f"🚫 BLOCKED ML INFERENCE: {safety_check}")
-            # Return neutral signal instead of executing
-            return pd.Series(0.5, index=market_data.index)
-        
+            logger.critical(
+                "Node '%s': ML inference is blocked in this process, so the node "
+                "produces no value. %s",
+                node_id,
+                safety_check,
+            )
+            raise MLInferenceUnavailable(
+                f"ML node '{node_id}' cannot run: {safety_check}. This used to publish a "
+                f"constant 0.5 for every bar, which a downstream '>= 0.5' comparator "
+                f"reads as a positive prediction on every bar. A blocked node yields "
+                f"nothing."
+            )
+
         # Get features from input nodes
         features = []
         for input_id, value in inputs.items():
             if isinstance(value, pd.Series):
                 features.append(value)
-        
+
         if not features:
-            # No features available, return neutral signal
-            return pd.Series(0.5, index=market_data.index)
+            logger.critical(
+                "Node '%s': no feature series arrived on any input, so there is nothing "
+                "to predict from.",
+                node_id,
+            )
+            raise MLInferenceUnavailable(
+                f"ML node '{node_id}' received no feature series on any input "
+                f"({sorted(inputs)} arrived, none of them a pandas Series), so it has "
+                f"no basis for a prediction. This used to publish a constant 0.5."
+            )
         
         # Combine features with SAFE forward fill (limited)
         feature_df = pd.concat(features, axis=1)
@@ -1266,123 +1335,74 @@ class MLExecutor(NodeExecutor):
                 f"Cannot perform inference with incomplete feature data."
             )
         
-        # Load model - NO MOCK FALLBACK ALLOWED
+        # ── NO INFERENCE ON THIS PATH, AND NO SUBSTITUTE FOR ONE ──────────
+        # Everything that followed this point has been removed, because none of it could
+        # run and leaving it in place made the method look like a working inference
+        # pipeline. What was here: a feature guard, an observability hop, a call to
+        # `self._get_feature_schema(...)` which is defined NOWHERE in the repository, a
+        # `model.predict`, and then a block testing `if None.isna().any().any()` whose
+        # `AttributeError` was caught by a bare `except Exception` and re-raised as
+        # "Model prediction failed" - blaming the model for a typo - followed by
+        # `return None` instead of `return result`, with the real `return result` and the
+        # prediction-quality observability stranded after it, unreachable.
+        #
+        # So there were four independent reasons no model-derived prediction could ever be
+        # returned, on top of `model_registry` always being empty: it defaults to `{}` and
+        # all three instantiations in this codebase pass nothing.
+        #
+        # Refusing REGARDLESS of whether a model was found is deliberate. A refusal that
+        # fired only on a missing model would invite the one-line "fix" of populating the
+        # registry, which measurably does not work - the next statement was the missing
+        # `_get_feature_schema`. The reason is reported either way so the reader is not
+        # sent looking for a configuration step that does not exist.
+        #
+        # The governed plan path is where ML actually works and is untouched:
+        # `execute_plan` resolves `state.model_versions` through
+        # `model_readiness.model_ready` and marks the node AWAITING_MODEL.
         model = self.model_registry.get(model_id)
-        
-        if not model:
-            # 🚨 CRITICAL: Model not found - execution blocked
-            logger.critical(
-                f"🚫 MODEL NOT FOUND: model_id={model_id}. "
-                f"DAG node cannot execute. Aborting to prevent fake signals."
+        if model is None:
+            reason = (
+                f"no model is registered under model_id={model_id!r}, and nothing in this "
+                f"codebase populates MLExecutor.model_registry - it defaults to {{}} and "
+                f"every instantiation passes no registry"
             )
-            # Alert system notification
-            try:
-                from backend_app.backend.alert_system import AlertSystem
-                AlertSystem.send_alert(
-                    level="CRITICAL",
-                    title="ML Model Missing - Execution Blocked",
-                    message=f"Model {model_id} not found in registry. Strategy execution blocked.",
-                    channels=["telegram", "email"]
-                )
-            except Exception:
-                pass  # Alert system may not be initialized
-            
-            raise RuntimeError(
-                f"🚫 MODEL NOT FOUND: {model_id}\n"
-                f"The ML model required for this DAG node is not available.\n"
-                f"Execution has been BLOCKED to prevent fake signals from triggering trades.\n"
-                f"Please verify:\n"
-                f"  1. Model was properly trained and saved\n"
-                f"  2. Model registry contains the model\n"
-                f"  3. Model ID in strategy matches registry"
+        else:
+            reason = (
+                f"a model is registered under model_id={model_id!r}, but this executor has "
+                f"no working inference path: the feature-schema helper it called "
+                f"(_get_feature_schema) does not exist"
             )
-        
-        # 🛡️ PIPELINE GUARD: Validate features before ML
+
+        logger.critical(
+            "Node '%s': ML inference unavailable on the legacy DAG path (%s). No value "
+            "is produced; the node does not trade.",
+            node_id,
+            reason,
+        )
         try:
-            guard_features(feature_df)
-        except PipelineError as e:
-            raise RuntimeError(f"Pipeline guard failed at feature stage: {e}")
-        
-        # 📊 OBSERVABILITY: Log feature quality
-        feature_metrics = observe_features(feature_df, "ml_input")
-        dashboard.record(feature_metrics)
-        
-        # 🚨 STEP 1: VALIDATE FEATURES BEFORE PREDICTION
-        try:
-            # Try to get schema from model or use inferred schema
-            schema = self._get_feature_schema(model, feature_df)
-            
-            # Validate and prepare features
-            feature_df = FeatureValidator.validate_and_prepare(
-                feature_df=feature_df,
-                schema=schema,
-                model=model,
-                market_data_index=market_data.index
+            from backend_app.backend.alert_system import AlertSystem
+
+            AlertSystem.send_alert(
+                level="CRITICAL",
+                title="ML Inference Unavailable - Node Produced No Signal",
+                message=(
+                    f"ML node {node_id} (model_id={model_id}) could not run on the legacy "
+                    f"DAG path: {reason}"
+                ),
+                channels=["telegram", "email"],
             )
-            
-            logger.info(f"✅ Features validated: {feature_df.shape}")
-            
-        except (FeatureValidationError, ModelMismatchError) as e:
-            logger.critical(f"🚫 FEATURE VALIDATION FAILED: {e}")
-            raise RuntimeError(
-                f"ML feature validation failed: {e}. "
-                f"Cannot perform inference with invalid features."
-            )
-        
-        # 🛡️ PIPELINE GUARD: Validate before ML prediction
-        try:
-            guard_ml_prediction(feature_df)
-        except PipelineError as e:
-            raise RuntimeError(f"Pipeline guard failed at ML stage: {e}")
-        
-        # STEP 2: Real model prediction with validated features
-        try:
-            predictions = model.predict(feature_df)
-            
-            # Validate predictions
-            if len(predictions) != len(market_data):
-                raise IndicatorComputationError(
-                    f"Prediction shape mismatch: expected {len(market_data)}, "
-                    f"got {len(predictions)}"
-                )
-            
-            if np.isnan(predictions).any():
-                nan_count = np.isnan(predictions).sum()
-                raise IndicatorComputationError(
-                    f"Model produced NaN predictions: {nan_count} values"
-                )
-            
-            logger.info(f" Model prediction successful: {len(predictions)} predictions")
-            
-            # PIPELINE GUARD: Validate signal generation
-            result = pd.Series(predictions, index=market_data.index)
-            try:
-                # Final validation - ensure no NaN after scaling
-                if None.isna().any().any():
-                    raise FeatureValidationError("NaN values introduced during scaling")
-            
-                # OUTPUT CONTRACT VALIDATION
-                validate_node_output(
-                    output=result,
-                    node_id=node_id,
-                    expected_length=len(market_data),
-                    expected_index=market_data.index
-                )
-            
-                return None
-            except Exception as e:
-                logger.critical(f" Model prediction failed: {e}")
-                raise RuntimeError(f"Model prediction failed: {e}")
-            
-            # OBSERVABILITY: Log prediction quality
-            prediction_metrics = observe_ml_predictions(result, "ml_output")
-            dashboard.record(prediction_metrics)
-            
-            return result
-            
-        except Exception as e:
-            logger.critical(f"🚫 Model prediction failed: {e}")
-            raise RuntimeError(f"Model prediction failed: {e}")
+        except Exception:  # noqa: BLE001 - alerting must never decide execution
+            pass  # Alert system may not be initialized
+
+        raise MLInferenceUnavailable(
+            f"ML node '{node_id}' cannot produce a prediction: {reason}. "
+            f"Execution is refused rather than substituting a value - this path used to "
+            f"publish a constant 0.5, which a downstream '>= 0.5' comparator reads as a "
+            f"positive prediction on every bar. "
+            f"ML strategies run through the governed plan path, which resolves a "
+            f"model_versions row per node and holds the node AWAITING_MODEL until its "
+            f"artifact is present and checksum-verified."
+        )
 
 
 class LegacyLogicExecutor(NodeExecutor):

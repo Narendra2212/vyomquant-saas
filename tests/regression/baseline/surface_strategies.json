@@ -823,6 +823,7 @@
       "handler_count": 2,
       "handlers": [
         {
+          "_baseline_note_raises": "RE-RECORDED, additively, by the change that made POST /api/strategies/{id}/deploy refuse what it cannot apply. TWO ADDITIONS, NOTHING REMOVED, RENAMED, RETYPED OR RE-STATUSED; the three recorded entries keep their values and their order. (1) 422 DEPLOY_PARAMETER_NOT_APPLICABLE. The route accepted four request parameters and applied none of them - they were read off the body, never passed to `deploy_strategy`, and the deployment proceeded as though they had been honoured. A caller that set a risk parameter was told the deploy succeeded and got a bot running on different settings, which is the worst available outcome for a parameter that sizes a position. Refusing the request names the dropped keys in `not_applied` instead. (2) 409 DEPLOY_BLUEPRINT_INCOMPLETE. `version_data['blueprint']` carries no `exchange_id` - measured against StrategyGraph.to_dict(), whose keys are edges, metadata, name, nodes, schema_version, strategy_id, validation_state, version - so the route could write a deployment row for a bot that can never start. It now refuses and names the missing keys in `required_blueprint_keys`. WHY THIS IS NOT A REGRESSION: a caller that sent only applicable parameters and a complete blueprint sees no change whatsoever. The two new statuses are reachable only by a request that previously got a silent misapplication or an unstartable deployment. Pinned by tests/test_deploy_strategy_accepts_only_what_it_applies.py.",
           "decorators": [
             "router.post('/strategies/{strategy_id}/deploy')",
             "limiter.limit('50/minute')"
@@ -860,6 +861,24 @@
                 "missing_prerequisite": "computed"
               },
               "error_code": "DEPLOY_PREREQUISITE_NOT_MET",
+              "status_code": 409
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "not_applied": "list"
+              },
+              "error_code": "DEPLOY_PARAMETER_NOT_APPLICABLE",
+              "status_code": 422
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "required_blueprint_keys": "list"
+              },
+              "error_code": "DEPLOY_BLUEPRINT_INCOMPLETE",
               "status_code": 409
             },
             {

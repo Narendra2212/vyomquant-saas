@@ -1061,36 +1061,37 @@ _UNOWNED = (
     "unowned (design.md → Server-side artifact resolution; no task in tasks.md implements it)"
 )
 
-PENDING: Mapping[str, Pending] = {
-    "view_risk_config.risk_metrics": Pending(
-        clauses=_ALL_THREE,
-        owner=_UNOWNED,
-        defect=(
-            'answers 200 {"strategy_id": …, "risk_metrics": {…}} — the OWNER\'s own risk read, '
-            "to a subscriber (``risk_metrics`` is empty in this environment, which runs no "
-            "QuestDB; the figures are there wherever the telemetry store is). This entry used "
-            "to describe TWO defects in sequence; the first is "
-            "gone. ``strategy_operations.get_strategy_risk_metrics`` called "
-            "``MetricsService.get_risk_metrics(user=…)`` against a method declared "
-            "``(self, user_id, strategy_id)``, so the route raised ``TypeError`` and answered "
-            "500 to every caller, owner included, before reaching any ownership decision — and "
-            "echoed ``str(e)`` in the body. That call site now passes ``user_id=user['id']`` "
-            "and the body carries a fixed sentence "
-            "(``tests/test_strategy_risk_metrics_endpoint.py`` is its revert-detector). "
-            "WHAT REMAINS is the second defect, and it is the Requirement 12.7 gap: the route "
-            "resolves no ownership at all. ``MetricsService.get_risk_metrics`` takes the "
-            "caller's id and does not use it — the QuestDB read is keyed on ``strategy_id`` "
-            "alone — so a subscriber is answered the owner's drawdown, exposure, position "
-            "limits and kill-switch state rather than 403 with "
-            "``MARKETPLACE_OPERATION_NOT_PERMITTED`` and an audited refusal. This one is the "
-            "worst-answering of the fifteen: the other fourteen fabricated a 404, this one "
-            "discloses. It is a read of a telemetry table, not of ``strategies``, so no RLS "
-            "predicate stands behind the missing handler-level check — and no owner-scoped "
-            "refusal for task 17.9's guard to refine either, which is why that fix does not "
-            "reach this route and this entry stays"
-        ),
-    ),
-}
+#: EMPTY, and that is the finished state rather than a disabled guard.
+#:
+#: The fifteenth and last entry — ``view_risk_config.risk_metrics`` — is gone. It recorded a
+#: route that "resolves no ownership at all": ``MetricsService.get_risk_metrics`` accepts the
+#: caller's id and never uses it (its QuestDB read is keyed on ``strategy_id`` alone), and the
+#: handler went straight to that read, so a subscriber was answered the owner's drawdown,
+#: exposure, position limits and kill-switch state. The entry noted that it was "the
+#: worst-answering of the fifteen: the other fourteen fabricated a 404, this one discloses",
+#: and that task 17.9's guard could not reach it because there was no owner-scoped refusal for
+#: that guard to refine.
+#:
+#: There is one now. ``strategy_operations._assert_owns_strategy`` resolves ownership against
+#: ``strategies`` — which does carry ``user_id`` and is RLS-protected — before the telemetry
+#: read is issued, and the risk-metrics route passes it
+#: ``restricted_operation=STRATEGY_READ`` so that a caller who turns out not to own the
+#: strategy is offered to ``refuse_if_entitled_subscriber`` on the refusing branch. An
+#: entitled subscriber therefore gets the audited 403 these three clauses assert, and a
+#: stranger still gets the 404 Requirement 21.4 requires. The gate is applied at the handler
+#: rather than inside ``MetricsService`` because the telemetry tables have no schema
+#: definition or writer anywhere in this repository, so a predicate on a ``user_id`` column
+#: that may not exist would trade a disclosure for a broken read.
+#:
+#: ``xfail(strict=True)`` is what forced this deletion rather than allowing it: the three
+#: clauses began passing and the file went red with XPASS. Nothing was loosened to get here —
+#: the disclosure assertion, the stable-code assertion and the audit assertion are the ones
+#: that were written for the defect, unchanged.
+#:
+#: Regression coverage for the ownership half of the fix, including the stranger's 404 and the
+#: 503 for an ownership read that did not complete, is
+#: ``tests/test_strategy_metrics_tenant_isolation.py``.
+PENDING: Mapping[str, Pending] = {}
 
 
 def _cases(clause: str):

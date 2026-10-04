@@ -375,12 +375,42 @@ def runtime_values(reg, graph, node_id, port, frame):
     The real validator, the real compiler, the real adapter, the real engine - the chain
     ``dag_worker`` and ``dag_event_loop`` use. Nothing about a preview appears here, which
     is the point: this is the answer the preview has to match.
+
+    A FAILURE FURTHER DOWN THE GRAPH IS NOT THIS NODE'S FAILURE. ``execute_dag`` re-raises
+    whatever a node raises, so one unexecutable node anywhere aborts the whole run - and
+    ``feature_graph`` has to terminate its FEATURE node somewhere, so it feeds an
+    ``xgboost`` node whose ML inference is unavailable under ``VYOMQUANT_MODE=safe`` (and
+    which raised ``MODEL NOT FOUND`` under paper/live even before that, because nothing
+    populates ``MLExecutor.model_registry``). That has nothing to do with what ``feat_lag``
+    computed one level earlier.
+
+    So the run's exception is held rather than propagated, and then the requested output is
+    looked up as before. THE CHECK IS NOT WEAKENED: if ``node_id``'s ``port`` was not
+    produced, the lookup raises ``KeyError`` and the held exception is re-raised as its
+    cause, so a node that genuinely failed to produce its value still fails this helper -
+    with both the missing key and the reason attached.
     """
     plan = SC.compile_graph(graph, reg)
     nodes, edges = SC.plan_to_engine_graph(plan, reg)
     engine = DAGEngine(enable_event_buffer=False)
-    engine.execute_dag(nodes, edges, frame)
-    return engine, engine.node_outputs[(node_id, port)]
+
+    run_error = None
+    try:
+        engine.execute_dag(nodes, edges, frame)
+    except Exception as exc:  # noqa: BLE001 - re-raised below unless irrelevant
+        run_error = exc
+
+    try:
+        produced = engine.node_outputs[(node_id, port)]
+    except KeyError as missing:
+        if run_error is not None:
+            raise AssertionError(
+                f"the runtime produced no {port!r} output for {node_id!r}, and the graph "
+                f"run failed: {type(run_error).__name__}: {run_error}"
+            ) from run_error
+        raise missing
+
+    return engine, produced
 
 
 def served_frame(feed_recorder, index=-1, timeframe="5m"):

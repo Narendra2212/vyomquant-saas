@@ -5,13 +5,39 @@ Tests that financial transactions use SERIALIZABLE isolation level
 to prevent race conditions and ensure consistency for money-critical operations.
 
 This test verifies the fix for the critical transaction isolation issue.
+
+EVERY TEST IN THIS FILE SKIPS unless ``DATABASE_URL`` names a PostgreSQL server.
+
+``SHOW transaction_isolation`` is PostgreSQL syntax and SQLite's parser rejects it
+outright (``near "SHOW": syntax error``), so before the guard below existed all three
+tests in this file failed on every run of the ``unit-tests`` job in
+``.github/workflows/01-pr-check.yml`` -- that job has no ``DATABASE_URL`` by design, so
+``SessionLocal()`` resolves to the ``sqlite:///./algo22.db`` fallback. SQLite has no
+isolation level to report, so there is nothing here to rewrite into a SQLite-compatible
+form: the question this file asks only has an answer on a real server.
+``tests/test_database_isolation_level_postgres.py`` records the same conclusion about
+this file in its own docstring.
+
+See ``tests/test_sqlite_lane_is_greenable.py``, which asserts both that this guard
+exists and that the file is named in the ``database-tests`` job, so skipping here cannot
+quietly become running nowhere.
 """
+
+import os
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from backend_app.core.database import SessionLocal, engine
 from backend_app.core.database_pool import get_db_pool
+
+pytestmark = pytest.mark.skipif(
+    not os.getenv("DATABASE_URL", "").startswith(("postgresql", "postgres://")),
+    reason=(
+        "needs a real PostgreSQL through DATABASE_URL; provided by the database-tests "
+        "job in .github/workflows/01-pr-check.yml, skipped in the SQLite lane"
+    ),
+)
 
 
 def test_transaction_isolation_level_serializable():

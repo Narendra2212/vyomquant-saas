@@ -272,8 +272,26 @@ def _is_required(parameter) -> bool:
     return inner is Ellipsis or type(inner).__name__ == "PydanticUndefinedType"
 
 
-class TestEveryRouteAcceptsBothCredentials:
-    """The credential contract is uniform across the whole surface."""
+class TestTheTicketIsTheOnlyCredential:
+    """The credential contract is uniform across the whole surface.
+
+    THIS CLASS USED TO ASSERT THE OPPOSITE OF WHAT IT ASSERTS NOW, and the change is not
+    a relaxation. Task 8.2 accepted `?ticket=` alongside `?token=` "for one release" so a
+    cached frontend bundle would keep its socket, and this class pinned that overlap. The
+    overlap then ENDED: commit c60546c6, "Stop writing session JWTs to CloudWatch: the
+    ?token= socket credential is deleted", removed the parameter from all nine handlers,
+    and c60546c6 names the reason -- a session JWT in a query string is recorded by every
+    access log and log aggregator the request passes through.
+
+    The test file was not updated with it, so `?token=` was still being asserted present
+    on nine routes that no longer declare it, and every handler raised
+    `TypeError: ws_telemetry() got an unexpected keyword argument 'token'`. That is 9 of
+    the failures in the lane this file runs in.
+
+    So the assertion is inverted rather than deleted: `?token=` must now be ABSENT, which
+    keeps the removal from being undone by a later edit that reads "accept a token for
+    compatibility" and reintroduces the credential this commit took away.
+    """
 
     def test_nine_websocket_routes_are_published(self):
         """Pinned so a tenth route cannot be added without this file noticing."""
@@ -286,32 +304,37 @@ class TestEveryRouteAcceptsBothCredentials:
         )
 
     @pytest.mark.parametrize("route", WS_ROUTES, ids=WS_ROUTE_IDS)
-    def test_route_still_accepts_a_token(self, route):
-        """The one-release overlap: a cached bundle keeps its socket."""
-        assert "token" in _query_parameters(route), (
-            f"{route.path} no longer accepts ?token=; the overlap release needs it"
+    def test_route_no_longer_accepts_a_token(self, route):
+        """The overlap is over. A session JWT is not a socket credential.
+
+        Asserted on the handler's signature, so a route that re-declares the parameter
+        fails here even if nothing ever sends one.
+        """
+        assert "token" not in _query_parameters(route), (
+            f"{route.path} accepts ?token= again. A session JWT in a query string is "
+            f"recorded by every access log the request passes through, which is why "
+            f"c60546c6 removed it. Use ?ticket=."
         )
 
     @pytest.mark.parametrize("route", WS_ROUTES, ids=WS_ROUTE_IDS)
-    def test_neither_credential_is_required_by_the_handshake(self, route):
-        """Both are optional at the signature so *either* can carry the connection.
+    def test_the_ticket_is_not_required_by_the_handshake(self, route):
+        """Optional at the signature so the REFUSAL is the handler's, not FastAPI's.
 
-        A required `token` would reject a ticket-only client during the handshake,
-        before any code in the body ran. The refusal for "neither presented" lives in
-        the body instead, which the close-code tests below cover.
+        A required `ticket` would make a credential-less connection a 422 during the
+        handshake, before any code in the body ran, and the close code the body chooses
+        -- 4001, which a client can act on -- would never be sent. The refusal for
+        "nothing presented" lives in the body, which the close-code tests below cover.
         """
-        parameters = _query_parameters(route)
-        for name in ("ticket", "token"):
-            assert not _is_required(parameters[name]), (
-                f"{route.path}: {name} is declared required"
-            )
+        parameter = _query_parameters(route)["ticket"]
+
+        assert not _is_required(parameter), f"{route.path}: ticket is declared required"
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  THE REFUSAL MOVED INTO THE BODY — IT MUST STILL REFUSE
+#  THE REFUSAL IS THE HANDLER'S — IT MUST STILL REFUSE
 #
-#  Making `token` optional on four routes moved "no credential presented" from a
-#  handshake rejection to a decision in the handler. So the handler has to be the thing
+#  `ticket` is optional at the signature, so "no credential presented" is a decision in
+#  the handler rather than a handshake rejection. So the handler has to be the thing
 #  observed making it, on all nine, with the close codes those routes already used.
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -340,10 +363,14 @@ class _RecordingWebSocket:
 
 
 def _placeholder_arguments(route) -> dict:
-    """Values for the handler's non-credential parameters, by annotation."""
+    """Values for the handler's non-credential parameters, by annotation.
+
+    Derived from the signature rather than hardcoded, which is what lets the two tests
+    below stop passing `token=` without having to know which routes once took one.
+    """
     arguments = {}
     for name, parameter in _query_parameters(route).items():
-        if name in ("ticket", "token"):
+        if name == "ticket":
             continue
         arguments[name] = 1 if parameter.annotation is int else "placeholder"
     return arguments
@@ -353,13 +380,12 @@ class TestNoCredentialIsRefusedOnEveryRoute:
     """Requirement 3.9 — authentication still applies unchanged on every route."""
 
     @pytest.mark.parametrize("route", WS_ROUTES, ids=WS_ROUTE_IDS)
-    def test_missing_both_credentials_closes_4001(self, route):
+    def test_missing_the_credential_closes_4001(self, route):
         socket = _RecordingWebSocket()
         _run(
             route.endpoint(
                 websocket=socket,
                 ticket=None,
-                token=None,
                 **_placeholder_arguments(route),
             )
         )
@@ -383,7 +409,6 @@ class TestNoCredentialIsRefusedOnEveryRoute:
             route.endpoint(
                 websocket=socket,
                 ticket=secrets.token_urlsafe(32),
-                token=None,
                 **_placeholder_arguments(route),
             )
         )

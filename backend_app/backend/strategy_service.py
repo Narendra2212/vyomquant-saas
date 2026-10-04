@@ -34,6 +34,7 @@ from backend_app.backend.strategy_builder import (
 # The lifecycle state machine (task 8.3). Imported as a module, so a test that replaces a
 # seam replaces it for every caller, and so the transition rules have exactly one home.
 from backend_app.backend import strategy_lifecycle as lifecycle
+from backend_app.backend.ml_node_types import detect_ml_nodes
 from backend_app.core.audit_trail import StrategyAuditAction as AuditAction
 
 logger = logging.getLogger("StrategyService")
@@ -258,12 +259,196 @@ class DeployPrerequisiteError(Exception):
         self.missing_prerequisite = missing_prerequisite
 
 
+class StrategyOwnershipUnresolved(Exception):
+    """Raised when :meth:`StrategyService.owns_strategy` could not establish ownership.
+
+    Deliberately NOT "not owned". The whole value of this type is that it separates the two
+    outcomes a caller must not conflate:
+
+    * the read COMPLETED and matched no row -> ``owns_strategy`` returns ``False``, and the
+      handler answers 404, indistinguishable from a non-existent id (Requirement 21.4);
+    * the read DID NOT COMPLETE -> this exception, and the handler answers 503.
+
+    Collapsing the second into the first would tell an owner their own strategy does not
+    exist because a database hiccuped — the substitution of an absence for a failure that
+    ``marketplace/errors.MARKETPLACE_READ_FAILED`` and ``paper_read_failed`` exist to
+    prevent elsewhere in this codebase. It is also not a :class:`ValueError`, because this
+    router's handlers already map a bare ``ValueError`` onto 404.
+    """
+
+
 #: The name this gate carries in the deploy preflight summary (task 8.2, Requirement 13.3).
 #: It is not one of ``deployment_binding.BINDING_CONDITIONS`` because the gate is this
 #: service's, not the binding module's - but Requirement 13.1 counts "a valid, hash-verified
 #: compiled plan" among the mandatory validations, so 13.3 requires its status alongside
 #: them. Named here so the router and the tests read the same string.
 DEPLOY_PREREQUISITE_CONDITION = "deploy_prerequisites"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  WHAT deploy_strategy ACCEPTS AND CANNOT APPLY
+#
+#  `StrategyDeployRequest` declares `capital`, `trade_size_pct`, `stop_loss_pct`
+#  and `max_drawdown_pct`; the route forwards all four; `deploy_strategy`
+#  accepts all four in its signature; and the `strategy_deployments` row it
+#  inserts contains none of them. A search for `trade_size_pct` in this file
+#  returned exactly one line - the signature.
+#
+#  AND THERE IS NOWHERE TO PUT THEM. `004e_deployment_bindings.sql` adds
+#  `exchange_account_id`, `risk_config_id`, `execution_config`, `mode` and
+#  `dag_hash`, and that is the whole of it.
+#  `deployment_binding.EXECUTION_CONFIG_FIELDS` is `max_order_notional`,
+#  `max_open_positions`, `slippage_tolerance_bps`, `order_timeout_seconds`,
+#  `retry_policy`, and `normalise_execution_config` REFUSES unknown keys, so
+#  the JSONB column will not take them either. Persisting them needs a
+#  migration against a populated production table.
+#
+#  SO THEY ARE REFUSED, NOT REPORTED. The backtest route's `configuration`
+#  echo keeps its inert fields and declares them, because that is a report
+#  about a simulation. This is different: a trader who sets a 2% stop and
+#  gets a deployment with no stop at all is worse off than one who gets an
+#  error, and the error costs nothing because the values do nothing today.
+#  Per-trade risk belongs on `strategies.risk`, which is what the live path
+#  (`strategy_builder.StrategyEngine.run_logic`) actually reads.
+#
+#  Regression: tests/test_deploy_strategy_accepts_only_what_it_applies.py
+# ══════════════════════════════════════════════════════════════════════════
+
+#: Deploy parameters this service accepts and cannot apply, with why. Same shape as
+#: ``backtest_runtime.CONFIGURATION_FIELDS_NOT_APPLIED``, so the two accepted-but-inert
+#: surfaces in this codebase are described the same way.
+DEPLOY_PARAMS_NOT_APPLIED: Dict[str, str] = {
+    "capital": (
+        "no column on strategy_deployments holds it and nothing downstream reads it; the "
+        "live bot sizes from the wallet balance it fetches, not from a declared figure"
+    ),
+    "trade_size_pct": (
+        "no column holds it, and execution_config refuses unknown keys. Per-trade sizing "
+        "comes from strategies.risk.position_size_pct, which is what the live path reads"
+    ),
+    "stop_loss_pct": (
+        "no column holds it. The live path reads strategies.risk.stop_loss_pct and "
+        "forwards it on the order, so setting it here would not place the stop"
+    ),
+    "max_drawdown_pct": (
+        "no column holds it and the name appears nowhere else in the live path; the "
+        "drawdown ceiling enforced at runtime is the RiskManager's, not a per-deployment "
+        "figure"
+    ),
+}
+
+#: Keys the fleet's consumers read off the blueprint and refuse to run without.
+#: ``exchange_id`` is ``BotRunner.__init__``'s - it raises
+#: ``ValueError("exchange_id must be provided in strategy blueprint")``. The other three
+#: are ``StrategyEngine.run_logic``'s ``required`` list (minus ``strategy_id``, which the
+#: canonical graph does carry), and a blueprint missing them makes every tick a no-op.
+BLUEPRINT_STARTABLE_KEYS: Tuple[str, ...] = (
+    "exchange_id",
+    "buy_logic",
+    "sell_logic",
+    "risk",
+)
+
+
+class DeployParameterNotApplicable(Exception):
+    """A deploy request supplied a control this service cannot apply.
+
+    Not a :class:`ValueError`: both deploy routes already map a bare ``ValueError`` onto
+    400, or onto 403 when the message mentions a quota, so a bare one here would be
+    reported as a validation or entitlement problem. This is neither - the request is
+    well-formed and the caller is entitled; the platform simply cannot honour the field.
+    """
+
+
+class DeployBlueprintIncomplete(Exception):
+    """The stored blueprint cannot start a bot, so no deployment is created.
+
+    Separate from :class:`DeployPrerequisiteError`, which is about the VERSION's compile
+    state (validation_state / dag_hash / compiled_plan). This is about the blueprint
+    DOCUMENT: a version can be perfectly compiled and still serialise to a graph envelope
+    that carries no venue and no logic trees, which is what the canonical save path
+    produces.
+    """
+
+
+def assert_deploy_params_applicable(supplied: Mapping[str, Any]) -> None:
+    """Refuse any of :data:`DEPLOY_PARAMS_NOT_APPLIED` that was actually supplied.
+
+    ``None`` means "not supplied" - all four are ``Optional[...] = None`` on the request
+    model, and absence is the normal case. Everything else counts as supplied, INCLUDING
+    ``0`` and ``0.0``: a truthiness test would silently accept a ``stop_loss_pct`` of zero,
+    which is precisely the kind of deliberate value a trader would be most surprised to
+    find discarded.
+
+    Every offending field is named in one refusal rather than the first one found, so a
+    caller correcting its request does not have to discover them one round-trip at a time.
+    """
+    offending = sorted(
+        name
+        for name, value in supplied.items()
+        if name in DEPLOY_PARAMS_NOT_APPLIED and value is not None
+    )
+    if not offending:
+        return
+
+    details = "; ".join(f"{name}: {DEPLOY_PARAMS_NOT_APPLIED[name]}" for name in offending)
+    raise DeployParameterNotApplicable(
+        f"This deploy endpoint cannot apply {offending}, so it will not accept them "
+        f"rather than discard them silently. {details}. Set per-trade risk on the "
+        f"strategy's own `risk` configuration (strategies.risk: position_size_pct, "
+        f"stop_loss_pct, take_profit_pct), which is what the live runtime reads."
+    )
+
+
+def assert_blueprint_startable(blueprint: Any, *, strategy_id: str) -> None:
+    """Refuse a blueprint the fleet cannot start, before anything is written.
+
+    WHY THIS EXISTS. ``deploy_strategy`` hands ``version_data["blueprint"]`` to
+    ``fleet.start_bot``, and for every version saved through the current path that value is
+    ``StrategyGraph.to_dict()`` - keys ``schema_version, strategy_id, version, name,
+    nodes, edges, metadata, validation_state`` and nothing else. ``StrategyGraph``'s
+    docstring says so outright: "There is deliberately no ``exchange`` field (SB-06)."
+    ``BotRunner.__init__`` then raises ``ValueError("exchange_id must be provided in
+    strategy blueprint")``, ``fleet_manager.start_bot`` catches it and returns
+    ``(False, ...)``, and this service UPDATEs the row it had already inserted to
+    ``failed``. So the route could not deploy, and discovered it only after creating a
+    deployment record.
+
+    Called BEFORE the insert, so a refusal leaves no ``strategy_deployments`` row - the
+    same ordering the archive and prerequisite gates above it use.
+
+    IT CHECKS CONTENT, NOT ROUTE. ``strategy_versions.blueprint`` has been ``JSONB NOT
+    NULL`` since ``001_strategy_architecture.sql``, long before the canonical writer, so a
+    version-1 row may legitimately carry all four keys. Such a row passes here and deploys
+    exactly as it does today.
+
+    IT SUBSTITUTES NOTHING. ``routers/strategies.py``'s deploy endpoint defaults the venue
+    to ``"binance"`` when the caller names none; copying that would be the SB-06 defect on
+    the deploy path - a deployment whose venue nobody chose. Missing means refused.
+
+    Raises
+        :class:`DeployBlueprintIncomplete` naming every missing key.
+    """
+    if not isinstance(blueprint, Mapping):
+        raise DeployBlueprintIncomplete(
+            f"Strategy {strategy_id} has no usable blueprint to deploy: expected an "
+            f"object, got {type(blueprint).__name__}. Nothing was created."
+        )
+
+    missing = [key for key in BLUEPRINT_STARTABLE_KEYS if key not in blueprint]
+    if not missing:
+        return
+
+    raise DeployBlueprintIncomplete(
+        f"The stored blueprint for strategy {strategy_id} cannot start a bot: it is "
+        f"missing {missing}. `BotRunner` refuses a blueprint with no `exchange_id`, and "
+        f"`StrategyEngine.run_logic` skips every tick without `buy_logic`, `sell_logic` "
+        f"and `risk`. This is what the canonical save path stores - a serialised "
+        f"StrategyGraph, which carries nodes and edges and deliberately no venue - so "
+        f"this endpoint cannot deploy it. Use the versioned deploy route "
+        f"(POST /api/strategy-operations/strategies/{{id}}/versions/{{version}}/deploy). "
+        f"No deployment was created."
+    )
 
 
 class StrategyStatus(Enum):
@@ -484,7 +669,81 @@ class StrategyService:
             "deployments": deployments,
             "performance": performance
         }
-    
+
+    async def owns_strategy(self, user: dict, strategy_id: str) -> bool:
+        """Whether ``strategy_id`` exists and belongs to ``user``. One owner-scoped read.
+
+        WHY THIS EXISTS SEPARATELY FROM :meth:`get_strategy`
+        ---------------------------------------------------
+        :meth:`get_strategy` is the right ownership gate for a handler that then goes on to
+        USE the strategy, and several already use it that way. It is the wrong gate for the
+        six metrics endpoints, for two reasons: it issues four reads where one answers the
+        question, and the fourth of them is ``_get_strategy_performance`` -> ``MetricsService
+        .get_strategy_performance``, i.e. the very read the gate is supposed to stand in
+        front of. Using it there would make the gate pay for the read it is gating.
+
+        So this is one statement with the ownership in its ``WHERE`` clause — the pattern
+        every other resource read in this codebase follows — selecting a single column,
+        because the answer is "does a row match", not "what is in it".
+
+        Isolation is enforced twice, as it is in :meth:`get_strategy`: the client from
+        :meth:`_get_supabase` carries this user's access token so PostgREST applies the
+        ``strategies`` RLS policy, and the query additionally carries an explicit
+        ``.eq("user_id", ...)``.
+
+        Returns:
+            ``True`` when a row matched. ``False`` when the read completed and matched
+            nothing — which is the answer for a strategy that does not exist AND for one
+            belonging to someone else, deliberately the same answer so that this method
+            cannot be used as an existence oracle (Requirement 21.4).
+
+        Raises:
+            StrategyOwnershipUnresolved: no usable client, or the read did not complete, or
+                it returned a response whose ``data`` cannot be read. Ownership is then
+                UNKNOWN, and an unknown must not be reported as a ``False`` — see that
+                exception's docstring.
+        """
+        user_id = (user or {}).get("id")
+        if not user_id or not strategy_id:
+            # Nothing was read, so nothing is established. Refusing here rather than
+            # returning False keeps "we did not check" distinct from "it is not yours".
+            raise StrategyOwnershipUnresolved(
+                "ownership cannot be resolved without both a caller id and a strategy id"
+            )
+
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if not sb:
+            raise StrategyOwnershipUnresolved(
+                "no database client is available, so strategy ownership could not be "
+                "established"
+            )
+
+        try:
+            q = (
+                sb.table("strategies")
+                .select("id")
+                .eq("id", strategy_id)
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            res = await q if inspect.isawaitable(q) else q
+        except Exception as exc:  # noqa: BLE001 - re-raised as the unresolved outcome
+            raise StrategyOwnershipUnresolved(
+                f"the strategy ownership read did not complete: {exc}"
+            ) from exc
+
+        # A response object whose `data` is None is the third case: the read came back and
+        # cannot be interpreted. Reading it as "no rows" would report an owner as a
+        # stranger, so it is refused for the same reason a raised error is.
+        if res is None or getattr(res, "data", None) is None:
+            raise StrategyOwnershipUnresolved(
+                "the strategy ownership read returned no readable result"
+            )
+
+        return bool(res.data)
+
     async def list_strategies(
         self,
         user: dict,
@@ -1724,10 +1983,23 @@ class StrategyService:
         # Trigger actual deployment via FleetManager
         from backend_app.core.state import app_state
         if hasattr(app_state, 'fleet'):
+            # ── THE RUNTIME MODE IS THE BINDING'S MODE ────────────────────────
+            # `binding.mode` is the value every Requirement 13 gate above was
+            # evaluated against: `assert_account_required_for_live` demanded an
+            # exchange account for it, the LIVE_TRADING entitlement was checked
+            # against it, and it is what `chk_sd_mode` persisted on the row. The
+            # runtime flag has to be that same decision rather than a second one.
+            #
+            # Until this line existed, `BotRunner` read the mode from
+            # `blueprint.get("paper_trading", True)` — a key nothing writes — so a
+            # fully gated `mode='live'` deployment started a PAPER bot while the
+            # database, the lifecycle and the UI all reported it live.
+            # Regression: tests/test_live_deployment_mode_propagation.py
             success, message = await app_state.fleet.start_bot(
                 user_id=user["id"],
                 symbol=binding.symbol,
-                blueprint=version_data["blueprint"]
+                blueprint=version_data["blueprint"],
+                paper_trading=(binding.mode != db_binding.MODE_LIVE),
             )
             
             if success:
@@ -2448,8 +2720,13 @@ class StrategyService:
         if isinstance(strategy_data.get("buy_logic"), dict):
             nodes = strategy_data["buy_logic"].get("_nodes", [])
         
-        # Check for ML/DL nodes
-        ml_nodes = [n for n in nodes if n.get("type", "").lower() in ["ml", "dl"]]
+        # Check for ML/DL nodes, using the SHARED vocabulary rather than an inlined
+        # ["ml", "dl"]. This gate used to miss the `ml_dl` and `ml_model` spellings that
+        # `routers/strategies.py` has always counted as model blocks, so a strategy
+        # declaring a model it did not have was refused there and deployed here. Widening
+        # the set can only refuse more, never less - see backend/ml_node_types.py.
+        # Regression: tests/test_ml_node_detection_is_one_vocabulary.py
+        ml_nodes = detect_ml_nodes(nodes)
         
         if ml_nodes and not strategy_data.get("ml_model_path"):
             raise ValueError(
@@ -2476,6 +2753,30 @@ class StrategyService:
         # is created or fleet call is made, naming the missing prerequisite.
         self._assert_deploy_prerequisites(
             version_data, strategy_id, version_data.get("version", version)
+        )
+
+        # ── Two more gates, both BEFORE the insert for the same reason ──────────
+        # A refusal must leave no `strategy_deployments` row behind. Until these existed
+        # this method inserted the row, called the fleet, failed, and UPDATEd the row to
+        # `failed` - so a route that cannot deploy still accumulated records.
+        #
+        # 1. Controls this endpoint accepts and cannot apply. Refused rather than
+        #    discarded; see DEPLOY_PARAMS_NOT_APPLIED for why refusing is the right answer
+        #    for risk controls specifically.
+        # 2. The blueprint about to be handed to `fleet.start_bot`. The canonical save path
+        #    stores a serialised StrategyGraph, which carries no `exchange_id` and no logic
+        #    trees, and `BotRunner.__init__` refuses it.
+        # Regression: tests/test_deploy_strategy_accepts_only_what_it_applies.py
+        assert_deploy_params_applicable(
+            {
+                "capital": capital,
+                "trade_size_pct": trade_size_pct,
+                "stop_loss_pct": stop_loss_pct,
+                "max_drawdown_pct": max_drawdown_pct,
+            }
+        )
+        assert_blueprint_startable(
+            version_data.get("blueprint"), strategy_id=strategy_id
         )
 
         # ── mode, on every deployment this codebase creates ──────────────────────
@@ -2588,10 +2889,15 @@ class StrategyService:
         # This will start the bot instance
         from backend_app.core.state import app_state
         if hasattr(app_state, 'fleet'):
+            # The mode this deployment resolved, for the same reason `deploy_version`
+            # passes `binding.mode`: `normalise_mode` decided it above,
+            # `assert_account_required_for_live` gated it, and it is what was persisted.
+            # Regression: tests/test_live_deployment_mode_propagation.py
             success, message = await app_state.fleet.start_bot(
                 user_id=user["id"],
                 symbol=strategy["strategy"]["symbol"],
-                blueprint=version_data["blueprint"]
+                blueprint=version_data["blueprint"],
+                paper_trading=(mode != db_binding.MODE_LIVE),
             )
             
             if success and sb:

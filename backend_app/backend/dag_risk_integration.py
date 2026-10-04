@@ -36,6 +36,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend_app.backend.dag_engine import DAGEngine
+from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.backend.dag_event_loop import (DAGEventLoop, MarketEvent,
                                                 Signal)
 from backend_app.core.risk_engine import RiskEngine
@@ -610,7 +611,14 @@ class RiskIntegratedEventLoop(DAGEventLoop):
 
         engine = getattr(self, "execution_engine", None)
         if not engine:
-            engine = ExecutionEngine(portfolio_state=portfolio_state)
+            # PAPER: this fallback engine is built with no exchange executor, so it
+            # simulates. Stated explicitly because the engine now refuses a branch that
+            # disagrees with what it was built for.
+            # Regression: tests/test_execution_engine_mode_matches_its_branch.py
+            engine = ExecutionEngine(
+                portfolio_state=portfolio_state,
+                execution_environment=ExecutionEnvironment.PAPER,
+            )
 
         res = await engine.execute_trade(
             tenant_id=tenant_id,

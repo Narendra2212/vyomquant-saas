@@ -70,7 +70,25 @@ class ExchangeGateway:
         self.is_connected = False
     
     async def execute_order(self, job: ExecutionJob) -> Dict[str, Any]:
-        """Execute order via Canonical ExecutionEngine Gateway."""
+        """Execute order via Canonical ExecutionEngine Gateway.
+
+        WHAT THIS REPORTS IS WHAT HAPPENED, AND NOTHING ELSE.
+
+        This method used to substitute invented values for the ones it did not have: an
+        `order_{hex}` when no order id came back, `Decimal("50000")` as the execution
+        price when the job carried no price, and a fee recomputed at 0.001 rather than
+        read off the fill. Combined with an executor-less engine - which falls through to
+        `_execute_trade_internal`'s paper branch and returns a successful `paper_` fill -
+        that produced a complete, plausible, entirely fictional execution record.
+
+        Two things changed. The fallback engine states `LIVE`, so with no exchange
+        executor it refuses at the branch point instead of simulating (see
+        `tests/test_execution_engine_mode_matches_its_branch.py`). And the result is read
+        off the fill, with a refusal reported as a refusal.
+
+        Regression: tests/test_execution_paths_that_claim_an_exchange.py
+        """
+        from backend_app.backend.execution_environment import ExecutionEnvironment
         from backend_app.core.execution_engine import ExecutionEngine
         
         tenant_id = UUID(str(job.tenant_id)) if isinstance(job.tenant_id, (str, UUID)) else job.tenant_id
@@ -98,7 +116,14 @@ class ExchangeGateway:
         
         engine = getattr(self, "execution_engine", None)
         if not engine:
-            engine = ExecutionEngine(portfolio_state=portfolio_state)
+            # LIVE: this gateway claims an exchange - the class name, the docstring and
+            # the `exchange_name` it is constructed with all say so - and an engine built
+            # for LIVE with no exchange executor refuses rather than simulating. An
+            # injected engine is the injector's to label.
+            engine = ExecutionEngine(
+                portfolio_state=portfolio_state,
+                execution_environment=ExecutionEnvironment.LIVE,
+            )
 
         res = await engine.execute_trade(
             tenant_id=tenant_id,
@@ -110,14 +135,59 @@ class ExchangeGateway:
             metadata={"job_id": job.job_id, "idempotency_key": job.idempotency_key}
         )
 
-        details = res.details or {}
+        # The fill as the engine reported it. `_execute_trade_internal` returns the same
+        # keys on both of its branches - `order_id`, `executed_price`, `size`, `fee` -
+        # and `execute_with_idempotency` nests that dict under `trade_result`.
+        fill = (res.details or {}).get("trade_result") or {}
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        if not res.success:
+            logger.error(
+                "Execution job %s was not executed: %s. Reporting a failure with no "
+                "order id, price or fee, because none of them exist.",
+                job.job_id,
+                res.message or res.status,
+            )
+            return {
+                "order_id": None,
+                "status": "failed",
+                "filled_quantity": "0",
+                "execution_price": "0",
+                "fees": "0",
+                "error": res.message or res.status or "execution_failed",
+                "exchange_timestamp": timestamp,
+            }
+
+        order_id = fill.get("order_id") or res.execution_id
+        executed_price = fill.get("executed_price")
+        if not order_id or executed_price is None:
+            # Defensive, not expected: both engine branches always set these. Reported as
+            # a failure rather than back-filled, because a fill with no price is not a
+            # fill anyone can account for.
+            logger.error(
+                "Execution job %s reported success without an order id or an executed "
+                "price (%r). Treating it as a failure rather than inventing either.",
+                job.job_id,
+                fill,
+            )
+            return {
+                "order_id": None,
+                "status": "failed",
+                "filled_quantity": "0",
+                "execution_price": "0",
+                "fees": "0",
+                "error": "incomplete_fill_report",
+                "exchange_timestamp": timestamp,
+            }
+
         return {
-            "order_id": res.execution_id or details.get("order_id") or f"order_{uuid.uuid4().hex[:12]}",
-            "status": "filled" if res.success else "failed",
-            "filled_quantity": job.quantity if res.success else Decimal("0"),
-            "execution_price": job.price or Decimal("50000"),
-            "fees": job.quantity * Decimal("0.001"),
-            "exchange_timestamp": datetime.now(timezone.utc).isoformat()
+            "order_id": order_id,
+            "status": "filled",
+            "filled_quantity": str(fill.get("size", job.quantity)),
+            "execution_price": str(executed_price),
+            "fees": str(fill.get("fee", "0")),
+            "fee_currency": fill.get("fee_currency"),
+            "exchange_timestamp": timestamp,
         }
     
     async def cancel_order(self, order_id: str) -> bool:
@@ -414,7 +484,32 @@ class ExecutionWorker:
                 self.state = WorkerState.IDLE
     
     async def _complete_job_with_result(self, job: ExecutionJob, result: Dict[str, Any]):
-        """Complete job with execution result."""
+        """Complete job with execution result -- ONLY IF IT FILLED.
+
+        This method never read `result["status"]`. It wrote whatever the gateway returned
+        into the job, set `JobStatus.COMPLETED`, acknowledged the job off the queue and
+        emitted `exchange_telemetry.on_order_execution` for it. So the gateway's own
+        refusal - `{"order_id": None, "status": "refused", "error":
+        "PORTFOLIO_STATE_REQUIRED"}`, which is what it returns for every job, because
+        `ExecutionJob` has no `portfolio_state` field for a producer to fill - was
+        recorded as an executed order with a null id and a zeroed price, quantity and
+        fee, and reported to telemetry as an execution.
+
+        Anything that did not fill now goes to `_fail_job`, which is what the retry and
+        dead-letter paths are for. Checked before the job is mutated, so a refused job
+        does not carry a half-written result into the failure path.
+
+        Regression: tests/test_execution_paths_that_claim_an_exchange.py
+        """
+        reported = str(result.get("status") or "").lower()
+        if reported != "filled":
+            await self._fail_job(
+                job,
+                result.get("error")
+                or f"gateway did not report a fill (status={reported or 'missing'!r})",
+            )
+            return
+
         # Update job with result
         job.order_id = result.get("order_id")
         job.execution_price = Decimal(result.get("execution_price", "0"))

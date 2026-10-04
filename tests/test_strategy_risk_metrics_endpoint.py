@@ -247,14 +247,40 @@ def owner_client(monkeypatch):
         app.dependency_overrides.pop(get_current_user, None)
 
 
+class _OwnerAffirmingStrategyService:
+    """The ownership seam, answering "yes" for the one identity this file uses.
+
+    This route now resolves ownership before it reads anything, through
+    ``strategy_operations._assert_owns_strategy`` -> ``StrategyService.owns_strategy``.
+    That gate is the fix for the second defect this file's docstring describes as
+    deliberately not asserted here — the route read ``strategy_risk`` by ``strategy_id``
+    alone, with no RLS behind it, so a subscriber received the owner's answer. The property
+    now lives in ``tests/test_strategy_metrics_tenant_isolation.py``.
+
+    Every request here is the owner's, and this environment has no Supabase to resolve
+    ownership against, so the seam is stubbed to the owner's verdict. Without it the request
+    answers 503 ``STRATEGY_OWNERSHIP_UNRESOLVED`` and the call-site assertions below would
+    be measuring the absence of a database.
+    """
+
+    async def owns_strategy(self, user: dict, strategy_id: str) -> bool:
+        return True
+
+
 def _install(monkeypatch, service: Any) -> None:
-    """Replace the router's one seam onto the metrics service."""
+    """Replace the router's two seams: the metrics service and the ownership resolver."""
 
     async def _get_metrics_service() -> Any:
         return service
 
+    async def _get_strategy_service() -> Any:
+        return _OwnerAffirmingStrategyService()
+
     monkeypatch.setattr(
         strategy_operations, "get_metrics_service", _get_metrics_service
+    )
+    monkeypatch.setattr(
+        strategy_operations, "get_strategy_service", _get_strategy_service
     )
 
 

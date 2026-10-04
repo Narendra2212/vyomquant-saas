@@ -114,15 +114,22 @@ calls before the engine (doubles reused from
 made here that a backtest over live Binance data was run.** Nothing in this file depends on the
 bar values; every assertion is about key names and about which producer won.
 
-THE ONE PROPERTY OF `F` THIS MEASUREMENT HAD TO ACCOMMODATE
------------------------------------------------------------
-`backtesting_engine.py:168-175` recomputes `position = entries_raw.cumsum() - exits_raw.cumsum()`
-**inclusive of the current bar**, then keeps only `entries_raw & (position == 0)`. An entry bar
-therefore always has `position >= 1` and is filtered out unless an exit signal preceded it - so a
-signal series that opens with an *exit* is the minimum that reaches VectorBT at all; anything
-else raises "Strategy generated 0 signals". Recorded here because it is a real property of `F`
-that shaped :func:`_conditions`, not a property of this test. It is not this task's defect and no
-assertion below depends on it.
+THE ONE PROPERTY OF `F` THIS MEASUREMENT HAD TO ACCOMMODATE - SINCE FIXED
+--------------------------------------------------------------------------
+`backtesting_engine.py` used to compute `position = entries_raw.cumsum() - exits_raw.cumsum()`
+**inclusive of the current bar**, then keep only `entries_raw & (position == 0)`. An entry bar
+therefore always had `position >= 1` and was filtered out unless an exit signal preceded it - so
+a signal series that opened with an *exit* was the minimum that reached VectorBT at all, and
+anything else raised "Strategy generated 0 signals". That is why :func:`_conditions` below shorts
+on every 8th bar and longs on the bar after.
+
+THAT DEFECT IS NOW FIXED and the selection is written sequentially, so the ordering is no longer
+load-bearing: an ordinary long-first strategy simulates too. :func:`_conditions` is left as it
+is, because every assertion in this file is about key names and about which producer won, and
+none of them depends on the signal ordering - changing the fixture would re-baseline the numbers
+in section 2 for no gain. The note is kept, past-tense, so a reader does not re-derive the
+constraint from the fixture's shape and conclude it is still required.
+See `tests/test_backtest_signal_path_integrity.py`.
 
 HARNESS
 -------
@@ -346,12 +353,14 @@ def _bars(count=BAR_COUNT):
 
 
 def _conditions(count=BAR_COUNT):
-    """Long/short condition arrays that survive `backtesting_engine.py:168-175`.
+    """Long/short condition arrays for the measurement in section 2.
 
-    Short on every 8th bar, long on the bar after it. The *exit-before-entry* ordering is
-    mandatory, not stylistic - see THE ONE PROPERTY OF `F` in the module docstring. Anything
-    else reaches `raise ValueError("Strategy generated 0 signals")` and no payload exists to
-    measure.
+    Short on every 8th bar, long on the bar after it. The *exit-before-entry* ordering was
+    mandatory when this file was written, because the position filter discarded any entry not
+    preceded by an exit and anything else reached
+    `raise ValueError("Strategy generated 0 signals")` with no payload to measure. That defect
+    is fixed and the ordering is no longer required - see THE ONE PROPERTY OF `F` in the module
+    docstring. Kept unchanged so section 2's figures stay on their original baseline.
     """
     longs = np.zeros(count, dtype=bool)
     shorts = np.zeros(count, dtype=bool)
@@ -435,21 +444,60 @@ def vectorbt_engine_run():
     return _run_engine()
 
 
-@pytest.fixture(scope="module")
-def fallback_engine_run():
-    """`(results, equity_curve)` from the pandas fallback at `backtesting_engine.py:230-244`."""
-    with _without_vectorbt():
-        return _run_engine()
+def test_the_pandas_fallback_path_no_longer_exists_and_refuses_instead():
+    """THE FALLBACK PATH WAS REMOVED. This is what replaces the parametrised case.
 
+    `_without_vectorbt()` and `_run_engine()` above are retained and reused here, because
+    the branch they reach is still worth asserting — what changed is the contract it has to
+    satisfy. It used to RETURN a payload, and this file measured its key set alongside the
+    VectorBT path's ("run against both engine paths"). It now RAISES.
 
-@pytest.fixture(params=["vectorbt", "fallback"])
-def engine_run(request, vectorbt_engine_run, fallback_engine_run):
-    """Both engine paths, as Requirement 2.7 requires ("run against both engine paths").
+    WHY THE PATH WAS REMOVED RATHER THAN HAVING ITS KEY SET FIXED
+    ------------------------------------------------------------
+    Its keys were never the problem; its VALUES were fabricated. `profit_factor` was the
+    literal `1.5`, `sortino_ratio` was `sharpe * 1.1`, `total_fees_paid` was an estimate
+    standing in the field the real path fills from `portfolio.stats()`, `trades` was `[]` so
+    the win/loss split was back-derived from a win rate, and that `win_rate_pct` divided
+    winning **bars** by trade **count** — on a 120-bar run with one trade it reported
+    `7000.0`. The branch also applied no stop-loss, no take-profit, no slippage and no
+    spread, while the real path passes `sl_stop`/`tp_stop`/`slippage` to
+    `vbt.Portfolio.from_signals`.
 
-    Parametrised rather than looped so a path that is fixed while the other is not reports as
-    one passing case and one failing case.
+    None of it was marked, and the payload shape was identical to a real one — so once
+    `backtest_runtime` persisted it into `strategy_backtests`, `routers/library.py`'s
+    publish path copied those `backtest_*` columns onto a `library_strategies` row and
+    `listing_projection` served them as a listing's PUBLIC `performance_summary` and
+    `risk_metrics`. A deployment missing one pinned dependency could therefore publish an
+    invented profit factor as a strategy's measured track record. Matching key sets between
+    a real simulation and that is not a property worth preserving.
+
+    Refusing costs nothing real: `vectorbt==0.26.2` is pinned in `requirements-base.txt`, so
+    the branch is unreachable in any correctly provisioned environment.
+
+    Regression: tests/test_backtest_engine_refuses_without_vectorbt.py
     """
-    payload = vectorbt_engine_run if request.param == "vectorbt" else fallback_engine_run
+    from backend_app.backend.backtesting_engine import BacktestEngineUnavailable
+
+    with _without_vectorbt():
+        with pytest.raises(BacktestEngineUnavailable) as excinfo:
+            _run_engine()
+
+    assert "vectorbt" in str(excinfo.value).lower(), (
+        f"the refusal does not name the missing dependency: {excinfo.value!r}"
+    )
+
+
+@pytest.fixture(params=["vectorbt"])
+def engine_run(request, vectorbt_engine_run):
+    """The engine paths that PRODUCE a payload. There is now exactly one.
+
+    Still parametrised, and deliberately so: the parametrisation is what made this file
+    report "one path fixed, one not" as two distinct cases, and it is the seam a second
+    real engine path would be added back through. The `fallback` case is gone because that
+    path no longer returns anything to measure — see
+    :func:`test_the_pandas_fallback_path_no_longer_exists_and_refuses_instead`.
+    """
+    payload = vectorbt_engine_run
     return request.param, payload[0], payload[1]
 
 
@@ -939,19 +987,33 @@ def test_the_curve_is_in_the_vectorbt_payload_not_only_in_the_return_tuple(
     )
 
 
-def test_the_fallback_path_already_puts_the_curve_in_its_payload(fallback_engine_run):
-    """PASSES on `F`. The two engine paths disagree, and the fallback is the correct one.
+def test_the_surviving_engine_path_puts_the_curve_in_its_payload(vectorbt_engine_run):
+    """The curve travels IN BAND, on the one path that still produces a payload.
 
-    `backtesting_engine.py:243` does `results["equity_curve"] = equity_curve` before returning
-    the same value as the tuple element. So the curve's fate is **path-dependent**: a
-    deployment without VectorBT persists a curve and a deployment with it does not. That is
-    worth recording because it means 1.9's symptom ("the chart renders empty") reproduces only
-    on the primary path, and a fix verified against the fallback would look green while
-    changing nothing.
+    WHAT THIS TEST USED TO BE, AND WHY IT MOVED
+    -------------------------------------------
+    It was `test_the_fallback_path_already_puts_the_curve_in_its_payload`, and it recorded a
+    PATH-DEPENDENCE: the pandas fallback set `results["equity_curve"]` before returning the
+    same value as its tuple element, while the VectorBT path returned it out of band only —
+    so "a deployment without VectorBT persists a curve and a deployment with it does not",
+    and a fix verified against the fallback "would look green while changing nothing".
+
+    Both halves of that premise are gone. The VectorBT path now sets the key itself (the
+    engine's own note: "Setting the key here removes the drop site rather than patching
+    it"), so the two paths no longer disagree; and the fallback no longer exists, because it
+    fabricated its metrics — see
+    :func:`test_the_pandas_fallback_path_no_longer_exists_and_refuses_instead`.
+
+    So the assertion is repointed rather than deleted: the property worth holding is that
+    the path that DOES produce a payload carries the curve in it, which is exactly what
+    stops `strategy_backtests.equity_curve` persisting as `[]` for a run that produced one
+    point per bar.
     """
-    results, curve = fallback_engine_run
+    results, curve = vectorbt_engine_run
     assert results["equity_curve"] == curve, (
-        "the fallback path is expected to carry the curve in its payload at :243"
+        "the engine returned the equity curve as a tuple element without also putting it "
+        "in the payload. That is the out-of-band hand-off the runtime used to forget, "
+        "which persisted an empty equity_curve for a run that produced one point per bar."
     )
 
 

@@ -20,7 +20,7 @@ therefore a patch on the live adapter's single seam, not on one of several.
 
 ``master_executor.BotRunner._recover_live_state`` is the fork this requirement is about:
 
-    is_paper = self.blueprint.get("paper_trading", True)
+    is_paper = self.paper_trading      # REQUIRED constructor argument, never defaulted
     if is_paper:
         ...  # ConnectionEngine is constructed, but mocked (_apply_mock_interface()) -
         ...  # get_exchange_executor is never imported on this branch
@@ -489,7 +489,14 @@ def test_master_executor_paper_branch_source_contains_no_reference_to_the_live_f
     from backend_app.backend.master_executor import BotRunner
 
     source = inspect.getsource(BotRunner._recover_live_state)
-    is_paper_start = source.index("is_paper = self.blueprint")
+    # Anchored on the ASSIGNMENT, not on its right-hand side. This used to read
+    # `source.index("is_paper = self.blueprint")`, which broke the moment the mode stopped
+    # being derived from the blueprint — and that derivation was itself the defect
+    # (`blueprint.get("paper_trading", True)` with nothing ever writing the key, so every
+    # live deployment ran as paper; see tests/test_live_deployment_mode_propagation.py).
+    # The property this guard checks is about the branch, not about where the flag came
+    # from, so the anchor should not depend on the latter.
+    is_paper_start = source.index("is_paper = ")
     paper_branch_end = source.index("# LIVE path", is_paper_start)
     paper_branch = source[is_paper_start:paper_branch_end]
 

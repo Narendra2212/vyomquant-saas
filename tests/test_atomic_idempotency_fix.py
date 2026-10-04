@@ -64,15 +64,34 @@ async def test_lua_script_execution():
     """
     redis_client = await redis_manager.get_client()
     
-    # Test Lua script execution
+    # WHAT THIS TEST DOES AND DOES NOT EXERCISE
+    #
+    # It does NOT execute Lua. `core/cache/redis_manager`'s in-memory `eval_lua` ignores
+    # its `script` argument entirely and reimplements the decision in Python, so what the
+    # assertions below measure is that mock — not the script text passed in. That is how
+    # the production script's `string.sub(current_value, 1, 7) ~= 'processing'` (seven
+    # characters compared against a ten-character literal, therefore constant-true) stayed
+    # live while this test passed: the second assertion below expects `{0, False}`, which
+    # the real script could not return because that branch was unreachable.
+    #
+    # The script is kept in sync with the production one rather than deleted, because this
+    # file's value is the end-to-end shape; `tests/test_idempotency_lua_prefix_agreement.py`
+    # is what holds the script text itself to the prefix/length invariant, and it scans for
+    # copies like this one so the two cannot drift.
+    from backend_app.core.distributed_idempotency import (
+        PROCESSING_LOCK_MARKER,
+        PROCESSING_LOCK_PREFIX,
+    )
+
     lua_script = """
     local key = KEYS[1]
     local lock_payload = ARGV[1]
     local processing_ttl = ARGV[2]
+    local lock_marker = ARGV[3]
     
     local current_value = redis.call('GET', key)
     
-    if current_value and string.sub(current_value, 1, 7) ~= 'processing' then
+    if current_value and string.sub(current_value, 1, #lock_marker) ~= lock_marker then
         return {1, current_value}
     end
     
@@ -85,17 +104,24 @@ async def test_lua_script_execution():
     """
     
     key = "test_lua_key"
-    lock_payload = "processing:test_owner"
+    lock_payload = f"{PROCESSING_LOCK_PREFIX}test_owner"
     
     # First call - should acquire lock
-    result = await redis_client.eval(lua_script, 1, key, lock_payload, "60")
+    result = await redis_client.eval(lua_script, 1, key, lock_payload, "60", PROCESSING_LOCK_MARKER)
     status, value = result
     
     assert status == 0, "First call should return status 0 (lock acquired)"
     assert value == lock_payload, "First call should return lock payload"
     
     # Second call - should not acquire lock
-    result = await redis_client.eval(lua_script, 1, key, "processing:other_owner", "60")
+    result = await redis_client.eval(
+        lua_script,
+        1,
+        key,
+        f"{PROCESSING_LOCK_PREFIX}other_owner",
+        "60",
+        PROCESSING_LOCK_MARKER,
+    )
     status, value = result
     
     assert status == 0, "Second call should return status 0 (lock not acquired)"
