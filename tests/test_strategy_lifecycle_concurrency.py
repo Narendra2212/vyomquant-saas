@@ -27,13 +27,32 @@ points, but this file's 40 seeds vary the world each starts from - see
 ``_GATHER_SEED_COUNT``'s own comment), but a NONZERO count is the expected and reproduced
 outcome, not a flake.
 
-Both tests are written to **fail** against the code as it stands, on purpose, and their
-docstrings say so. They are the regression tests Requirement 2.16 asks for once an
-application-level guard is added - the day a lock, an optimistic-version guard, or a
-status-conditioned ``WHERE`` predicate lands on these write paths, these two tests are the
-ones that will start passing, and that transition is the signal this task's fix is real.
-Until then, a failing run of this file is not a defect in the file - it is task 12.6's
-proof, executed. See "Provable here: partly" in `tasks.md`'s own text for this task: the
+UPDATE - THE FIRST OF THE TWO IS NOW FIXED, AND THIS FILE IS WHAT PROVED IT
+----------------------------------------------------------------------------
+Both tests were written to **fail** against the code as it stood, on purpose, as the
+regression tests Requirement 2.16 asks for: the day a lock, an optimistic-version guard or
+a status-conditioned ``WHERE`` predicate landed on these write paths, they would start
+passing, and that transition would be the signal the fix was real.
+
+``test_the_four_operations_can_land_running_but_deleted`` has made that transition. A
+status-conditioned re-check now sits on both sides of the race -
+``deploy_version`` re-reads ``strategies.archived_at`` immediately before its deployment
+INSERT, and ``archive_strategy`` re-reads blocking deployments immediately after its
+``archived_at`` UPDATE and undoes the archive if one landed in that window - so on every
+interleaving one side observes the other. The test XPASSed under ``strict``, which failed
+the build, which is exactly how the marker came off.
+
+``test_deploy_can_race_itself_into_a_double_deploy`` still fails and is still marked, and
+that is correct rather than outstanding: the authoritative guard for it is a DATABASE
+constraint, ``021_strategy_deployment_live_uniqueness.sql``'s partial unique index, proven
+against a real server by ``tests/test_strategy_lifecycle_concurrency_postgres.py`` in the
+``database-tests`` job. This file drives the SQLite-backed application layer, which cannot
+see that index, so what it measures is specifically the application-level gap - real, but
+not the only line of defence.
+
+Neither guard makes these operations atomic. A re-check narrows a window; only a
+constraint closes one. The sequential-ordering sweep and the narrower gather-based checks
+below were never written to fail. See "Provable here: partly" in `tasks.md`'s own text for this task: the
 sandbox proves exactly this - that the application-level guarantee is currently absent -
 which is a stronger and more specific answer than "partly", named here precisely.
 
@@ -652,36 +671,29 @@ _GATHER_SEED_COUNT = 40
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "REQUIREMENT 2.16 IS VIOLATED TODAY, AND THIS TEST IS THE PROOF -- see the module "
-        "docstring. start/stop/delete/deploy fired together against one strategy id "
-        "reliably lands running-but-deleted (21 of 40 seeded interleavings on the "
-        "recorded run). There is no asyncio.Lock, no SELECT ... FOR UPDATE and no "
-        "expected_version guard on any of the four write paths; each is a plain read, "
-        "decide, write with no re-check at write time. "
-        "WHY IT IS NOW MARKED xfail RATHER THAN LEFT FAILING. It was written to fail on "
-        "purpose, which was sound while nothing ran it: `01-pr-check.yml`'s `unit-tests` "
-        "job has never executed, because `validate-code` failed at `black --check` on "
-        "every run and every other job declared `needs: validate-code`. Now that the "
-        "test lane actually runs, a deliberately-failing test is indistinguishable from "
-        "a regression and would keep the whole suite red, so the defect is pinned "
-        "instead of broadcast. strict=True means the day a lock, an optimistic-version "
-        "guard or a status-conditioned WHERE lands on these paths, this XPASSes and "
-        "fails the build until the marker is deleted with the fix -- which is the signal "
-        "the module docstring asks for. "
-        "NOT FIXED HERE: serialising four lifecycle write paths across "
-        "strategy_service, strategy_lifecycle, strategy_archive, deployment_binding, "
-        "deployment_manager, routers/strategies and routers/strategy_operations is a "
-        "change to money paths that needs its own verification, not a line in a defect "
-        "sweep. The double-deploy half has a DATABASE-level guard already -- "
-        "021_strategy_deployment_live_uniqueness.sql's partial unique index, proven by "
-        "tests/test_strategy_lifecycle_concurrency_postgres.py in the database-tests "
-        "job. running-but-deleted is a cross-table invariant and has no such guard."
-    ),
-)
 async def test_the_four_operations_can_land_running_but_deleted(_seeded_asset_universe) -> None:
+    # THE MARKER IS GONE BECAUSE THE DEFECT IS FIXED. This was
+    # `xfail(strict=True)` -- running-but-deleted reproduced in 21 of 40 seeded
+    # interleavings, and the file's own header said the day a status-conditioned re-check
+    # landed on these write paths it would start passing and the marker would come off
+    # with the fix. That is what happened: it XPASSed, strict turned the XPASS into a
+    # build failure, and this is the deletion that answers it.
+    #
+    # The guard is in two halves, one on each side of the race, because a single re-check
+    # narrows a window rather than closing it:
+    #   `strategy_service.deploy_version` re-reads `strategies.archived_at` immediately
+    #     before its deployment INSERT and refuses if it is set -- the early
+    #     `assert_strategy_not_archived` was many awaits away from the write.
+    #   `strategy_archive.archive_strategy` re-reads blocking deployments immediately
+    #     AFTER its `archived_at` UPDATE and, if one landed in that window, clears
+    #     `archived_at` again and raises STRATEGY_HAS_ACTIVE_DEPLOYMENTS -- which is what
+    #     that refusal's documented "Nothing is written" contract promises.
+    # On every interleaving one side observes the other.
+    #
+    # Still NOT atomic, and the comment stays so nobody reads this as more than it is: a
+    # database constraint is the authoritative fix, as
+    # `021_strategy_deployment_live_uniqueness.sql` already is for the double-deploy half.
+    # This closes the reachable application-level hole.
     """start, stop, delete and deploy, fired together with ``asyncio.gather``, across 40
     seeds against fresh worlds.
 

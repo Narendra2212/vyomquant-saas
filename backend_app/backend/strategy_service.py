@@ -1900,6 +1900,65 @@ class StrategyService:
             deployment_data.update(db_binding.binding_row_columns(binding))
             binding_stored = True
 
+        # ── RE-CHECK ARCHIVAL AT WRITE TIME (Requirement 2.16) ────────────────
+        #
+        # `_load_version_for_deploy` already called `assert_strategy_not_archived`, and
+        # that was the ONLY archival check on this path. It is a READ, and it happens
+        # many awaits before this INSERT - the binding gates, the quota reservation and
+        # the lifecycle lookups all sit between them. So `archive_strategy` committing in
+        # that window left this function free to write a deployment row for a strategy
+        # that is now archived, and the end of this function moves that row to `running`.
+        # The result is the terminal state Requirement 2.16 forbids by name:
+        # running-but-deleted.
+        #
+        # Measured, not hypothesised: `tests/test_strategy_lifecycle_concurrency.py`
+        # reproduced it in 21 of 40 seeded interleavings of start/stop/delete/deploy
+        # against one strategy id.
+        #
+        # This is the "status-conditioned re-check at write time" that file names as the
+        # fix. It does not make the operation atomic - a re-check narrows a window, it
+        # does not close one - which is why `archive_strategy` carries the other half,
+        # a post-write re-check that undoes its own archive if a deployment landed in
+        # ITS window. One of the two sees the other on every interleaving.
+        #
+        # Refused as `ArchiveRejected`, which is a `DeployRejected`, so the deploy
+        # route's existing handler maps it to the 409 it already maps that family to.
+        # Nothing has been written yet at this point except the quota reservation, which
+        # is released before the refusal travels - a deployment that never happened must
+        # not be counted against the caller's allowance.
+        # Regression: tests/test_strategy_lifecycle_concurrency.py
+        recheck_q = (
+            sb.table("strategies")
+            .select("*")
+            .eq("id", strategy_id)
+            .eq("user_id", user["id"])
+            .execute()
+        )
+        recheck_res = await recheck_q if inspect.isawaitable(recheck_q) else recheck_q
+        recheck_rows = getattr(recheck_res, "data", None) or []
+        if recheck_rows:
+            from backend_app.backend.strategy_archive import (OPERATION_DEPLOY,
+                                                              is_archived)
+
+            if is_archived(recheck_rows[0]):
+                logger.warning(
+                    "Refusing to write a deployment for strategy %s: it was archived "
+                    "between the deploy gate and this insert. No deployment row was "
+                    "created (Requirement 2.16).",
+                    strategy_id,
+                )
+                await SubscriptionEngine.decrement_quota_usage(
+                    user["id"], Resource.BOTS.value
+                )
+                from backend_app.backend.strategy_archive import \
+                    assert_strategy_not_archived
+
+                assert_strategy_not_archived(
+                    recheck_rows[0],
+                    operation=OPERATION_DEPLOY,
+                    strategy_id=strategy_id,
+                )
+
         try:
             q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
             deployment_result = await q2 if inspect.isawaitable(q2) else q2

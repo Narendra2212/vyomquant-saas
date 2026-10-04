@@ -647,6 +647,89 @@ async def archive_strategy(
                 identifier,
             )
 
+    # ── RE-CHECK DEPLOYMENTS AFTER THE WRITE (Requirement 2.16) ──────────────
+    #
+    # `load_blocking_deployments` above is a READ, and the `UPDATE` is a separate
+    # statement. A `deploy_version` that committed its deployment row in that window
+    # produced the terminal state Requirement 2.16 forbids by name: this strategy
+    # archived AND carrying a live deployment - running-but-deleted. Reproduced in 21 of
+    # 40 seeded interleavings by `tests/test_strategy_lifecycle_concurrency.py`.
+    #
+    # `deploy_version` carries the other half of this guard, a re-check of `archived_at`
+    # immediately before its INSERT. Between the two, one side sees the other on every
+    # interleaving: either deploy observes the archive and refuses, or the archive
+    # observes the deployment here and undoes itself.
+    #
+    # UNDOING IS THE RIGHT DIRECTION, and it is not arbitrary. This function's documented
+    # contract for `STRATEGY_HAS_ACTIVE_DEPLOYMENTS` is "Nothing is written", so clearing
+    # `archived_at` restores the state that refusal promises. The resulting world - not
+    # archived, deployment running - is a LEGAL terminal state; the caller is told their
+    # archive did not happen and why, which is true. Choosing the other direction, leaving
+    # the archive and stopping the deployment, would mean this function silently killing a
+    # bot the caller never asked it to touch.
+    #
+    # WORST CASE EQUALS TODAY'S BEHAVIOUR. If the compensating update itself fails, the
+    # strategy stays archived with a live deployment - exactly the state that existed
+    # before this guard - and the failure is logged at `critical` because at that point it
+    # needs a person. So this can only improve the outcome, never worsen it.
+    #
+    # NOT A SUBSTITUTE FOR SERIALISATION. Two statements with a gap between them is a
+    # narrower window, not atomicity; the authoritative fix is a database constraint, as
+    # `021_strategy_deployment_live_uniqueness.sql` already is for the double-deploy half
+    # of this requirement. This closes the reachable application-level hole in the
+    # meantime.
+    # Regression: tests/test_strategy_lifecycle_concurrency.py
+    raced = await load_blocking_deployments(
+        sb, user_id=user_id, strategy_id=identifier, strategy_row=strategy
+    )
+    if raced:
+        reverted = False
+        try:
+            await _execute(
+                sb.table("strategies")
+                .update({ARCHIVED_AT_COLUMN: None})
+                .eq("id", identifier)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            reverted = True
+        except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+            logger.critical(
+                "Strategy %s was archived and then found to carry %d live deployment(s) "
+                "(%s), and the archive could NOT be undone: %s. The strategy is archived "
+                "with a running deployment - running-but-deleted - and needs manual "
+                "intervention.",
+                identifier,
+                len(raced),
+                raced,
+                exc,
+            )
+        else:
+            logger.warning(
+                "Strategy %s was archived and then found to carry %d live deployment(s) "
+                "(%s) that landed during the archive. The archive has been undone; the "
+                "strategy is active and its deployment is untouched (Requirement 2.16).",
+                identifier,
+                len(raced),
+                raced,
+            )
+
+        raise ArchiveRejected(
+            "STRATEGY_HAS_ACTIVE_DEPLOYMENTS",
+            "This strategy has "
+            f"{len(raced)} active deployment(s) that started while it was being "
+            "archived, so it cannot be archived. Stop every one of them first; the "
+            "strategy, its versions, its backtests, its deployments and its signals are "
+            "unchanged.",
+            {
+                "strategy_id": identifier,
+                "blocking_deployments": raced,
+                "blocking_states": list(STOPPABLE_BINDING_STATES),
+                "raced_during_archive": True,
+                "archive_reverted": reverted,
+            },
+        )
+
     await record_audit(
         StrategyAuditAction.STRATEGY_ARCHIVED,
         actor_id=user_id or "unknown",

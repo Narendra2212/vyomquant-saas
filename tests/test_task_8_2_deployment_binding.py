@@ -169,12 +169,38 @@ def _plan(dag_hash="deadbeefcafe1234", symbol=SYMBOL, timeframe=TIMEFRAME,
     }
 
 
+#: A blueprint the fleet can actually start.
+#:
+#: This fixture used to be `{"nodes": [], "edges": []}`, and every test here that deployed
+#: it passed only because `app_state.fleet.start_bot` is an `AsyncMock`. Against the real
+#: runtime that blueprint cannot start a bot at all: `BotRunner.__init__` raises
+#: `ValueError("exchange_id must be provided in strategy blueprint")` at
+#: `master_executor.py:139`, before any paper/live branch, and `strategy_builder` lists
+#: `buy_logic`, `sell_logic` and `risk` in its own `required` and then indexes them
+#: directly. `strategy_service.assert_blueprint_startable` now refuses such a deploy
+#: before the `strategy_deployments` INSERT rather than writing a row, failing to start,
+#: and UPDATEing it to `failed`.
+#:
+#: So the four keys are here because the tests that use this row claim to deploy
+#: successfully, and a row that cannot start a bot cannot support that claim. Only key
+#: PRESENCE is checked, so the values are the smallest realistic ones; the negative tests
+#: that assert a refusal build their own rows and are deliberately left without them.
+_STARTABLE_BLUEPRINT = {
+    "nodes": [],
+    "edges": [],
+    "exchange_id": "binance",
+    "buy_logic": {"op": "AND", "conditions": []},
+    "sell_logic": {"op": "AND", "conditions": []},
+    "risk": {"trade_size_pct": 1.0, "stop_loss_pct": 2.0, "take_profit_pct": 4.0},
+}
+
+
 def _version(**overrides):
     row = {
         "id": "44444444-4444-4444-8444-444444444444",
         "strategy_id": STRATEGY_ID,
         "version": "v3.0",
-        "blueprint": {"nodes": [], "edges": []},
+        "blueprint": dict(_STARTABLE_BLUEPRINT),
         "validation_state": "VALID",
         "dag_hash": "deadbeefcafe1234",
         "compiled_plan": _plan(),

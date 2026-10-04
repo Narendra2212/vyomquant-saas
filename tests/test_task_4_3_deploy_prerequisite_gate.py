@@ -152,13 +152,36 @@ def _seeded_asset_universe():
         au.reset_asset_universe_state_for_tests()
 
 
+#: A blueprint the fleet can actually start. See `_version_row`.
+#:
+#: `{"nodes": [], "edges": []}` is what this was, and it is not deployable: `BotRunner`
+#: raises `ValueError("exchange_id must be provided in strategy blueprint")` in its
+#: constructor (`master_executor.py:139`), before any paper/live branch, and
+#: `strategy_builder` requires `buy_logic`, `sell_logic` and `risk` and indexes them
+#: directly. The deploy path now refuses such a blueprint before writing a
+#: `strategy_deployments` row (`strategy_service.assert_blueprint_startable`), where it
+#: used to insert the row, fail to start the bot, and UPDATE it to `failed`.
+#:
+#: Only key PRESENCE is checked, so these are the smallest realistic values. The tests
+#: below that assert a REFUSAL build their own rows and are left without these keys on
+#: purpose - they must keep refusing for their own stated reason, before this gate.
+_STARTABLE_BLUEPRINT = {
+    "nodes": [],
+    "edges": [],
+    "exchange_id": "binance",
+    "buy_logic": {"op": "AND", "conditions": []},
+    "sell_logic": {"op": "AND", "conditions": []},
+    "risk": {"trade_size_pct": 1.0, "stop_loss_pct": 2.0, "take_profit_pct": 4.0},
+}
+
+
 def _version_row(**overrides):
     """A version row with every prerequisite satisfied, unless overridden."""
     row = {
         "id": str(uuid4()),
         "strategy_id": "strategy_task_4_3",
         "version": "v2.0",
-        "blueprint": {"nodes": [], "edges": []},
+        "blueprint": dict(_STARTABLE_BLUEPRINT),
         "validation_state": "VALID",
         "dag_hash": "abc123def4567890",
         "compiled_plan": _readable_plan(),
