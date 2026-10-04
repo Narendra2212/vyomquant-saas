@@ -1082,6 +1082,21 @@ exists to remove.
       implement `009_paper_trading.sql`'s semantics. That is a named blocker, not a pass
     - **Provable here: yes for routes the sandbox can serve; no for the paper routes without further work**
     - **Closed for routes the sandbox can serve.** `tests/sandbox_lifecycle/test_cross_tenant_ownership_matrix.py` extended with orders, positions, portfolios, traces, credentials, billing, subscriptions, listings, paper accounts, invoices; 224 passed, independently re-verified this dispatch. **Remains BLOCKED for the paper routes** — `SandboxDatabase` does not implement `009_paper_trading.sql`'s semantics, per this task's own recorded gap.
+    - **AMENDMENT — THE PAPER-ROUTES BLOCKER IS DISCHARGED BY 13.29, AND THE GAP THIS TASK NAMED
+      WAS HARNESS-SPECIFIC.** Nothing above is withdrawn and the checkbox is unchanged: the bullets
+      were accurate when written and remain accurate **of this harness**. What has since been
+      established is that *"`SandboxDatabase` does not implement `009_paper_trading.sql`'s
+      semantics"* is a statement about **the store this task was told not to duplicate**, not about
+      whether the paper routes enforce the tenant boundary. They do, and it was already proven when
+      this task ran — by a second harness built on the repository's other Persistence_Layer double
+      (`FakeSupabase` ← `MatrixStore`), which **does** model the eleven `paper_*` tables with their
+      unique indexes and UPDATE triggers: `tests/property/test_tenant_isolation_matrix.py` collects
+      all **22** `/api/paper` rows from `app.router.routes` and classifies **220** cells on them,
+      and `tests/test_tenant_isolation_library_paper.py` drives the example-based cases, **56
+      passed**. Both were committed in `f285740f`, before this task. **See 13.29** for the
+      enumeration, the three verifications and the corrected task-14 tally. The lesson 13.29 draws
+      from this entry: a BLOCKED gap names the harness as often as the code, and the two call for
+      opposite responses
     - _Requirements: 1.14, 2.14_
 
   - [x] 12.5 1.15 — document the tenant boundary per table
@@ -4208,6 +4223,218 @@ exists to remove.
     _applied to the response body rather than the log (a refusal may carry a category and_
     _never the provider's text — and until this task that was a property of the source,_
     _asserted nowhere a route was actually called)_
+
+
+- [ ] 13.29 CLAUSE 1.14'S PAPER-ROUTES GAP IS CLOSED BY CITATION — THE GAP WAS A PROPERTY OF
+  `SandboxDatabase`, NOT OF THE PAPER ROUTES, AND A SECOND HARNESS HAS COVERED ALL 22 OF THEM
+  SINCE `f285740f`. ONE HANDED-OVER CLAIM IS NARROWED: THE COMPLETENESS GUARD IS A FLOOR, NOT A
+  ROUTE-DERIVED ORACLE, AND THE DURABILITY LIVES ONE FILE OVER
+  - **WHAT 12.4 RECORDED, QUOTED, AND WHY IT WAS TRUE.** 12.4 (`1.14 — extend the cross-tenant
+    ownership matrix`) is checked `[x]` and records: *"**Closed for routes the sandbox can
+    serve.** `tests/sandbox_lifecycle/test_cross_tenant_ownership_matrix.py` extended with
+    orders, positions, portfolios, traces, credentials, billing, subscriptions, listings, paper
+    accounts, invoices; 224 passed, independently re-verified this dispatch. **Remains BLOCKED
+    for the paper routes** — `SandboxDatabase` does not implement `009_paper_trading.sql`'s
+    semantics, per this task's own recorded gap."* That statement was accurate when written and
+    is accurate now — **of that harness**. `SandboxDatabase` is the sandbox lifecycle double;
+    `009_paper_trading.sql` declares the eleven `paper_*` tables with their unique indexes and
+    their UPDATE triggers, and a harness that does not model them cannot serve a paper route at
+    all, let alone compare two answers from one. The gap 12.4 named is therefore a fact about
+    **the store the sweep was told not to duplicate**, not a fact about whether the paper routes
+    enforce the tenant boundary. This task does not re-run that sweep and does not extend it
+  - **THE TWO FILES THAT COVER THE PAPER ROUTES, AND THE HARNESS DIFFERENCE THAT LETS THEM.**
+    Neither depends on `SandboxDatabase`. The hierarchy is `FakeSupabase`
+    (`tests/test_paper_repository.py`) ← `MatrixStore`
+    (`tests/property/test_tenant_isolation_matrix.py`) ← `CountingStore` / `_JourneyStore` —
+    the repository's ONE Persistence_Layer double, which **does** model the eleven `paper_*`
+    tables, their unique indexes and their UPDATE triggers, which is precisely the capability
+    `SandboxDatabase` lacks. `tests/property/test_tenant_isolation_matrix.py` owns the generated
+    exhaustive sweep; `tests/test_tenant_isolation_library_paper.py` is the example-based
+    counterpart, one pytest case per surface, deriving its cell pools from the matrix rather than
+    listing them. **Both were committed in `f285740f`** ("feat(marketplace): strategy
+    marketplace, subscriptions, paper trading") — the coverage predates this task and is cited,
+    not built here. No file was edited by this task except this `tasks.md`
+  - **THE 22 PAPER ROWS, ENUMERATED FROM `MATRIX_DECLARATIONS` RATHER THAN ACCEPTED.** Eight on
+    the default account — `GET /api/paper/account`, `POST /api/paper/account/reset`,
+    `GET /api/paper/positions`, `GET /api/paper/orders`, `POST /api/paper/orders`,
+    `DELETE /api/paper/orders/{order_id}`, `GET /api/paper/trades`, `GET /api/paper/summary`.
+    Fourteen on Paper_Sessions — `POST /api/paper/sessions`, `GET /api/paper/sessions`,
+    `GET /api/paper/sessions/{session_id}`, the four
+    `POST /api/paper/sessions/{session_id}/{pause,resume,stop,reset}`, and the seven
+    `GET /api/paper/sessions/{session_id}/{orders,fills,positions,trades,equity,metrics,events}`.
+    The handed-over list gave six of these as bare paths (`GET /positions`, `GET /orders`,
+    `POST /orders`, `DELETE /orders/{order_id}`, `GET /trades`, `GET /summary`); the row **keys**
+    carry the full mounted path, which matters because the key is what `ROW_PREFIXES` matches and
+    what a failure names. Count and membership otherwise agree exactly
+  - **THE MEASUREMENTS, TAKEN THIS DISPATCH.** `collect_rows()` returns **70** rows: **22**
+    `/api/paper` route rows, **41** `/api/library` route rows and **7** owned channel families.
+    `MATRIX_DECLARATIONS` holds **22** `/api/paper` entries, one per collected row. `RESOURCE_KINDS`
+    is **10**, so the paper rows carry **220 matrix cells** — of which **54 are attempted** (16
+    reference, 22 identity, 16 exposure) and **166 are declared not-applicable with a reason** that
+    the coverage test requires to be at least 40 characters, so an inapplicable cell cannot be
+    confused with an unattempted one. The example-based file derives **8 `PAPER_READ_CELLS`** and
+    **8 `PAPER_MUTATION_CELLS`** from those reference cells — 16, matching the matrix's reference
+    count exactly — and asserts every pool non-empty **at import**, so a pool that silently went
+    to zero fails before a report can count its passes
+  - **WHY THE SWEEP CANNOT SILENTLY MISS A PAPER ROUTE: ROWS ARE COLLECTED, NEVER LISTED.**
+    `ROW_PREFIXES` is `(("/api/library", MARKETPLACE_API), ("/api/paper", PAPER_TRADING_API))`,
+    and `collect_rows()` walks `app.router.routes` on **every run**, taking every method of every
+    path under either prefix (`HEAD` and `OPTIONS` excluded, because Starlette synthesises them
+    from the `GET` registration — same handler, same authorisation, not a second surface).
+    `test_the_matrix_covers_every_collected_endpoint_and_channel` then asserts **both
+    directions**: `collected - declared` empty, so a route added later has no declaration and
+    **fails** rather than passing silently; and `declared - collected` empty, so a declaration
+    left behind by a deleted route **fails** rather than continuing to claim coverage nothing
+    backs. It further asserts `len(MATRIX) == len(rows) * len(RESOURCE_KINDS)`, that every row is
+    attempted on at least one column, and that every column is attempted on at least one row. The
+    file records it was proved able to fail in both directions — removing any single `_D(...)`
+    line names exactly that row, and adding a route under either prefix fails it without the file
+    being touched. **This is the mechanism that makes the citation durable rather than a snapshot**
+  - **VERIFICATION 1 — THE PAPER COVERAGE IS COMMITTED. HOLDS.**
+    `tests/property/test_tenant_isolation_matrix.py` is ` M`: it carries the parallel
+    workstream's uncommitted gate-override fix, which adds `require_marketplace_subscribe`,
+    `check_marketplace_subscription_quota` and `check_strategy_quota` to `_matrix_app`'s override
+    list and documents why (`59b08de4` put those gates in front of `POST /{library_id}/checkout`
+    and `POST /{library_id}/clone` as route **dependencies**, which resolve before the handler
+    body, so those two cells stopped reaching the tenant boundary and answered a plan refusal
+    identically either way — a false pass that reads like a closed Requirement 21.4 gap).
+    Confirmed rather than assumed: a line-level diff of `HEAD` against the working copy puts
+    **all four changed ranges inside one function**, `def _matrix_app(...)` at committed line
+    1963. The paper-relevant regions are **byte-identical** between `HEAD` and the working copy —
+    `ROW_PREFIXES` (84 chars), `collect_rows` (1798), the whole `MATRIX_DECLARATIONS` tuple
+    (**10,596 chars**, which is where all 22 paper declarations live) and
+    `test_the_matrix_covers_every_collected_endpoint_and_channel` (4016). `REQUIREMENT_21_4_GAPS`
+    sits at committed lines ~1281–1340, outside every changed range. And
+    `tests/test_tenant_isolation_library_paper.py` is **tracked and clean** — absent from
+    `status --short` entirely. **The citation rests on committed code; nothing is scoped away**
+  - **VERIFICATION 2 — THE PAPER ROWS REACH THE TENANT BOUNDARY. HOLDS, AND MORE CLEANLY THAN
+    `/api/library` DOES.** This is the trap 13.26/13.27 and the `/api/library` gate incident both
+    turned on, so it was checked structurally rather than argued from the absence of a plan gate.
+    `backend_app/routers/paper_trading.py` declares `router = APIRouter()` with **no router-level
+    `dependencies=`** — the string `dependencies=` does not occur in the file — and every one of
+    the 22 route functions takes exactly **`Depends(get_current_user)`** and no other dependency.
+    No plan gate, no quota gate, no `get_admin_user`, no feature flag.
+    `backend_app/core/subscription_middleware.py` contains **no `add_middleware` registration and
+    no `/api/paper` reference**. So not one of the six gates the parallel workstream is editing is
+    resolvable on a paper route, and nothing short-circuits ahead of the handler body — which is
+    why their uncommitted change cannot affect this citation in either direction. The positive
+    evidence is stronger than the absence: **all 54 attempted paper cells carry `ORACLE_STRICT`**,
+    the byte-identical oracle. Not one is `ORACLE_GAP` and not one is `ORACLE_PUBLIC_CATALOGUE`.
+    **All seven pinned `REQUIREMENT_21_4_GAPS` are on `/api/library` rows** — `DELETE
+    /api/library/{library_id}`, `POST /api/library`, `POST /api/library/submissions` and
+    `POST /api/library/{library_id}/{checkout,clone,deploy,rate}` — and **none is on a paper
+    row**. The paper surface has no recorded disclosure to pin
+  - **THE NO-CONTROL EXCEPTIONS: THERE ARE THREE, NOT TWO, AND MY JUDGEMENT ON EACH.** 12 of the
+    22 paper rows carry `owner_control=True`. The handover named two exceptions; a third exists.
+    (1) **`POST /api/paper/sessions`** (`_NO_CONTROL_SESSION_START`) — **honest limitation.** A
+    start request additionally needs the simulator configuration and Requirement 16.12's
+    validated symbol set, which cannot be assembled without a market-data feed, so the body is
+    refused as request-invalid **for the owner too**. The note states the identifier *is* carried
+    to the route and the refusal is identical either way, and points the ownership half at
+    `GET/POST /api/paper/sessions/{session_id}` — which does carry a control. (2) **`DELETE
+    /api/paper/orders/{order_id}`** — **honest limitation, and the weakest cell on the surface.**
+    `cancel_order` answers `CANCEL_FAILED "order not found"` for a foreign order, an absent one
+    **and the owner's own OPEN order** in this environment, because the cancel path requires the
+    live simulator the feed provides. The cross-tenant equality Requirement 21.4 asks for is still
+    asserted; what the environment costs is the positive control that would distinguish *refused
+    because foreign* from *refused because there is no simulator*. The note says so and points the
+    ownership half at `GET /api/paper/sessions/{id}/orders`, which has one. This is the single
+    paper row where the gap is environmental rather than definitional, and it is disclosed, not
+    hidden. (3) **`POST /api/paper/orders`** — **not a limitation at all, and the handover missed
+    it.** The optional `strategy_id` on a paper order is *recorded and never dereferenced*: the
+    order belongs to the caller's own default account and the field is a tag on it, so the answer
+    **cannot** depend on whose strategy it names — and that independence is what the cell asserts.
+    An owner control here would be a control over a resolution the handler deliberately does not
+    perform. **None of the three is a coverage hole.** The remaining 7 rows carry neither a
+    control nor a note — `GET /api/paper/{account,orders,positions,trades,summary}`,
+    `GET /api/paper/sessions`, `POST /api/paper/account/reset` — correctly: they take no foreign
+    identifier, so they produce no reference cell, and the "must say why" assertion is scoped to
+    `rows_with_references` by construction. They are covered as exposure and identity cells
+    instead, which is the right shape for a default-account or collection surface
+  - **VERIFICATION 3 — THE COMPLETENESS GUARD. DOES NOT HOLD AS HANDED OVER; NARROWED, AND THE
+    DURABILITY RELOCATED TO WHERE IT ACTUALLY LIVES.** The handover asked me to confirm
+    `test_the_paper_session_reads_cover_the_detail_body_and_all_seven_sub_resources` *"derives
+    that from the routes rather than from a hand-written list — that is what makes the citation
+    durable rather than a snapshot."* **It does not.** The test computes
+    `covered = {cell.row.key for cell in PAPER_READ_CELLS}` — derived — and compares it against an
+    `expected` set of **eight route keys written as literals in the function body**, asserting one
+    direction only (`expected - covered` empty). So it is a genuine **floor**: it fires if the
+    derived pool shrinks below the eight known session reads, which is exactly the failure its own
+    docstring claims it exists for ("would silently shrink to nothing if the session routes stopped
+    being classified as reference cells, and a report counting passes would not notice"). It is
+    **not** a route-derived completeness oracle, and a new session sub-resource added later would
+    not fail it. **The citation survives this intact, because the route-addition durability is
+    supplied one file over and bidirectionally** — by
+    `test_the_matrix_covers_every_collected_endpoint_and_channel` over
+    `collect_rows()`/`app.router.routes`, described above, which a new `/api/paper` route fails
+    until it is declared. The two guards are complementary and neither substitutes for the other:
+    the matrix's catches a route appearing or disappearing, this one catches a route being
+    reclassified out of the pool while still existing. **Recorded this way rather than as handed
+    over, because the citation's weight-bearing member is the matrix test, and a future reader
+    told the wrong one would check the wrong file**
+  - **WHAT THE EXAMPLE-BASED FILE ASSERTS, SINCE A CITATION IS ONLY WORTH ITS CONTENTS.**
+    `tests/test_tenant_isolation_library_paper.py`, **56 passed**, re-verified this dispatch.
+    Every paper read and every paper mutation is driven twice against a **fresh** store as `u1` —
+    once naming `u2`'s session, once naming an identifier that exists in no tenant — and the two
+    answers must be equal in `comparable()` (status, headers, body), so the oracle is what the
+    route actually answers for an unknown identifier and never a literal the test chose. On top of
+    the equality: a **full before/after image of every `paper_*` row compared as canonical text**,
+    because a handler that applied the write and then reported a refusal answers exactly like one
+    that refused; and `_assert_no_value_of_u2_appears`, at any nesting depth. The named cases the
+    handover cites are present and passing —
+    `test_a_paper_session_read_of_another_tenants_session_is_refused_and_names_no_field_of_it`,
+    `test_a_paper_mutation_of_another_tenants_session_leaves_every_row_byte_identical`,
+    `test_the_paper_session_reads_cover_the_detail_body_and_all_seven_sub_resources`,
+    `test_the_paper_channel_refuses_a_subscription_to_another_tenants_session` and
+    `test_a_broadcast_on_another_tenants_session_channel_reaches_no_intruder_connection`. The last
+    two run the **real** `core.websocket_auth.authorize_channel_subscription` over
+    `ws_channels.PAPER_FAMILY` with no stubbed decision, assert the frame **did** reach the
+    owner (so "the intruder got nothing" cannot pass on a channel that delivered nothing), and
+    assert the intruder's socket is absent from all eleven of `ws_manager._stores()`
+  - **WHAT THE CITATION STILL DOES NOT ESTABLISH, STATED HERE SO 1.14 IS NOT READ AS MORE THAN IT
+    IS.** The cited file's own "WHAT THIS FILE DOES NOT ESTABLISH" section names three, and they
+    carry over unchanged: **row-level security is not exercised** (no PostgreSQL here; the double
+    answers like a service-role client, which is the *weaker* path and therefore the right one to
+    drive in process — an endpoint whose only tenant scope is a policy this host cannot run leaks
+    here and fails rather than passing on a filter the double honoured for it); **the Audit_Log
+    entry Requirement 21.4 also requires is not asserted**, because `_matrix_app` silences the
+    recorder for want of a Redis; and **no timing claim**, since Requirement 19.4's one-second
+    deadline over a dictionary lookup would be measuring the double. None of the three is the gap
+    12.4 named, and the first is the same database-absence constraint 13.23 discharged for 1.16 at
+    the declaration level
+  - **GATES — REGRESSION ONLY, NOTHING MOVED.** `tests/test_tenant_isolation_library_paper.py`
+    **56 passed** (114s), the expected number. `tests/test_no_undefined_names.py` **3 passed**
+    (136s). **The full property matrix was not run**: it is the slow exhaustive sweep over all
+    70 rows × 10 columns, it is the file carrying the parallel workstream's uncommitted change,
+    and the paper facts this task cites were measured out of it directly — rows, declarations,
+    cells, oracles and gap membership, all read from the imported module — which is the evidence
+    a pass/fail count would have summarised anyway. Said rather than left as an unexplained
+    omission
+  - **CORRECTED STATUS FOR TASK 14'S PARTIAL-BLOCKER LIST, WITH EVERY DISCHARGE CITED SO THE
+    TALLY IS CHECKABLE.** Task 14 and the `§Notes` entry both still say *"The five partial
+    blockers are reported as BLOCKED: 1.13's deployment path, 1.14's paper routes, 1.16's
+    database-level serialisation, 1.20's production log audit, 1.42's heap measurement."* That was
+    the state at task 12. Since then: **1.16's** database-level half was discharged by **13.23**
+    and its ADDENDUM (`uq_strategy_deployments_one_live` applied to `public`, 2026-10-03 07:38
+    UTC). **1.20's** log half was discharged by **13.26** as corrected by **13.27**, and its
+    response-body half by **13.28**, so 1.20 is closed on all three surfaces — bundle, log and
+    response body. **1.14's** paper routes are closed by **this task, 13.29**, by citation.
+    **What remains is two, not five: 1.13's deployment path (12.3) and 1.42's heap measurement
+    (12.12)** — the first because no running worker is available here to exercise the only path
+    by which an order reaches a venue, the second as recorded at 12.12. Task 14's bullet and the
+    `§Notes` entry are **left as written**: they were accurate at task 12, and this bullet is the
+    amendment, per 13.23's ADDENDUM convention
+  - _Requirements: 1.14 / 2.14 — the paper-routes half moves from **BLOCKED with its gap named**_
+    _to **closed by citation**, which is the disposition 1.17 established and 12.7 used. The_
+    _sandbox half stays where 12.4 left it: proven, by that file's 224. The clause is now closed_
+    _on both halves. The gap 12.4 named was never a property of the paper routes — it was a_
+    _property of `SandboxDatabase`, and the right answer to it was a harness that models_
+    _`009_paper_trading.sql` rather than a second sweep, which is what `f285740f` already shipped._
+    _The general lesson, and it is 12.7's from the other end: **a BLOCKED gap names the harness as_
+    _often as it names the code, and the two call for opposite responses** — a gap in the code is_
+    _closed by a fix, a gap in the harness is closed by finding the harness that does not have it._
+    _Re-reading the blocker before re-implementing it is what turned a P0 clause's open half into a_
+    _citation and 220 already-committed cells_
 
 
 - [ ] 14. Checkpoint — ensure all tests pass
