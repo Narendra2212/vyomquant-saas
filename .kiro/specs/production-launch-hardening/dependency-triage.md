@@ -69,10 +69,30 @@ image even at 3.3.0. The bump is still the correct action — it is free, it cle
 and it means the fixed version is what a future `from jose import jwt` would pick up — but it did
 not close an open hole on the WebSocket auth path, because that path was never on python-jose.
 
-**Follow-up, not done here (out of scope):** the stronger fix is to drop the
-`python-jose[cryptography]` pin entirely, since it is unused and only adds attack surface and image
-weight. That is a manifest removal with an import-audit check attached and is deliberately left for
-a separate change.
+**Follow-up — NOW DONE, in the separate change this paragraph asked for.** The stronger fix was to
+drop the `python-jose[cryptography]` pin entirely, since it is unused and only adds attack surface
+and image weight — a manifest removal with an import-audit check attached.
+
+The pin is gone from `requirements-base.txt`, replaced by a comment carrying this section's
+reasoning, and `tests/test_no_unused_jwt_library.py` is the attached audit. It asserts five things,
+so none of the evidence above can rot silently: the distribution is declared in no requirements
+file; nothing imports `jose` (an AST parse over the repo, not a text search — this doc and that
+comment both mention the name); no installed distribution requires it, so it was a direct pin;
+`auth_middleware.py` still imports PyJWT's `jwt` and still pins `ES256`; and the requirement parser
+itself is non-vacuous.
+
+That last one earned its place. A first pass at this audit used `^[A-Za-z0-9._-]+` to read
+requirement lines, which does not match `python-jose[cryptography]==3.4.0` because of the bracket —
+so it reported the package as "not pinned in any requirements file" while the pin sat in
+`requirements-base.txt`. The parser is extras-aware and PEP 503-normalised now, and
+`test_the_extras_aware_parse_actually_finds_pins` holds it to that against `PyJWT` (plain) and
+`passlib[bcrypt]` (extras).
+
+This closes 4 CRITICAL and 4 MEDIUM alerts permanently rather than at a version floor: a
+dependency that is installed and never imported keeps generating advisories, each needing its own
+triage, for a library the product does not use. Removal cannot regress a call site because there is
+no call site. The `cryptography` pin's justification above named python-jose as one of its
+consumers; that list has been corrected in the manifest too.
 
 ### 2. `torch` 2.3.1+cpu -> 2.6.0 — CVE-2025-32434 — RUNTIME — JUSTIFIED EXCEPTION, NOT BUMPED
 

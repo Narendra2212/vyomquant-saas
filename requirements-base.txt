@@ -27,14 +27,36 @@ postgrest==0.16.8
 # (CVE-2026-26007, SECT subgroup) and 48.0.1 (GHSA-537c-gmf6-5ccf, bundled OpenSSL), so
 # 49.0.0 clears all 24 open alerts on this package, HIGH and below. Pinned to the
 # advisory floor rather than the newest release (50.0.2) because this package is a
-# compiled dependency of pyjwt, python-jose, httpx/supabase TLS and
+# compiled dependency of pyjwt, httpx/supabase TLS and
 # backend_app/core/credential_vault.py, and the smaller jump is the smaller behavioural
 # risk. See .kiro/specs/production-launch-hardening/tasks.md task 13.24.
+# (python-jose was named in this list too, and is no longer installed - see below.)
 cryptography==49.0.0
-# CVE-2024-33663 (CRITICAL, algorithm confusion with OpenSSH ECDSA and other key
-# formats) is fixed in 3.4.0. Patch-level bump; see
-# .kiro/specs/production-launch-hardening/dependency-triage.md.
-python-jose[cryptography]==3.4.0
+# python-jose IS REMOVED, NOT PINNED, and this is the follow-up
+# .kiro/specs/production-launch-hardening/dependency-triage.md section 1 named and
+# deferred: "the stronger fix is to drop the `python-jose[cryptography]` pin entirely,
+# since it is unused and only adds attack surface and image weight. That is a manifest
+# removal with an import-audit check attached and is deliberately left for a separate
+# change."
+#
+# The pin was `python-jose[cryptography]==3.4.0`, moved there from 3.3.0 to clear
+# CVE-2024-33663 (CRITICAL, algorithm confusion, CWE-347). That bump was correct and
+# free, but it answered only the advisories that existed on the day it was taken: the
+# package carried 4 CRITICAL and 4 MEDIUM open alerts, and an installed-but-never-imported
+# dependency goes on generating them forever, each needing its own triage, for a library
+# the product does not use.
+#
+# Three facts, each asserted by tests/test_no_unused_jwt_library.py so none can rot:
+# nothing imports `jose` (a repo-wide AST parse, not a text search - this comment and the
+# triage doc both mention the name); no installed distribution declares it, so it was a
+# direct pin rather than something pulled in underneath another package; and the JWT work
+# is PyJWT's - `core/auth_middleware.py` imports `jwt`/`PyJWKClient` and
+# `decode_token_local` pins `algorithms=["ES256"]` against a JWKS-resolved key instead of
+# trusting the token's own `alg` header, which is precisely the shape CVE-2024-33663
+# exploited. So this path never had that exposure.
+#
+# If python-jose is ever genuinely needed, delete that test file along with re-adding the
+# pin. Leaving an import-audit that no longer audits anything is worse than neither.
 passlib[bcrypt]==1.7.4
 PyJWT==2.14.0
 sqlalchemy==2.0.35
