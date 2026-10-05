@@ -102,9 +102,23 @@ const { orders, library, user, exchange, wsSubscribe } = vi.hoisted(() => ({
 // Both the named `api` export and the `default` export, because pages import it both ways
 // (`ExchangeManager`/`SecurityLogs` import `{ api }`; `StrategyMarketplace` imports the
 // default). One factory, both shapes, so neither page's import style is left unmocked.
+// `isAuthenticated` is the third export this factory owes, and omitting it did not fail these
+// tests -- it failed the RUN. `StrategyMarketplace`, one of the pages exercised here, renders
+// entitlement-gated controls through `useEntitlements`, which does
+// `import { api, isAuthenticated } from '../api'` and opens its `load()` with
+// `if (!isAuthenticated())` (`src/hooks/useEntitlements.js:99`). A `vi.mock` factory replaces
+// the whole module, so an omitted export does not fall through to the real one -- touching it
+// throws, and it throws inside an async `load`, so it lands as an UNHANDLED ERROR with no
+// failed assertion anywhere. Vitest caught 6 of them here while reporting
+// `Test Files 155 passed (155)`, and exits non-zero on unhandled errors.
+//
+// Answered from `sessionStorage.token` because that is what this file's `beforeEach` sets and
+// its `afterEach` clears, so the hook sees the same session the fixtures establish. Same
+// shape as `tests/unit/lib/singleSocket.test.jsx`.
 vi.mock('../../../src/api', () => ({
   api: { orders, library, user, exchange },
   default: { orders, library, user, exchange },
+  isAuthenticated: () => !!sessionStorage.getItem('token'),
 }));
 vi.mock('../../../src/websocketClient', () => ({
   default: { subscribe: wsSubscribe },
