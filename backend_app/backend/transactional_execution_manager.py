@@ -689,8 +689,10 @@ class TransactionalExecutionManager:
                 _sym = json_text("data", "symbol", _d)
                 row = self.db.execute(
                     text(
-                        f"SELECT {_qty} FROM positions "
-                        f"WHERE {_sym} = :symbol AND tenant_id = :tid"
+                        # json_text() raises on anything but ^[A-Za-z_][A-Za-z0-9_]*$, and both
+                        # of its arguments here are literals; sym and tenant_id are bound.
+                        f"SELECT {_qty} FROM positions "  # nosec: B608
+                        f"WHERE {_sym} = :symbol AND tenant_id = :tid"  # nosec: B608
                     ),
                     {"symbol": sym, "tid": str(self.tenant_id)}
                 ).fetchone()
@@ -743,8 +745,10 @@ class TransactionalExecutionManager:
                     _sym_sql = json_text("data", "symbol", _session_dialect(self.db))
                     pos_row_check = self.db.execute(
                         text(
-                            f"SELECT id FROM positions "
-                            f"WHERE {_sym_sql} = :symbol AND tenant_id = :tid"
+                            # json_text() raises on anything but an identifier and is called
+                            # with literals; symbol and tenant_id are bound parameters.
+                            f"SELECT id FROM positions "  # nosec: B608
+                            f"WHERE {_sym_sql} = :symbol AND tenant_id = :tid"  # nosec: B608
                         ),
                         {"symbol": symbol, "tid": str(self.tenant_id)}
                     ).fetchone()
@@ -789,8 +793,10 @@ class TransactionalExecutionManager:
                     _sym_sql = json_text("data", "symbol", _session_dialect(self.db))
                     local_pos_row = self.db.execute(
                         text(
-                            f"SELECT id, data FROM positions "
-                            f"WHERE {_sym_sql} = :symbol AND tenant_id = :tid"
+                            # json_text() raises on anything but an identifier and is called
+                            # with literals; symbol and tenant_id are bound parameters.
+                            f"SELECT id, data FROM positions "  # nosec: B608
+                            f"WHERE {_sym_sql} = :symbol AND tenant_id = :tid"  # nosec: B608
                         ),
                         {"symbol": symbol, "tid": str(self.tenant_id)}
                     ).fetchone()
@@ -1141,8 +1147,10 @@ class TransactionalExecutionManager:
             _sym_sql = json_text("data", "symbol", _session_dialect(self.db))
             position_row = self.db.execute(
                 text(
-                    f"SELECT id, data FROM positions "
-                    f"WHERE tenant_id = :tenant_id AND {_sym_sql} = :symbol"
+                    # json_text() raises on anything but an identifier and is called with
+                    # literals; symbol and tenant_id are bound parameters.
+                    f"SELECT id, data FROM positions "  # nosec: B608
+                    f"WHERE tenant_id = :tenant_id AND {_sym_sql} = :symbol"  # nosec: B608
                 ),
                 {"tenant_id": str(self.tenant_id), "symbol": symbol}
             ).fetchone()
