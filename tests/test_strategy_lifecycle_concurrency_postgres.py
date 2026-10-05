@@ -617,16 +617,65 @@ def test_the_atomic_update_predicate_does_not_prevent_running_but_deleted(world)
     commits. ``rowcount`` is 1, not 0 — there is nothing to raise on. This is why
     task 13.23 does not ship a fix for this half.
     """
-    result = world.race(
-        _archive_body_atomic,
-        _deploy_body,
-        isolation="READ COMMITTED",
-        with_live_unique_index=True,
+    # REPEATED, BECAUSE ONE RUN CANNOT ESTABLISH THIS AND ONE RUN IS WHAT MADE IT FLAKY.
+    #
+    # This asserted a single race's outcome and failed on the first CI run it ever got, with
+    # `{'B': 'COMMITTED', 'A': 'RuntimeError:None'}` -- session A refusing at
+    # `rowcount == 0`. That is not a contradiction of the finding; it is the OTHER
+    # interleaving of the same race.
+    #
+    # After `mid.wait()` both sessions proceed and nothing orders them. The runner commits
+    # each session only after its body returns, so:
+    #
+    #   A's UPDATE evaluates BEFORE B's INSERT commits  ->  NOT EXISTS sees nothing,
+    #       rowcount 1, both COMMIT, final state is archived + live. THE RACE REPRODUCES.
+    #   B's INSERT commits BEFORE A's UPDATE evaluates  ->  READ COMMITTED takes a fresh
+    #       snapshot per statement, A sees the live row, rowcount 0, A raises and rolls back.
+    #       Final state is not-archived + live, which is legal.
+    #
+    # Which one happens is thread scheduling. The original measurement was taken on a machine
+    # that produced the first; a contended two-core runner produced the second.
+    #
+    # So the property is REACHABILITY, not inevitability: the atomic predicate does not
+    # PREVENT running-but-deleted, and showing that requires observing the bad interleaving at
+    # least once rather than hoping for it on a single attempt. Pinning the interleaving
+    # instead would need a third barrier between A's UPDATE and B's commit, which means
+    # changing `race` and every body in this file to carry it -- and a hand-ordered
+    # interleaving is a weaker claim than one the scheduler produces on its own.
+    #
+    # If this ever exhausts every attempt, the finding HAS changed and the record must change
+    # with it -- which is this file's stated rule for its reproduction tests, not a licence to
+    # raise the attempt count.
+    attempts = 20
+    observed: list[dict] = []
+
+    for _ in range(attempts):
+        result = world.race(
+            _archive_body_atomic,
+            _deploy_body,
+            isolation="READ COMMITTED",
+            with_live_unique_index=True,
+        )
+        observed.append(result)
+
+        reproduced = (
+            result["outcomes"] == {"A": "COMMITTED", "B": "COMMITTED"}
+            and result["archived"] is not None
+            and len(result["live"]) == 1
+        )
+        if reproduced:
+            return
+
+    refusals = sum(
+        1 for r in observed if "RuntimeError" in str(r["outcomes"].get("A", ""))
     )
-    assert result["outcomes"] == {"A": "COMMITTED", "B": "COMMITTED"}, result["outcomes"]
-    assert result["archived"] is not None and len(result["live"]) == 1, (
-        "the atomic predicate now prevents running-but-deleted at READ COMMITTED, "
-        f"which contradicts task 13.23's measurement: {result}"
+    raise AssertionError(
+        f"running-but-deleted was not reachable in {attempts} attempts at READ COMMITTED "
+        f"with the atomic NOT EXISTS predicate: session A refused at rowcount == 0 in "
+        f"{refusals} of them. If that is now reliable, the atomic predicate IS sufficient "
+        f"for this half and task 13.23's measurement -- and the application-level guard "
+        f"added for Requirement 2.16 -- should be revisited rather than this count raised.\n"
+        f"outcomes seen: {[r['outcomes'] for r in observed]}"
     )
 
 
