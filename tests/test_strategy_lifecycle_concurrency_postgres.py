@@ -491,6 +491,75 @@ def _deploy_body(cur, mid, w: _ScratchWorld) -> None:
     )
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE SAME TWO OPERATIONS, WITH THE INTERLEAVING PINNED
+#
+#  `mid` releases both sessions together and then nothing orders them, so which of the two
+#  possible interleavings occurs is thread scheduling. That turned out to be decided by the
+#  RUNNER rather than by chance: on one GitHub runner the race reproduced on the first
+#  attempt, and on another session A refused at `rowcount == 0` on 20 attempts out of 20.
+#  Bimodal per host, not random within a host -- so repeating the attempt does not help, and
+#  neither does raising the count.
+#
+#  These two bodies therefore CONSTRUCT the interleaving the finding is about, using two
+#  `threading.Event`s the test hangs on the world object. No change to `race` and no change to
+#  the shared `_deploy_body` / `_archive_body_atomic`, which other tests in this file use --
+#  adding a wait to `_deploy_body` would deadlock `deploy` vs `deploy`, where both sessions run
+#  it.
+#
+#      B: INSERT the deployment, do not commit         -> w.inserted.set()
+#      A: UPDATE ... NOT EXISTS, record rowcount       -> w.updated.set()
+#      B: return, and only now does the runner commit
+#
+#  Under READ COMMITTED A's subquery cannot see B's uncommitted row, so `NOT EXISTS` holds,
+#  `rowcount` is 1, both commit, and the terminal state is archived + live. A does not block on
+#  B either: B's uncommitted INSERT is in `strategy_deployments`, MVCC does not block readers
+#  of it, and A's UPDATE targets `strategies`, which B never touches.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _deploy_body_ordered(cur, mid, w: _ScratchWorld) -> None:
+    """``_deploy_body``, holding its transaction open until the archiver has decided."""
+    cur.execute("SELECT archived_at FROM strategies WHERE id = %s", (w.strategy_id,))
+    if cur.fetchone()[0] is not None:
+        raise RuntimeError("deploy refused: strategy archived")
+    mid.wait(timeout=60)
+    cur.execute(
+        "INSERT INTO strategy_deployments (id, strategy_id, user_id, status) "
+        "VALUES (%s, %s, %s, 'running')",
+        (str(uuid.uuid4()), w.strategy_id, w.user_id),
+    )
+    # The row exists in this transaction and in no other. Tell the archiver to go.
+    w.inserted.set()
+    # Do not return -- returning is what makes the runner commit, and committing before the
+    # archiver's UPDATE evaluates is the OTHER interleaving, the one this test is not about.
+    w.updated.wait(timeout=60)
+
+
+def _archive_body_atomic_ordered(cur, mid, w: _ScratchWorld) -> None:
+    """``_archive_body_atomic``, evaluating its predicate while the deploy is uncommitted."""
+    cur.execute(
+        "SELECT id, status FROM strategy_deployments WHERE strategy_id = %s",
+        (w.strategy_id,),
+    )
+    cur.fetchall()
+    mid.wait(timeout=60)
+    w.inserted.wait(timeout=60)
+    cur.execute(
+        "UPDATE strategies SET archived_at = now() "
+        "WHERE id = %s AND user_id = %s AND archived_at IS NULL "
+        f"  AND NOT EXISTS (SELECT 1 FROM strategy_deployments d "
+        f"                  WHERE d.strategy_id = strategies.id "
+        f"                    AND d.status IN ({LIVE_SQL_LIST}))",
+        (w.strategy_id, w.user_id),
+    )
+    rowcount = cur.rowcount
+    # Release the deployer whatever happened, so a refusal here cannot hang the run.
+    w.updated.set()
+    if rowcount == 0:
+        raise RuntimeError("archive refused at write time: rowcount == 0")
+
+
 def _archive_body(cur, mid, w: _ScratchWorld) -> None:
     """``strategy_archive.archive_strategy``: read the deployments to decide
     whether any is blocking, then ``UPDATE … WHERE id = ? AND user_id = ?`` with
@@ -617,65 +686,51 @@ def test_the_atomic_update_predicate_does_not_prevent_running_but_deleted(world)
     commits. ``rowcount`` is 1, not 0 — there is nothing to raise on. This is why
     task 13.23 does not ship a fix for this half.
     """
-    # REPEATED, BECAUSE ONE RUN CANNOT ESTABLISH THIS AND ONE RUN IS WHAT MADE IT FLAKY.
+    # THE INTERLEAVING IS CONSTRUCTED, NOT HOPED FOR.
     #
-    # This asserted a single race's outcome and failed on the first CI run it ever got, with
-    # `{'B': 'COMMITTED', 'A': 'RuntimeError:None'}` -- session A refusing at
-    # `rowcount == 0`. That is not a contradiction of the finding; it is the OTHER
-    # interleaving of the same race.
+    # Two earlier shapes of this test both failed, and between them they establish why:
     #
-    # After `mid.wait()` both sessions proceed and nothing orders them. The runner commits
-    # each session only after its body returns, so:
+    #   1. A single `race` asserting one outcome failed on the first CI run it ever got, with
+    #      `{'B': 'COMMITTED', 'A': 'RuntimeError:None'}` -- session A refusing at
+    #      `rowcount == 0`, which is the OTHER interleaving, not a contradiction of the
+    #      finding.
+    #   2. Repeating that race up to 20 times, asserting only that the bad interleaving is
+    #      REACHABLE, passed on one runner on its first attempt and then failed on another
+    #      with "session A refused at rowcount == 0 in 20 of them".
     #
-    #   A's UPDATE evaluates BEFORE B's INSERT commits  ->  NOT EXISTS sees nothing,
-    #       rowcount 1, both COMMIT, final state is archived + live. THE RACE REPRODUCES.
-    #   B's INSERT commits BEFORE A's UPDATE evaluates  ->  READ COMMITTED takes a fresh
-    #       snapshot per statement, A sees the live row, rowcount 0, A raises and rolls back.
-    #       Final state is not-archived + live, which is legal.
+    # So the interleaving is decided by the HOST, not by chance: bimodal per runner rather
+    # than random within a runner. Repetition cannot fix that and neither can a larger count,
+    # which is what shape 2's own failure message said to conclude.
     #
-    # Which one happens is thread scheduling. The original measurement was taken on a machine
-    # that produced the first; a contended two-core runner produced the second.
+    # `_deploy_body_ordered` / `_archive_body_atomic_ordered` therefore rendezvous twice more
+    # through two Events, so the deployer's INSERT is on the wire and uncommitted at the
+    # moment the archiver's predicate evaluates. That is the interleaving Requirement 2.16 is
+    # about, and it is now the one that runs, on every host.
     #
-    # So the property is REACHABILITY, not inevitability: the atomic predicate does not
-    # PREVENT running-but-deleted, and showing that requires observing the bad interleaving at
-    # least once rather than hoping for it on a single attempt. Pinning the interleaving
-    # instead would need a third barrier between A's UPDATE and B's commit, which means
-    # changing `race` and every body in this file to carry it -- and a hand-ordered
-    # interleaving is a weaker claim than one the scheduler produces on its own.
-    #
-    # If this ever exhausts every attempt, the finding HAS changed and the record must change
-    # with it -- which is this file's stated rule for its reproduction tests, not a licence to
-    # raise the attempt count.
-    attempts = 20
-    observed: list[dict] = []
+    # The claim this makes is narrower than shape 1's and honest about it: the atomic
+    # NOT EXISTS predicate does not prevent running-but-deleted WHEN THE WRITES INTERLEAVE
+    # THIS WAY. It says nothing about how often that happens in production, which is a
+    # question about load and not about correctness -- and "sometimes" is all a race needs to
+    # be worth closing.
+    world.inserted = threading.Event()
+    world.updated = threading.Event()
 
-    for _ in range(attempts):
-        result = world.race(
-            _archive_body_atomic,
-            _deploy_body,
-            isolation="READ COMMITTED",
-            with_live_unique_index=True,
-        )
-        observed.append(result)
-
-        reproduced = (
-            result["outcomes"] == {"A": "COMMITTED", "B": "COMMITTED"}
-            and result["archived"] is not None
-            and len(result["live"]) == 1
-        )
-        if reproduced:
-            return
-
-    refusals = sum(
-        1 for r in observed if "RuntimeError" in str(r["outcomes"].get("A", ""))
+    result = world.race(
+        _archive_body_atomic_ordered,
+        _deploy_body_ordered,
+        isolation="READ COMMITTED",
+        with_live_unique_index=True,
     )
-    raise AssertionError(
-        f"running-but-deleted was not reachable in {attempts} attempts at READ COMMITTED "
-        f"with the atomic NOT EXISTS predicate: session A refused at rowcount == 0 in "
-        f"{refusals} of them. If that is now reliable, the atomic predicate IS sufficient "
-        f"for this half and task 13.23's measurement -- and the application-level guard "
-        f"added for Requirement 2.16 -- should be revisited rather than this count raised.\n"
-        f"outcomes seen: {[r['outcomes'] for r in observed]}"
+
+    assert result["outcomes"] == {"A": "COMMITTED", "B": "COMMITTED"}, (
+        "both sessions must commit for this to be the running-but-deleted interleaving; "
+        f"got {result['outcomes']}"
+    )
+    assert result["archived"] is not None and len(result["live"]) == 1, (
+        "the atomic predicate now prevents running-but-deleted even with the interleaving "
+        "constructed, which contradicts task 13.23's measurement. If that is real, this half "
+        "of clause 1.16 is closed at the database level and the application-level guard added "
+        f"for Requirement 2.16 should be revisited: {result}"
     )
 
 
