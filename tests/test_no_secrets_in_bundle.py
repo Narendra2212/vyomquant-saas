@@ -216,6 +216,7 @@ class TestExistingWorkflowCheckIsGeneralisedNotReplaced:
 class TestNoSecretKeyNameInTheBundle:
     """Requirement 1.20 / 2.20, generalised name sweep."""
 
+    @pytest.mark.frontend_bundle
     def test_no_known_secret_name_appears_in_dist(self, bundle_text: str):
         offenders = []
         for name in sorted(KNOWN_SECRET_NAMES):
@@ -274,6 +275,7 @@ class TestNoLeakedCredentialShapeInTheBundle:
     variable name.
     """
 
+    @pytest.mark.frontend_bundle
     def test_only_the_expected_anon_key_jwt_is_present(self, bundle_text: str):
         # Supabase JWTs are three base64url segments joined by '.', always starting
         # "eyJ" (the base64url encoding of '{"' for the JSON header). Match the full

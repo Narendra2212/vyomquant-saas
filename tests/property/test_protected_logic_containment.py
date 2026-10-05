@@ -1289,8 +1289,51 @@ def test_the_clone_path_creates_a_strategies_row_once_consent_and_entitlement_ar
     # Cloning IS the logic transfer Requirement 7.2 permits under explicit consent, so the
     # inserted row carries the owner's protected columns. That is what P-48 asserts the
     # default-closed state prevents.
-    for column in ("buy_logic", "sell_logic", "risk", "indicators", "ml_model_path"):
+    for column in ("buy_logic", "sell_logic", "risk", "indicators"):
         assert column in payload
+
+    # ── `ml_model_path` IS THE ONE Protected_Logic COLUMN CLONING DOES NOT TRANSFER ──
+    #
+    # This loop used to include it, because the Protected_Logic glossary in
+    # marketplace-subscriptions-paper-trading/requirements.md names
+    # `strategies.ml_model_path` alongside the four logic columns. The column was removed
+    # from the clone payload deliberately, and this assertion is the inversion of what the
+    # loop above used to claim rather than an omission.
+    #
+    # WHY, MEASURED RATHER THAN ASSERTED. `ml_model_path` is a FILESYSTEM PATH, not logic.
+    # `master_executor.py:144` reads it off the blueprint, `:236` calls
+    # `ml_models.load_model_to_memory`, and that ends in `joblib.load` (ml_models.py:414).
+    # Unpickling executes the artifact's `__reduce__`. Path containment does not help and
+    # `ml_models.py`'s own header says so under "WHAT THIS DOES NOT CLOSE": every tenant's
+    # artifact lives under the same permitted root, so confining the path to that root still
+    # resolves to the AUTHOR's file.
+    #
+    # So copying the path put author A's artifact into user B's bot process -- the process
+    # holding B's DECRYPTED EXCHANGE API KEYS -- and A controls that artifact's bytes,
+    # because A trained and uploaded it. That is author-to-cloner code execution, reachable
+    # by publishing a listing with cloning enabled. Consent to "copy my strategy logic" is
+    # not informed consent to "run my code against your exchange account", which is why the
+    # glossary listing the column is not read as a mandate to transfer it.
+    #
+    # THE CONSEQUENCE IS A LOUD REFUSAL, NOT SILENT BREAKAGE. A clone of an ML strategy has
+    # no model and is refused at deploy time with `ML_MODEL_MISSING`. The eligibility gate
+    # in `clone_strategy` is unaffected -- it reads `source.get("ml_model_path")`, so a
+    # listing whose strategy has ML nodes and no model is still refused outright.
+    #
+    # THE SPEC-CONFORMANT FIX IS TO COPY THE ARTIFACT, not the pointer, so the clone is
+    # self-contained and owned by the cloner. That needs the artifact resolved through
+    # `model_versions` with an ownership check -- the governed path this legacy column
+    # bypasses -- plus storage accounting and cleanup. It is a feature, not a launch fix, and
+    # until it exists the pointer must not be copied.
+    #
+    # Regression for the handler side: tests/test_ml_model_path_containment.py
+    assert "ml_model_path" not in payload, (
+        "the clone payload carries the author's ml_model_path again. That column reaches "
+        "joblib.load in the cloner's bot process, which holds the cloner's decrypted "
+        "exchange keys, and the author controls the artifact's bytes. If artifact COPYING "
+        "has since been implemented, this assertion is what should change -- and it should "
+        "become an assertion about the clone's OWN artifact, not the author's path."
+    )
 
     assert client.writes_to("library_strategies"), "clone_count is incremented on success"
     assert client.writes_to("library_ratings"), "the verified-clone marker is written"

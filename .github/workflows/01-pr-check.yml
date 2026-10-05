@@ -171,8 +171,20 @@ jobs:
       # own `database-tests` job below rather than here, precisely so that pointing a
       # DATABASE_URL at a real server cannot change the behaviour of this lane. Adding
       # one here would silently re-route every `SessionLocal()` in the suite.
+      # `-m "not frontend_bundle"` DESELECTS TWO TESTS, AND DOES NOT DROP THEIR CHECK.
+      # The first run of this job that was ever allowed to start ERRORed on
+      # `test_no_known_secret_name_appears_in_dist` and
+      # `test_only_the_expected_anon_key_jwt_is_present`, both with "algo22-terminal/dist/
+      # does not exist or is empty". They scan the BUILT frontend bundle, this job installs
+      # Python and never node, and their fixture calls `pytest.fail` rather than `skip` --
+      # correct for a developer locally, impossible here.
+      # They now run in `frontend-tests` below, after that job's own `npm run build`, selected
+      # by exactly this marker. That job is additionally gated on changes under
+      # `algo22-terminal/**`, which is the only way a secret can reach the bundle: a
+      # backend-only diff cannot alter it. The other five tests in that file read the workflow
+      # YAML, `.env.example` and curated name lists, need no bundle, and still run here.
       - name: Run Unit Tests
-        run: pytest tests/ -v --tb=short -k "not chaos and not load"
+        run: pytest tests/ -v --tb=short -k "not chaos and not load" -m "not frontend_bundle"
         env:
           REDIS_URL: redis://localhost:6379
           ENV: test
@@ -586,3 +598,31 @@ jobs:
         if: steps.changes.outputs.frontend == 'true'
         working-directory: ./algo22-terminal
         run: npx vitest --run
+
+      # THE BUNDLE SECRET SWEEP RUNS HERE, BECAUSE THIS IS WHERE THE BUNDLE EXISTS.
+      #
+      # `tests/test_no_secrets_in_bundle.py` scans `algo22-terminal/dist/` for leaked secret
+      # names and for JWT-shaped strings other than the expected anon key. Two of its tests
+      # take the built bundle as their input, and in the `unit-tests` job they could only ever
+      # ERROR -- that job installs Python and never node, so `dist/` is never built. They did
+      # exactly that on the first run of that job that was ever allowed to start.
+      #
+      # They belong after the `npm run build` step above, which is three lines up and has just
+      # produced the artifact. The job's `if:` guard is also the right scope for them: it fires
+      # on changes under `algo22-terminal/**`, and nothing else can put a secret in the bundle.
+      #
+      # Only `pytest` is installed, not `requirements-cpu.txt`. Measured rather than assumed:
+      # the module imports `pathlib`, `pytest` and `re`, and `tests/conftest.py` imports
+      # `asyncio`, `os`, `pytest` and `warnings`. Nothing here needs the backend dependency set.
+      - name: Set up Python for the bundle secret sweep
+        if: steps.changes.outputs.frontend == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Scan the built bundle for leaked secrets
+        if: steps.changes.outputs.frontend == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pytest tests/test_no_secrets_in_bundle.py -m frontend_bundle -v --tb=short
