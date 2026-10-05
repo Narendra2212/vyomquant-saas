@@ -53,6 +53,73 @@ class WatchdogConfig:
     max_retries: int = 3                     # Max fetch retries
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE POSITION LOCK STATEMENT, RENDERED FOR THE BOUND DIALECT
+#
+#  Both call sites below are labelled "FIN-CRITICAL-002 FIX: Update position with row-level
+#  locking", and both ran this, inline and twice:
+#
+#      SELECT * FROM positions WHERE tenant_id = :tenant_id AND symbol = :symbol FOR UPDATE
+#
+#  `positions` HAS NO `symbol` COLUMN. `alembic/versions/d97ffff9c3bb_execution_schema_
+#  rebuild.py` declares it as exactly five columns -- `id`, `tenant_id`, `data` (JSON),
+#  `created_at`, `updated_at` -- and the symbol lives inside the `data` payload. PostgreSQL,
+#  which is what production runs, answers `UndefinedColumn: column "symbol" does not exist`.
+#
+#  Both call sites then swallow it:
+#
+#      except Exception as lock_error:
+#          logger.warning(...)
+#          # Continue with update even if lock fails (non-blocking fallback)
+#
+#  So the row-level lock that fix is named after was never once acquired, and the code went on
+#  to mutate the position without it. `main.py:383` starts this watchdog unconditionally at
+#  startup, so that is the shipped behaviour, not a dormant branch.
+#
+#  Nothing caught it for two compounding reasons. `01-pr-check.yml`'s `database-tests` job --
+#  the only lane with a real PostgreSQL -- had never executed, because `black --check` failed
+#  ahead of it and every test job declared `needs: validate-code`. And the two tests that DO
+#  assert this statement, in `tests/test_position_delta_race_condition_fix.py`, are verbatim
+#  mirrors of these lines, so they only ever reported it where a real server exists. The first
+#  run of that job reported both.
+#
+#  Same defect family as the `json_extract` portability fix, and fixed with the same renderer:
+#  one definition, chosen by the SESSION'S dialect rather than by a module-level assumption.
+#  Regression: tests/test_positions_table_column_agreement.py
+# ══════════════════════════════════════════════════════════════════════════
+
+def _position_lock_sql(dialect: str) -> str:
+    """`SELECT ... FOR UPDATE` locking one tenant's position for one symbol.
+
+    ``dialect`` picks the JSON access spelling: PostgreSQL gets ``data ->> 'symbol'``,
+    everything else gets ``json_extract(data, '$.symbol')``. Both compare against the bound
+    ``:symbol`` parameter.
+
+    ``FOR UPDATE`` is retained and is the point of the statement. SQLite cannot parse it, which
+    is why the SQLite-side regression strips it to check the predicate and the real lock is
+    exercised against PostgreSQL in the ``database-tests`` job.
+    """
+    from backend_app.backend.transactional_execution_manager import json_text
+
+    symbol_sql = json_text("data", "symbol", dialect)
+    return (
+        "SELECT * FROM positions "  # nosec: B608
+        f"WHERE tenant_id = :tenant_id AND {symbol_sql} = :symbol "  # nosec: B608
+        "FOR UPDATE"
+    )
+
+
+def _watchdog_session_dialect(db: Any) -> str:
+    """The bound dialect's name, or ``"sqlite"`` when it cannot be determined.
+
+    Thin re-export of the accessor `transactional_execution_manager` already uses, kept behind
+    a local import so this module does not gain a module-level dependency on it.
+    """
+    from backend_app.backend.transactional_execution_manager import _session_dialect
+
+    return _session_dialect(db)
+
+
 class OrderWatchdog:
     """
     STEP 7.1: Order watchdog system.
@@ -469,15 +536,26 @@ class OrderWatchdog:
             if fill_delta > 0:
                 # Acquire row-level lock on position before update
                 try:
-                    # Lock position row for this tenant/symbol to prevent concurrent updates
+                    # Lock position row for this tenant/symbol to prevent concurrent updates.
+                    # Rendered for the session's dialect -- see _position_lock_sql: the inline
+                    # statement this replaces referenced a `symbol` column `positions` does
+                    # not have, so PostgreSQL rejected it and the lock was never taken.
                     self.db.execute(
-                        text("SELECT * FROM positions WHERE tenant_id = :tenant_id AND symbol = :symbol FOR UPDATE"),
+                        text(_position_lock_sql(_watchdog_session_dialect(self.db))),
                         {"tenant_id": order.tenant_id, "symbol": order.symbol}
                     )
                     logger.info(f"Position lock acquired for {order.tenant_id}:{order.symbol}")
                 except Exception as lock_error:
                     logger.warning(f"Position lock failed for {order.tenant_id}:{order.symbol}: {lock_error}")
-                    # Continue with update even if lock fails (non-blocking fallback)
+                    # Continue with update even if lock fails (non-blocking fallback).
+                    # A failed statement leaves the transaction needing a rollback on
+                    # PostgreSQL, so the session is reset before the unlocked update proceeds;
+                    # without this the `_update_position` call and the `self.db.commit()`
+                    # below both inherit the aborted transaction.
+                    try:
+                        self.db.rollback()
+                    except Exception:  # pragma: no cover - rollback of a dead session
+                        logger.warning("Position lock rollback failed", exc_info=True)
                 
                 await self._update_position(order, fill_delta=fill_delta)
             
@@ -496,15 +574,20 @@ class OrderWatchdog:
             if fill_delta > 0:
                 # Acquire row-level lock on position before update
                 try:
-                    # Lock position row for this tenant/symbol to prevent concurrent updates
+                    # Same statement and same reasoning as the `filled` branch above.
                     self.db.execute(
-                        text("SELECT * FROM positions WHERE tenant_id = :tenant_id AND symbol = :symbol FOR UPDATE"),
+                        text(_position_lock_sql(_watchdog_session_dialect(self.db))),
                         {"tenant_id": order.tenant_id, "symbol": order.symbol}
                     )
                     logger.info(f"Position lock acquired for {order.tenant_id}:{order.symbol}")
                 except Exception as lock_error:
                     logger.warning(f"Position lock failed for {order.tenant_id}:{order.symbol}: {lock_error}")
-                    # Continue with update even if lock fails (non-blocking fallback)
+                    # Continue with update even if lock fails (non-blocking fallback).
+                    # Rollback first -- see the `filled` branch.
+                    try:
+                        self.db.rollback()
+                    except Exception:  # pragma: no cover - rollback of a dead session
+                        logger.warning("Position lock rollback failed", exc_info=True)
                 
                 await self._update_position(order, fill_delta=fill_delta)
             

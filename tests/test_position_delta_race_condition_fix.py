@@ -55,18 +55,35 @@ def test_position_update_row_level_locking():
     This test ensures that concurrent position updates are protected by
     SELECT FOR UPDATE to prevent race conditions and position drift.
     """
+    # THE STATEMENT IS IMPORTED FROM PRODUCTION, NOT RETYPED HERE.
+    #
+    # This test used to carry its own copy of the SQL, which is how it came to assert a
+    # statement that cannot run. The first execution of the `database-tests` job reported
+    # `UndefinedColumn: column "symbol" does not exist`, and it was right: `positions` is
+    # declared `id, tenant_id, data (JSON), created_at, updated_at`, and the symbol lives
+    # inside `data`. `order_watchdog.py` had the identical statement at two call sites, each
+    # wrapped in an `except` that logged a warning and carried on without the lock -- so the
+    # "FIN-CRITICAL-002 FIX" row-level lock was never acquired on PostgreSQL.
+    #
+    # Calling the production helper means a future edit to that statement is tested here by
+    # construction, and a copy cannot silently diverge from it again.
+    # See tests/test_positions_table_column_agreement.py.
+    from backend_app.backend.order_watchdog import (_position_lock_sql,
+                                                    _watchdog_session_dialect)
+
     session = SessionLocal()
     try:
-        # Test that SELECT FOR UPDATE works
-        result = session.execute(
-            text("SELECT * FROM positions WHERE tenant_id = :tenant_id AND symbol = :symbol FOR UPDATE"),
+        session.execute(
+            text(_position_lock_sql(_watchdog_session_dialect(session))),
             {"tenant_id": "test_tenant", "symbol": "BTC/USDT"}
         )
-        
-        # The query should execute without error (even if no rows found)
-        # This proves that FOR UPDATE syntax is supported
+
+        # The query must execute without error (even if no rows are found). That is what
+        # proves both the FOR UPDATE syntax and the column expression are valid against this
+        # server. It does NOT prove a row was locked -- `positions` may be empty here, and
+        # `SELECT ... FOR UPDATE` matching zero rows succeeds while locking nothing.
         print("✓ Row-level locking (SELECT FOR UPDATE) is supported")
-        
+
     finally:
         session.rollback()
         session.close()
@@ -108,9 +125,13 @@ def test_concurrent_position_update_safety():
             # Begin transaction
             session.begin()
             
-            # Acquire row-level lock
+            # Acquire row-level lock, using production's own statement rather than a copy
+            # of it -- see test_position_update_row_level_locking above for why.
+            from backend_app.backend.order_watchdog import (
+                _position_lock_sql, _watchdog_session_dialect)
+
             session.execute(
-                text("SELECT * FROM positions WHERE tenant_id = :tenant_id AND symbol = :symbol FOR UPDATE"),
+                text(_position_lock_sql(_watchdog_session_dialect(session))),
                 {"tenant_id": "test_tenant", "symbol": "BTC/USDT"}
             )
             
