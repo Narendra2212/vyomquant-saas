@@ -29,6 +29,37 @@ concurrency:
   group: ecs-deploy-vyomquant-api-service-cjema2sl
   cancel-in-progress: false
 
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  `actions: read` IS WHAT MAKES THE SECURITY GATE ABLE TO ANSWER
+#
+#  This workflow declared no `permissions:` block at all, so it inherited the repository
+#  default for `GITHUB_TOKEN`. That default grants contents and packages, and NOT `actions`.
+#  `scripts/require_security_scan.py` asks
+#  `GET /repos/{repo}/actions/runs?head_sha=...` whether `05 Security` passed for the commit
+#  being deployed, and that endpoint needs the `actions` scope. Without it the API answers
+#  403.
+#
+#  The gate is fail-closed, which is correct, so it refused:
+#
+#      SECURITY GATE: 05 Security must have passed for 6c5660a1
+#        GitHub API returned 403; refusing rather than guessing.
+#
+#  That is the SAME 14-second failure at the SAME step that `03 Deploy` has shown on every
+#  run, and it was never about the scan. The bandit finding fixed in f1376280 was real and
+#  did independently fail `05 Security`; this is a second, separate cause sitting behind it,
+#  which only became visible once the first was cleared and the scan went green. Two faults,
+#  one symptom.
+#
+#  Set explicitly rather than widened: `contents: read` for `actions/checkout`, `actions:
+#  read` for that one query. Nothing here needs more -- AWS auth uses static access keys
+#  rather than OIDC, so no `id-token: write`, and `actions/upload-artifact@v4` needs no
+#  token scope of its own. Declaring the block REPLACES the default for every job in this
+#  workflow, which is why both are named instead of just the new one.
+# ══════════════════════════════════════════════════════════════════════════════════════
+permissions:
+  contents: read
+  actions: read
+
 env:
   AWS_REGION: ap-southeast-1
   ECS_CLUSTER: vyomquant-cluster
