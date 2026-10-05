@@ -120,10 +120,28 @@ const { mockApi } = vi.hoisted(() => {
   return { mockApi: api };
 });
 
+// `isAuthenticated` IS PART OF THIS MOCK'S OBLIGATION, and leaving it out did not fail these
+// tests -- it failed the RUN. All 155 test files passed and the step still exited non-zero.
+//
+// `StrategyMarketplace` renders entitlement-gated controls through `useEntitlements`, which
+// does `import { api, isAuthenticated } from '../api'` and opens its `load()` with
+// `if (!isAuthenticated())` (`src/hooks/useEntitlements.js:99`). A `vi.mock` factory replaces
+// the WHOLE module, so an export it omits does not fall through to the real one -- touching it
+// throws `[vitest] No "isAuthenticated" export is defined on the "../../api" mock`. That
+// happens inside the hook's async `load`, so it surfaced as an UNHANDLED ERROR rather than a
+// failed assertion, and vitest exits non-zero on those even when every test passes.
+//
+// Answered from `sessionStorage.token` rather than hardcoded, because that is the store
+// `signIn()` / `signOut()` below actually drive, and section 1 asserts the authenticated and
+// anonymous halves of each paired `library.*` / `library.*Public` method. A flat `() => false`
+// would make the hook permanently anonymous while the transport tests still signed in, which
+// is a mock disagreeing with its own fixture. This is the same shape
+// `tests/unit/lib/singleSocket.test.jsx` uses, for the same reason.
 vi.mock('../../api', () => ({
   default: mockApi,
   api: mockApi,
   endpoints: mockApi,
+  isAuthenticated: () => !!sessionStorage.getItem('token'),
 }));
 
 import StrategyMarketplace from '../StrategyMarketplace';

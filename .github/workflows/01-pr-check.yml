@@ -594,11 +594,6 @@ jobs:
       # `npx vitest --run` and never `npm run test`: the `test` script is bare `vitest`, which
       # is watch mode and would never terminate on a runner. `--run` executes once and exits
       # non-zero on any failure, which is what makes this job blocking.
-      - name: Run frontend unit tests
-        if: steps.changes.outputs.frontend == 'true'
-        working-directory: ./algo22-terminal
-        run: npx vitest --run
-
       # THE BUNDLE SECRET SWEEP RUNS HERE, BECAUSE THIS IS WHERE THE BUNDLE EXISTS.
       #
       # `tests/test_no_secrets_in_bundle.py` scans `algo22-terminal/dist/` for leaked secret
@@ -626,3 +621,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest
           pytest tests/test_no_secrets_in_bundle.py -m frontend_bundle -v --tb=short
+
+      # AFTER the secret sweep, deliberately. These two steps were the other way round at
+      # first, which meant a failing unit test stopped the bundle from ever being checked for
+      # a leaked credential -- and that happened immediately: all 155 test files passed while
+      # the step still exited non-zero on an unhandled error, so the sweep never ran. A secret
+      # in a shipped bundle is the more serious of the two findings and must not be gated
+      # behind the less serious one.
+      - name: Run frontend unit tests
+        if: steps.changes.outputs.frontend == 'true'
+        working-directory: ./algo22-terminal
+        run: npx vitest --run
