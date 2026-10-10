@@ -213,7 +213,7 @@ jobs:
         run: pytest tests/ -v --tb=short -k "not chaos and not load" -m "not frontend_bundle"
         env:
           REDIS_URL: redis://localhost:6379
-          AERORA_TEST_REDIS_URL: redis://localhost:6379/15
+          AERORA_TEST_REDIS_URL: redis://localhost:6379/0
           ENV: test
           AERORA_MODE: safe
           PYTHONPATH: .
@@ -732,7 +732,7 @@ jobs:
       # `AERORA_TEST_REDIS_URL` is the deliberate opt-in conftest does NOT touch, and is
       # what carries the endpoint through to `tests/real_redis_gate.py`.
       REDIS_URL: redis://localhost:6379
-      AERORA_TEST_REDIS_URL: redis://localhost:6379/15
+      AERORA_TEST_REDIS_URL: redis://localhost:6379/0
       ENV: test
       AERORA_MODE: safe
       PYTHONPATH: .

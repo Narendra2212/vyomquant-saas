@@ -41,6 +41,7 @@ import hmac
 import json
 import os
 import uuid
+from urllib.parse import urlsplit
 
 import pytest
 import pytest_asyncio
@@ -83,13 +84,216 @@ WEBHOOK_SECRET = "test-webhook-secret-not-a-real-credential"
 # fixture below supplies the other half, because a pytest marker cannot express a failure.
 # Business logic, signature validation, idempotency behaviour, lock semantics and the
 # production Redis configuration are untouched by this change.
-from tests.real_redis_gate import (real_redis_required, redis_url as _gate_redis_url,
+#
+# `_LOOPBACK_HOSTS` and `ALLOW_REMOTE_VAR` are imported alongside the public surface
+# because `_app_cache_url()` below has to apply the SAME production-safety rule to a
+# second URL, and duplicating the host list here would let the two copies drift. The gate
+# remains the single place that decides what "safe to connect to" means.
+from tests.real_redis_gate import (ALLOW_REMOTE_VAR, _LOOPBACK_HOSTS,
+                                   real_redis_required, redis_url as _gate_redis_url,
                                    require_real_redis)
 
 #: Kept as a module-level constant because the fixtures below hand it to the backend cache
 #: manager, but now sourced from the shared gate rather than read from the environment a
 #: second time -- one opt-in name, resolved in one place.
+#:
+#: THIS IS THE OPT-IN, NOT THE KEYSPACE. See `_app_cache_url()`.
 REDIS_URL = _gate_redis_url()
+
+
+def _app_cache_url() -> str:
+    """The URL the APPLICATION's cache is on -- not the one this file asked for. F2.
+
+    ═══════════════════════════════════════════════════════════════════════════════
+    WHY THIS EXISTS (Phase 11B-A9 -> A12)
+    ═══════════════════════════════════════════════════════════════════════════════
+    Two of the six tests below failed in CI run 38044138718 because the synchronous test
+    client and the application handler were writing to DIFFERENT REDIS DATABASES on the
+    same server. Not a dedup defect, not a mock, not a dead server -- a keyspace split:
+
+        tests/test_webhook_duplicate_delivery_real_redis.py::
+            test_the_lock_is_recorded_in_redis_under_the_documented_key   FAILED
+              -> AssertionError: no idempotency key at webhook:razorpay:evt_... after a delivery
+            test_an_in_flight_delivery_blocks_a_concurrent_one            FAILED
+              -> AssertionError: ... was still in flight was processed anyway: {'status': 'success'}
+
+    `backend_app/backend/redis_manager.py` pins the cache to its own database and
+    OVERRIDES whatever database a URL named::
+
+        37: REDIS_DB_CACHE = 0
+        43: REDIS_URL = os.getenv("REDIS_URL", "").strip()      # captured at IMPORT
+        69:     query_params['db'] = str(db)                    # overrides the URL's own db
+        86:     return f"redis://{auth}{REDIS_HOST}:{REDIS_PORT}/{db}"   # or builds it fresh
+       141:     cache = await aioredis.from_url(get_redis_url(REDIS_DB_CACHE), ...)
+
+    In CI, `REDIS_URL: redis://localhost:6379` and `AERORA_TEST_REDIS_URL:
+    redis://localhost:6379/15`. Both branches of `get_redis_url` therefore resolve to
+    DB 0 -- the non-empty branch yields `redis://localhost:6379?db=0`, and redis-py
+    resolves the query parameter in preference to any path, measured on redis 5.0.8::
+
+        parse_url('redis://localhost:6379/15?db=0') -> {'db': 0, 'host': 'localhost', 'port': 6379}
+
+    while this file's client went to DB 15. So the handler's lock was written, correctly,
+    somewhere the test never looked.
+
+    Note also that line 43 is a MODULE-LEVEL CONSTANT read once at import. The
+    `monkeypatch.setenv("REDIS_URL", ...)` in `billing_env` and the `os.environ`
+    assignment in `real_redis_cache` cannot retroactively change it, so pointing the
+    application at DB 15 from here is not available as an option.
+
+    WHY DERIVE RATHER THAN HARD-CODE DB 0. `get_redis_url` is a pure function of that
+    module's constants, so calling it returns the exact string `initialize()` passed to
+    `aioredis.from_url` -- by construction, not by coincidence. A hard-coded `/0` would
+    agree today and drift the moment `REDIS_DB_CACHE`, the override, or the host/port
+    fallback changes, and it would reintroduce this bug silently.
+
+    WHY THE IMPORT IS LAZY. It must happen AFTER `real_redis_cache` has resolved the
+    manager. By then `backend_app.backend.redis_manager` is imported and its constants
+    are frozen to whatever the application itself observed, so this function cannot
+    report a URL the application never used.
+
+    WHAT THIS DOES NOT DO. It does not set, export, or mutate `REDIS_URL`, `REDIS_HOST`
+    or `REDIS_PORT`, and it does not touch application code. The opt-in and liveness
+    decision stays entirely on `AERORA_TEST_REDIS_URL` via the shared gate. The only
+    thing that moves is where THIS FILE'S OWN client looks.
+
+    TRADE-OFF, STATED. The test client no longer sits on the dedicated database index
+    named by `AERORA_TEST_REDIS_URL`; it sits on the application's cache database. That
+    is strictly less keyspace isolation than `/15` promised -- but `/15` was never where
+    the application wrote, so the isolation was illusory and bought nothing. Every key
+    this file creates is uuid-suffixed and registered for teardown. Restoring real
+    isolation requires `get_redis_url` to honour an explicitly configured database, which
+    is an application change, owned elsewhere, and out of scope here.
+    """
+    from backend_app.backend.redis_manager import REDIS_DB_CACHE, get_redis_url
+
+    url = get_redis_url(REDIS_DB_CACHE)
+
+    # The same refusal the gate applies to `AERORA_TEST_REDIS_URL`, applied to the URL we
+    # derived. Without it, a deployment-shaped `REDIS_HOST` would quietly point this
+    # file's client -- which WRITES and DELETES keys -- at a shared or managed instance.
+    # FAIL, not skip: a required real-Redis assertion may not be satisfied by a skip, and
+    # the endpoint is deliberately not echoed (CI logs are world-readable).
+    host = (urlsplit(url).hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS and (os.environ.get(ALLOW_REMOTE_VAR) or "").strip() != "1":
+        pytest.fail(
+            f"the application's effective cache URL (REDIS_URL / REDIS_HOST / REDIS_PORT, "
+            f"database {REDIS_DB_CACHE}) names a non-loopback host and "
+            f"{ALLOW_REMOTE_VAR}=1 was not set. Refusing to connect: this file writes and "
+            f"deletes keys, so it must not be able to reach a shared or managed instance "
+            f"by accident. (The host is deliberately not echoed.)"
+        )
+    return url
+
+
+#: Sentinel keys written by the keyspace probe below. Prefixed and uuid-suffixed so they
+#: cannot collide with an application key, and given a short TTL so an interrupted run
+#: cannot leave litter behind even if teardown never executes.
+_PROBE_PREFIX = "aerora:test:keyspace-probe"
+_PROBE_TTL_SECONDS = 30
+
+
+async def _prove_one_keyspace(manager, client) -> None:
+    """Prove the test client and the application cache manager see the SAME keys. F3.
+
+    This is the assertion whose absence let Phase 11B-A6 ship a green-looking run in which
+    two tests were measuring an empty database. It is deliberately BIDIRECTIONAL, because
+    the two failures were in opposite directions and one direction alone would have caught
+    only one of them:
+
+        app writes -> test reads    `test_the_lock_is_recorded_in_redis_under_the_documented_key`
+        test writes -> app reads    `test_an_in_flight_delivery_blocks_a_concurrent_one`
+
+    It runs per test rather than once per session on purpose: `_redis_manager`,
+    `_dev_mode_bypass` and `_test_mode` are injection seams on a session-wide singleton
+    (see `_REDIS_SINGLETON_SEAMS` in `tests/conftest.py`), so agreement proven at session
+    start is not agreement now. Four commands per test is not worth optimising.
+
+    A FAILED WRITE IS REPORTED AS A FAILED WRITE, not as a mismatch. The manager's proxies
+    swallow every exception and return `None`/`False`
+    (`backend_app/core/cache/redis_manager.py`, `get`/`set`/`delete`), so a cache fault and
+    an empty keyspace are indistinguishable from the return value alone. Checking the write
+    result first keeps the two apart instead of blaming the wrong thing.
+
+    Everything here FAILS rather than skips, and the mock is never accepted as real: by the
+    time this runs, `real_redis_required` has established the opt-in is set,
+    `_real_redis_is_usable` has established the endpoint answers PING, and
+    `real_redis_cache` has established the manager handed back something that is not
+    `MockRedisClient` and not `None`.
+    """
+    import redis as _redis
+
+    from backend_app.backend.redis_manager import REDIS_DB_CACHE
+
+    nonce = uuid.uuid4().hex
+    key_app_wrote = f"{_PROBE_PREFIX}:app-wrote:{nonce}"
+    key_test_wrote = f"{_PROBE_PREFIX}:test-wrote:{nonce}"
+    token = f"keyspace-probe-{nonce}"
+
+    try:
+        # ── direction 1: the application writes, this file must be able to read it ──
+        wrote = await manager.set(key_app_wrote, token, ex=_PROBE_TTL_SECONDS)
+        if not wrote:
+            pytest.fail(
+                f"the application cache manager REFUSED a write it was handed a real "
+                f"cache for (`set` returned {wrote!r}). Its proxies return False on any "
+                f"exception and log a warning, so the reason is in the captured log, not "
+                f"in this value. This is not a keyspace mismatch -- the write never "
+                f"landed anywhere."
+            )
+
+        seen_by_test = client.get(key_app_wrote)
+        if seen_by_test != token:
+            pytest.fail(
+                f"KEYSPACE SPLIT: the application cache manager wrote a sentinel and this "
+                f"file's client cannot see it (read {seen_by_test!r}, expected the "
+                f"sentinel). Both clients answered, so there is a Redis on both ends -- "
+                f"they are not looking at the same one. This file derives its URL from "
+                f"`get_redis_url(REDIS_DB_CACHE)` with REDIS_DB_CACHE={REDIS_DB_CACHE}, "
+                f"so a mismatch means the manager is connected to something that function "
+                f"does not describe: an injected `_redis_manager`, a connection opened "
+                f"before REDIS_URL reached its current value, or a second server. "
+                f"`test_the_lock_is_recorded_in_redis_under_the_documented_key` would "
+                f"fail next with 'no idempotency key ... after a delivery', which is the "
+                f"CI failure this probe exists to name at its cause."
+            )
+
+        # ── direction 2: this file writes, the application must be able to read it ──
+        client.set(key_test_wrote, token, ex=_PROBE_TTL_SECONDS)
+        seen_by_app = await manager.get(key_test_wrote)
+        if seen_by_app != token:
+            pytest.fail(
+                f"KEYSPACE SPLIT (reverse direction): this file wrote a sentinel and the "
+                f"application cache manager cannot see it (read {seen_by_app!r}). Its "
+                f"`get` returns None both for 'absent' and for 'the call raised', so "
+                f"check the captured log before concluding which. "
+                f"`test_an_in_flight_delivery_blocks_a_concurrent_one` depends on exactly "
+                f"this direction -- it installs the `processing` marker itself -- and "
+                f"would fail next with 'processed anyway'."
+            )
+    except (_redis.exceptions.RedisError, OSError) as exc:
+        # The gate PINGed `AERORA_TEST_REDIS_URL`; this client is on the URL the
+        # APPLICATION uses, which may be a different endpoint. A failure here means that
+        # second endpoint is unusable. Fail closed, and do not echo it.
+        pytest.fail(
+            f"the shared gate reached the endpoint named by its own opt-in variable, but "
+            f"this file's client could not use the application's effective cache URL "
+            f"(database {REDIS_DB_CACHE}): {type(exc).__name__}. The two are allowed to "
+            f"differ, so a reachable opt-in endpoint does not imply a reachable "
+            f"application endpoint. (Neither is echoed.)"
+        )
+    finally:
+        # Through BOTH paths, so the sentinels are gone whichever side can still reach
+        # them, and regardless of which assertion above fired. `pytest.fail` raises a
+        # BaseException subclass, so it passes straight through these handlers.
+        try:
+            await manager.delete(key_app_wrote, key_test_wrote)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            client.delete(key_app_wrote, key_test_wrote)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # `pytest.ini` sets asyncio_mode = strict, so the async tests below need the marker
@@ -174,9 +378,14 @@ async def real_redis_cache(billing_env):
     `_REDIS_SINGLETON_SEAMS` list -- so flipping it here cannot leak into another test,
     which is the whole reason that fixture exists.
 
-    If the manager still hands back the mock, the test skips rather than passing: a green
-    result from the in-memory dict would be precisely the false assurance this file was
-    written to remove.
+    If the manager still hands back the mock, the test FAILS rather than passing or
+    skipping (Phase 11B-A5, see the guard below): a green result from the in-memory dict
+    would be precisely the false assurance this file was written to remove.
+
+    Note that this fixture establishes only that the manager returned a REAL cache. It
+    does not establish that the real cache is the one this file's own client is looking
+    at -- that is a separate question, it was answered "no" in CI run 38044138718, and
+    `redis_client` / `_prove_one_keyspace` now answer it explicitly.
     """
     from backend_app.core.cache import redis_manager
     from backend_app.core.cache.redis_manager import MockRedisClient
@@ -185,10 +394,43 @@ async def real_redis_cache(billing_env):
     redis_manager._bypass_dev_mode(True)
     cache = await redis_manager._get_active_cache()
     if cache is None or isinstance(cache, MockRedisClient):
-        pytest.skip(
-            f"redis_manager still resolves to {type(cache).__name__}; cannot exercise "
-            f"the lock against the real server, and the in-memory dict would prove "
-            f"nothing (see BUG-027)."
+        # FAIL, NOT SKIP (Phase 11B-A5).
+        #
+        # This was `pytest.skip(...)`, and by the time this line is reached a skip is the
+        # wrong answer. Two things are already established:
+        #
+        #   * `real_redis_required` (pytestmark) has confirmed AERORA_TEST_REDIS_URL IS
+        #     SET -- otherwise collection would have skipped and this fixture would never
+        #     run;
+        #   * `_real_redis_is_usable` (autouse, above) has confirmed the endpoint ANSWERS
+        #     PING, from a permitted host.
+        #
+        # So reaching here means: a real Redis was asked for, the shared gate reached it,
+        # and the APPLICATION cache manager still did not hand back a real cache. That is
+        # a wiring or configuration fault, not an absent server -- and the two quota files
+        # sharing this gate would FAIL on the same broken service, so reporting it as a
+        # skip here is the same false-assurance asymmetry D5' exists to remove. A required
+        # real-Redis assertion may not be satisfied by a skip.
+        #
+        # `_get_active_cache()` reaches this state via one of two branches
+        # (backend_app/core/cache/redis_manager.py:727-745), both measured in
+        # staging/probe_p11b4_cache_fallback.py:
+        #   * no `.cache` from `_ensure_manager()` and `_mock_cache_is_acceptable()` true
+        #     -> MockRedisClient  (what ENV=test produces)
+        #   * the same with the predicate false -> None
+        #
+        # The DETECTION below is unchanged and was already correct; only the disposition
+        # moves. No application code is touched: the manager's fail-soft behaviour is
+        # deliberate and is owned elsewhere.
+        pytest.fail(
+            f"the shared real-Redis gate PASSED its PING, but redis_manager resolved to "
+            f"{type(cache).__name__} instead of a real cache. AERORA_TEST_REDIS_URL is "
+            f"set and the endpoint answered, so this is a cache-manager wiring fault, not "
+            f"a missing server -- it FAILS rather than skipping, because the in-memory "
+            f"dict would prove nothing (see BUG-027) and a skip here would hide a broken "
+            f"service behind a green run. Check DEV_MODE / ENV, whether "
+            f"`_bypass_dev_mode(True)` took effect, and whether the manager could open "
+            f"its own connection to the same endpoint the gate just reached."
         )
     return redis_manager
 
@@ -235,16 +477,37 @@ async def test_the_credential_gate_refuses_test_keys(billing_env):
     assert "TEST key id" in str(excinfo.value.detail), excinfo.value.detail
 
 
-@pytest.fixture
-def redis_client():
+# `pytest_asyncio.fixture` and a dependency on `real_redis_cache`, both required by F2/F3:
+# the URL must be derived AFTER the application manager has resolved (see
+# `_app_cache_url`), and the probe has to await the manager's async proxies.
+@pytest_asyncio.fixture
+async def redis_client(real_redis_cache):
+    """A synchronous client on the SAME keyspace as the application cache, proven.
+
+    Was `_redis.Redis.from_url(REDIS_URL, ...)` -- the opt-in URL, whose database index
+    the application overrides -- which is the Phase 11B-A9 keyspace split. It now resolves
+    through `_app_cache_url()`, and `_prove_one_keyspace()` demonstrates the agreement
+    before any test body runs rather than leaving it assumed.
+
+    Teardown is unchanged in intent and now actually effective: because this client is
+    finally on the database the handler writes to, deleting the registered keys removes
+    the handler's locks instead of deleting nothing from an unrelated database.
+    """
     import redis as _redis
 
-    client = _redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    client = _redis.Redis.from_url(_app_cache_url(), decode_responses=True)
     created: list[str] = []
-    yield client, created
-    for key in created:
+    try:
+        await _prove_one_keyspace(real_redis_cache, client)
+        yield client, created
+    finally:
+        for key in created:
+            try:
+                client.delete(key)
+            except Exception:  # noqa: BLE001
+                pass
         try:
-            client.delete(key)
+            client.close()
         except Exception:  # noqa: BLE001
             pass
 
