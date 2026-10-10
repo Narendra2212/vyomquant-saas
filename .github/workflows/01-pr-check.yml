@@ -183,10 +183,37 @@ jobs:
       # `algo22-terminal/**`, which is the only way a secret can reach the bundle: a
       # backend-only diff cannot alter it. The other five tests in that file read the workflow
       # YAML, `.env.example` and curated name lists, need no bundle, and still run here.
+      # D5': `AERORA_TEST_REDIS_URL` IS WHAT SWITCHES THE REAL-REDIS TESTS ON.
+      #
+      # `REDIS_URL` below does NOT, and that was the defect. `tests/conftest.py` runs
+      #     os.environ["REDIS_URL"] = ""
+      # unconditionally at import, before any test module loads, so that the 11,000+ tests in
+      # this lane cannot be re-pointed at a live cache by whatever happens to be exported.
+      # That blanking is correct and is deliberately left alone. Its consequence was that the
+      # `redis:7-alpine` service above -- healthy, mapped, health-checked -- could never reach
+      # the tests that exist to exercise it: they read `REDIS_URL`, found `''`, and SKIPPED on
+      # every PR. Three files were affected, and one of them had been dormant since it was
+      # written. Measured in `staging/p10k_gate_predicate.txt`.
+      #
+      # `AERORA_TEST_REDIS_URL` is the second, deliberate name -- the same pattern
+      # `AERORA_TEST_DATABASE_URL` already uses for PostgreSQL in the `database-tests` job, and
+      # the name `tests/test_webhook_duplicate_delivery_real_redis.py` already read. conftest
+      # does not touch it, so it survives to the gate in `tests/real_redis_gate.py`.
+      #
+      # `/15` pins a dedicated database index. The service container is already ephemeral and
+      # exclusive to this job, so this is belt-and-braces rather than load-bearing -- but it
+      # means these tests cannot collide with anything else that might later share the
+      # instance, and no test ever issues FLUSHDB.
+      #
+      # `REDIS_URL` is RETAINED unchanged. Several tests assert on how the application behaves
+      # when it is present (`test_api03_rate_limit_storage_is_fail_closed.py`,
+      # `test_api04_store_failure_after_startup.py`), and conftest blanks it for everyone
+      # regardless, so removing it here would change an unrelated lane for no benefit.
       - name: Run Unit Tests
         run: pytest tests/ -v --tb=short -k "not chaos and not load" -m "not frontend_bundle"
         env:
           REDIS_URL: redis://localhost:6379
+          AERORA_TEST_REDIS_URL: redis://localhost:6379/15
           ENV: test
           AERORA_MODE: safe
           PYTHONPATH: .
