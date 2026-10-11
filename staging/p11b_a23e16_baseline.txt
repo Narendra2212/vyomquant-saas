@@ -1,0 +1,151 @@
+
+================================================================================================
+1. ROOT / BRANCH / HEAD / REMOTE
+================================================================================================
+  toplevel     : C:/aerora_quant_backend_updated_final1
+  branch       : main
+  HEAD         : ecd23a9e934ec58a7b1f0e5db638da8e865e8187
+  origin/main  : ecd23a9e934ec58a7b1f0e5db638da8e865e8187
+  HEAD==origin : True
+  ahead/behind : 0	0
+  A29 baseline ecd23a9e still HEAD : True
+
+  last 3 commits:
+    ecd23a9e 10-11 15:13 Narendra2212 :: launch phase 1
+    074b772a 10-05 23:40 Narendra2212 :: Give the deploy gate permission to read the answer it refuses without
+    6c5660a1 10-05 22:43 Narendra2212 :: Construct the interleaving instead of hoping for it: the host was deciding
+
+================================================================================================
+2. WORKTREE COUNTS
+================================================================================================
+  staged / unstaged / untracked / unmerged : 0 / 2 / 28 / 0    (A29 exit: 0 / 2 / 6 / 0)
+  tracked index entries : 5705   (A29 exit: 5705)
+  worktrees / stash     : 1 / 2
+
+  full porcelain:
+     M staging/PHASE11B_A23E11_AUTHORIZATION_DELTA.md
+     M tests/test_drift_classification.py
+    ?? staging/PHASE11B_A23E12_PARALLEL_BLOCKER_RESOLUTION.md
+    ?? staging/PHASE11B_A23E14_REGISTER_AUTHORIZATION_AND_BLOCKER_REDUCTION.md
+    ?? staging/PHASE11B_A28B_CI_EVIDENCE_AND_LEDGER_ROW_VERIFICATION.md
+    ?? staging/PHASE11B_A29_TEST6_AND_DECISION_REQUESTS.md
+    ?? staging/PHASE11B_D11_EVIDENCE_AND_D71_READINESS.md
+    ?? staging/PHASE12_PARALLEL_BLOCKER_RESOLUTION.md
+    ?? staging/p11b29_audit.py
+    ?? staging/p11b29_audit.txt
+    ?? staging/p11b29_indexdiag.py
+    ?? staging/p11b29_indexdiag.txt
+    ?? staging/p11b_a23e16_baseline.py
+    ?? staging/p12_bindprobe.txt
+    ?? staging/p12_d6c_sql.txt
+    ?? staging/p12_d6c_sql_syntax_check.py
+    ?? staging/p12_d6c_types.py
+    ?? staging/p12_d6c_types.txt
+    ?? staging/p12_exec.txt
+    ?? staging/p12_final_audit.py
+    ?? staging/p12_final_audit.txt
+    ?? staging/p12_tenant.txt
+    ?? staging/p12_w6_classifier_probe.py
+    ?? staging/p12_w6_lines.py
+    ?? staging/p12_w6_lines.txt
+    ?? staging/p12_w6_probe.txt
+    ?? staging/p12e12_d71_bindprobe_rerun.txt
+    ?? staging/p12e12_quota01.txt
+    ?? staging/p12e12_w6_probe_run.txt
+    ?? staging/p12e13_ci.json
+
+================================================================================================
+3. A29 TEST-6 SURVIVAL CHECK
+================================================================================================
+  worktree blob : 99a2917ac0a65761ef3dfe9299ed1df87647552a   (A29 exit recorded 99a2917ac0a65761ef3dfe9299ed1df87647552a)
+  index blob    : fcffbe8e01367aa7f99fffe2677267821fb8424d
+  HEAD blob     : fcffbe8e01367aa7f99fffe2677267821fb8424d
+  status code   :  M
+  lines         : 808   (A29: 808)
+  present: True   def test_counts_reduce_to_the_legacy_output
+  present: True   def test_the_legacy_reconstruction_is_membership_not_multiset
+  present: True   def test_the_legacy_arithmetic_cases_cover_every_classification_category
+  present: True   def _legacy_membership_diff
+  present: True   LEGACY_ARITHMETIC_CASES = [
+  'whole-tuple **membership**' semantics anchor cited : True
+  LEGACY_ARITHMETIC_CASES entries : 25
+
+================================================================================================
+4. FINGERPRINTS (worktree) -- all re-measured, none reused
+================================================================================================
+  8f432d994d9d0a8b9f707b7f18fbb4e27c0a5db2  clean scripts/verify_provisioning.py
+  f853c1482ca295440c78e4f25a8989438fab041e  clean scripts/verify_schema_drift.py
+  6e194f43a832d1f9cb0f99efd88dd204c5b3c444  clean scripts/verify_production_schema.py
+  5106dd5916424c9b795a5b393e36afc21c4ba9b4  clean tests/test_snapshot_dimension_invariants.py
+  99a2917ac0a65761ef3dfe9299ed1df87647552a   M    tests/test_drift_classification.py
+  91d55a379115c88edd2fd6be01871b82a75ef498  clean .github/workflows/01-pr-check.yml
+  d7b0e811b615ee13ba089b5cbe9d790161176de2  clean backend_app/backend/redis_manager.py
+  6c8a3692c35056d0b7ea25d7ce04dfcf1db06a11  clean backend_app/core/cache/redis_manager.py
+  256f03994b395d383fc49dd5b87a456ba68d99cb  clean backend_app/core/subscription_engine.py
+  a3849d4acd7afcf4e53054fc85b16c786776eada  clean backend_app/main.py
+  7e238620bc22f0ad246f0ebc373b7032c6b28ef0  clean staging/PHASE11B_W1D_LEDGER_AND_DRIFT_READINESS.md
+  1402bdc5a1b030430d6e192989a851b4a21ce9a8  clean staging/PHASE11B_W1D12_CLASSIFIER_DECISION_RECORD.md
+  7b206850c72519664c0981d1bce3af9f3a6bd0e8  clean staging/PHASE11B_A23E6_GOVERNANCE_DECISION_PACKET.md
+  e6069946039186ff2219ce7b881f1c4675aac90c  clean staging/provisioning_snapshot.json
+  bc8f63d0f621c414280849c4a3adb4d554361664  clean staging/PHASE11A_READINESS_SCORECARD.json
+
+================================================================================================
+5. LEDGER LINES 800-804 (verbatim status cells)
+================================================================================================
+  L800: id='**AP-W1D-1**'       owner='DB owner (read access)'   status='**NOT GRANTED**'
+  L801: id='**AP-W1D-2**'       owner='DB owner'                 status='**NOT GRANTED**'
+  L802: id='**AP-W1D-3**'       owner='Code owner'               status='**NOT GRANTED**'
+  L803: id='**AP-W1D-4**'       owner='DB owner + code owner'    status='**NOT GRANTED**'
+  L804: id='**AP-W1D-5**'       owner='Coordinator + DB owner'   status='**NOT GRANTED**'
+  L802 reconciled to 'GRANTED (W1D-12)' : False
+
+================================================================================================
+6. ORIGINAL 22 STAGED PATHS -- still tracked after the launch commit?
+================================================================================================
+  present in HEAD commit : 22 / 22
+
+================================================================================================
+7. PG LANE TESTS -- presence and tracked state
+================================================================================================
+  tests/*postgres*.py files : 33
+    tracked=True   tests/test_billing_data_isolation_postgres.py
+    tracked=True   tests/test_bug049_identity_types_postgres.py
+    tracked=True   tests/test_bug056_library_subscriptions_updated_at_postgres.py
+    tracked=True   tests/test_bug057_listing_moderation_authz_postgres.py
+    tracked=True   tests/test_cross_tenant_read_sweep_postgres.py
+    tracked=True   tests/test_database_isolation_level_postgres.py
+    tracked=True   tests/test_fee01_tenant_is_validated_not_sentinel_postgres.py
+    tracked=True   tests/test_fee_third_asset_pct_is_nullable_postgres.py
+    tracked=True   tests/test_lib01_clone_strategy_postgres.py
+    tracked=True   tests/test_money01_referral_commission_idempotence_postgres.py
+    tracked=True   tests/test_money04_referral_ledger_is_single_currency_postgres.py
+    tracked=True   tests/test_money06_referral_obligations_postgres.py
+    tracked=True   tests/test_p10d_fee_summary_does_not_mix_denominations_postgres.py
+    tracked=True   tests/test_p10d_referral_settlement_lifecycle_postgres.py
+    tracked=True   tests/test_paper01_botrunner_fills_reach_the_ledger_postgres.py
+    tracked=True   tests/test_paper02_unfunded_order_state_postgres.py
+    tracked=True   tests/test_pgcrypto_preflight_postgres.py
+    tracked=True   tests/test_position_lifecycle_postgres.py
+    tracked=True   tests/test_pr_check_postgres_service.py
+    tracked=True   tests/test_production_security_probe_rolls_back_postgres.py
+    tracked=True   tests/test_referral_money_lifecycle_postgres.py
+    tracked=True   tests/test_referral_payout_schema_contract_postgres.py
+    tracked=True   tests/test_schema_drift_checker_is_read_only_postgres.py
+    tracked=True   tests/test_signup_integration_postgres.py
+    tracked=True   tests/test_strategy_lifecycle_concurrency_postgres.py
+    tracked=True   tests/test_tenant01_cross_tenant_matrix_postgres.py
+    tracked=True   tests/test_tenant02_fee_records_rls_postgres.py
+    tracked=True   tests/test_tenant_db_context_postgres.py
+    tracked=True   tests/test_tenant_isolation_rls_postgres.py
+    tracked=True   tests/test_tenant_referential_integrity_postgres.py
+    tracked=True   tests/test_trade01_concurrent_exposure_postgres.py
+    tracked=True   tests/test_trade07_stale_execution_recovery_postgres.py
+    tracked=True   tests/test_work03_bot_ownership_claims_postgres.py
+
+================================================================================================
+8. CREDENTIAL HYGIENE (status only -- nothing opened)
+================================================================================================
+  exchange_keys.json           exists=True   tracked=False  gitignored=True
+  .env                         exists=True   tracked=False  gitignored=True
+  staging/pg_dsn.txt           exists=True   tracked=False  gitignored=True
+  .env.corrupt.backup          exists=True   tracked=False  gitignored=True

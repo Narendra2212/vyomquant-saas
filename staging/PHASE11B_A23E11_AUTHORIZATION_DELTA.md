@@ -186,4 +186,5 @@ identity), then the serial ladder — lifecycle tests → `test_redis_debounce.p
 `test_r6_d` required to remain XFAIL → Redis/proxy → global-safety/kill-switch → cache/exchange
 regressions → preservation audit.
 
-**No approval was created, implied or signed on an
+**No approval was created, implied or signed on anyone's behalf. No owner was contacted — no channel
+to do so is documented. Live trading remains OFF / NOT CERTIFIED.**

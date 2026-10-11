@@ -1,0 +1,55 @@
+================================================================================================
+CI EVIDENCE FOR THE LAUNCH COMMIT ecd23a9e934e
+================================================================================================
+  runs found for this SHA : 6
+  workflows that ran      : ['02 Build', '03 Deploy', '05 Security', '06 Frontend Deploy', '07 Desktop Build (native, unsigned)']
+
+  workflow files defined in the repo, and whether each ran on this SHA:
+    NO RUN  01-pr-check.yml            triggers=['pull_request']
+    RAN     02-build.yml               triggers=['push']
+    RAN     03-deploy.yml              triggers=['workflow_dispatch', 'workflow_run']
+    NO RUN  04-nightly-audit.yml       triggers=['schedule', 'workflow_dispatch']
+    RAN     05-security.yml            triggers=['push', 'pull_request', 'schedule']
+    RAN     06-frontend-deploy.yml     triggers=['push', 'workflow_dispatch']
+    RAN     07-desktop-build.yml       triggers=['push', 'pull_request', 'workflow_dispatch']
+
+================================================================================================
+PER-RUN JOB OUTCOMES
+================================================================================================
+
+  --- 05 Security  (id 38129699454, event push) ---
+      run conclusion : failure
+      job  success      Trivy Container Vulnerability Scanner
+      job  failure      Trivy IaC Misconfiguration & Secret Scan
+           step failure    Trivy IaC scan — terraform/ (blocking, CRITICAL)
+      job  failure      Bandit SAST & Dependency Security Scan
+           step failure    Run Bandit Scan
+
+  --- 02 Build  (id 38129699471, event push) ---
+      run conclusion : success
+      job  success      Build & Push Docker Image to ECR
+
+  --- 03 Deploy  (id 38130273012, event workflow_run) ---
+      run conclusion : failure
+      job  failure      Pre-Deployment Validation Gate
+           step failure    Require the security scan to have passed for this commit
+      job  skipped      ECS Fargate Deploy & Self-Healing Diagnostics
+
+  --- 05 Security  (id 38132697285, event schedule) ---
+      run conclusion : failure
+      job  success      Trivy Container Vulnerability Scanner
+      job  failure      Bandit SAST & Dependency Security Scan
+           step failure    Run Bandit Scan
+      job  failure      Trivy IaC Misconfiguration & Secret Scan
+           step failure    Trivy IaC scan — terraform/ (blocking, CRITICAL)
+
+  --- 06 Frontend Deploy  (id 38129699497, event push) ---
+      run conclusion : success
+      job  success      Build & Deploy Frontend to S3 + CloudFront
+
+  --- 07 Desktop Build  (id 38129699516, event push) ---
+      run conclusion : success
+      job  success      Windows (x86_64, MSVC)
+      job  success      Linux (x86_64)
+      job  success      macOS (universal)
+      job  success      Desktop build summary

@@ -1,0 +1,74 @@
+================================================================================================
+05 Security (push)  (run 38129699454) -- filtered verdict lines only
+================================================================================================
+  log lines retrieved : 1089
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	﻿2026-10-11T09:48:49.0891350Z Current runner version: '2.337.0'
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0928162Z ##[group]Runner Image Provisioner
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0930047Z Hosted Compute Agent
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0931219Z Version: 20261002.596
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0932278Z Commit: <redacted>
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0933642Z Build Date: 2026-10-02T22:28:27Z
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0934748Z Worker ID: {<redacted>}
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0936543Z Region: eastus
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0937645Z Cloud: Azure
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0938604Z ##[endgroup]
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0941895Z ##[group]Operating System
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0942994Z Ubuntu
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0943891Z 24.04.5
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0945146Z LTS
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0946055Z ##[endgroup]
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0947162Z ##[group]Runner Image
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0948228Z Image: ubuntu-24.04
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0949257Z Version: 20261004.327.1
+    y IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0951850Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0954667Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0956330Z ##[endgroup]
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0958401Z ##[group]GITHUB_TOKEN Permissions
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0961662Z Contents: read
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0962706Z Metadata: read
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0963598Z Packages: read
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0964505Z ##[endgroup]
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0967803Z Secret source: Actions
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0969698Z Cache mode: write
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.0971445Z Prepare workflow directory
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.1992842Z Prepare all required actions
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.2129069Z Getting action download info
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.5175568Z Download action repository 'actions/checkout@v4' (SHA:<redacted>)
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.6196200Z Download action repository 'aquasecurity/trivy-action@v0.36.0' (SHA:<redacted>)
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.7336082Z Download action repository 'actions/upload-artifact@v4' (SHA:<redacted>)
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:49.9666364Z Getting action download info
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.0406133Z Download action repository 'aquasecurity/setup-trivy@<redacted>' (SHA:<redacted>)
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.1144095Z Download action repository 'actions/cache@<redacted>' (SHA:<redacted>)
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.2996846Z Getting action download info
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.3734567Z Download action repository 'actions/cache@<redacted>' (SHA:<redacted>)
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.5512077Z Download action repository 'actions/checkout@<redacted>' (SHA:<redacted>)
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.6654118Z Getting action download info
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.7452378Z Getting action download info
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.8924302Z Getting action download info
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:50.9764133Z Getting action download info
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.1178938Z Complete job name: Trivy IaC Misconfiguration & Secret Scan
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2172731Z ##[group]Run actions/checkout@v4
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2174086Z with:
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2174821Z   repository: Narendra2212/vyomquant-saas
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2179222Z   <redacted>
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2180006Z   ssh-strict: true
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2180411Z   ssh-user: git
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2180826Z   persist-credentials: true
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2181263Z   clean: true
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2181671Z   sparse-checkout-cone-mode: true
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2182114Z   fetch-depth: 1
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2182489Z   fetch-tags: false
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2182886Z   show-progress: true
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2183280Z   lfs: false
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2183640Z   submodules: false
+    Trivy IaC Misconfiguration & Secret Scan	UNKNOWN STEP	2026-10-11T09:48:51.2184030Z   set-safe-directory: true
+  matched lines (unique) : 1085
+
+================================================================================================
+03 Deploy  (run 38130273012) -- filtered verdict lines only
+================================================================================================
+  log lines retrieved : 147
+    Pre-Deployment Validation Gate	UNKNOWN STEP	2026-10-11T09:58:41.5290494Z   05-security.yml runs Trivy at severity CRITICAL with exit-code 1, so this means a
+    Pre-Deployment Validation Gate	UNKNOWN STEP	2026-10-11T09:58:41.5437233Z ##[error]Process completed with exit code 1.
+  matched lines (unique) : 2
+

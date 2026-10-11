@@ -663,3 +663,146 @@ def test_classification_touches_neither_input():
     classify_dimension("policies", expected, actual)
 
     assert expected == before_e and actual == before_a
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Ledger §3.6 test 6 -- the legacy compatibility arithmetic
+#
+#  `staging/PHASE11B_W1D_LEDGER_AND_DRIFT_READINESS.md` §3.5 (L527-528) states the
+#  invariant that makes the 4-way classification a safe drop-in for the whole-tuple
+#  diff it replaced:
+#
+#       missing_today = missing + modified
+#       extra_today   = added   + modified
+#
+#  and §3.6 test 6 (`test_counts_reduce_to_the_legacy_output`, L558) requires a
+#  regression test asserting it "for every case".
+#
+#  Nothing above asserts that arithmetic. `test_the_header_counts_match_the_detail`
+#  checks that the header agrees with the detail it prints; this checks something
+#  different and stronger -- that the new four-way split still SUMS to what the old
+#  two-category output reported. Without it the classifier could silently start
+#  reporting a different total and every existing test would stay green.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _legacy_membership_diff(expected, actual):
+    """The pre-W1D-13 whole-tuple diff, reconstructed.
+
+    **Membership (set) semantics, deliberately -- not multiset.** Two things fix this:
+
+    1. `scripts/verify_schema_drift.py`'s own `render()` docstring records the behaviour
+       being replaced as "`compare()` by whole-tuple **membership**, the summary by list
+       equality", so membership is the historical semantics, not a guess.
+    2. The pre-W1D-13 source is untracked and absent from the object database, so it
+       cannot be recovered and diffed -- the reconstruction is anchored on (1) rather
+       than on the file.
+
+    `tests/test_the_legacy_reconstruction_is_membership_not_multiset` pins the choice so
+    a later "tidy-up" into `collections.Counter` cannot change it silently.
+    """
+    missing = [row for row in expected if row not in actual]
+    extra = [row for row in actual if row not in expected]
+    return len(missing), len(extra)
+
+
+#: Every structural outcome the classifier can produce, including the two categories the
+#: legacy output had no way to express (`duplicated`, `ambiguous`).
+LEGACY_ARITHMETIC_CASES = [
+    ("modified attribute", "policies", [POLICY], [POLICY_CHANGED]),
+    ("genuine removal", "policies", [POLICY], []),
+    ("genuine addition", "policies", [], [POLICY]),
+    ("whole-row change", "privileges", [GRANT], [GRANT_OTHER]),
+    ("whole-row removal", "privileges", [GRANT], []),
+    ("duplicate multiplicity baseline", "privileges", [GRANT, GRANT], [GRANT]),
+    ("duplicate multiplicity live", "privileges", [GRANT], [GRANT, GRANT]),
+    ("ambiguous key", "policies", [POLICY, POLICY_COLLIDES], [POLICY]),
+    ("advisory checksum change", "recorded_migrations", [MIGRATION], [MIGRATION_CHANGED]),
+    ("reordered identical", "columns", [COL_A, COL_B], [COL_B, COL_A]),
+    ("identical", "policies", [POLICY], [POLICY]),
+    ("both empty", "policies", [], []),
+    ("null vs empty string", "columns", [COL_A_NULL], [COL_A_EMPTY]),
+    ("multi-row mixed outcome", "policies", [POLICY, POLICY_CHANGED], [POLICY_CHANGED]),
+]
+
+
+@pytest.mark.parametrize("label,dimension,expected,actual", LEGACY_ARITHMETIC_CASES)
+def test_counts_reduce_to_the_legacy_output(label, dimension, expected, actual):
+    """Ledger §3.5's compatibility invariant, asserted for every case.
+
+    A `modified` object is counted once on each side by the legacy diff -- once as
+    missing, once as extra -- which is precisely why the classifier's `modified`
+    appears in BOTH identities rather than in one of them.
+    """
+    result = classify_dimension(dimension, expected, actual)
+    legacy_missing, legacy_extra = _legacy_membership_diff(expected, actual)
+
+    assert len(result.missing) + len(result.modified) == legacy_missing, (
+        f"{label}: missing+modified = {len(result.missing)}+{len(result.modified)} "
+        f"!= legacy_missing {legacy_missing}. The classification no longer reduces to "
+        f"the whole-tuple diff it replaced, so its counts are not comparable with any "
+        f"drift report produced before W1D-13."
+    )
+    assert len(result.added) + len(result.modified) == legacy_extra, (
+        f"{label}: added+modified = {len(result.added)}+{len(result.modified)} "
+        f"!= legacy_extra {legacy_extra}."
+    )
+
+
+def test_the_legacy_arithmetic_cases_cover_every_classification_category():
+    """Guards the parametrisation above against silently covering nothing.
+
+    Test 6 is only meaningful if the case table actually reaches each category. If a
+    future edit drops the duplicate or collision fixtures, this fails rather than
+    leaving a green test that proves the invariant on three trivial cases.
+    """
+    seen = {"missing": 0, "modified": 0, "added": 0, "duplicated": 0, "ambiguous": 0}
+    verdicts = set()
+    for _label, dimension, expected, actual in LEGACY_ARITHMETIC_CASES:
+        result = classify_dimension(dimension, expected, actual)
+        verdicts.add(result.verdict)
+        for category in seen:
+            seen[category] += len(getattr(result, category))
+
+    for category, count in seen.items():
+        assert count > 0, f"no case in the table produces a `{category}` row"
+    assert {"same", "drift"} <= verdicts, f"table does not reach both verdicts: {verdicts}"
+
+
+def test_the_legacy_reconstruction_is_membership_not_multiset():
+    """Pins the semantics of the reconstruction, because the two readings disagree.
+
+    The legacy diff was whole-tuple MEMBERSHIP. A multiset reading
+    (`Counter(expected) - Counter(actual)`) is a plausible-looking alternative that
+    would also "work" on most cases -- and would then make test 6 fail on the two
+    duplicate-multiplicity cases, because the classifier routes equal-row
+    multiplicity differences to `duplicated`, a category the two-term identity
+    cannot express.
+
+    So the invariant holds under membership semantics and NOT under multiset
+    semantics. That is a real distinction, and this test records it so the helper
+    above is not "simplified" into a `Counter` by someone reading it as a style
+    choice. If the historical semantics are ever shown to have been multiset, test 6
+    needs a documented scope qualification -- not a quiet helper rewrite.
+    """
+    import collections
+
+    expected = [GRANT, GRANT]
+    actual = [GRANT]
+
+    membership_missing, membership_extra = _legacy_membership_diff(expected, actual)
+    assert (membership_missing, membership_extra) == (0, 0), (
+        "membership semantics cannot see a duplicate-count difference"
+    )
+
+    counter_missing = sum(
+        (collections.Counter(expected) - collections.Counter(actual)).values()
+    )
+    assert counter_missing == 1, "multiset semantics should see the extra duplicate"
+
+    result = classify_dimension("privileges", expected, actual)
+    assert len(result.duplicated) == 1, "the classifier should route this to `duplicated`"
+    assert len(result.missing) + len(result.modified) == membership_missing
+    assert len(result.missing) + len(result.modified) != counter_missing, (
+        "if these ever agree, the two readings have converged and this guard is moot"
+    )

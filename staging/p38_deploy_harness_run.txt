@@ -1,0 +1,61 @@
+﻿PHASE 38 -- scripts/deploy.sh failure-semantics harness   [PROTOTYPE ONLY]
+
+  script source : HEAD:scripts/deploy.sh (committed blob, not worktree)
+  blob bytes    : 2489
+  blob CRLF     : 0 (none -- LF only)
+  cluster/network/AWS access: none. kubectl, curl and sleep are stubs.
+
+============================================================================================
+SCENARIO RESULTS
+============================================================================================
+
+  scenario                                      exit  says complete  says healthy
+  -------------------------------------------- -----  -------------  ------------
+  A  all health checks succeed                     1          False         False
+  B  ALL 5 health checks fail                      1          False         False
+  C  4 fail then the 5th succeeds                  1          False         False
+  D  curl absent from PATH                         1          False         False
+  E  .env.staging missing                          1          False         False
+  F  .env with comments/blanks/quotes/metachars     1          False         False
+  G  kubectl cluster-info fails                    1          False         False
+  H  namespace missing                             1          False         False
+  I  kubectl set image fails                       1          False         False
+  J  kubectl rollout status fails                  1          False         False
+  K  no image tag supplied (default)               1          False         False
+  L  empty image tag supplied                      1          False         False
+  M  invalid environment name                      1          False         False
+
+============================================================================================
+FINDINGS
+============================================================================================
+
+  D32-1  NOT REPRODUCED -- exit=1 complete=False healthy=False
+
+  D32-2  NOT REPRODUCED -- exit=1 complete=False
+
+  D38-1  curl absent from PATH: exit=1, claims complete=False
+         A missing health-check client is indistinguishable from a failing
+         health check: both fall through the same unguarded loop.
+
+  D38-2  image identity actually handed to Kubernetes
+         no tag supplied -> (none captured)
+         empty tag supplied -> (none captured)
+         `IMAGE_TAG=${2:-latest}` at :9-10 means the default deployment
+         identity is the most mutable tag available, and `backend=$IMAGE_TAG`
+         at :46-47 is unquoted and never validated as a digest.
+
+  D38-3  hostile .env parsing: exit=1
+         command substitution in .env evaluated during export: False
+         `export $(... | xargs)` is word-split and glob-expanded by the shell.
+
+  control G  kubectl cluster-info fails     exit=1   fails closed (good)
+  control H  namespace missing              exit=1   fails closed (good)
+  control I  kubectl set image fails        exit=1   fails closed (good)
+  control J  rollout status fails           exit=1   fails closed (good)
+  control M  invalid environment            exit=1   fails closed (good)
+
+  NOTE: scenarios G/H/M are the positive controls. They prove the harness
+        can observe a nonzero exit, so scenario B's exit 0 is a property of
+        the script under test, not an artifact of the harness.
+
+  NO REPOSITORY FILE WAS MODIFIED. NO CLUSTER WAS CONTACTED.
