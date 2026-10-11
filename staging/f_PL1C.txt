@@ -1,0 +1,7 @@
+NODE_PREVIEW.name = 'node_preview'   contains 'vie': True
+VERSION_COMPARE.name = 'version_compare'   contains 'vie': False
+VERSION_HISTORY.name = 'version_history'   contains 'vie': False
+CONFIRMED COLLISION
+details.operation is the fixed literal 'node_preview'; the generated
+Protected_Logic params key was 'vie', which is the substring node_pre[vie]w.
+NONCE_END=PL1C

@@ -1,0 +1,8 @@
+E       Failed: DID NOT RAISE RuntimeError
+tests\test_api04_store_failure_after_startup.py:80: Failed
+E       Failed: DID NOT RAISE RuntimeError
+tests\test_api04_store_failure_after_startup.py:91: Failed
+FAILED tests/test_api04_store_failure_after_startup.py::test_a_later_outage_does_not_produce_a_memory_config_on_re_resolution
+FAILED tests/test_api04_store_failure_after_startup.py::test_recovery_restores_the_shared_store
+2 failed, 10 passed, 36 warnings in 41.20s
+NONCE_END=AP4A1

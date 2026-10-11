@@ -1,0 +1,116 @@
+{
+  "ccxt_version": "4.3.92",
+  "approved": [
+    "binance",
+    "bybit",
+    "coinbase",
+    "kraken",
+    "okx",
+    "kucoin"
+  ],
+  "blocked": [
+    "bitget"
+  ],
+  "per_venue": {
+    "binance": {
+      "exchange": "binance",
+      "prod_api": "{\"dapiData\": \"https://dapi.binance.com/futures/data\", \"dapiPrivate\": \"https://dapi.binance.com/dapi/v1\", \"dapiPrivateV2\": \"https://dapi.binance.com/dapi/v2\", \"dapiPublic\": \"https://dapi.binance.com/dapi/v1\", \"eapiPrivate\": \"https://eapi.binance.com/eapi/v1\", \"eapiPublic\": \"https://eapi.binance.com/eapi/v1\", \"fapiData\": \"https://fapi.binance.com/futures/data\", \"fapiPrivate\": \"https://fapi.binance.com/fapi/v1\", \"fapiPrivateV2\": \"https://fapi.binance.com/fapi/v2\", \"fapiPrivateV3\": \"https://fapi.binance.com/fapi/v3\", \"fapiPublic\": \"https://fapi.binance.com/fapi/v1\", \"fapiPublicV2\": \"https://fapi.binance.com/fapi/v2\", \"fapiPublicV3\": \"https://fapi.binance.com/fapi/v3\", \"papi\": \"https://papi.binance.com/papi/v1\", \"private\": \"https://api.binance.com/api/v3\", \"public\": \"https://api.binance.com/api/v3\", \"sapi\": \"https://api.binance.com/sapi/v1\", \"sapiV2\": \"https://api.binance.com/sapi/v2\", \"sapiV3\": \"https://api.binance.com/sapi/v3\", \"sapiV4\": \"https://api.binance.com/sapi/v4\", \"v1\": \"https://api.binance.com/api/v1\"}",
+      "declares_test": true,
+      "test_url": "{\"dapiPrivate\": \"https://testnet.binancefuture.com/dapi/v1\", \"dapiPrivateV2\": \"https://testnet.binancefuture.com/dapi/v2\", \"dapiPublic\": \"https://testnet.binancefuture.com/dapi/v1\", \"fapiPrivate\": \"https://testnet.binancefuture.com/fapi/v1\", \"fapiPrivateV2\": \"https://testnet.binancefuture.com/fapi/v2\", \"fapiPrivateV3\": \"https://testnet.binancefuture.com/fapi/v3\", \"fapiPublic\": \"https://testnet.binancefuture.com/fapi/v1\", \"fapiPublicV2\": \"https://testnet.binancefuture.com/fapi/v2\", \"fapiPublicV3\": \"https://testnet.binancefuture.com/fapi/v3\", \"private\": \"https://testnet.binance.vision/api/v3\", \"public\": \"https://testnet.binance.vision/api/v3\", \"v1\": \"https://testnet.binance.vision/api/v1\"}",
+      "armed": "constructed",
+      "armed_api": "{\"dapiPrivate\": \"https://testnet.binancefuture.com/dapi/v1\", \"dapiPrivateV2\": \"https://testnet.binancefuture.com/dapi/v2\", \"dapiPublic\": \"https://testnet.binancefuture.com/dapi/v1\", \"fapiPrivate\": \"https://testnet.binancefuture.com/fapi/v1\", \"fapiPrivateV2\": \"https://testnet.binancefuture.com/fapi/v2\", \"fapiPrivateV3\": \"https://testnet.binancefuture.com/fapi/v3\", \"fapiPublic\": \"https://testnet.binancefuture.com/fapi/v1\", \"fapiPublicV2\": \"https://testnet.binancefuture.com/fapi/v2\", \"fapiPublicV3\": \"https://testnet.binancefuture.com/fapi/v3\", \"private\": \"https://testnet.binance.vision/api/v3\", \"public\": \"https://testnet.binance.vision/api/v3\", \"v1\": \"https://testnet.binance.vision/api/v1\"}",
+      "has_apiBackup": true,
+      "apiBackup": "{\"dapiData\": \"https://dapi.binance.com/futures/data\", \"dapiPrivate\": \"https://dapi.binance.com/dapi/v1\", \"dapiPrivateV2\": \"https://dapi.binance.com/dapi/v2\", \"dapiPublic\": \"https://dapi.binance.com/dapi/v1\", \"eapiPrivate\": \"https://eapi.binance.com/eapi/v1\", \"eapiPublic\": \"https://eapi.binance.com/eapi/v1\", \"fapiData\": \"https://fapi.binance.com/futures/data\", \"fapiPrivate\": \"https://fapi.binance.com/fapi/v1\", \"fapiPrivateV2\": \"https://fapi.binance.com/fapi/v2\", \"fapiPrivateV3\": \"https://fapi.binance.com/fapi/v3\", \"fapiPublic\": \"https://fapi.binance.com/fapi/v1\", \"fapiPublicV2\": \"https://fapi.binance.com/fapi/v2\", \"fapiPublicV3\": \"https://fapi.binance.com/fapi/v3\", \"papi\": \"https://papi.binance.com/papi/v1\", \"private\": \"https://api.binance.com/api/v3\", \"public\": \"https://api.binance.com/api/v3\", \"sapi\": \"https://api.binance.com/sapi/v1\", \"sapiV2\": \"https://api.binance.com/sapi/v2\", \"sapiV3\": \"https://api.binance.com/sapi/v3\", \"sapiV4\": \"https://api.binance.com/sapi/v4\", \"v1\": \"https://api.binance.com/api/v1\"}",
+      "headers_added": [],
+      "sandboxMode_option": true,
+      "proof_url_swap": true,
+      "proof_header": false,
+      "any_proof": true
+    },
+    "bybit": {
+      "exchange": "bybit",
+      "prod_api": "{\"futures\": \"https://api.{hostname}\", \"private\": \"https://api.{hostname}\", \"public\": \"https://api.{hostname}\", \"spot\": \"https://api.{hostname}\", \"v2\": \"https://api.{hostname}\"}",
+      "declares_test": true,
+      "test_url": "{\"futures\": \"https://api-testnet.{hostname}\", \"private\": \"https://api-testnet.{hostname}\", \"public\": \"https://api-testnet.{hostname}\", \"spot\": \"https://api-testnet.{hostname}\", \"v2\": \"https://api-testnet.{hostname}\"}",
+      "armed": "constructed",
+      "armed_api": "{\"futures\": \"https://api-testnet.{hostname}\", \"private\": \"https://api-testnet.{hostname}\", \"public\": \"https://api-testnet.{hostname}\", \"spot\": \"https://api-testnet.{hostname}\", \"v2\": \"https://api-testnet.{hostname}\"}",
+      "has_apiBackup": true,
+      "apiBackup": "{\"futures\": \"https://api.{hostname}\", \"private\": \"https://api.{hostname}\", \"public\": \"https://api.{hostname}\", \"spot\": \"https://api.{hostname}\", \"v2\": \"https://api.{hostname}\"}",
+      "headers_added": [],
+      "sandboxMode_option": true,
+      "proof_url_swap": true,
+      "proof_header": false,
+      "any_proof": true
+    },
+    "coinbase": {
+      "exchange": "coinbase",
+      "prod_api": "{\"rest\": \"https://api.coinbase.com\"}",
+      "declares_test": false,
+      "test_url": null,
+      "armed": "RAISED NotSupported: coinbase does not have a sandbox URL"
+    },
+    "kraken": {
+      "exchange": "kraken",
+      "prod_api": "{\"private\": \"https://api.kraken.com\", \"public\": \"https://api.kraken.com\", \"zendesk\": \"https://kraken.zendesk.com/api/v2/help_center/en-us/articles\"}",
+      "declares_test": false,
+      "test_url": null,
+      "armed": "RAISED NotSupported: kraken does not have a sandbox URL"
+    },
+    "okx": {
+      "exchange": "okx",
+      "prod_api": "{\"rest\": \"https://{hostname}\"}",
+      "declares_test": true,
+      "test_url": "{\"rest\": \"https://{hostname}\"}",
+      "armed": "constructed",
+      "armed_api": "{\"rest\": \"https://{hostname}\"}",
+      "has_apiBackup": true,
+      "apiBackup": "{\"rest\": \"https://{hostname}\"}",
+      "headers_added": [
+        "x-simulated-trading"
+      ],
+      "sandboxMode_option": true,
+      "proof_url_swap": false,
+      "proof_header": true,
+      "any_proof": true
+    },
+    "kucoin": {
+      "exchange": "kucoin",
+      "prod_api": "{\"broker\": \"https://api-broker.kucoin.com\", \"earn\": \"https://api.kucoin.com\", \"futuresPrivate\": \"https://api-futures.kucoin.com\", \"futuresPublic\": \"https://api-futures.kucoin.com\", \"private\": \"https://api.kucoin.com\", \"public\": \"https://api.kucoin.com\", \"webExchange\": \"https://kucoin.com/_api\"}",
+      "declares_test": false,
+      "test_url": null,
+      "armed": "RAISED NotSupported: kucoin does not have a sandbox URL"
+    },
+    "bitget": {
+      "exchange": "bitget",
+      "prod_api": "{\"broker\": \"https://api.{hostname}\", \"common\": \"https://api.{hostname}\", \"convert\": \"https://api.{hostname}\", \"copy\": \"https://api.{hostname}\", \"earn\": \"https://api.{hostname}\", \"margin\": \"https://api.{hostname}\", \"mix\": \"https://api.{hostname}\", \"p2p\": \"https://api.{hostname}\", \"spot\": \"https://api.{hostname}\", \"tax\": \"https://api.{hostname}\", \"user\": \"https://api.{hostname}\"}",
+      "declares_test": false,
+      "test_url": null,
+      "armed": "constructed",
+      "armed_api": "{\"broker\": \"https://api.{hostname}\", \"common\": \"https://api.{hostname}\", \"convert\": \"https://api.{hostname}\", \"copy\": \"https://api.{hostname}\", \"earn\": \"https://api.{hostname}\", \"margin\": \"https://api.{hostname}\", \"mix\": \"https://api.{hostname}\", \"p2p\": \"https://api.{hostname}\", \"spot\": \"https://api.{hostname}\", \"tax\": \"https://api.{hostname}\", \"user\": \"https://api.{hostname}\"}",
+      "has_apiBackup": false,
+      "apiBackup": null,
+      "headers_added": [],
+      "sandboxMode_option": true,
+      "proof_url_swap": false,
+      "proof_header": false,
+      "any_proof": false
+    }
+  },
+  "mechanisms": {
+    "url_swap": [
+      "binance",
+      "bybit"
+    ],
+    "header_only": [
+      "okx"
+    ],
+    "unsupported": [
+      "coinbase",
+      "kraken",
+      "kucoin"
+    ],
+    "no_proof": [
+      "bitget"
+    ]
+  }
+}

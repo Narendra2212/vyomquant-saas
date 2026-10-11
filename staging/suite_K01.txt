@@ -1,0 +1,4 @@
+START=2026-10-09T12:37:39.4537083+05:30
+FILES=tests\test_trade02_kill_switch_fails_closed.py
+.....................
+EXITCODE=-1073741510

@@ -1,0 +1,22 @@
+START=2026-10-09T01:18:47.1764167+05:30
+DSN=postgresql://postgres:@127.0.0.1:58620/postgres
+ARGS=tests\test_lib01_clone_strategy_postgres.py tests\test_validation_sweep.py tests\test_marketplace_pipeline.py tests\test_tenant_isolation_library_paper.py tests\test_subscriber_restricted_operations.py
+........................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 29%]
+........................................................................ [ 39%]
+............................s...................ss.s.......s.s.......... [ 49%]
+.......s.....s....ss.................................................... [ 59%]
+........................................................................ [ 69%]
+........................................................................ [ 79%]
+........................................................................ [ 88%]
+........................................................................ [ 98%]
+binance requires to release all resources with an explicit call to the .close() coroutine. If you are using the exchange instance with async coroutines, add `await exchange.close()` to your code into a place when you're done with the exchange and don't need the exchange instance anymore (at the end of your async coroutine).
+Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x0000015310169820>
+Unclosed connector
+connections: ['[(<aiohttp.client_proto.ResponseHandler object at 0x000001531022E8D0>, 233146.812)]', '[(<aiohttp.client_proto.ResponseHandler object at 0x00000153102C0770>, 233147.39)]']
+connector: <aiohttp.connector.TCPConnector object at 0x000001530E8758B0>
+........x                                                                [100%]
+718 passed, 10 skipped, 1 xfailed in 45.51s
+EXITCODE=0

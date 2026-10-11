@@ -1480,10 +1480,18 @@ def test_malformed_input_never_answers_500(route: MutatingRoute, client):
 #: describe. Deleting the key would turn that host's environment gap into a false Requirement
 #: 1.39 finding. Nothing about the assertion is relaxed either way - this comment only stops
 #: the set from documenting a cause that no longer applies on a Razorpay deployment.
+#: `library.unpublish_strategy` was REMOVED from this set, the same way
+#: `billing.create_portal_session` was: the handler was fixed, so the assertion below now runs
+#: and passes for real instead of being skipped. Its 500 came from `_build_service_client()`
+#: returning `None` and the route dereferencing it (LIB-01) - exactly the cause this set's
+#: comment describes. `routers/library.py` now calls `_require_service_client()`, which answers
+#: the catalogue's `MARKETPLACE_READ_FAILED` (503) and names the real condition, so there is no
+#: 500 left to excuse. `library.clone_strategy` was never in this set and was the red test that
+#: surfaced the defect; it passes for the same reason. The sweep's skip count went 11 -> 10 and
+#: its pass count 382 -> 383 in that one change.
 _ENVIRONMENT_GAP_ROUTE_KEYS = frozenset(
     {
         "copilot.delete_copilot_session",
-        "library.unpublish_strategy",
         "strategy_operations.cancel_training_job",
         "billing.create_portal_session",
     }

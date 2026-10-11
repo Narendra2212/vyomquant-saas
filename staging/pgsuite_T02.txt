@@ -1,0 +1,81 @@
+START=2026-10-09T11:45:47.4362136+05:30
+DSN=postgresql://postgres:@127.0.0.1:58620/postgres
+ARGS=tests\test_tenant02_fee_records_rls_postgres.py
+..................FF..                                                   [100%]
+================================== FAILURES ===================================
+_______________ test_fee_engine_reads_only_the_requested_tenant _______________
+
+db = <connection object at 0x00000231E55FAF00; dsn: 'user=postgres dbname=postgres host=127.0.0.1 port=58620 connect_timeout=10', closed: 0>
+tenants = {'a': 'cecffdae-7def-4208-b212-b8fffbc5e7f6', 'b': 'f9df6d5e-0ba0-4863-9aed-a60b88f2489e', 'row_a': {'fee_id': 'fee_te...67d269', 'tenant_id': 'f9df6d5e-0ba0-4863-9aed-a60b88f2489e', 'execution_id': None, 'order_id': 'order_tenant_b', ...}}
+
+    def test_fee_engine_reads_only_the_requested_tenant(db, tenants):
+        """The application's own isolation, independent of RLS.
+    
+        `FeeEngine.get_fee_summary` filters on `tenant_id` in the query. That is a SECOND,
+        independent boundary: the owner connection is exempt from the policy, so for the
+        backend path the application's `WHERE` clause is the only thing separating tenants.
+        Worth asserting precisely because RLS does not cover it.
+        """
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+    
+        from backend_app.backend.fee_engine import FeeEngine
+    
+        engine = create_engine(DSN)
+        session = sessionmaker(bind=engine)()
+        try:
+            summary_a = FeeEngine(session).get_fee_summary(uuid.UUID(tenants["a"]))
+            summary_b = FeeEngine(session).get_fee_summary(uuid.UUID(tenants["b"]))
+        finally:
+            session.close()
+            engine.dispose()
+    
+        assert summary_a["count"] == 1, (
+            f"get_fee_summary returned {summary_a['count']} rows for tenant A, not 1"
+        )
+        assert summary_b["count"] == 1
+        # Each tenant's single row has the same shape, so the figures must match each other
+        # and the seeded values ??? which is what proves neither summary absorbed the other's row.
+>       assert summary_a["total_fees"] == summary_b["total_fees"] == "0.05"
+E       AssertionError: assert '0.05000000' == '0.05'
+E         
+E         - 0.05
+E         + 0.05000000
+
+tests\test_tenant02_fee_records_rls_postgres.py:703: AssertionError
+_____________ test_the_migration_file_exists_and_is_additive_only _____________
+
+    def test_the_migration_file_exists_and_is_additive_only():
+        """`test_no_destructive_statements` covers the declared set; 026 is outside it.
+    
+        `tests/test_marketplace_paper_schema_contract.py`'s destructive-statement guard and its
+        P-58 idempotency property are both hard-coded to five files (006-010), so a new 026 is
+        not exercised by either. Asserted here instead, on the file this phase added.
+        """
+        assert MIGRATION.is_file(), f"{MIGRATION} is missing"
+        text = MIGRATION.read_text(encoding="utf-8")
+        upper = text.upper()
+    
+        for forbidden in ("DROP TABLE", "DROP COLUMN", "TRUNCATE", "DELETE FROM", "RENAME"):
+>           assert forbidden not in upper, (
+                f"026 contains {forbidden!r}. A migration that removes or renames is not "
+                f"replay-safe and is not additive."
+            )
+E           AssertionError: 026 contains 'TRUNCATE'. A migration that removes or renames is not replay-safe and is not additive.
+E           assert 'TRUNCATE' not in "-- ========...n\nCOMMIT;\n"
+E             
+E             'TRUNCATE' is contained here:
+E               ELETES OR TRUNCATES, SO
+E             ?           ++++++++
+E               -- `TEST_NO_DESTRUCTIVE_STATEMENTS` HOLDS. APPLYING THIS FILE TWICE REACHES THE SAME STATE.
+E               --
+E               -- REGRESSION: TESTS/TEST_TENANT02_FEE_RECORDS_RLS_POSTGRES.PY...
+E             
+E             ...Full output truncated (324 lines hidden), use '-vv' to show
+
+tests\test_tenant02_fee_records_rls_postgres.py:756: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_tenant02_fee_records_rls_postgres.py::test_fee_engine_reads_only_the_requested_tenant
+FAILED tests/test_tenant02_fee_records_rls_postgres.py::test_the_migration_file_exists_and_is_additive_only
+2 failed, 20 passed in 5.04s
+EXITCODE=1

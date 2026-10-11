@@ -1,0 +1,15 @@
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:549: assert 429 == 409
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:577: assert 429 == 200
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:591: assert 429 == 404
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:616: KeyError: 'backtest_id'
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:627: KeyError: 'status'
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:765: assert 429 == 422
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:781: assert 429 == 422
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:793: assert 429 == 500
+FAILED tests/test_task_6_1_backtest_execute.py::TestArchivedStrategiesAreRefused::test_it_answers_409_naming_the_operation_and_the_timestamp
+FAILED tests/test_task_6_1_backtest_execute.py::TestArchivedStrategiesAreRefused::test_a_row_with_no_archival_column_is_treated_as_active
+FAILED tests/test_task_6_1_backtest_execute.py::TestOwnership::test_another_tenant_gets_404_and_nothing_runs
+FAILED tests/test_task_6_1_backtest_execute.py::TestOneSynchronousResponse::test_it_returns_the_persisted_result_directly
+FAILED tests/test_task_6_1_backtest_execute.py::TestOneSynchronousResponse::test_it_carries_no_job_id_to_poll
+FAILED tests/test_task_6_1_backtest_execute.py::TestRefusalsFromTheRuntime::test_a_version_that_no_longer_compiles_names_the_version
+NONCE_END=P6H6

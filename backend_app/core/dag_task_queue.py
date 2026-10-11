@@ -9,7 +9,8 @@ from uuid import UUID
 
 from backend_app.core.cache import redis_manager
 from backend_app.core.database import SessionLocal
-from backend_app.core.hard_quota_enforcer import HardQuotaEnforcer
+# QUOTA-01: the `HardQuotaEnforcer` import is gone with the unused attribute it fed. See the
+# note in `__init__` and that class's module docstring.
 from backend_app.core.models.dag_task import DAGTaskCreate, DAGTaskRepository
 from backend_app.core.tenant import TenantContext
 
@@ -346,7 +347,12 @@ class DAGTaskQueueManager:
         self.max_concurrent_per_tenant = max_concurrent_per_tenant
         self.global_max_concurrent = global_max_concurrent
         self.task_timeout_seconds = task_timeout_seconds
-        self.enforcer = HardQuotaEnforcer()
+        # QUOTA-01: `self.enforcer = HardQuotaEnforcer()` was here and was never read — no
+        # method on this class called it. It is removed rather than left dormant because
+        # HardQuotaEnforcer is deprecated (its usage counting fails open; see that module's
+        # docstring), and an instance sitting on a live service invites someone to start using
+        # it. This queue's own concurrency bounds are `max_concurrent_per_tenant` and
+        # `global_max_concurrent` above, which ARE enforced here.
         
         # Track local state
         self._running_tasks: Dict[str, asyncio.Task] = {}

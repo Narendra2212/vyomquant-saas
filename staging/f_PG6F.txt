@@ -1,0 +1,2 @@
+ALIVE=True
+NONCE_END=PG6F

@@ -53,7 +53,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from backend_app.backend.strategy_service import StrategyService
+from backend_app.backend.strategy_service import (
+    BLUEPRINT_STARTABLE_KEYS,
+    StrategyService,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "strategy_status_frame.json"
@@ -177,6 +180,38 @@ def _user():
     return {"id": USER_ID, "email": f"{USER_ID}@example.com", "access_token": "tok"}
 
 
+def _startable_blueprint():
+    """A blueprint the deploy path will actually accept.
+
+    WHY THIS EXISTS. This file's blueprint used to be ``{"nodes": []}``, and the deploy
+    path has since grown a deliberate guard: ``strategy_service.assert_startable_blueprint``
+    raises ``DeployBlueprintIncomplete`` for a blueprint missing any of
+    ``BLUEPRINT_STARTABLE_KEYS``, and its docstring is explicit that it "SUBSTITUTES
+    NOTHING - Missing means refused" (copying the endpoint's ``"binance"`` default would
+    be the SB-06 defect on the deploy path). ``{"nodes": []}`` is missing all four, so
+    every start in this file raised before publishing anything.
+
+    THE CONTRACT THIS FILE TESTS IS NOT BLUEPRINT COMPLETENESS. It is that a start
+    publishes exactly one ``STRATEGY_STATUS`` frame through ``ws.broadcast_user``. That
+    contract is live and worth keeping, so the fixture is corrected to reach it rather
+    than the file being marked obsolete - which would have deleted the only coverage of
+    frame publication. Blueprint completeness is covered where it belongs, by the deploy
+    tests that assert the refusal.
+
+    The keys are taken FROM the production tuple, not retyped, so adding a fifth required
+    key cannot leave this fixture silently incomplete again.
+    """
+    blueprint = {"nodes": [], "edges": []}
+    for key in BLUEPRINT_STARTABLE_KEYS:
+        if key == "exchange_id":
+            blueprint[key] = "binance"
+        elif key == "risk":
+            blueprint[key] = {"max_position_size": 0.1, "stop_loss_pct": 2.0}
+        else:
+            blueprint[key] = {"conditions": []}
+    return blueprint
+
+
 def _version_data():
     """A version already past the deploy-prerequisite gate (Requirement 10.4)."""
     return {
@@ -185,8 +220,19 @@ def _version_data():
         "validation_state": "VALID",
         "dag_hash": "deadbeefcafe1234",
         "compiled_plan": {"nodes": []},
-        "blueprint": {"nodes": []},
+        "blueprint": _startable_blueprint(),
     }
+
+
+def test_the_fixture_blueprint_satisfies_the_real_startable_contract():
+    """The premise of every start test below, asserted against production's own list.
+
+    If this fails, the four start tests are measuring a refusal rather than a publish.
+    """
+    blueprint = _startable_blueprint()
+    missing = [key for key in BLUEPRINT_STARTABLE_KEYS if key not in blueprint]
+    assert missing == [], f"the test blueprint is still missing {missing}"
+    assert BLUEPRINT_STARTABLE_KEYS, "the production key list is empty, so this proves nothing"
 
 
 def _service_with(sb, ws_mock, *, fleet_result=(True, "started")):

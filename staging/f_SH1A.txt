@@ -1,0 +1,16 @@
+77	.eq(
+42	supabase.table
+26	.select(
+18	.limit(
+13	.order(
+12	.is_(
+11	.insert(
+7	.update(
+2	.execute(
+1	.gt(
+1	.single(
+--- _execute helper ---
+877: def require_persistence(supabase: Any) -> None:
+900: The same reading ``settlement_service._rows`` uses: rows may arrive on ``.data``, under a
+955: def _execute(query: Any, what: str) -> List[Dict[str, Any]]:
+NONCE_END=SH1A

@@ -49,6 +49,40 @@ class MockExchangeExecutor:
         })()
 
 
+def _arm_risk_verdict(engine, tenant_id=None, strategy_id="test_strategy",
+                      reason="InstitutionalRiskManager: APPROVED"):
+    """Supply the risk verdict that ``execute_with_idempotency`` normally supplies.
+
+    TRADE-05 made the risk verdict a property of the live call rather than something the
+    venue branch assumes. ``execute_with_idempotency`` sets ``_live_risk_approved`` from
+    its ``risk_approved`` argument (``execution_engine.py:734``), and the venue branch
+    refuses any live order whose value is not ``True`` (``:1022``) -- previously it placed
+    the order with no verdict at all, which is what TRADE-05 fixed.
+
+    The tests in this file call ``_execute_trade_internal`` DIRECTLY, below the gateway,
+    so nothing sets that state for them and all three were refused. They arm it here
+    rather than being rerouted through the public gateway, because what they are testing
+    -- the internal execution path, concurrency over it, and the anti-bypass token -- is
+    exactly the layer below the gateway; routing them through it would change their
+    subject. Arming the verdict explicitly is also more honest than it looks: it makes
+    visible, at each call site, that reaching this method requires a verdict somebody
+    produced.
+
+    The refusal behaviour itself is covered in
+    ``tests/test_live_risk_gate_enforcement.py::test_unapproved_live_order_never_reaches_ccxt``.
+    """
+    engine._live_risk_approved = True
+    engine._live_risk_reason = reason
+    # TRADE-04 additionally requires the order to be attributable: the live gate refuses
+    # LIVE_ORDER_UNIDENTIFIED unless both an execution_id and a tenant_id are present, so
+    # that a venue write can always be traced to a tenant and a strategy. The gateway
+    # sets these from its own arguments (`execution_engine.py:737-738`); entering below
+    # it means setting them here.
+    engine._live_tenant_id = str(tenant_id or uuid.uuid4())
+    engine._live_strategy_id = str(strategy_id)
+    return engine
+
+
 def test_single_execution_gateway_flow():
     """Verify that execution flows through the canonical gateway with idempotency and risk check."""
     async def _run():
@@ -61,6 +95,8 @@ def test_single_execution_gateway_flow():
 
         # Test the basic paper trading execution (without database idempotency)
         # This tests the core execution logic without database dependencies
+        # TRADE-05 / TRADE-04: see the helper's docstring
+        _arm_risk_verdict(engine, tenant_id=tenant_id, strategy_id=strategy_id)
         res1 = await engine._execute_trade_internal(
             symbol="BTC/USDT",
             side="buy",
@@ -89,6 +125,8 @@ def test_concurrent_idempotency_100_signals():
         # Test that the internal execution is called properly (without database idempotency)
         # The full idempotency test requires database mocking which is complex
         # This test verifies the execution engine handles concurrent calls correctly
+        # TRADE-05 / TRADE-04: see the helper's docstring
+        _arm_risk_verdict(engine, tenant_id=tenant_id, strategy_id=strategy_id)
         tasks = [
             engine._execute_trade_internal(
                 symbol="BTC/USDT",
@@ -167,6 +205,7 @@ def test_anti_bypass_validation_token_verification():
         engine = ExecutionEngine(portfolio_state={"total_equity": Decimal("100000.0")}, exchange_executor=dummy_exec)
         
         # Test that the internal execution sets the token properly
+        _arm_risk_verdict(engine)  # TRADE-05: see the helper's docstring
         success, result = await engine._execute_trade_internal(
             symbol="BTC/USDT",
             side="buy",

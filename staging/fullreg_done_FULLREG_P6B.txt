@@ -1,0 +1,1 @@
+DONE_FULLREG_P6B exit=1

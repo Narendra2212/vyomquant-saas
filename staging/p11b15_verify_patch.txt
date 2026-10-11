@@ -1,0 +1,38 @@
+shared index BEFORE  raw=4a23178d4d771f86e8d4eb810fce192cc6011dcca9068f39ecc4567b4bfb0f62
+                 content=7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d
+
+private index seeded from PR #6 tree: rc=0
+
+git apply --cached --check --whitespace=error   (private index = PR #6)
+  rc = 1
+  <stdin>:468: trailing whitespace.
+      
+  error: patch failed: .github/workflows/01-pr-check.yml:213
+  error: .github/workflows/01-pr-check.yml: patch does not apply
+  error: patch failed: tests/test_webhook_duplicate_delivery_real_redis.py:41
+  error: tests/test_webhook_duplicate_delivery_real_redis.py: patch does not apply
+  error: patch failed: tests/test_quota01_metered_reservation_is_hard.py:32
+  error: tests/test_quota01_metered_reservation_is_hard.py: patch does not apply
+  VERDICT: DOES NOT APPLY
+  private index removed: True
+
+shared index AFTER   raw=4a23178d4d771f86e8d4eb810fce192cc6011dcca9068f39ecc4567b4bfb0f62  SAME
+                 content=7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME
+
+============================================================================================
+STALE /15 REFERENCES THAT THE PATCH DOES *NOT* YET FIX
+============================================================================================
+
+  tests/test_webhook_duplicate_delivery_real_redis.py : 2 reference(s)
+     130: redis://localhost:6379/15`. Both branches of `get_redis_url` therefore resolve to
+     134: parse_url('redis://localhost:6379/15?db=0') -> {'db': 0, 'host': 'localhost', 'port': 6379}
+
+  tests/test_quota01_metered_reservation_is_hard.py : 1 reference(s)
+     340: ``ConnectionPool.from_url('redis://localhost:6379/15?db=0').connection_kwargs['db']``
+
+  These are prose, not behaviour: both files derive the client URL from
+  get_redis_url(REDIS_DB_CACHE) and never read AERORA_TEST_REDIS_URL for the
+  keyspace. The quotes are accurate for every CURRENT PR head (all carry /15)
+  and become stale the moment the workflow edit lands. Fixing them requires
+  editing a test file, which is a repair step -- not read-only preparation --
+  so it is left pending rather than slipped in.

@@ -1623,6 +1623,124 @@ async def rename_strategy(
 _GRAPH_PAYLOAD_KEYS = ("graph_json", "nodes", "edges")
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# API-01: THE COLUMN ALLOWLIST FOR `PUT /api/strategies/{id}`
+# ═════════════════════════════════════════════════════════════════════════════
+# This route took a raw caller `body` dict and did `update_payload = dict(body)` straight
+# into `.table("strategies").update(...)`. There was no column allowlist, and the only
+# field-specific guards were `status` (blocked from running/deployed) and `ml_model_path`
+# (containment-checked). Every other column on `strategies` was therefore writable by the
+# caller, including the ones that decide ownership, marketplace linkage and archival
+# state.
+#
+# The `.eq("user_id", user["id"])` filter on the UPDATE means this was never
+# CROSS-TENANT — a caller could only corrupt their own row. That is why this is a
+# mass-assignment / integrity defect rather than a tenant-isolation one. What it allowed:
+#
+#   tenant/ownership      `user_id` — reassign the row to another account
+#   marketplace linkage   `marketplace_listing_id`, `is_published`, `source_library_id`
+#   subscription state    `is_subscribed`, `subscription_id`, `is_read_only`
+#   lifecycle             `archived_at` (bypassing the archive workflow),
+#                         `is_active`, `environment` (paper/live!)
+#   integrity/provenance  `id`, `created_at`, `cloned_from`, `current_version`
+#   derived graph state   `dag_hash`, `dag_version`, `dag_schema_version` — these are
+#                         computed from the compiled plan, so a caller-supplied value
+#                         would make the stored hash disagree with the stored graph
+#   runtime telemetry     `last_signal_at`
+#
+# `environment` deserves naming explicitly: it is the paper/live discriminator on the
+# strategy row. A caller-writable execution environment on a trading strategy is the
+# worst field in the list, which is why an allowlist is the right shape here rather than
+# a longer series of individual field guards.
+#
+# WHY AN ALLOWLIST AND NOT A DENYLIST. A denylist is wrong by default: a column added to
+# `strategies` later would become silently caller-writable. An allowlist makes a new
+# column unwritable until somebody decides it should be, which is the direction that
+# fails safe. `tests/test_api01_strategies_update_allowlist.py` pins both halves.
+#
+# WHY 422 AND NOT SILENT STRIPPING. Silently dropping an unexpected field tells the
+# caller their write succeeded when it did not. This router's own convention for a
+# rejected field is an explicit 4xx naming the field (see `_assert_model_path_storable`'s
+# 422 and `create_strategy`'s validation), so a refusal is consistent with it. The error
+# echoes the offending FIELD NAMES but never their values — the same rule
+# `library.py:3043-3046` follows.
+
+#: Columns a caller may change through `PUT /api/strategies/{id}`.
+#:
+#: `status` is present but additionally constrained above: the handler refuses
+#: `running`/`deployed` so a caller cannot bypass the deploy gate, while still allowing
+#: the legitimate transitions (e.g. back to `draft`/`stopped`).
+_UPDATABLE_STRATEGY_COLUMNS = frozenset({
+    # identity and presentation
+    "name",
+    # market binding (also derivable from the graph; see SB-06 handling below)
+    "symbol",
+    "timeframe",
+    # strategy definition
+    "buy_logic",
+    "sell_logic",
+    "risk",
+    "indicators",
+    "dag_config",
+    "ml_model_path",
+    # deployment-time binding the author chooses
+    "exchange_id",
+    # lifecycle values that are legitimately author-settable
+    "status",
+    "execution_order",
+    # the author's own backtest evidence
+    "backtest_result",
+})
+
+#: Keys that are accepted in the request body but are NOT columns — they carry the graph
+#: and are folded into `buy_logic` further down, then popped from the payload.
+_NON_COLUMN_BODY_KEYS = frozenset(_GRAPH_PAYLOAD_KEYS)
+
+
+def _assert_update_fields_are_mutable(body: Dict[str, Any]) -> None:
+    """Refuse a `PUT /api/strategies/{id}` body carrying a non-caller-mutable field.
+
+    API-01. Raises :class:`HTTPException` 422 ``STRATEGY_FIELD_NOT_MUTABLE`` naming the
+    offending fields and echoing none of their values.
+    """
+    if not isinstance(body, dict):
+        # The handler's own contract is a JSON object; anything else is already a 422 by
+        # the time it gets here, but this keeps the guard total rather than assuming.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "STRATEGY_UPDATE_BODY_INVALID",
+                "message": "The request body must be a JSON object of fields to update.",
+            },
+        )
+
+    offending = sorted(
+        key
+        for key in body
+        if key not in _UPDATABLE_STRATEGY_COLUMNS and key not in _NON_COLUMN_BODY_KEYS
+    )
+    if not offending:
+        return
+
+    logger.info(
+        "[STRATEGIES] Update refused: %d non-mutable field(s) supplied: %s",
+        len(offending),
+        ", ".join(offending),
+    )
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "error": "STRATEGY_FIELD_NOT_MUTABLE",
+            "message": (
+                "These fields cannot be changed through this endpoint. Ownership, "
+                "marketplace linkage, subscription state, archival state, execution "
+                "environment and derived graph metadata are set by the server."
+            ),
+            "fields": offending,
+        },
+    )
+
+
 @router.put("/{strategy_id}")
 async def update_strategy(
     strategy_id: str,
@@ -1701,6 +1819,11 @@ async def update_strategy(
     # so a refusal writes nothing. See `_assert_model_path_storable`.
     if "ml_model_path" in body:
         _assert_model_path_storable(body.get("ml_model_path"))
+
+    # ── API-01: THE COLUMN ALLOWLIST ─────────────────────────────────────────
+    # The wider half of P1-06 referenced above, now closed. Enforced here, before the
+    # payload is assembled, so a refused request writes nothing at all.
+    _assert_update_fields_are_mutable(body)
 
     # ── The graph half ───────────────────────────────────────────────────────
     # Compiled BEFORE the update is issued, so an invalid graph is refused having changed

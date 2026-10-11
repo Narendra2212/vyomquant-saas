@@ -75,13 +75,13 @@ export default function DownloadSection() {
               Platforms
             </p>
             <h2 className="text-3xl font-black tracking-tight text-content-primary sm:text-4xl lg:text-5xl">
-              Trade in the browser today, on your desktop shortly
+              Trade in the browser today
             </h2>
             <p className="mt-5 text-lg leading-relaxed text-content-secondary">
               The web platform is live and complete — nothing to install, nothing to configure.
-              Native terminals for Windows, macOS and Linux are built on Tauri and in final
-              testing. Each one below reports its own status, so you always know what you can
-              actually run.
+              Native desktop terminals are in development on Tauri; none is published for
+              download yet. Each artifact below reports its own status, so you always know what
+              you can actually run.
             </p>
           </div>
 
@@ -117,8 +117,16 @@ export default function DownloadSection() {
                 <h3 className="text-title font-bold text-content-primary">
                   Native desktop terminals
                 </h3>
+                {/* "In development", not "In final testing". A build in final testing is a
+                    build that exists, and three of the four below do not: measured in
+                    `algo22-terminal/releases/`, the macOS DMG is 69 bytes, the AppImage 64 and
+                    the .deb 67 — one-line text placeholders, not binaries. Only the Windows
+                    installer is a real artifact (112,117,309 bytes), and it is not served.
+                    `design/pageFields.js` already says "No macOS build has been produced for
+                    this release" on the panel itself, so the badge was contradicting the card
+                    beneath it. */}
                 <span className="rounded-md border border-status-warning/30 bg-status-warning-wash px-2 py-0.5 font-mono text-micro font-semibold uppercase tracking-wider text-status-warning">
-                  In final testing
+                  In development
                 </span>
               </div>
 
@@ -146,8 +154,8 @@ export default function DownloadSection() {
               </div>
 
               <p className="mt-4 font-mono text-micro leading-relaxed text-content-secondary">
-                Your account, strategies and history are the same on every platform — the desktop
-                terminals connect to the account you create today.
+                The desktop terminals will connect to the same account, strategies and history —
+                nothing you build in the browser today needs rebuilding later.
               </p>
             </div>
           </div>

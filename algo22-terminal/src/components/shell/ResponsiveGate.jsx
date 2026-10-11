@@ -115,6 +115,10 @@ import { token } from '../../design/tokens';
 // one strip. Same argument `ds/index.js` makes for keeping `Chart` out of itself, applied
 // one level up. `ds/Panel` imports `./EmptyState` directly for the same reason.
 import { Alert } from '../ds/Alert';
+// The trader's persisted width PREFERENCE. It is a request, not a width: `sidebarModeFor`
+// below resolves it against the viewport, and the viewport floor wins. See that function.
+// Dependency-free on purpose — `store/useSidebarStore.js` explains why it is not `zustand`.
+import useSidebarCollapsed, { toggleSidebarCollapsed } from '../../store/useSidebarStore';
 
 import { NAV_ENTRIES, activeNavId } from './navigation';
 
@@ -404,9 +408,44 @@ export function routeAccess(pathname, viewport) {
   };
 }
 
-/** `'expanded'` at laptop and above, `'rail'` at tablet (§11.6, Requirement 2.4). */
-export function sidebarModeFor(viewport) {
-  return rank(viewport) >= rank('LAPTOP') ? 'expanded' : 'rail';
+/**
+ * The sidebar's mode: `'expanded'` at laptop and above, `'rail'` at tablet (§11.6,
+ * Requirement 2.4) — and `'rail'` at any width when the trader has asked for it.
+ *
+ * TWO INPUTS, ONE OF WHICH IS A FLOOR AND NOT A VOTE. `collapsed` is the trader's
+ * persisted request from `store/useSidebarStore`. It can only ever make the sidebar
+ * NARROWER: below laptop width this returns `'rail'` whatever `collapsed` says, because
+ * 216px of chrome on a 768px screen leaves no readable content column and that is the
+ * judgement §11.6 already made. So the preference is honoured where there is a choice and
+ * ignored where there is not — it cannot be used to re-widen a tablet.
+ *
+ * `collapsed` DEFAULTS TO `false` so the one-argument call is unchanged: this function was
+ * a pure viewport lookup before the toggle existed, `tests/unit/shell/responsiveGate.test.jsx`
+ * calls it that way, and a viewport alone still answers for a trader who has never touched
+ * the control.
+ *
+ * @param {'BELOW'|'TABLET'|'LAPTOP'|'DESKTOP'} viewport
+ * @param {boolean} [collapsed] The trader's request. Narrows only; never widens.
+ * @returns {'expanded'|'rail'}
+ */
+export function sidebarModeFor(viewport, collapsed = false) {
+  if (rank(viewport) < rank('LAPTOP')) return 'rail';
+  return collapsed ? 'rail' : 'expanded';
+}
+
+/**
+ * Whether the collapse control has anything to decide at this viewport.
+ *
+ * `false` below laptop width, where {@link sidebarModeFor} forces the rail — and a control
+ * whose state cannot change the thing it names is worse than no control, so `Sidebar`
+ * renders none there (Requirement 19.4's rule about controls that do nothing, applied to
+ * the chrome rather than to a page).
+ *
+ * @param {'BELOW'|'TABLET'|'LAPTOP'|'DESKTOP'} viewport
+ * @returns {boolean}
+ */
+export function canCollapseAt(viewport) {
+  return rank(viewport) >= rank('LAPTOP');
 }
 
 /**
@@ -422,6 +461,16 @@ const DEFAULT_CONTEXT = Object.freeze({
   minimum: MINIMUM_SUPPORTED_VIEWPORT,
   restriction: null,
   sidebarMode: 'expanded',
+  // The collapse trio. `collapsed: false` keeps a gate-less mount at today's expanded
+  // width, for the same reason `sidebarMode` defaults to `'expanded'` here: the gate is
+  // what narrows the sidebar, and its absence is not.
+  collapsed: false,
+  // `true`, matching the `'DESKTOP'` viewport above — a focused mount should see the
+  // control it would see on a desktop, not a disabled one.
+  canCollapse: true,
+  // A no-op rather than `null`, so a component rendered outside the gate can call it
+  // without a guard. Nothing is persisted and nothing moves; there is no shell to resize.
+  toggleSidebar: () => {},
 });
 
 const ViewportAccessContext = createContext(DEFAULT_CONTEXT);
@@ -429,10 +478,14 @@ const ViewportAccessContext = createContext(DEFAULT_CONTEXT);
 /**
  * What this route may do at the current width.
  *
- * `{ viewport, access, minimum, restriction, sidebarMode }`. Task 8.5/8.6 read
- * `sidebarMode` for the rail; task 24.7 reads `access === 'restricted'` to turn the
- * Builder's editing surface off. Neither re-derives a breakpoint, which is the point of
- * publishing the decision rather than the width.
+ * `{ viewport, access, minimum, restriction, sidebarMode, collapsed, canCollapse,
+ * toggleSidebar }`. Task 8.5/8.6 read `sidebarMode` for the rail; task 24.7 reads
+ * `access === 'restricted'` to turn the Builder's editing surface off. Neither re-derives
+ * a breakpoint, which is the point of publishing the decision rather than the width.
+ *
+ * `sidebarMode` is the RESOLVED answer and is the only one a layout should read.
+ * `collapsed` is the trader's raw request and exists so the toggle can label and
+ * `aria-expanded` itself honestly at a width where the request is being overridden.
  */
 export function useViewportAccess() {
   return useContext(ViewportAccessContext);
@@ -500,15 +553,27 @@ export function ResponsiveGate({ pathname, children }) {
   const viewport = useViewport();
   const { access, minimum, restriction } = routeAccess(pathname, viewport);
 
+  // A BOOLEAN snapshot, so this re-renders only when the preference actually flips — and
+  // `toggleSidebarCollapsed` is a module function with a stable identity, so it does not
+  // need to be a dependency-tracked value at all.
+  const collapsed = useSidebarCollapsed();
+
   const contextValue = useMemo(
     () => Object.freeze({
       viewport,
       access,
       minimum,
       restriction,
-      sidebarMode: sidebarModeFor(viewport),
+      // The RESOLVED mode. Below laptop width `sidebarModeFor` returns the rail whatever
+      // `collapsed` is, so a stored preference cannot re-widen a tablet.
+      sidebarMode: sidebarModeFor(viewport, collapsed),
+      // The raw request, published alongside it so the toggle can be honest about its own
+      // state at a width where the request is overridden.
+      collapsed,
+      canCollapse: canCollapseAt(viewport),
+      toggleSidebar: toggleSidebarCollapsed,
     }),
-    [viewport, access, minimum, restriction],
+    [viewport, access, minimum, restriction, collapsed],
   );
 
   // Requirement 17.1's floor. `children` are not evaluated into the tree here — the same

@@ -56,6 +56,7 @@ from backend_app.core.subscription_dependencies import (
 )  # noqa: F401  — `require_marketplace_browse` is used on the subscription-status read below
 from backend_app.core.rate_limit import limiter
 from backend_app.core.rate_limit_keys import caller_or_address, source_address
+from backend_app.core.runtime_env import local_fallbacks_are_acceptable
 from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
 from backend_app.backend.marketplace import submission_service as _submission_service
 from backend_app.backend.marketplace import pricing_evaluator as _pricing_evaluator
@@ -144,13 +145,42 @@ _service_client = None
 
 
 def _get_service_client():
-    """Returns a cached Supabase service-role client."""
+    """Returns a cached Supabase service-role client.
+
+    THE DEGRADED RETURN IS GATED ON THE DECLARED ENVIRONMENT, NOT ON ``DEV_MODE`` ALONE.
+    Both branches below used to read ``os.getenv("DEV_MODE", "false") == "true"`` and
+    nothing else, so ``ENV`` never entered the decision. Measured in
+    ``staging/probe_lib01_service_client.py``:
+
+        ENV=production + DEV_MODE=true   ->  _build_service_client() RETURNED None
+
+    ``_build_service_client``'s own docstring says it "raises 500 if env is not
+    configured", and every caller dereferences the result immediately -- so a ``None``
+    becomes ``AttributeError: 'NoneType' object has no attribute 'table'``, caught by the
+    route's broad ``except Exception`` and answered as 500 "Failed to look up library
+    entry." A configuration failure presents as an application defect, and the real cause
+    appears only in a log line.
+
+    ``runtime_env.local_fallbacks_are_acceptable()`` is the one place that judgement lives
+    (RUNTIME-01). A declared non-local ``ENV`` overrides ``DEV_MODE`` and logs the ignored
+    flag at CRITICAL; an unset ``ENV`` with ``DEV_MODE=true`` still degrades, so a
+    developer machine and ``tests/conftest.py`` (which sets ``ENV=testing``) are unchanged.
+
+    WHAT THIS DOES NOT FIX. The ``None`` return still exists for local environments, and
+    the callers still dereference it without checking. That half is reported as LIB-01 and
+    is a decision for this router's owner: either every call site checks, or this function
+    stops returning ``None`` at all and local runs are expected to supply a service-role
+    key. Changing it here would alter the behaviour of every ``/api/library`` route under
+    the test suite's own environment, which is more than a precedence fix.
+
+    Regression: tests/test_environment_precedence_is_centralised.py
+    """
     global _service_client
     if _service_client is None:
         url = os.environ.get("SUPABASE_URL")
         key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
         if not url or not key:
-            if os.getenv("DEV_MODE", "false").lower() == "true":
+            if local_fallbacks_are_acceptable():
                 return None
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set."
@@ -158,7 +188,7 @@ def _get_service_client():
         try:
             _service_client = create_client(url, key)
         except Exception as e:
-            if os.getenv("DEV_MODE", "false").lower() == "true":
+            if local_fallbacks_are_acceptable():
                 return None
             raise
     return _service_client
@@ -261,15 +291,127 @@ def _safe_uuid(value: str, field_name: str = "id") -> str:
 
 
 def _build_service_client():
-    """Returns a service-role client; raises 500 if env is not configured."""
+    """A service-role client, **or ``None``**, for a caller that handles absence itself.
+
+    THE DOCSTRING USED TO SAY "raises 500 if env is not configured", AND IT WAS FALSE.
+    It is false in two ways, and both were LIB-01:
+
+    1. :func:`_get_service_client` RETURNS ``None`` when the credentials are absent and the
+       process is permitted local fallbacks. That ``None`` is not a ``RuntimeError``, so it
+       passes straight through the ``except`` below untouched.
+    2. ``create_client`` can raise something that is **not** a ``RuntimeError`` (it raises
+       ``SupabaseException`` for an invalid key), and in a non-local environment
+       :func:`_get_service_client` re-raises it, so it bypasses this handler too.
+
+    Fifteen call sites in this module already check the result (``if not svc:``) and answer
+    an empty page or a 503. Twenty-four did not, and dereferenced it: ``svc.table(...)`` on
+    ``None`` raises ``AttributeError``, which the route's own broad ``except Exception``
+    relabelled as a 500 naming the wrong cause - measured on
+    ``POST /api/library/{id}/clone`` as ``500 "Failed to look up library entry."`` with
+    ``'NoneType' object has no attribute 'table'`` visible only in the log.
+
+    **The contract is now the honest one**: this returns the client or ``None``, and a caller
+    that cannot proceed without one calls :func:`_require_service_client` instead. The name
+    pair is the point - at every call site a reader can see which behaviour was chosen.
+
+    The deliberate degraders are left on this function on purpose: a browse surface that
+    answers an empty page on a developer machine with no service key is a considered choice
+    (``browse_library``, ``get_featured_strategies``, ``get_trending_strategies``), not an
+    oversight, and turning those into 503s would change behaviour several suites rely on.
+    """
     try:
         return _get_service_client()
     except RuntimeError as exc:
         logger.error(f"Service client unavailable: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server configuration error. Please contact support.",
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see (2) in the docstring
+        # A ``create_client`` failure in a NON-local environment. Previously this escaped
+        # both this handler and the caller's expectations, and landed in whatever broad
+        # ``except`` the route happened to have.
+        logger.error(f"Service client could not be constructed: {exc}")
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+
+def _read_did_not_complete(operation: str, exc: BaseException) -> MarketplaceError:
+    """Log a client call that did not complete, and RETURN the 503 for the caller to raise.
+
+    WHY THIS EXISTS (LIB-04, found by the PostgreSQL lane of the Phase 7 full regression).
+    The LIB-01 repair narrowed this module's broad ``except Exception`` handlers to
+    ``except _PostgrestAPIError``, because a broad handler had been relabelling an
+    ``AttributeError`` from a ``None`` client as "Failed to look up library entry." - a
+    statement about a row that was not the problem. Narrowing fixed that and introduced a
+    different defect: **a failure that is not a PostgREST ``APIError`` now escaped the
+    handler entirely** and reached the application's generic 500.
+
+    That is not an edge case. ``supabase-py`` performs the request with ``httpx``, and the
+    commonest real read failure - DNS, TLS, connection reset, read timeout - arrives as
+    ``httpx.ConnectError`` / ``httpx.ReadTimeout`` / ``httpx.RemoteProtocolError``, none of
+    which is an ``APIError``. So the narrowing turned "the database was unreachable" from a
+    503 into a 500.
+
+    Measured, rather than reasoned about: the PostgreSQL lane answered
+    ``500 INTERNAL_SERVER_ERROR`` on ``POST /api/library/{id}/clone`` and
+    ``DELETE /api/library/{id}``, and the escaping exception was
+    ``psycopg2.InterfaceError: connection already closed`` - a dead client handed to the
+    route. Different transport, same shape: the client raised something that is not an
+    ``APIError``.
+
+    THE CALLER'S ANSWER IS THE SAME EITHER WAY. From outside, a read that did not complete
+    is a 503 regardless of which layer failed, and ``MARKETPLACE_READ_FAILED``'s public
+    sentence already says exactly that. What differs is the LOG: the
+    ``_PostgrestAPIError`` handlers keep their own message because the database answered and
+    its answer is the diagnosis, while this one carries ``exc_info=True`` and the exception
+    TYPE, because an unexpected type is the diagnosis. A programming error is therefore
+    still fully visible to an operator - which the original broad handler was not, since it
+    logged only ``f"...: {exc}"`` with no traceback.
+
+    Returns rather than raises, so the call site reads ``raise _read_did_not_complete(...)``
+    and the control flow stays visible where it happens.
+
+    Regression: tests/test_lib04_a_broken_client_is_503_not_500.py
+    """
+    logger.error(
+        "library.%s did not complete: %s: %s",
+        operation,
+        type(exc).__name__,
+        exc,
+        exc_info=True,
+    )
+    return MarketplaceError(MARKETPLACE_READ_FAILED)
+
+
+def _require_service_client():
+    """A service-role client, or a structured 503. For callers that must have one.
+
+    THE LIB-01 FIX. Answers ``MARKETPLACE_READ_FAILED`` - which
+    ``backend_app/backend/marketplace/errors.py`` maps to **503** and whose public sentence
+    is "This information could not be read right now, so no figures are being shown. Please
+    try again shortly." - instead of letting ``None`` reach a ``.table(...)`` call and become
+    a 500 that names the wrong cause.
+
+    NOT A NEW ERROR CODE. This is the code ``get_categories`` in this same module already
+    raises for exactly this condition::
+
+        svc = _build_service_client()
+        if not svc:
+            logger.error("categories: no service client available")
+            raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    The catalogue has no "server not configured" code, and adding one would mean touching
+    ``MARKETPLACE_CODES``, ``HTTP_STATUS_FOR_CODE`` and ``PUBLIC_MESSAGE_FOR_CODE`` together
+    plus ``tests/test_marketplace_error_surface.py``'s catalogue invariants. ``503`` is also
+    the right answer on its merits: the condition is a dependency this server cannot reach,
+    it is retryable, and it tells the caller nothing about their own data - which a 500
+    "Failed to look up library entry." falsely implied was the problem.
+    """
+    svc = _build_service_client()
+    if not svc:
+        logger.error(
+            "no Supabase service-role client is available, so this request cannot be "
+            "served. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
         )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    return svc
 
 
 def _current_submission_state_for_listing(svc, source_strategy_id):
@@ -2124,7 +2266,12 @@ async def unpublish_strategy(
     """Soft-unpublishes a strategy. Existing clones are unaffected."""
     lib_id = _safe_uuid(library_id, "library_id")
     user_id = _safe_uuid(user["id"], "user_id")
-    svc = _build_service_client()
+    # LIB-01, the same defect as ``clone_strategy``. This route is why
+    # ``library.unpublish_strategy`` sat in ``test_validation_sweep``'s
+    # ``_ENVIRONMENT_GAP_ROUTE_KEYS``: it dereferenced a ``None`` service client and the
+    # resulting 500 had to be skipped rather than asserted. With the 503 the skip is no
+    # longer needed and the sweep's assertion runs for real.
+    svc = _require_service_client()
 
     # Verify ownership
     try:
@@ -2135,12 +2282,11 @@ async def unpublish_strategy(
             .single()
             .execute()
         )
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"unpublish_strategy lookup error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to look up library entry.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("unpublish_strategy lookup", exc)
 
     if not resp.data:
         raise HTTPException(
@@ -2166,12 +2312,11 @@ async def unpublish_strategy(
         svc.table("library_strategies").update(
             {"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).eq("id", lib_id).execute()
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"unpublish_strategy update error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to unpublish strategy.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("unpublish_strategy update", exc)
 
     # Drop the cached catalogue pages. Unpublishing removes the Listing from the browsable pool
     # (Requirement 4 Criterion 7), and `browse_library` answers from a 300-second cache without
@@ -2242,31 +2387,57 @@ async def clone_strategy(
     """
     lib_id = _safe_uuid(library_id, "library_id")
     user_id = _safe_uuid(user["id"], "user_id")
-    svc = _build_service_client()
+    # LIB-01: a missing service-role client is answered as a 503 naming the real condition,
+    # not dereferenced into an AttributeError and relabelled "Failed to look up library
+    # entry." See :func:`_require_service_client`.
+    svc = _require_service_client()
 
     # 1. Fetch library entry
+    #
+    # The ``except`` is narrowed to the concrete PostgREST error, for the same reason steps 8
+    # and 9 below already narrow theirs (Requirement 30.5): a broad ``except Exception`` here
+    # relabelled EVERY failure - including an ``AttributeError`` from a ``None`` client and a
+    # programming error such as a bad column name - as "Failed to look up library entry.",
+    # which is a statement about the row that was not the problem. A read that did not
+    # complete is answered with the same 503 step 4 already uses for a failed entitlement
+    # read, so this route never folds a broken read into a statement about the data.
+    # ``.single()`` IS DELIBERATELY NOT USED HERE ANY MORE (LIB-03).
+    #
+    # It asks PostgREST for `application/vnd.pgrst.object+json`, which answers 406 PGRST116
+    # ("JSON object requested, multiple (or no) rows returned") when the id matches nothing.
+    # supabase-py turns that into an `APIError`, so a listing that does not exist raised
+    # instead of returning an empty result - and the `if not lib_resp.data: -> 404` branch
+    # below was therefore UNREACHABLE for the one case it was written for. The caller got a
+    # 5xx for a plain "no such listing": a 500 before this phase, and a 503 after the
+    # error-handling repair, neither of which is true.
+    #
+    # Reading the list and indexing it keeps the two outcomes distinct, which is the whole
+    # point: "no such row" is a 404 about the caller's request, and only a read that DID NOT
+    # COMPLETE is the 503.
     try:
         lib_resp = (
             svc.table("library_strategies")
             .select("id, author_id, source_strategy_id, name, is_active, moderation_status, clone_count, source_cloning_enabled")
             .eq("id", lib_id)
-            .single()
+            .limit(1)
             .execute()
         )
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy library lookup error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to look up library entry.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("clone_strategy library lookup", exc)
 
-    if not lib_resp.data:
+    lib_rows = lib_resp.data or []
+    if isinstance(lib_rows, dict):  # a client that still answers a single object
+        lib_rows = [lib_rows]
+    if not lib_rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Library strategy not found.",
         )
 
-    lib_entry = lib_resp.data
+    lib_entry = lib_rows[0]
 
     if not lib_entry["is_active"] or lib_entry["moderation_status"] not in ("approved", "featured"):
         raise HTTPException(
@@ -2335,6 +2506,15 @@ async def clone_strategy(
         raise MarketplaceError(entitlement.wire_code)
 
     # 5. Idempotency: check if user already cloned this library entry
+    #
+    # READ-THEN-WRITE WITH NOTHING BEHIND IT. There is no unique constraint on
+    # ``strategies (user_id, source_library_id)`` in any migration, so two concurrent
+    # clones can both read "no existing clone" and both insert. That is reported as LIB-02
+    # rather than fixed here: the fix is a migration adding the constraint, and adding one
+    # is a schema change that needs to be applied deliberately rather than as part of an
+    # error-handling repair. What this phase does guarantee is that the duplicate is two
+    # rows the caller owns - not a cross-tenant write and not a corrupted listing - and the
+    # regression test for it names the outcome rather than asserting the absent constraint.
     try:
         existing_clone = (
             svc.table("strategies")
@@ -2343,12 +2523,11 @@ async def clone_strategy(
             .eq("user_id", user_id)
             .execute()
         )
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy idempotency check error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to check for existing clones.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("clone_strategy idempotency check", exc)
 
     if existing_clone.data:
         existing_id = existing_clone.data[0]["id"]
@@ -2360,27 +2539,34 @@ async def clone_strategy(
     # 6. Fetch source strategy DAG (service-role, cross-user read)
     source_id = lib_entry["source_strategy_id"]
     try:
+        # Same reason as step 1: ``.single()`` made "the author deleted the strategy this
+        # listing points at" a read error rather than the 404 the branch below declares
+        # (LIB-03). A listing can outlive its source - ``strategies_source_library_id_fkey``
+        # is ``ON DELETE SET NULL`` on the clone side and nothing cascades the other way -
+        # so this is a reachable state, not a theoretical one.
         src_resp = (
             svc.table("strategies")
             .select("name, symbol, timeframe, exchange_id, buy_logic, sell_logic, risk, indicators, ml_model_path")
             .eq("id", source_id)
-            .single()
+            .limit(1)
             .execute()
         )
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy source fetch error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch source strategy data.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("clone_strategy source fetch", exc)
 
-    if not src_resp.data:
+    src_rows = src_resp.data or []
+    if isinstance(src_rows, dict):
+        src_rows = [src_rows]
+    if not src_rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Source strategy no longer exists.",
         )
 
-    source = src_resp.data
+    source = src_rows[0]
     now_ts = datetime.now(timezone.utc).isoformat()
 
     # SECURITY: Validate ML/DL strategies have trained models before cloning
@@ -2451,14 +2637,17 @@ async def clone_strategy(
 
     try:
         clone_resp = svc.table("strategies").insert(clone_payload).execute()
-    except Exception as exc:
+    except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy insert error: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create strategy clone.",
-        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        raise _read_did_not_complete("clone_strategy insert", exc)
 
     if not clone_resp.data:
+        # A write that reported no row. Not a read failure, and not something the caller
+        # can retry into a different answer, so this keeps its 500 - the catalogue reserves
+        # 500 for the caller-invisible-but-our-fault case and this is one.
+        logger.error("clone_strategy insert returned no row for library_id=%s", lib_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Clone operation returned no data.",
@@ -2477,6 +2666,15 @@ async def clone_strategy(
         ).eq("id", lib_id).execute()
     except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy clone_count increment error: {exc}")
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        # BEST EFFORT, DELIBERATELY: the clone row already exists and is owned by the
+        # caller, so failing the request now would report a failure for an operation that
+        # succeeded. Logged with a traceback and swallowed; the counter being behind is
+        # LIB-02's territory, not a reason to refuse.
+        logger.error(
+            "library.clone_strategy clone_count increment did not complete: %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
 
     # 9. Create verified-clone marker in library_ratings (upsert). Non-critical, same
     #    narrowing to the concrete PostgREST APIError (Requirement 30.5).
@@ -2493,6 +2691,13 @@ async def clone_strategy(
         ).execute()
     except _PostgrestAPIError as exc:
         logger.error(f"clone_strategy verified-clone rating marker error: {exc}")
+    except Exception as exc:  # noqa: BLE001 - see _read_did_not_complete (LIB-04)
+        # Best effort for the same reason as the counter above: the clone exists, and the
+        # verified-clone marker is a secondary annotation on it.
+        logger.error(
+            "library.clone_strategy verified-clone rating marker did not complete: %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
 
     logger.info(
         f"Strategy cloned: library_id={lib_id} -> new_strategy_id={new_strategy_id} by user={user_id}"

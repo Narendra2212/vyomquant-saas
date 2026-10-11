@@ -1,0 +1,133 @@
+{
+  "ccxt_version": "4.3.92",
+  "venues": {
+    "binance": {
+      "present": true,
+      "native_field": "newClientOrderId",
+      "methods": {
+        "create_order_request": {
+          "mentions_clientOrderId": true,
+          "mentions_native_field": true
+        }
+      },
+      "evidence_lines": [
+        "clientOrderId = self.safe_string_2(params, 'newClientOrderId', 'clientOrderId')",
+        "clientOrderIdRequest = 'newClientStrategyId' if isPortfolioMarginConditional else 'newClientOrderId'",
+        "if clientOrderId is None:",
+        "request[clientOrderIdRequest] = brokerId + self.uuid22()",
+        "request[clientOrderIdRequest] = clientOrderId",
+        "requestParams = self.omit(params, ['type', 'newClientOrderId', 'clientOrderId', 'postOnly', 'stopLossPrice', 'takeProfitPrice', 'stopPrice', 'triggerP"
+      ],
+      "auto_generates_when_absent": true,
+      "reads_unified_clientOrderId": true,
+      "writes_native_field": true,
+      "omits_unified_from_params": true,
+      "translation_confirmed": true
+    },
+    "bybit": {
+      "present": true,
+      "native_field": "orderLinkId",
+      "methods": {
+        "create_order": {
+          "mentions_clientOrderId": false,
+          "mentions_native_field": true
+        },
+        "create_order_request": {
+          "mentions_clientOrderId": true,
+          "mentions_native_field": true
+        }
+      },
+      "evidence_lines": [
+        "clientOrderId = self.safe_string(params, 'clientOrderId')",
+        "if clientOrderId is not None:",
+        "request['orderLinkId'] = clientOrderId",
+        "request['orderLinkId'] = self.uuid16()",
+        "params = self.omit(params, ['stopPrice', 'timeInForce', 'stopLossPrice', 'takeProfitPrice', 'postOnly', 'clientOrderId', 'triggerPrice', 'stopLoss', '"
+      ],
+      "auto_generates_when_absent": false,
+      "reads_unified_clientOrderId": true,
+      "writes_native_field": true,
+      "omits_unified_from_params": true,
+      "translation_confirmed": true
+    },
+    "okx": {
+      "present": true,
+      "native_field": "clOrdId",
+      "methods": {
+        "create_order_request": {
+          "mentions_clientOrderId": true,
+          "mentions_native_field": true
+        }
+      },
+      "evidence_lines": [
+        "clientOrderId = self.safe_string_2(params, 'clOrdId', 'clientOrderId')",
+        "params = self.omit(params, ['currency', 'ccy', 'marginMode', 'timeInForce', 'stopPrice', 'triggerPrice', 'clientOrderId', 'stopLossPrice', 'takeProfit",
+        "if clientOrderId is None:",
+        "request['clOrdId'] = brokerId + self.uuid16()",
+        "request['clOrdId'] = clientOrderId",
+        "params = self.omit(params, ['clOrdId', 'clientOrderId'])"
+      ],
+      "auto_generates_when_absent": true,
+      "reads_unified_clientOrderId": true,
+      "writes_native_field": true,
+      "omits_unified_from_params": true,
+      "translation_confirmed": true
+    },
+    "kucoin": {
+      "present": true,
+      "native_field": "clientOid",
+      "methods": {
+        "create_order": {
+          "mentions_clientOrderId": false,
+          "mentions_native_field": true
+        },
+        "create_order_request": {
+          "mentions_clientOrderId": true,
+          "mentions_native_field": true
+        }
+      },
+      "evidence_lines": [
+        ":param str [params.clientOid]: client order id, defaults to uuid if not passed",
+        "clientOrderId = self.safe_string_2(params, 'clientOid', 'clientOrderId', self.uuid())",
+        "params = self.omit(params, ['clientOid', 'clientOrderId'])",
+        "'clientOid': clientOrderId,"
+      ],
+      "auto_generates_when_absent": true,
+      "reads_unified_clientOrderId": true,
+      "writes_native_field": true,
+      "omits_unified_from_params": true,
+      "translation_confirmed": true
+    },
+    "kraken": {
+      "present": true,
+      "native_field": "userref",
+      "methods": {},
+      "evidence_lines": [],
+      "auto_generates_when_absent": false,
+      "reads_unified_clientOrderId": false,
+      "writes_native_field": false,
+      "omits_unified_from_params": false,
+      "translation_confirmed": false
+    },
+    "coinbase": {
+      "present": true,
+      "native_field": "client_order_id",
+      "methods": {
+        "create_order": {
+          "mentions_clientOrderId": true,
+          "mentions_native_field": true
+        }
+      },
+      "evidence_lines": [
+        "'client_order_id': id + '-' + self.uuid(),",
+        "params = self.omit(params, ['timeInForce', 'triggerPrice', 'stopLossPrice', 'takeProfitPrice', 'stopPrice', 'stop_price', 'stopDirection', 'stop_direc",
+        "request = self.omit(request, 'client_order_id')"
+      ],
+      "auto_generates_when_absent": true,
+      "reads_unified_clientOrderId": false,
+      "writes_native_field": true,
+      "omits_unified_from_params": true,
+      "translation_confirmed": false
+    }
+  }
+}

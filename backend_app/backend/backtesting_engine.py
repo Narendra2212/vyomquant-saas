@@ -44,6 +44,61 @@ VALID_FREQ_MAP = {
 }
 
 
+#: Bars per year for each supported timeframe, used to annualize the Sharpe ratio.
+#:
+#: WHY THIS EXISTS. The Sharpe calculation was
+#: ``(returns.mean() / returns.std()) * (252 ** 0.5)`` — the square root of the number of
+#: TRADING DAYS in a year — applied to the per-bar return series regardless of what a bar
+#: actually was. The annualization factor for a return series is the square root of the
+#: number of observations per year, so 252 is correct only for daily bars. This engine
+#: accepts fourteen other timeframes, and ``5m`` is its default.
+#:
+#: The error is multiplicative and large. On hourly bars the factor should be
+#: ``sqrt(8760) ≈ 93.6`` and ``sqrt(252) ≈ 15.9`` was used, understating Sharpe by about
+#: 5.9x; on 5-minute bars the true factor is ``sqrt(105120) ≈ 324``, a 20x understatement.
+#: Every intraday strategy's headline risk-adjusted figure was wrong, in the direction
+#: that makes a good strategy look mediocre — and the number is comparable across
+#: strategies on the marketplace, so it also mis-ranked them against each other.
+#:
+#: CRYPTO TRADES CONTINUOUSLY, so the year is 365 x 24 hours rather than 252 x 6.5. There
+#: is no weekend gap and no exchange close to exclude. Daily bars are therefore 365, not
+#: 252 — the equities convention never applied to this asset class.
+BARS_PER_YEAR = {
+    "1m": 365 * 24 * 60,
+    "3m": 365 * 24 * 20,
+    "5m": 365 * 24 * 12,
+    "15m": 365 * 24 * 4,
+    "30m": 365 * 24 * 2,
+    "1h": 365 * 24,
+    "2h": 365 * 12,
+    "4h": 365 * 6,
+    "6h": 365 * 4,
+    "8h": 365 * 3,
+    "12h": 365 * 2,
+    "1d": 365,
+    "3d": 365 / 3,
+    "1w": 52,
+}
+
+
+def annualization_factor(timeframe: str) -> float:
+    """The multiplier that turns a per-bar Sharpe into an annualized one.
+
+    ``sqrt(observations per year)``. Raises for an unrecognised timeframe rather than
+    falling back to a default, because a silent fallback is how the single hardcoded 252
+    went unnoticed: a wrong factor produces a plausible-looking number, so nothing
+    downstream can detect it. :data:`VALID_FREQ_MAP` already refuses unknown timeframes
+    upstream, so an unknown value reaching here is a programming error.
+    """
+    key = str(timeframe).lower()
+    if key not in BARS_PER_YEAR:
+        raise ValueError(
+            f"No annualization factor for timeframe '{timeframe}'. "
+            f"Known: {sorted(BARS_PER_YEAR)}"
+        )
+    return float(BARS_PER_YEAR[key]) ** 0.5
+
+
 def _safe_stat(stats, key: str, default=None):
     """
     FIX BT-1: Safe stat extraction that correctly handles NaN vs missing key.
@@ -590,11 +645,22 @@ class BacktestEngine:
         # Extract returns series
         returns = portfolio.returns()
         
-        # Sharpe Ratio (annualized, assuming 252 trading days)
-        # Normalize to 0 if not enough trades for statistical significance
+        # Sharpe Ratio, annualized by the ACTUAL bar size.
+        #
+        # The factor used to be a hardcoded `252 ** 0.5`, which is the equities trading-day
+        # count and is wrong for every timeframe this engine accepts except daily — and
+        # wrong for daily too, since crypto has no weekends. See `BARS_PER_YEAR`.
+        #
+        # Still "not enough trades" -> 0.0 rather than null, which is a separate reporting
+        # defect recorded in the audit (a real Sharpe of 0.0 is indistinguishable from "we
+        # declined to compute one"); not changed here because the field is non-nullable in
+        # the consumers.
+        # Regression: tests/test_sharpe_annualization_matches_timeframe.py
         sharpe = 0.0
         if trades_count >= 20 and returns.std() != 0 and not pd.isna(returns.std()):
-            sharpe = (returns.mean() / returns.std()) * (252 ** 0.5)
+            sharpe = (returns.mean() / returns.std()) * annualization_factor(
+                params.get("timeframe", "5m")
+            )
         
         # Max Drawdown from stats
         max_dd = stats.get("Max Drawdown [%]", 0.0)

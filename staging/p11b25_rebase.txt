@@ -1,0 +1,34 @@
+========================================================================================================
+1. BASELINE
+========================================================================================================
+  branch: main   HEAD: 074b772ab16cece62cbfca0f2b78497be2ae56d5
+  origin/main: 074b772ab16cece62cbfca0f2b78497be2ae56d5
+  index content digest: 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME as A24
+  staged / unstaged / untracked: 22 / 102 / 139
+  unmerged: 0
+
+========================================================================================================
+2. DESTINATIONS
+========================================================================================================
+  staging/PHASE11B_A25_OWNER_MAP.md                              ABSENT -- safe
+  staging/PHASE11B_A25_LAUNCH_EXECUTION_DASHBOARD.md             ABSENT -- safe
+    (no PHASE11B_A25* artifact exists yet)
+
+========================================================================================================
+3. REPORTS NEWER THAN A24  (A24 mtime 10-11 12:48:29)
+========================================================================================================
+  PHASE11B_W1D11_CLASSIFIER_APPROVAL_HANDOFF.md                    20054 B  10-11 12:51:40
+
+========================================================================================================
+4. CONCURRENT TARGET FILES -- fingerprints
+========================================================================================================
+  path                                               XY    vs HEAD      worktree blob
+  backend_app/main.py                                 M    +289/-36     a3849d4acd7afcf4
+  backend_app/routers/exchange.py                    MM    +422/-29     4b40973568edfa4d
+  backend_app/routers/billing.py                      M    +700/-40     cb3cfda2ec3e3261
+  backend_app/core/global_safety.py                   M    +653/-70     4b2a1fc52748f3e9
+  backend_app/core/cache/redis_manager.py             M    +185/-5      6c8a3692c35056d0
+  backend_app/core/subscription_engine.py             M    +61/-4       256f03994b395d38
+  backend_app/backend/redis_manager.py                     clean        d7b0e811b615ee13
+  backend_app/backend/order_watchdog.py               M    +435/-11     a67092359cb74ad3
+  tests/test_redis_debounce.py                        M    +225/-0      5a8db7a8afbd57a0

@@ -19,9 +19,11 @@ from backend_app.backend.connection_engine import (ConnectionEngine,
                                                    release_exchange)
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import (get_current_user,
-                                           get_request_supabase, get_vault, get_ws_manager)
+                                           get_request_supabase, get_vault,
+                                           get_ws_manager, require_aal2)
 from backend_app.core.models import ExchangeKeysRequest, TestConnectionRequest
-from backend_app.core.subscription_dependencies import check_exchange_connection_slot
+from backend_app.core.subscription_dependencies import (
+    check_exchange_connection_slot, exchange_connection_slot_guard)
 from backend_app.backend.redis_manager import get_redis_manager
 from backend_app.core.rate_limit import limiter  # BE-CRITICAL-004 FIX
 from supabase import Client as SupabaseClient
@@ -60,6 +62,142 @@ _CONNECTIONS_READ_FAILED_MESSAGE = (
     "Your exchange connections could not be read, so none are listed rather than "
     "reported as absent. Try again in a moment."
 )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  CREDENTIAL-VERIFICATION REFUSALS (SC-27)
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# WHY THE EXCEPTION TEXT MAY NOT BE REFLECTED TO THE CALLER
+# ---------------------------------------------------------
+# ``store_keys`` and ``test_stored_connection`` both dial the venue with credentials and
+# both used to answer ``HTTPException(400, f"...{str(e)}")``. That ``e`` is raised by ccxt
+# from a call made with the api key and secret the caller submitted microseconds earlier,
+# and a ccxt auth error routinely carries the venue's own response body — which can echo
+# the submitted parameters, internal endpoint paths and account identifiers — into its
+# message. The handler therefore reflected arbitrary third-party text, on the one request
+# in the application that is guaranteed to be holding live broker credentials.
+#
+# WHY NOT JUST RETURN ONE FLAT SENTENCE
+# -------------------------------------
+# Because the trader has to be able to act. "Verification failed" leaves a wrong key, a
+# key missing the read permission, an IP that is not allowlisted at the venue, and a venue
+# in maintenance looking identical, and those need four different actions. So the
+# exception is CLASSIFIED against ccxt's exception hierarchy and each class maps to a
+# stable code and a sentence this repository controls. The caller learns the CATEGORY of
+# the failure and never a byte of the provider's text; the full exception, with traceback,
+# goes to the operator log.
+#
+# ORDERING IS LOAD-BEARING. Verified against the pinned ccxt 4.3.92:
+#     PermissionDenied   < AuthenticationError < ExchangeError  < BaseError
+#     AccountNotEnabled  < PermissionDenied
+#     RateLimitExceeded  < NetworkError        < OperationFailed < BaseError
+#     OnMaintenance      < ExchangeNotAvailable < NetworkError
+# so the narrow classes must be tested before the broad ones. An ``except`` chain would
+# bury the ordering in control flow; the explicit table below puts it where it can be read
+# and checked against the hierarchy above.
+EXCHANGE_VERIFICATION_REJECTED = "EXCHANGE_VERIFICATION_REJECTED"
+EXCHANGE_VERIFICATION_FORBIDDEN = "EXCHANGE_VERIFICATION_FORBIDDEN"
+EXCHANGE_VERIFICATION_THROTTLED = "EXCHANGE_VERIFICATION_THROTTLED"
+EXCHANGE_VERIFICATION_UNREACHABLE = "EXCHANGE_VERIFICATION_UNREACHABLE"
+EXCHANGE_VERIFICATION_FAILED = "EXCHANGE_VERIFICATION_FAILED"
+EXCHANGE_UNSUPPORTED = "EXCHANGE_UNSUPPORTED"
+EXCHANGE_KEY_STORAGE_FAILED = "EXCHANGE_KEY_STORAGE_FAILED"
+EXCHANGE_NO_STORED_CREDENTIALS = "EXCHANGE_NO_STORED_CREDENTIALS"
+
+#: The sentence a failed storage write answers with. The write is to Supabase, so the
+#: exception is a PostgREST error carrying table and column names; those name this
+#: deployment's schema and are not the caller's business.
+_KEY_STORAGE_FAILED_MESSAGE = (
+    "Your credentials were verified but could not be saved. They have not been stored. "
+    "Try again in a moment."
+)
+
+
+def _verification_refusal(exc: BaseException, exchange_id: str) -> HTTPException:
+    """The refusal a failed credential verification answers with.
+
+    Classifies ``exc`` into one stable code plus a static sentence. The exception's own
+    text is deliberately absent from the result: see the section comment above. Callers
+    are expected to log ``exc`` themselves (with ``exc_info``) before raising this.
+
+    Args:
+        exc: Whatever the verification raised — a ccxt error, the ``ConnectionError`` /
+            ``ValueError`` that ``ConnectionEngine.connect`` raises, or anything else.
+        exchange_id: The venue, for the client-facing sentence. Echoed from the request,
+            and safe to echo: the caller chose it, and it is already in the response of
+            every other endpoint in this router.
+
+    Returns:
+        An :class:`HTTPException` ready to ``raise ... from exc``.
+    """
+    import ccxt as ccxt_base
+
+    venue = str(exchange_id).upper()
+
+    # Narrowest first. Each entry is (exception types, HTTP status, code, message).
+    table = (
+        (
+            (ccxt_base.PermissionDenied,),
+            403,
+            EXCHANGE_VERIFICATION_FORBIDDEN,
+            f"{venue} accepted the key but refused the permissions it needs. Enable read "
+            f"and balance access on the key, check that the key is not restricted to an "
+            f"IP other than this platform's, and try again.",
+        ),
+        (
+            (ccxt_base.AuthenticationError,),
+            400,
+            EXCHANGE_VERIFICATION_REJECTED,
+            f"{venue} rejected these credentials. Check the API key, secret and "
+            f"passphrase for typos or trailing spaces, confirm the key has not been "
+            f"revoked, and try again. Nothing has been stored.",
+        ),
+        (
+            (ccxt_base.RateLimitExceeded, ccxt_base.DDoSProtection),
+            429,
+            EXCHANGE_VERIFICATION_THROTTLED,
+            f"{venue} is rate-limiting this platform, so the credentials could not be "
+            f"verified. This is not a problem with your key. Try again in a few minutes.",
+        ),
+        (
+            (ccxt_base.NetworkError, ConnectionError, TimeoutError),
+            503,
+            EXCHANGE_VERIFICATION_UNREACHABLE,
+            f"{venue} could not be reached, so the credentials were not verified and "
+            f"nothing has been stored. This is not a problem with your key. Try again in "
+            f"a few minutes.",
+        ),
+        (
+            (ValueError,),
+            400,
+            EXCHANGE_UNSUPPORTED,
+            f"'{exchange_id}' is not a venue this platform can connect to. Choose one "
+            f"from the supported exchanges list.",
+        ),
+    )
+
+    for types, status_code, code, message in table:
+        if isinstance(exc, types):
+            return HTTPException(
+                status_code=status_code,
+                detail={"error": code, "message": message},
+            )
+
+    # Unclassified. A 400 would assert the caller's credentials were at fault, which
+    # nothing here established, so this answers 502: the failure is on the far side or in
+    # this platform, and the operator log carries the detail.
+    return HTTPException(
+        status_code=502,
+        detail={
+            "error": EXCHANGE_VERIFICATION_FAILED,
+            "message": (
+                f"The connection to {venue} could not be verified, so nothing has been "
+                f"stored. The failure has been logged for investigation. Try again in a "
+                f"few minutes."
+            ),
+        },
+    )
 
 
 _CACHED_SUPPORTED_EXCHANGES = None
@@ -175,7 +313,7 @@ async def get_supported_exchanges(request: Request, user: dict = Depends(get_cur
 @router.post("/keys")
 async def store_keys(
     body: ExchangeKeysRequest,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_aal2),
     vault=Depends(get_vault),
     redis_manager=Depends(get_redis_manager),
     supabase: Any = Depends(get_request_supabase),
@@ -184,6 +322,41 @@ async def store_keys(
     Store encrypted exchange API keys in vault.
     Tests connection before saving to ensure credentials are valid.
     Invalidates cache on successful storage.
+
+    AUTH-01: THIS ENDPOINT REQUIRES AAL2 (MFA). ``Depends(require_aal2)`` replaces
+    ``Depends(get_current_user)`` here.
+    ----------------------------------------------------------------------------------
+    ``require_aal2`` (``core/dependencies.py``) existed and was applied to ZERO
+    endpoints — a repository-wide search for ``Depends(require_aal2)`` returned nothing,
+    and the dependency's own code comment said so. Its docstring names the operations it
+    "MUST be applied to", and the first of them is "Exchange API key mutation
+    (create/delete)". That docstring is this repository's specification for the control,
+    so wiring it here is applying the stated rule, not introducing a new one.
+
+    WHY THIS ENDPOINT IS THE HIGHEST-VALUE PLACE FOR IT. Storing exchange API keys is the
+    single most valuable credential operation in the product: the keys reach a venue that
+    holds the customer's money. An attacker holding a stolen password-only session could
+    previously attach their own exchange credentials, or rotate the victim's keys to ones
+    they control, with no second factor anywhere in the path.
+
+    ``require_aal2`` itself depends on ``get_current_user``, so authentication,
+    token validation, the freeze check and the returned user shape are all unchanged —
+    this adds a step-up requirement and subtracts nothing.
+
+    PRODUCT-VISIBLE CONSEQUENCE, STATED DELIBERATELY. A customer who has not enrolled a
+    TOTP factor cannot reach ``aal2`` and will receive 403 from this endpoint until they
+    enrol. Enrolment is fully implemented and reachable (``algo22-terminal/src/pages/TwoFA.jsx``
+    — Supabase ``mfa.enroll``/``challenge``/``verify``), so this is a step the customer
+    can complete rather than a dead end. It is still a behaviour change that support
+    should know about before launch, and it is recorded as such in
+    ``staging/REMEDIATION_REPORT.md``.
+
+    NOT applied to the read and connection-test endpoints in this router
+    (``/supported``, ``GET /``, ``/test``, ``/test-stored``, ``/{id}/capabilities``,
+    ``/connections/...``): the dependency's docstring says "DO NOT apply globally —
+    non-sensitive read endpoints should NOT require MFA", and ``/test`` does not persist
+    anything. Only the two MUTATING credential operations are gated.
+    Regression: tests/test_auth01_require_aal2_is_wired.py
 
     THE EXCHANGE-CONNECTION LIMIT (Free 1, Trader 2, Pro Quant 5, Business 8)
     ------------------------------------------------------------------------
@@ -197,6 +370,20 @@ async def store_keys(
     account sitting at its limit can still rotate every key it owns. Nothing here disconnects or
     invalidates an existing connection — a downgrade leaves stored credentials alone and only
     prevents adding the next one.
+
+    THE LIMIT IS CHECKED TWICE, ON PURPOSE (QUOTA-01)
+    -------------------------------------------------
+    The call below is a FAST PRE-CHECK: it refuses an over-limit account in milliseconds and,
+    more importantly, refuses it before the credential in this request body is sent anywhere.
+    It is an optimisation and a credential-hygiene measure, not the control — it reads the
+    account's venue set and returns, and by the time the row is written that figure is stale.
+
+    The CONTROL is ``exchange_connection_slot_guard`` further down, which re-reads the same
+    figure under a per-account cross-process lock and holds that lock across the vault write,
+    so the read that authorises the write and the write itself are one critical section. Two
+    concurrent requests for two DIFFERENT venues previously both passed a single free slot; a
+    Free account, whose limit is one, finished holding two venue credentials.
+    Regression: tests/test_quota01_exchange_slot_is_atomic.py
     """
     await check_exchange_connection_slot(user, supabase, body.exchange_id)
 
@@ -212,27 +399,108 @@ async def store_keys(
         exchange = await bridge.connect()
         await DataEngine(exchange).fetch_wallet_balance_snapshot()
     except Exception as e:
-        raise HTTPException(400, f"Exchange connection verification failed: {str(e)}")
+        # SC-27: logged in full for an operator, classified for the caller. The previous
+        # `f"...{str(e)}"` reflected a ccxt message produced from the credentials in this
+        # very request body. `exc_info` is what makes the operator side of this trade
+        # work — the caller loses the provider text, so the log has to carry it.
+        logger.error(
+            "Credential verification failed for user=%s exchange=%s: %s: %s",
+            user["id"],
+            body.exchange_id,
+            type(e).__name__,
+            e,
+            exc_info=True,
+        )
+        raise _verification_refusal(e, body.exchange_id) from e
     finally:
         if bridge:
             await bridge.disconnect()
 
     try:
-        vault.store_exchange_keys(
-            user_id=user["id"],
-            exchange_id=body.exchange_id,
-            raw_api_key=body.api_key,
-            raw_secret=body.secret_key,
-            raw_password=body.password,
-            raw_secret_key=body.secret_key,
-            label=getattr(body, "label", None),
-            uid=getattr(body, "uid", None),
-        )
+        # QUOTA-01: the authoritative slot decision and the write it authorises, in one
+        # critical section per account. The guard re-reads the venue set under a cross-process
+        # lock, so a concurrent request for a DIFFERENT venue cannot also be told the last slot
+        # is free. It refuses rather than admits when the lock cannot be taken (409 contended,
+        # 503 unreachable) — see `core/subscription_dependencies.py` for why that direction is
+        # the only safe one. The venue handshake above is deliberately outside the lock: it is
+        # the slow part, and serialising it would make an account's key storage wait on a
+        # 30-second exchange timeout.
+        async with exchange_connection_slot_guard(user, supabase, body.exchange_id):
+            vault.store_exchange_keys(
+                user_id=user["id"],
+                exchange_id=body.exchange_id,
+                raw_api_key=body.api_key,
+                raw_secret=body.secret_key,
+                raw_password=body.password,
+                raw_secret_key=body.secret_key,
+                label=getattr(body, "label", None),
+                uid=getattr(body, "uid", None),
+            )
+    except HTTPException:
+        # The guard's own refusals (409 in flight, 503 lock unavailable) and the pre-check's
+        # quota refusal are already the structured answer this router returns. Re-raised before
+        # the generic handlers below so they are not relabelled as a storage failure.
+        raise
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        # The vault's own argument validation (`_validate_id`, "api_key and secret_key are
+        # required"). These strings are written in this repository and name the caller's
+        # own input, so they are safe to return — unlike the provider and database text
+        # below. Shaped as the structured refusal the rest of this router uses.
+        raise HTTPException(
+            status_code=400,
+            detail={"error": EXCHANGE_KEY_STORAGE_FAILED, "message": str(e)},
+        ) from e
     except Exception as e:
-        logger.error(f"Key storage failed for {user['id']}: {e}")
-        raise HTTPException(500, f"Failed to store keys in vault: {e}")
+        # SC-27: this `e` is a Supabase/PostgREST error, so its text carries table and
+        # column names from this deployment's schema — `exchange_keys`, the encrypted
+        # column names, and on a 42703 the exact column that is missing. The previous
+        # `f"Failed to store keys in vault: {e}"` handed all of it to the client.
+        logger.error(
+            "Key storage failed for user=%s exchange=%s: %s: %s",
+            user["id"],
+            body.exchange_id,
+            type(e).__name__,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": EXCHANGE_KEY_STORAGE_FAILED,
+                "message": _KEY_STORAGE_FAILED_MESSAGE,
+            },
+        ) from e
+
+    # CONN-01: evict any pooled client built with the SUPERSEDED credential.
+    # ----------------------------------------------------------------------
+    # This same endpoint is create-OR-ROTATE: a trader replacing compromised keys for a
+    # venue they are already connected to reaches here with new credentials. The in-process
+    # connection pool (`backend/connection_engine.py::get_or_create_exchange`) keys on
+    # sha256([user_id, exchange_id]) and deliberately omits the credential, so a pooled
+    # client built from the OLD keys would keep being served to every in-process caller
+    # until the connection was deleted or the process restarted -- the rotation would be
+    # silently ineffective (finding CONN-01). `delete_connection` already evicts for exactly
+    # this reason; the rotation path must do the same. `release_exchange` pops the pooled
+    # client and closes its socket, so the next `get_or_create_exchange` for this pair
+    # reconstructs with the freshly stored credential. It is a no-op (pop of an absent key)
+    # when nothing was pooled -- i.e. for a first-time connection -- so it is safe on the
+    # create path too. Placed AFTER the vault write so an eviction never happens on a
+    # request that failed to persist the new keys.
+    try:
+        await release_exchange(user["id"], body.exchange_id.lower())
+    except Exception as evict_err:  # noqa: BLE001
+        # Eviction is best-effort hardening, not the operation the caller asked for: the
+        # keys are already stored. A failure here means a stale pooled client may linger
+        # until the next restart, which is the pre-fix behaviour, so it is logged for an
+        # operator rather than failing a store that succeeded.
+        logger.warning(
+            "CONN-01: could not evict the pooled client after a key rotation for "
+            "user=%s exchange=%s (%s); the new credential will take effect on the next "
+            "reconnect or restart.",
+            user["id"],
+            body.exchange_id,
+            evict_err,
+        )
 
     # Invalidate cache
     if redis_manager:
@@ -397,7 +665,7 @@ async def list_exchanges(
 @router.delete("/{exchange_id}")
 async def delete_connection(
     exchange_id: str,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_aal2),
     supabase: SupabaseClient = Depends(get_request_supabase),
     redis_manager=Depends(get_redis_manager),
 ):
@@ -405,6 +673,16 @@ async def delete_connection(
     Delete exchange connection with safety checks.
     Warns if bots are running, strategies exist, or positions are open.
     Invalidates cache on successful deletion.
+
+    AUTH-01: THIS ENDPOINT REQUIRES AAL2 (MFA).
+    ------------------------------------------------------------------
+    The second half of the "Exchange API key mutation (create/delete)" operation that
+    ``require_aal2``'s docstring mandates. Deletion is destructive in a way that matters
+    beyond the credential itself: it is the operation that would be used to cover tracks
+    after an unauthorised key rotation, and this handler also decides what happens to
+    running bots and open positions on that venue. See ``store_keys`` above for the full
+    reasoning and the product-visible consequence.
+    Regression: tests/test_auth01_require_aal2_is_wired.py
     """
     try:
         # Check for active bots using this exchange
@@ -464,8 +742,26 @@ async def delete_connection(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to disconnect {exchange_id}: {e}")
-        raise HTTPException(500, f"Failed to disconnect: {e}")
+        # SC-27: no credential is in play here, but `e` is a Supabase/PostgREST or pool
+        # error whose text names this deployment's schema and internals.
+        logger.error(
+            "Failed to disconnect user=%s exchange=%s: %s: %s",
+            user["id"],
+            exchange_id,
+            type(e).__name__,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "EXCHANGE_DISCONNECT_FAILED",
+                "message": (
+                    "The exchange could not be disconnected. Nothing has been changed. "
+                    "Try again in a moment."
+                ),
+            },
+        ) from e
 
 
 @router.get("/schema/{exchange_id}")
@@ -582,8 +878,25 @@ async def get_exchange_auth_schema(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch auth schema for {exchange_id}: {e}")
-        raise HTTPException(500, f"Failed to retrieve exchange schema: {e}")
+        # SC-27: ccxt metadata only, no credential involved, but the message is still
+        # third-party text reflected verbatim.
+        logger.error(
+            "Failed to fetch auth schema for exchange=%s: %s: %s",
+            exchange_id,
+            type(e).__name__,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "EXCHANGE_SCHEMA_UNAVAILABLE",
+                "message": (
+                    f"The connection form for '{exchange_id}' could not be built. Try "
+                    f"again in a moment."
+                ),
+            },
+        ) from e
 
 
 @router.post("/test")
@@ -643,13 +956,23 @@ async def test_connection(
             "permissions": permissions,
             "message": "Connection verified successfully.",
         }
-    except ValueError as e:
-        raise HTTPException(400, str(e))
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(f"Connection test failed for {user['id']}: {e}")
-        raise HTTPException(400, f"Connection failed: {str(e)}")
+        # SC-27: identical exposure to ``store_keys`` and fixed identically — this handler
+        # also dials the venue with the api key and secret in the request body, so ccxt's
+        # message is not the caller's to read. The ``ValueError`` clause that stood above
+        # this one is folded in: the classifier maps it to 400 EXCHANGE_UNSUPPORTED, which
+        # is the same status it answered before with the exception's text attached.
+        logger.warning(
+            "Connection test failed for user=%s exchange=%s: %s: %s",
+            user["id"],
+            body.exchange_id,
+            type(e).__name__,
+            e,
+            exc_info=True,
+        )
+        raise _verification_refusal(e, body.exchange_id) from e
     finally:
         if bridge:
             await bridge.disconnect()
@@ -689,10 +1012,46 @@ async def test_stored_connection(
             "message": "Stored keys verified successfully.",
         }
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        # 404 is preserved: the frontend branches on it to mean "this venue has no stored
+        # credentials", and `load_decrypted_keys` raises ValueError for exactly that.
+        #
+        # SC-27: the text is not. That ValueError is either
+        # `f"No keys found for {user_id}/{exchange_id}."` or, from `_decrypt`, "Decryption
+        # failed. Key rotation issue or corrupted data." — a very different condition that
+        # this handler has always reported as a 404 and that an operator needs to see. The
+        # two are not separable without matching on the message, so the status stays as it
+        # was and the log carries which one actually happened.
+        logger.warning(
+            "Stored-credential lookup failed for user=%s exchange=%s: %s",
+            user["id"],
+            body.exchange_id,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": EXCHANGE_NO_STORED_CREDENTIALS,
+                "message": (
+                    f"No usable stored credentials were found for "
+                    f"{str(body.exchange_id).upper()}. Reconnect the exchange to store a "
+                    f"key, and if you have just rotated one, store it again."
+                ),
+            },
+        ) from e
     except Exception as e:
-        logger.warning(f"Stored connection test failed for {user['id']}: {e}")
-        raise HTTPException(400, f"Connection failed: {str(e)}")
+        # SC-27: the credentials here come from the vault rather than the request body,
+        # but they are live broker credentials all the same and ccxt's message is built
+        # from the call they were used in.
+        logger.warning(
+            "Stored connection test failed for user=%s exchange=%s: %s: %s",
+            user["id"],
+            body.exchange_id,
+            type(e).__name__,
+            e,
+            exc_info=True,
+        )
+        raise _verification_refusal(e, body.exchange_id) from e
     finally:
         if bridge:
             await bridge.disconnect()
@@ -809,7 +1168,41 @@ async def reconnect_connection_by_id(
 ):
     """
     Reconnect stored exchange connection and refresh connectivity state.
+
+    CONN-01: THIS ENDPOINT NOW ACTUALLY RECONNECTS.
+    ------------------------------------------------------------------------------------
+    It answered ``{"status": "RECONNECTED"}`` while doing nothing to the connection. All it
+    did was call ``test_stored_connection``, which builds its own throwaway
+    ``ConnectionEngine`` and never touches the in-process pool — so the pooled client that
+    the trader pressed "reconnect" *because of* was still there afterwards, still broken, and
+    still being served to every in-process caller. The one case the endpoint exists for was
+    the one case it could not fix.
+
+    Evicting first is what makes the name true: ``release_exchange`` pops the pooled client
+    and closes its socket, so the next ``get_or_create_exchange`` for this pair performs a
+    fresh handshake with the stored credential. The subsequent connectivity test then reports
+    on a connection that is genuinely new rather than on a throwaway client while a stale one
+    survives behind it.
+
+    Eviction runs BEFORE the test, not after, so a venue that is still refusing does not leave
+    the old client in place — a caller that gets a failing test result has at least had the
+    dead socket cleared. It is a no-op when nothing was pooled.
+    Regression: tests/test_conn01_pool_lifecycle_and_shutdown.py
     """
+    try:
+        await release_exchange(user["id"], exchange_id.lower())
+    except Exception as evict_err:  # noqa: BLE001
+        # Best-effort, same reasoning as `store_keys`: the caller asked for a reconnect, and a
+        # failure to close the OLD socket must not turn into a refusal to test the new one.
+        logger.warning(
+            "CONN-01: could not evict the pooled client before a reconnect for user=%s "
+            "exchange=%s (%s); the connectivity test below still runs, but a stale pooled "
+            "client may survive until restart.",
+            user["id"],
+            exchange_id,
+            evict_err,
+        )
+
     test_result = await test_stored_connection(
         body=TestConnectionRequest(exchange_id=exchange_id),
         user=user,

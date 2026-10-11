@@ -304,7 +304,15 @@ async def close_all_positions(
     from uuid import UUID as UUID_TYPE
 
     from backend_app.backend.execution_guard import ExecutionGuard
-    from backend_app.backend.safety_config import SafetyMonitor
+    # PORT-01 FIX: this read `backend_app.backend.safety_config`, which does not exist --
+    # the module is `backend_app.core.safety_config` (and that is what
+    # `routers/orders.py` imports). The import sits before the `try` below, so
+    # POST /api/portfolio/close-all raised ModuleNotFoundError on EVERY call and returned
+    # 500, which also meant the freeze check and the ExecutionGuard validation beneath it
+    # were unreachable -- silently removing one of only three ExecutionGuard call sites in
+    # the repository. It failed closed (no money moved) but the endpoint was dead.
+    # Regression: tests/test_port01_close_all_route_is_reachable.py
+    from backend_app.core.safety_config import SafetyMonitor
     # CRITICAL FIX C4: Use shared Redis pool
     from backend_app.core.cache.redis_manager import redis_manager
 

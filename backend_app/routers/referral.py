@@ -35,11 +35,62 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from backend_app.core.dependencies import get_current_user, get_request_supabase
+from backend_app.core.runtime_env import local_fallbacks_are_acceptable
 from supabase import Client as SupabaseClient
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 logger = logging.getLogger("ReferralRouter")
+
+_service_client = None
+
+
+def _get_service_client():
+    """A cached Supabase service-role client, as `routers/library.py:146` defines it.
+
+    Used by ONE endpoint in this module -- ``POST /referral/validate`` -- and the reason
+    is a privilege decision, not convenience.
+
+    Validating a code means reading a row that belongs to somebody else: the referrer's.
+    Doing that through the caller's own JWT requires an RLS policy broad enough to let
+    any logged-in customer read other customers' `referral_codes` rows, and
+    ``006_reconcile_production_database.sql`` supplied exactly that --
+    ``USING (user_id = auth.uid() OR is_active = true)``. Since every row is active, the
+    predicate reduces to TRUE and a single unfiltered select returns every referral code
+    in the business together with the `user_id` that owns it.
+
+    Measured with ``staging/anon_read_sweep.py authenticated``, which seeds a code owned
+    by customer A and reads it as customer B:
+
+        referral_codes      authenticated saw 1 of 1 row(s)
+
+    So the privilege moves to the server: the policy is narrowed to own-rows-only (see
+    ``migrations/referral_system_redesign.sql``), the lookup runs as `service_role`, and
+    the response still discloses only what it disclosed before -- a verdict plus the
+    referrer id FOR A CODE THE CALLER ALREADY SUPPLIED. Knowing one code's owner is the
+    referral feature working; enumerating all of them is not.
+
+    Like ``routers/library.py``, the degraded ``None`` return is gated on
+    ``runtime_env.local_fallbacks_are_acceptable()`` rather than on ``DEV_MODE`` alone, so
+    a declared non-local ``ENV`` cannot be downgraded to local semantics by a leftover
+    flag (RUNTIME-01). Regression:
+    tests/test_environment_precedence_is_centralised.py
+    """
+    global _service_client
+    if _service_client is None:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            if local_fallbacks_are_acceptable():
+                return None
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set."
+            )
+        from supabase import create_client
+
+        _service_client = create_client(url, key)
+    return _service_client
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PYDANTIC MODELS
@@ -419,7 +470,10 @@ async def get_referral_stats(
                 id=p["id"],
                 amount_usd=float(p["amount_usd"]),
                 status=p["status"],
-                payment_method=p.get("payment_method"),
+                # Phase 10: the provisioned column is `payout_method`; prefer it and fall
+                # back to `payment_method` for any legacy row written under the other
+                # migration's shape. The response field stays `payment_method`.
+                payment_method=p.get("payout_method") or p.get("payment_method"),
                 created_at=p["created_at"],
                 approved_at=p.get("approved_at"),
                 paid_at=p.get("paid_at"),
@@ -559,7 +613,9 @@ async def get_payout_history(
                 id=p["id"],
                 amount_usd=float(p["amount_usd"]),
                 status=p["status"],
-                payment_method=p.get("payment_method"),
+                # Phase 10: prefer the provisioned `payout_method` column; fall back to
+                # `payment_method` for legacy rows. Response field stays `payment_method`.
+                payment_method=p.get("payout_method") or p.get("payment_method"),
                 created_at=p["created_at"],
                 approved_at=p.get("approved_at"),
                 paid_at=p.get("paid_at"),
@@ -593,12 +649,21 @@ async def validate_referral_code(
     Validate a referral code before signup.
     Returns referrer information if valid.
     """
+    # `supabase` stays in the signature: `get_request_supabase` is what rejects an
+    # unauthenticated caller with 401, so removing it would make this endpoint public.
+    # The LOOKUP, however, deliberately does not use it -- see `_get_service_client`.
     if not supabase:
         raise HTTPException(status_code=503, detail="Database connection unavailable")
-    
+
+    svc = _get_service_client()
+    if not svc:
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
+
     try:
-        # Look up referral code
-        code_resp = supabase.table("referral_codes").select("user_id", "is_active").eq("code", request_body.referral_code.upper()).execute()
+        # Look up referral code. Runs as `service_role` so that the RLS policy on
+        # `referral_codes` can stay own-rows-only; the filter here is the whole
+        # authorisation story -- one exact code, supplied by the caller.
+        code_resp = svc.table("referral_codes").select("user_id", "is_active").eq("code", request_body.referral_code.upper()).execute()
         
         if not code_resp.data or len(code_resp.data) == 0:
             return ValidateReferralCodeResponse(
@@ -623,7 +688,12 @@ async def validate_referral_code(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error validating referral code {request.referral_code}: {e}")
+        # `request` is the FastAPI Request; the body is `request_body`. This line used to
+        # read `request.referral_code`, so the handler itself raised AttributeError and
+        # replaced the real error with a misleading one. The code is not logged at all
+        # now -- a referral code is a credential of sorts, and it belongs in the response
+        # to its owner rather than in a shared log.
+        logger.error("Error validating referral code: %s", e)
         raise HTTPException(status_code=500, detail="Failed to validate referral code")
 
 
@@ -701,24 +771,87 @@ async def create_payout_request(
                 detail="Concurrent wallet modification detected. Payout request aborted."
             )
         
-        # Create payout record
-        payout_resp = supabase.table("referral_payouts").insert({
-            "user_id": user_id,
-            "amount_usd": payout_request.amount_usd,
-            "status": "pending",
-            "payment_method": payout_request.payment_method,
-            "payment_details": payout_request.payment_details
-        }).execute()
-        if inspect.isawaitable(payout_resp):
-            payout_resp = await payout_resp
-        
+        # Create payout record.
+        #
+        # SCHEMA CONTRACT (Phase 10 fix): the provisioned `referral_payouts` table
+        # (migrations/006_reconcile_production_database.sql, and the live DB) names its
+        # columns `payout_method` (VARCHAR(50) NOT NULL) and `payout_details` (JSONB). This
+        # insert previously wrote `payment_method` / `payment_details`, which are NOT columns
+        # of the provisioned table -- so on the real schema it wrote a non-existent column
+        # and left the NOT NULL `payout_method` unset, failing the insert and 500-ing the
+        # payout request after the wallet had already been debited (then rolled back below).
+        # The API's own field stays `payment_method` (CreatePayoutRequest / PayoutRecord) so
+        # the client contract is unchanged; only the DB column names are corrected. A second
+        # migration, `migrations/referral_system_redesign.sql`, declares the OTHER shape
+        # (`payment_method` nullable), but `CREATE TABLE IF NOT EXISTS` means the `006`
+        # definition is the one materialised on this database, and migration 027 builds on
+        # that same table -- so `payout_method` is the authoritative column name.
+        # THE DEBIT ABOVE IS NOW UNCOMPENSATED UNTIL A PAYOUT ROW EXISTS.
+        #
+        # Phase 10 / WS-D. The compensating re-credit used to live inside
+        # `if not payout_resp.data`, i.e. it covered ONE failure mode: an insert that
+        # came back empty. An insert that RAISES -- PostgREST error, RLS denial, CHECK or
+        # FK violation, timeout, Supabase 5xx -- produces no `payout_resp` at all and
+        # jumped straight to this handler's `except Exception`, which only logged. The
+        # referrer's approved balance stayed reduced with NO payout row of any kind, and
+        # nothing reconciles that: there is no referral audit table and no settlement job
+        # (see the settlement gap reported in the same workstream).
+        #
+        # Measured, not inferred: tests/test_referral_payout_debit_is_compensated_on_
+        # insert_failure.py drives this handler with a stub whose payout insert raises.
+        # Before this change the balance went 500.00 -> 450.00 with zero payout rows,
+        # while the returns-empty control compensated correctly -- so the two paths
+        # genuinely differed.
+        #
+        # Both failure modes now run the SAME compensation, and a compensation that
+        # itself fails is logged CRITICAL with the figures needed to repair it by hand,
+        # because that is the one case where money really is unaccounted for and it must
+        # not be swallowed into a generic 500.
+        async def _compensate_debit(cause: str) -> None:
+            """Restore the pre-debit approved balance. Safe to call at most once."""
+            try:
+                rollback_resp = supabase.table("referral_wallets").update({
+                    "approved_balance_usd": approved_balance
+                }).eq("user_id", user_id).execute()
+                if inspect.isawaitable(rollback_resp):
+                    rollback_resp = await rollback_resp
+                if not getattr(rollback_resp, "data", None):
+                    raise RuntimeError("compensating update matched no wallet row")
+                logger.warning(
+                    "Referral payout insert failed (%s) for user %s; approved balance "
+                    "restored to %.2f",
+                    cause, user_id, approved_balance,
+                )
+            except Exception as comp_err:  # noqa: BLE001
+                # Do not re-raise: the caller must still answer 500 for the payout. This
+                # log IS the recovery record.
+                logger.critical(
+                    "REFERRAL PAYOUT DEBIT NOT COMPENSATED. user=%s amount=%.2f "
+                    "balance_before=%.2f balance_after_debit=%.2f payout_row=none "
+                    "insert_failure=%s compensation_failure=%s — this balance is "
+                    "unaccounted for and needs manual reconciliation.",
+                    user_id, payout_request.amount_usd, approved_balance,
+                    new_approved_balance, cause, comp_err,
+                )
+
+        try:
+            payout_resp = supabase.table("referral_payouts").insert({
+                "user_id": user_id,
+                "amount_usd": payout_request.amount_usd,
+                "status": "pending",
+                "payout_method": payout_request.payment_method,
+                "payout_details": payout_request.payment_details,
+            }).execute()
+            if inspect.isawaitable(payout_resp):
+                payout_resp = await payout_resp
+        except Exception as insert_err:  # noqa: BLE001
+            await _compensate_debit(f"{type(insert_err).__name__}: {insert_err}")
+            raise HTTPException(
+                status_code=500, detail="Failed to create payout request"
+            ) from insert_err
+
         if not payout_resp.data or len(payout_resp.data) == 0:
-            # Rollback wallet deduction on insert failure
-            rollback_resp = supabase.table("referral_wallets").update({
-                "approved_balance_usd": approved_balance
-            }).eq("user_id", user_id).execute()
-            if inspect.isawaitable(rollback_resp):
-                await rollback_resp
+            await _compensate_debit("insert returned no rows")
             raise HTTPException(status_code=500, detail="Failed to create payout request")
         
         logger.info(f"Payout request created for user {user_id}, amount: ${payout_request.amount_usd}")

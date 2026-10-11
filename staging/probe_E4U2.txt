@@ -1,0 +1,13 @@
+START=2026-10-08T22:07:20.7983834+05:30
+SCRIPT=staging\probe_env04_mount.py unset
+FATAL: Supabase connection failed: Invalid API key
+DEV_MODE: APIKeyVault initialization failed, using mock: Vault database connection failed.
+[AlertEngine] No providers configured! Alerts will be logged only.
+C:\aerora_quant_backend_updated_final1\.venv\Lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_id" has conflict with protected namespace "model_".
+System.Management.Automation.RemoteException
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+SETTING=unset
+IMPORT_FAILED=RuntimeError: FATAL: rate limiting has no shared store. REDIS_URL is set but unreachable (Timeout connecting to server). (ENV=production, REDIS_URL=set). In-memory rate limiting is per-process: with more than one replica the effective limit becomes the configured limit times the replica count, so it is refused outside an explicitly local environment. Set REDIS_URL to a reachable Redis, or declare the environment with DEV_MODE=true / ENV=development.
+ELAPSED=39.6
+EXITCODE=2

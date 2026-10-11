@@ -209,9 +209,27 @@ class ExchangeReconciliationService:
         - avg_price: Average fill price
         - status: Exchange status
         """
+        # Phase 10 / WS-D. This used to `return []`, which is the SAME defect BUG-FIX
+        # UK-01 (below) fixed for the exception path and left standing here.
+        #
+        # An empty list does not mean "no exchange client". It means "the venue reports
+        # no open orders", and `reconcile_open_orders` acts on that: every PENDING or
+        # EXECUTING row in the database is then treated as absent from the exchange and
+        # handed to `_handle_missing_exchange_order`, which resolves it. So a service
+        # constructed without a client -- which is exactly what
+        # `get_reconciliation_service(db)` produces, since `exchange_client` defaults to
+        # None -- would resolve EVERY active order on its first pass, having observed
+        # nothing at all.
+        #
+        # "I cannot see the exchange" and "the exchange is empty" must not be the same
+        # value, so this refuses instead. Regression:
+        # tests/test_p10d_exchange_reconciliation_fails_safely.py
         if not self.exchange:
-            logger.warning("No exchange client configured, returning empty list")
-            return []
+            raise RuntimeError(
+                "cannot reconcile: no exchange client is configured on this "
+                "ExchangeReconciliationService. Refusing to report zero open orders, "
+                "which would be read as every active order having left the venue."
+            )
         
         try:
             # This would call the actual exchange API
@@ -433,56 +451,56 @@ class ExchangeReconciliationService:
                     discrepancy=f"Exchange status uncertain due to transient error ({e}); state preserved for next reconciliation cycle"
                 )
 
-        # Fallback when fetch_order unavailable or order does not exist
+        # ═══════════════════════════════════════════════════════════════════
+        # NO `fetch_order` MEANS NO EVIDENCE, SO NO OUTCOME IS WRITTEN
+        # ═══════════════════════════════════════════════════════════════════
+        # Phase 10 / WS-D. This fallback used to decide the order's fate from its
+        # ABSENCE from the open-orders list alone:
+        #
+        #     filled_size > 0  ->  transition_to_filled(),  status = COMPLETED
+        #     otherwise        ->  transition_to_cancelled(), status = FAILED
+        #
+        # commented "Assume FILLED (conservative - better than leaving hanging)". It is
+        # not conservative. COMPLETED asserts that a trade settled at a particular size
+        # and price, and the only figures available here are the ones the database
+        # already held BEFORE the order left the list -- so a partially filled order that
+        # went on to fill completely is recorded at its stale partial size, and an order
+        # still live on the venue under a different query is recorded as FAILED. Both are
+        # terminal states with no route back, and they feed PnL.
+        #
+        # It also contradicts the two fixes directly above it in this same function:
+        # BUG-FIX ORD-03 asks the venue before resolving, and BUG-FIX REC-01 preserves
+        # state whenever the venue's answer is uncertain. An absent `fetch_order` is the
+        # MOST uncertain case of all -- the venue was never asked and cannot be.
+        #
+        # So the row is left exactly as it is and reported as a discrepancy. A stuck
+        # EXECUTING row is visible, queryable and recoverable: `OrderWatchdog`'s
+        # `classify_stale_executions` / `recover_unsubmitted_executions` (TRADE-07) exist
+        # for precisely this population. A fabricated COMPLETED is none of those things.
+        # Regression: tests/test_p10d_exchange_reconciliation_fails_safely.py
         filled_size = float(db_order.filled_size or 0)
-        
-        if filled_size > 0:
-            # Assume FILLED (conservative - better than leaving hanging)
-            transition_to_filled(
-                execution_id=db_order.execution_id,
-                filled_size=filled_size,
-                avg_price=float(db_order.avg_price or 0),
-                exchange_order_id=db_order.order_id or "unknown",
-                reason="Reconciled: Order not found on exchange, marked as filled"
-            )
-            
-            # Update DB
-            db_order.status = ExecutionStatus.COMPLETED
-            db_order.filled_at = datetime.utcnow()
-            self.db.commit()
-            
-            return ReconciliationResult(
-                execution_id=db_order.execution_id,
-                action=ReconciliationAction.MARK_FILLED,
-                old_state=db_order.status,
-                new_state="filled",
-                exchange_order_id=db_order.order_id,
-                filled_size=filled_size,
-                avg_price=float(db_order.avg_price or 0),
-                discrepancy="Order not found on exchange"
-            )
-        else:
-            # No fill recorded -> CANCELLED
-            transition_to_cancelled(
-                execution_id=db_order.execution_id,
-                cancelled_by="reconciliation",
-                reason="Reconciled: Order not found on exchange, assumed cancelled"
-            )
-            
-            # Update DB (use FAILED status for cancellation)
-            db_order.status = ExecutionStatus.FAILED
-            self.db.commit()
-            
-            return ReconciliationResult(
-                execution_id=db_order.execution_id,
-                action=ReconciliationAction.MARK_CANCELLED,
-                old_state=db_order.status,
-                new_state="cancelled",
-                exchange_order_id=db_order.order_id,
-                filled_size=0,
-                avg_price=None,
-                discrepancy="Order not found on exchange, no fill recorded"
-            )
+
+        logger.warning(
+            "RECONCILIATION WITHHELD: %s is absent from the exchange's open orders, but "
+            "this exchange client exposes no fetch_order, so its outcome cannot be "
+            "confirmed. State preserved (status=%s, filled_size=%s). The order is left "
+            "for the stale-order recovery path rather than resolved on an assumption.",
+            db_order.execution_id, db_order.status, filled_size,
+        )
+
+        return ReconciliationResult(
+            execution_id=db_order.execution_id,
+            action=ReconciliationAction.NO_ACTION,
+            old_state=db_order.status,
+            new_state=db_order.status,
+            exchange_order_id=db_order.order_id,
+            filled_size=filled_size,
+            avg_price=float(db_order.avg_price) if db_order.avg_price else None,
+            discrepancy=(
+                "Order absent from exchange open orders and no fetch_order available to "
+                "confirm its outcome; state preserved for stale-order recovery"
+            ),
+        )
     
     async def _handle_fill_mismatch(
         self,

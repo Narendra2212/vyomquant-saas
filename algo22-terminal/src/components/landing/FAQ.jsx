@@ -66,8 +66,12 @@ const gettingStarted = [
   },
   {
     question: 'Is the desktop app available?',
+    // "In development", not "in final testing", and no per-OS list. Measured in
+    // `algo22-terminal/releases/`: only the Windows installer is a real build; the macOS and
+    // Linux files are 64-69 byte text placeholders. `design/pageFields.js` states the same
+    // per artifact.
     answer:
-      'Not yet. The web platform is complete and is what you should start on today. Native terminals for Windows, macOS and Linux are built on Tauri and in final testing; the platforms section on this page reports the current status of each one. Your account and strategies carry across, so nothing you build now is wasted.',
+      'Not yet, on any operating system. The web platform is complete and is what you should start on today — it runs in any current browser on Windows, macOS and Linux. Native desktop terminals are in development on Tauri and none is published for download; the platforms section on this page reports each artifact\u2019s status. Your account and strategies will carry across, so nothing you build now is wasted.',
   },
   {
     question: 'How much does it cost to start?',

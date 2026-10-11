@@ -1,0 +1,14 @@
+START=2026-10-08T23:31:40.7054845+05:30
+=== tests\test_paper02_unfunded_order_state_postgres.py
+16 tests collected in 1.85s
+=== tests\test_lib01_clone_strategy_postgres.py
+17 tests collected in 4.94s
+=== tests\test_exchange_safety_fix.py
+tests/test_exchange_safety_fix.py::test_exchange_error_propagates
+9 tests collected in 3.27s
+=== tests\test_env03_placeholder_secrets_are_invalid.py
+138 tests collected in 1.13s
+=== tests\test_env04_production_router_requires_explicit_enablement.py
+45 tests collected in 1.19s
+=== tests\test_api05_documentation_exposure_matrix.py
+120 tests collected in 18.99s

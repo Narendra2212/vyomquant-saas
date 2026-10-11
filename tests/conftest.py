@@ -269,3 +269,175 @@ def _entitlement_state_is_per_test():
         yield
     finally:
         _clear_entitlement_keys()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  RATE-LIMITER LEAK GUARD  (REGRESSION_ORDER_ISOLATION.md)
+#
+#  The 8 order-dependent failures in `test_task_6_1_backtest_execute.py` were all an
+#  HTTP 429 where 409/200/404/422/500 was expected -- 33 passed when that file ran
+#  alone, 33 passed at HEAD, 8 failed at 80% of the full-suite ordering.
+#
+#  WHY A PER-FILE RESET WAS NOT ENOUGH. That file already carries
+#
+#      @pytest.fixture(autouse=True)
+#      def clear_rate_limit():
+#          from backend_app.core.rate_limit import limiter
+#          limiter.reset()
+#
+#  autouse and function-scoped, so it ran. The problem is WHICH OBJECT it reset.
+#  `core/rate_limit.py` builds ONE module-level `limiter`, the routers are decorated
+#  with `@limiter.limit(...)` at THEIR import time, and `main.py:593` does
+#  `app.state.limiter = limiter`. Three test files then re-import or reload that
+#  module -- `test_api03_rate_limit_storage_is_fail_closed.py`,
+#  `test_rate_limiter_fails_closed_in_production.py` (both `sys.modules.pop` +
+#  `import_module`) and `test_rate_limit_backend.py` (`importlib.reload`) -- which
+#  REBINDS `rate_limit.limiter` to a brand-new `Limiter` with its own storage while
+#  every registered route keeps closing over the original.
+#
+#  From that point on `from backend_app.core.rate_limit import limiter` yields a
+#  different object than the app is counting on, so the per-file reset cleared an
+#  unused limiter and the app's per-minute windows accumulated across thousands of
+#  TestClient requests until the routes started answering 429. The two rate-limit
+#  files run at 57% and `test_task_6_1` at 80%, which is the ordering observed.
+#
+#  Measured, not inferred: `staging/probe_order_isolation_429.py` confirms all six
+#  steps -- the app holds the original, a re-import yields a different object, the app
+#  still holds the original, the re-imported one is therefore the wrong reset target,
+#  `importlib.reload` does the same, and the two have separate storage.
+#
+#  THE FIX. Reset the limiter THE APP HOLDS, which is reachable as
+#  `app.state.limiter` whatever the module currently exports. Done here rather than in
+#  five separate files because it is a property of the session, not of any one file.
+#
+#  TEST-ONLY CONTAMINATION, not a product defect. Nothing in production re-imports
+#  `core.rate_limit`; each caller has its own rate-limit key and the windows roll.
+#  What the suite does that production does not is share one client address across
+#  ~13,000 requests in one process.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+#: Every ``Limiter`` instance this session has seen, including the ORPHANS a module
+#: re-import leaves behind. A ``WeakSet`` so a limiter that really does become garbage is
+#: not kept alive by this guard.
+_SEEN_LIMITERS = None
+
+#: The fingerprint of the last scan: ``(id(module limiter), id(app), route count)``.
+#:
+#: Keyed on the APP as well as the limiter, and that was a correction. Keying on the
+#: limiter alone scanned once -- on the first test, before anything had imported
+#: ``backend_app.main`` -- found no routes, recorded the limiter id, and then never
+#: re-scanned, so the guard was inert for the whole session and the 8 failures survived
+#: it. The route count is in the key too, because the app is built incrementally and a
+#: scan taken before the last router was registered would miss its limiter.
+_LAST_SCAN_KEY = None
+
+
+def _scan_for_limiters():
+    """Find every ``Limiter`` the app's routes are actually enforcing on, and remember it.
+
+    MEASURED NECESSITY, not defensiveness. ``staging/probe_order_isolation_429_body.py``
+    found THREE live ``Limiter`` instances mid-suite: ``app.state.limiter`` (which is also
+    the module's) and two ORPHANS left behind by the module re-imports. Resetting
+    ``app.state.limiter`` left the request at 429; resetting every live limiter brought it
+    to the expected 409. So the object doing the counting is reachable from neither the
+    module attribute nor ``app.state``.
+
+    WHY THE ROUTE CLOSURES AND NOT ``gc.get_objects()``. The gc sweep was tried first and
+    raised ``MemoryError`` on this process -- the app plus Hypothesis is millions of
+    objects and the returned list alone exhausted memory. ``slowapi`` keeps the limiter in
+    the closure of the wrapper its ``@limiter.limit(...)`` decorator installs (measured:
+    ``staging/probe_find_limiters_cheaply.py`` found 2 limiters across 351 route
+    endpoints, and ``endpoint attributes mentioning 'limit'`` is empty, so the closure is
+    the only place it lives). Walking 351 endpoints is cheap and reaches exactly the
+    objects that can refuse a request.
+    """
+    global _SEEN_LIMITERS
+
+    try:
+        from slowapi import Limiter
+    except Exception:
+        return
+
+    import sys
+    import weakref
+
+    if _SEEN_LIMITERS is None:
+        _SEEN_LIMITERS = weakref.WeakSet()
+
+    main_module = sys.modules.get("backend_app.main")
+    app = getattr(main_module, "app", None) if main_module is not None else None
+    for route in getattr(app, "routes", ()) or ():
+        func = getattr(route, "endpoint", None)
+        for _ in range(6):  # a short __wrapped__ chain; decorators here do not nest deep
+            if func is None:
+                break
+            for cell in getattr(func, "__closure__", None) or ():
+                try:
+                    value = cell.cell_contents
+                except ValueError:  # an empty cell
+                    continue
+                if isinstance(value, Limiter):
+                    _SEEN_LIMITERS.add(value)
+            func = getattr(func, "__wrapped__", None)
+
+
+def _reset_bound_rate_limiters():
+    """Reset every limiter object that could be holding a count for this session.
+
+    Deliberately does NOT import ``backend_app.main``. A test that never touches the app
+    should not pay for importing it, and forcing the import here would change what
+    thousands of tests load. The app is reset only if it is already in ``sys.modules``.
+    """
+    global _LAST_SCAN_KEY
+
+    import sys
+
+    rate_limit_module = sys.modules.get("backend_app.core.rate_limit")
+    current = getattr(rate_limit_module, "limiter", None)
+
+    main_module = sys.modules.get("backend_app.main")
+    app = getattr(main_module, "app", None) if main_module is not None else None
+
+    # Re-scan when anything that could introduce a new enforcing limiter has changed:
+    # the module's limiter being swapped by a re-import, a different app object, or more
+    # routes registered than the last scan saw.
+    scan_key = (
+        id(current) if current is not None else None,
+        id(app) if app is not None else None,
+        len(getattr(app, "routes", ()) or ()) if app is not None else 0,
+    )
+    if scan_key != _LAST_SCAN_KEY:
+        _LAST_SCAN_KEY = scan_key
+        _scan_for_limiters()
+
+    targets = []
+    if _SEEN_LIMITERS is not None:
+        targets.extend(list(_SEEN_LIMITERS))
+
+    bound = getattr(getattr(app, "state", None), "limiter", None)
+    for candidate in (bound, current):
+        if candidate is not None and not any(candidate is item for item in targets):
+            targets.append(candidate)
+
+    for limiter in targets:
+        reset = getattr(limiter, "reset", None)
+        if reset is None:
+            continue
+        try:
+            reset()
+        except Exception:
+            # A limiter whose storage refuses a reset must not fail the test that was
+            # about to run; the counts it keeps are the thing being guarded against,
+            # and a failure here would be reported against an innocent test.
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _rate_limit_counts_are_per_test():
+    """No test inherits another's rate-limit count. See the banner above."""
+    _reset_bound_rate_limiters()
+    try:
+        yield
+    finally:
+        _reset_bound_rate_limiters()

@@ -1,0 +1,74 @@
+START=2026-10-09T12:06:02.0744239+05:30
+SCRIPT=staging\anon_read_sweep.py anon
+[dsn] staging/pg_dsn.txt -> postgresql://127.0.0.1:58620/postgres
+==============================================================================
+BEHAVIOURAL READ SWEEP as ANON -- seed a row, adopt the role, count
+==============================================================================
+49 table(s) in public grant SELECT to anon.
+Reader identity: anon (no JWT).
+Every insert and read happens inside a savepoint that is rolled back.
+------------------------------------------------------------------------------
+A. LEAKED -- a seeded row owned by another customer was readable by anon
+------------------------------------------------------------------------------
+  (none)
+------------------------------------------------------------------------------
+B. BLOCKED -- row present, anon saw zero (44 table(s))
+------------------------------------------------------------------------------
+  billing_invoices                                 0 of 19 row(s)
+  dag_tasks                                        0 of 1 row(s)
+  deployment_permissions                           0 of 1 row(s)
+  exchange_connections                             0 of 1 row(s)
+  exchange_keys                                    0 of 19 row(s)
+  execution_records                                0 of 1 row(s)
+  fills                                            0 of 19 row(s)
+  idempotency_keys                                 0 of 1 row(s)
+  library_ratings                                  0 of 1 row(s)
+  library_strategies                               0 of 23 row(s)
+  library_subscriptions                            0 of 1 row(s)
+  marketplace_listings                             0 of 1 row(s)
+  notification_settings                            0 of 1 row(s)
+  notifications                                    0 of 19 row(s)
+  order_lifecycle_transitions                      0 of 1 row(s)
+  orders                                           0 of 19 row(s)
+  plan_usage_ledger                                0 of 1 row(s)
+  positions                                        0 of 19 row(s)
+  processed_orders                                 0 of 1 row(s)
+  profiles                                         0 of 21 row(s)
+  reconciliation_mismatches                        0 of 1 row(s)
+  referral_codes                                   0 of 21 row(s)
+  referral_commissions                             0 of 1 row(s)
+  referral_payouts                                 0 of 1 row(s)
+  referral_profiles                                0 of 0 row(s)
+  referral_relationships                           0 of 1 row(s)
+  referral_wallets                                 0 of 21 row(s)
+  referrals                                        0 of 1 row(s)
+  risk_settings                                    0 of 19 row(s)
+  risk_settings_audit                              0 of 1 row(s)
+  security_logs                                    0 of 19 row(s)
+  signal_events                                    0 of 1 row(s)
+  signals                                          0 of 1 row(s)
+  strategies                                       0 of 19 row(s)
+  strategy_backtests                               0 of 1 row(s)
+  strategy_deployments                             0 of 1 row(s)
+  strategy_limits                                  0 of 1 row(s)
+  strategy_research_reports                        0 of 1 row(s)
+  strategy_subscriptions                           0 of 1 row(s)
+  strategy_versions                                0 of 1 row(s)
+  support_tickets                                  0 of 1 row(s)
+  ticket_comments                                  0 of 1 row(s)
+  transaction_checkpoints                          0 of 1 row(s)
+  transaction_records                              0 of 1 row(s)
+------------------------------------------------------------------------------
+C. INTENTIONALLY PUBLIC (5 table(s))
+------------------------------------------------------------------------------
+  plan_features                                    anon saw 1 row(s) -- product information
+  plan_limits                                      anon saw 1 row(s) -- product information
+  plan_migration_mapping                           anon saw 10 row(s) -- product information
+  plan_prices                                      anon saw 1 row(s) -- product information
+  plans                                            anon saw 5 row(s) -- product information
+------------------------------------------------------------------------------
+D. NOT PROVEN -- no row could be seeded (0 table(s))
+------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+SUMMARY: 0 leaked, 44 proven blocked, 5 intentionally public, 0 not proven
+EXITCODE=0

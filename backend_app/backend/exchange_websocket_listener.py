@@ -19,11 +19,12 @@ EXPECTED RESULT:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Set
 
@@ -293,6 +294,56 @@ class ExchangeWebSocketListener:
         except Exception as e:
             logger.error(f"STEP 3: Error handling order update: {e}", exc_info=True)
     
+    @staticmethod
+    def _stable_trade_id(order_id: str, trade: Dict[str, Any]) -> Optional[str]:
+        """A deduplication identity for one fill, stable across replays.
+
+        FILL-01. The venue's own trade id is used whenever it supplies one — that is the
+        only truly authoritative identity, and it is what makes a redelivered event
+        collapse onto the row it already wrote.
+
+        The previous code was `trade.get("id", "unknown")`. When a venue omitted the id,
+        **every** such fill was booked under the literal string ``"unknown"``, so two
+        genuinely distinct partial fills collided on one identity and the second was
+        either lost or overwrote the first, depending on the persistence path.
+
+        When no venue id exists, a deterministic digest over the fill's own invariants is
+        derived instead: order id, timestamp, amount and price. That is:
+
+          * **stable** — a replay of the same event yields the same id, preserving
+            idempotency, which is the property that matters most here;
+          * **distinct** — two different fills differ in at least one of those fields in
+            all but one case.
+
+        That remaining case is stated rather than hidden: two fills of identical size at
+        an identical price within the same millisecond produce the same digest and are
+        collapsed into one. Collapsing is the safe direction — under-booking a fill is
+        detectable by reconciliation against the venue, whereas double-booking one
+        inflates a position with no record that it happened. Returns ``None`` when even
+        that cannot be formed, so the caller refuses rather than invents an identity.
+        """
+        venue_id = trade.get("id")
+        if venue_id not in (None, "", "unknown"):
+            return str(venue_id)
+
+        timestamp = trade.get("timestamp")
+        amount = trade.get("amount")
+        price = trade.get("price")
+        if timestamp is None or amount is None or price is None:
+            return None
+
+        material = "\x1f".join(str(x) for x in (order_id, timestamp, amount, price))
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+        logger.warning(
+            "FILL-01: venue supplied no trade id for order %s; derived the deterministic "
+            "identity %s from (order, timestamp, amount, price). Two fills of identical "
+            "size and price in the same millisecond would collapse into one — "
+            "deliberately, since under-booking is recoverable by reconciliation and "
+            "double-booking is not.",
+            order_id, digest,
+        )
+        return f"derived-{digest}"
+
     async def _handle_fill_event(
         self,
         order_event: OrderUpdateEvent,
@@ -308,29 +359,114 @@ class ExchangeWebSocketListener:
                 TransactionalExecutionManager
             from backend_app.core.database_pool import db_pool
 
-            # Extract trade information from raw data
+            # ═══════════════════════════════════════════════════════════════════
+            # FILL-01: CUMULATIVE AND INCREMENTAL QUANTITIES ARE NOT INTERCHANGEABLE
+            # ═══════════════════════════════════════════════════════════════════
+            # ESTABLISHED from ccxt 4.3.92's own `Exchange.safe_order`, which DERIVES the
+            # order-level figure by summing the trade-level ones:
+            #
+            #     filled = '0'
+            #     for i in range(len(trades)):
+            #         tradeAmount = self.safe_string(trades[i], 'amount')
+            #         if parseFilled and (tradeAmount is not None):
+            #             filled = Precise.string_add(filled, tradeAmount)
+            #
+            # so:
+            #     trade['amount']   -> INCREMENTAL, that trade only, with its own `id`
+            #     order['filled']   -> CUMULATIVE, the running total for the order
+            #
+            # Demonstrated: three trades of 1.0 / 1.0 / 0.5 parse to filled == 2.5.
+            # Evidence: staging/probe_p11bc_fill_semantics.py ->
+            # staging/p11bc_fill_semantics.txt
+            #
+            # THE DEFECT THIS REPLACES. When `trades` was empty but `lastTradeTimestamp`
+            # was set, this method synthesised a single trade as
+            #
+            #     {"id": raw_order_data["id"], "amount": raw_order_data["filled"], ...}
+            #
+            # which takes the CUMULATIVE quantity and books it through the INCREMENTAL
+            # path, under the ORDER's id. Two consequences, both money-affecting:
+            #
+            #   * a second such event re-books everything already booked, because
+            #     `filled` is a running total rather than a delta;
+            #   * the id is identical on every event for that order, so deduplication on
+            #     trade id cannot tell a NEW partial fill from a REPLAY of the last one.
+            #
+            # WHY IT IS REFUSED RATHER THAN CONVERTED. Turning a cumulative figure into a
+            # delta needs to know what has already been booked, and that is not in the
+            # event. Reading it back from the database here would be a read-then-write
+            # race against the very events this handler processes concurrently. So the
+            # ambiguous shape is recorded for reconciliation instead of being guessed at
+            # — the order-level cumulative figure is still persisted by
+            # `_update_order_in_db`, which is the correct home for a cumulative number.
             trades = raw_order_data.get("trades", [])
-            
-            if not trades and raw_order_data.get("lastTradeTimestamp"):
-                # Single fill event
-                trades = [{
-                    "id": raw_order_data.get("id"),
-                    "amount": raw_order_data.get("filled"),
-                    "price": raw_order_data.get("average") or raw_order_data.get("price"),
-                    "timestamp": raw_order_data.get("lastTradeTimestamp"),
-                    "fee": raw_order_data.get("fee", {})
-                }]
-            
+
+            if not trades:
+                if raw_order_data.get("lastTradeTimestamp"):
+                    logger.warning(
+                        "FILL-01: %s reported a fill timestamp for order %s with no "
+                        "per-trade detail. The order-level 'filled' figure is CUMULATIVE "
+                        "and cannot be booked as an incremental fill without knowing "
+                        "what has already been recorded, so NO fill row was written. "
+                        "The cumulative total is still persisted on the order. This "
+                        "execution requires reconciliation against the venue's trade "
+                        "history (fetch_my_trades).",
+                        order_event.exchange_id, order_event.order_id,
+                    )
+                return
+
             for trade in trades:
+                # A fill must carry a usable quantity and a usable price. `Decimal(str(
+                # trade.get("price", 0)))` previously defaulted BOTH to 0, which books a
+                # fill of zero size, or a real quantity at a price of zero — either
+                # corrupts position and PnL accounting silently.
+                raw_amount = trade.get("amount")
+                raw_price = trade.get("price")
+                if raw_amount is None or raw_price is None:
+                    logger.error(
+                        "FILL-01: refusing to book a fill for order %s with missing "
+                        "detail (amount=%r, price=%r). A fill without a usable price "
+                        "cannot be valued. Requires reconciliation.",
+                        order_event.order_id, raw_amount, raw_price,
+                    )
+                    continue
+                try:
+                    amount = Decimal(str(raw_amount))
+                    price = Decimal(str(raw_price))
+                except (InvalidOperation, ValueError, TypeError):
+                    logger.error(
+                        "FILL-01: refusing to book a fill for order %s with "
+                        "unparseable detail (amount=%r, price=%r).",
+                        order_event.order_id, raw_amount, raw_price,
+                    )
+                    continue
+                if amount <= 0 or price <= 0:
+                    logger.error(
+                        "FILL-01: refusing to book a non-positive fill for order %s "
+                        "(amount=%s, price=%s).",
+                        order_event.order_id, amount, price,
+                    )
+                    continue
+
+                trade_id = self._stable_trade_id(order_event.order_id, trade)
+                if trade_id is None:
+                    logger.error(
+                        "FILL-01: refusing to book a fill for order %s because no "
+                        "stable trade identity could be derived; booking it would make "
+                        "a replay indistinguishable from a new fill.",
+                        order_event.order_id,
+                    )
+                    continue
+
                 fill_event = FillEvent(
                     exchange_id=order_event.exchange_id,
                     tenant_id=order_event.tenant_id,
                     symbol=order_event.symbol,
                     order_id=order_event.order_id,
-                    trade_id=trade.get("id", "unknown"),
+                    trade_id=trade_id,
                     side=order_event.side,
-                    amount=Decimal(str(trade.get("amount", 0))),
-                    price=Decimal(str(trade.get("price", 0))),
+                    amount=amount,
+                    price=price,
                     fee=Decimal(str(trade.get("fee", {}).get("cost", 0))) if trade.get("fee") else None,
                     fee_currency=trade.get("fee", {}).get("currency") if trade.get("fee") else None,
                     timestamp=datetime.utcnow(),
@@ -379,11 +515,54 @@ class ExchangeWebSocketListener:
                 ).first()
                 
                 if order:
-                    # Update order status
+                    # ═══════════════════════════════════════════════════════════════
+                    # FILL-01: AN ABSENT FIGURE IS NOT A ZERO, AND FILLS DO NOT SHRINK
+                    # ═══════════════════════════════════════════════════════════════
+                    # `order.filled_size = str(event.filled) if event.filled else "0"`
+                    # had two distinct faults, both of which destroy recorded state:
+                    #
+                    #   1. ABSENT READ AS ZERO. The guard is truthiness, so an event that
+                    #      does not report `filled` — `None` — overwrote a previously
+                    #      recorded cumulative fill with "0". The order would then read
+                    #      as unfilled while the position existed at the venue. Same for
+                    #      `avg_price`: a later event lacking an average erased the price
+                    #      a real fill had been booked at.
+                    #
+                    #   2. NO MONOTONICITY. `filled` is CUMULATIVE (see the FILL-01 note
+                    #      in `_handle_fill_event`), so it can only ever increase for a
+                    #      given order. A late or out-of-order event carrying a stale,
+                    #      smaller total was written straight over a larger one.
+                    #
+                    # Both are fixed by the same rule: only ever move the cumulative
+                    # figure FORWARD, and leave a field untouched when the event says
+                    # nothing about it. Absent and zero are different facts.
                     order.status = event.status
-                    order.filled_size = str(event.filled) if event.filled else "0"
-                    order.remaining_size = str(event.remaining) if event.remaining else "0"
-                    order.avg_price = str(event.average_price) if event.average_price else "0"
+
+                    if event.filled is not None:
+                        try:
+                            incoming = Decimal(str(event.filled))
+                            recorded = Decimal(str(order.filled_size or "0"))
+                        except (InvalidOperation, ValueError, TypeError):
+                            incoming = recorded = None
+                        if incoming is not None:
+                            if incoming >= recorded:
+                                order.filled_size = str(event.filled)
+                                # `remaining` and `average` describe the same snapshot as
+                                # `filled`, so they move together with it or not at all.
+                                # Mixing a new `filled` with a stale `remaining` would
+                                # make the row internally inconsistent.
+                                if event.remaining is not None:
+                                    order.remaining_size = str(event.remaining)
+                                if event.average_price is not None:
+                                    order.avg_price = str(event.average_price)
+                            else:
+                                logger.warning(
+                                    "FILL-01: ignoring an out-of-order update for order "
+                                    "%s — it reports a cumulative filled of %s, below "
+                                    "the %s already recorded. Cumulative fills cannot "
+                                    "decrease, so this event is stale.",
+                                    event.order_id, incoming, recorded,
+                                )
                     order.last_exchange_sync = datetime.utcnow()
                     
                     db.commit()
@@ -501,19 +680,42 @@ class ExchangeWebSocketListener:
         
         Only runs if WebSocket hasn't delivered updates within timeout.
         """
-        try:
-            from backend_app.backend.exchange_reconciliation import \
-                ExchangeReconciliationEngine
-            
-            reconciler = ExchangeReconciliationEngine()
-            
-            # Reconcile open orders
-            await reconciler.reconcile_open_orders(tenant_id, exchange_id)
-            
-            logger.info(f"STEP 3: Fallback poll completed for {tenant_id}:{exchange_id}")
-        
-        except Exception as e:
-            logger.error(f"STEP 3: Fallback poll error: {e}")
+        # ═══════════════════════════════════════════════════════════════════
+        # THIS FALLBACK IS NOT IMPLEMENTED, AND NOW SAYS SO
+        # ═══════════════════════════════════════════════════════════════════
+        # Phase 10 / WS-D. This body used to be:
+        #
+        #     from backend_app.backend.exchange_reconciliation import \
+        #         ExchangeReconciliationEngine
+        #     reconciler = ExchangeReconciliationEngine()
+        #     await reconciler.reconcile_open_orders(tenant_id, exchange_id)
+        #
+        # `exchange_reconciliation` defines no `ExchangeReconciliationEngine` -- the class
+        # is `ExchangeReconciliationService` -- and its constructor requires a
+        # `db_session`, which no call here supplied. So every invocation raised
+        # ImportError, the enclosing `except Exception` logged it as
+        # "STEP 3: Fallback poll error", and the line read like a transient exchange
+        # problem. This fallback has never once run.
+        #
+        # It is NOT repaired by correcting the name. Doing that would start the
+        # reconciler from the WebSocket timeout path with no session, no tenant
+        # enumeration and no exchange client -- and a client-less service is exactly the
+        # configuration that `_fetch_exchange_orders` now refuses, because reporting zero
+        # open orders would resolve every active order. Wiring this reconciler up is a
+        # separate decision with duplicate-worker and ghost-order-idempotency questions
+        # attached; see the module docstring of
+        # tests/test_p10d_exchange_reconciliation_fails_safely.py.
+        #
+        # Until then the honest behaviour is to stop pretending a safety net exists. The
+        # WebSocket gap is still covered by `OrderWatchdog`, which IS started in
+        # main.py's lifespan and runs its own reconciliation loop over the same
+        # execution_records rows.
+        logger.warning(
+            "STEP 3: WebSocket fallback poll is NOT IMPLEMENTED for %s:%s — no "
+            "reconciler is wired to this path. Stale-order coverage comes from "
+            "OrderWatchdog (started in main.py's lifespan), not from here.",
+            tenant_id, exchange_id,
+        )
     
     def _map_order_status(self, status: str) -> OrderEventType:
         """Map exchange order status to event type."""

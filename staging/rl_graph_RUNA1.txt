@@ -1,0 +1,56 @@
+FATAL: Supabase connection failed: Invalid API key
+DEV_MODE: APIKeyVault initialization failed, using mock: Vault database connection failed.
+[AlertEngine] No providers configured! Alerts will be logged only.
+DEPRECATION WARNING: 'AERORA_MODE' environment variable is deprecated. Please update your deployment configuration to use 'VYOMQUANT_MODE' instead.
+C:\aerora_quant_backend_updated_final1\.venv\Lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_id" has conflict with protected namespace "model_".
+System.Management.Automation.RemoteException
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+NONCE=RUNA1
+
+TOTAL backend_app modules parsed : 396
+Reachable from main.py           : 139
+Modules importing backend_app.core.rate_limit: 14
+
+module | imports_rate_limit | reachable_from_main
+------------------------------------------------------------------------------
+backend_app.main | YES | YES
+backend_app.routers.auth | YES | no
+backend_app.routers.billing | YES | no
+backend_app.routers.copilot | YES | no
+backend_app.routers.dashboard | YES | no
+backend_app.routers.exchange | YES | no
+backend_app.routers.health | YES | no
+backend_app.routers.library | YES | no
+backend_app.routers.market | YES | no
+backend_app.routers.paper_trading | YES | no
+backend_app.routers.signal_trace | YES | no
+backend_app.routers.strategies | YES | no
+backend_app.routers.strategy_operations | YES | YES
+backend_app.routers.support | YES | no
+
+=== imported NAMES (is anything beyond `limiter` consumed?) ===
+backend_app.main: ['limiter']
+backend_app.routers.auth: ['limiter']
+backend_app.routers.billing: ['limiter']
+backend_app.routers.copilot: ['limiter']
+backend_app.routers.dashboard: ['limiter']
+backend_app.routers.exchange: ['limiter']
+backend_app.routers.health: ['limiter']
+backend_app.routers.library: ['limiter']
+backend_app.routers.market: ['limiter']
+backend_app.routers.paper_trading: ['limiter']
+backend_app.routers.signal_trace: ['limiter']
+backend_app.routers.strategies: ['limiter']
+backend_app.routers.strategy_operations: ['limiter']
+backend_app.routers.support: ['limiter']
+
+Consumers of names removed by the fix: NONE
+
+=== DYNAMIC: import backend_app.main ===
+ENV      = None
+DEV_MODE = None
+REDIS_URL= None
+IMPORT backend_app.main : FAILED RuntimeError: FATAL: rate limiting has no shared store. REDIS_URL is set but unreachable (Timeout connecting to server). (ENV=<unset>, REDIS_URL=set). In-memory rate limiting is per-process: with more than one replica the effective limit becomes the configured limit times the replica count, so it is refused outside an explicitly local environment. Set REDIS_URL to a reachable Redis, or declare the environment with DEV_MODE=true / ENV=development.
+
+NONCE_END=RUNA1

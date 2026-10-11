@@ -1,0 +1,13 @@
+Bot boot failed [f362ff72-817a-4abc-9b47-71dec431c83a_BTC_Ff78269]: simulated boot failure
+WORK-03: took over a STALE claim on 1c4e7264-1cbe-40c3-be55-1a1891705990/BTC/F695500 (no heartbeat for >90s). The previous owner cannot release this claim, because release is scoped to the owner token.
+FALSIFICATION RESULTS
+========================================================================
+[OK  ] A: boot-failure leak is detectable
+         claim rows after an unreleased boot failure = 1 (expected 1)
+[OK  ] B: unheartbeated claim is takeable (the gap)
+         rival outcome = reclaimed_stale, granted = True
+[OK  ] C: heartbeated claim is NOT takeable (the fix)
+         rival outcome = held_by_another, owner bot cancelled = False
+========================================================================
+VERDICT=ALL_CONTROLS_BEHAVED
+NONCE_END=W4B2

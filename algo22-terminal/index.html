@@ -16,42 +16,97 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 
-  <!-- Primary SEO Meta Tags -->
-  <title>VyomQuant — Institutional Quantitative Trading Terminal & Algorithmic SaaS</title>
-  <meta name="title" content="VyomQuant — Institutional Quantitative Trading Terminal & Algorithmic SaaS" />
-  <meta name="description" content="Institutional-grade algorithmic trading infrastructure featuring visual strategy design (DAG), VectorBT backtesting, paper trading, XGBoost ML integration, and automated exchange execution." />
-  <meta name="keywords" content="quantitative trading, algorithmic trading, backtesting, vectorbt, strategy builder, crypto trading bot, python trading, xgboost trading, automated trading SaaS" />
-  <meta name="author" content="VyomQuant Technologies" />
-  <meta name="theme-color" content="#0a0e17" />
+  <!-- Primary SEO Meta Tags
+
+       "Institutional" came out of the title and the description. `components/landing/
+       SecuritySection.jsx` states in its own copy that this product holds no third-party
+       security certification — "we would rather say that than imply one" — and it dropped an
+       "Enterprise Security" badge for exactly that reason. A title claiming an institutional
+       terminal is the same unearned attestation one level up, where it is the first thing a
+       search result shows, and it also mis-describes the audience: this is a retail crypto
+       algorithmic-trading product.
+
+       What stays is every claim that has an implementation behind it: the visual DAG builder
+       (`backend_app/backend/strategy_dag/`), vectorbt backtesting (`backtesting_engine.py`,
+       with `vectorbt==0.26.2` pinned and the engine refusing to fabricate metrics without
+       it), paper trading (`paper_trading_service.py`) and exchange execution
+       (`exchange_executor.py`). "ML" is named rather than "AI": the ML/DL training stack is
+       real (XGBoost, LightGBM, RandomForest, CatBoost, LSTM, GRU, Transformer), while
+       `routers/copilot.py`'s "AI Copilot" is a seven-entry keyword matcher with no model
+       behind it, so no AI claim is made anywhere in this document. -->
+  <title>VyomQuant — Build, Backtest & Automate Crypto Trading Strategies</title>
+  <meta name="title" content="VyomQuant — Build, Backtest & Automate Crypto Trading Strategies" />
+  <meta name="description" content="Design systematic crypto trading strategies on a visual canvas, backtest them on vectorbt, rehearse in paper trading, then automate them on your own exchange account. Paper trading is the default. Free tier, no card required." />
+  <meta name="keywords" content="quantitative trading, algorithmic trading, backtesting, vectorbt, strategy builder, crypto trading bot, paper trading, strategy marketplace, automated trading SaaS" />
+  <meta name="author" content="Aerora Dynamics Private Limited" />
+  <!-- `#080A0E` is `--color-surface-canvas` in src/styles/tokens.css. It was `#0a0e17`, a
+       fourth colour that matched neither the token nor anything else, so the browser chrome
+       and the first painted frame were a different near-black from the app. -->
+  <meta name="theme-color" content="#080A0E" />
   
-  <!-- Open Graph / Facebook -->
+  <!-- Open Graph / Facebook
+
+       NO `og:image`. It pointed at `https://vyomquant.in/og-image.png`, and that file does
+       not exist: `public/` holds robots.txt, sitemap.xml, tauri.svg, vite.svg and
+       vq-favicon.svg, so Vite copies no `og-image.png` into `dist/` and the deploy has
+       nothing to upload. Every share of this page rendered an empty image frame.
+
+       Removed rather than repointed, because the honest alternatives are both worse: an
+       `og:image` naming the 32x32 favicon gives crawlers a 32px square to scale into a
+       1200x630 card, and inventing a share image is a design asset, not a metadata fix.
+       With no image declared, Facebook and LinkedIn fall back to a text card that renders
+       correctly. Restore this pair the moment a real 1200x630 asset lands in `public/`. -->
   <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="VyomQuant" />
   <meta property="og:url" content="https://vyomquant.in/" />
-  <meta property="og:title" content="VyomQuant — Institutional Quantitative Trading Terminal" />
-  <meta property="og:description" content="Build, backtest, and deploy quantitative trading strategies with visual DAG builder, vectorized backtesting, and institutional risk management." />
-  <meta property="og:image" content="https://vyomquant.in/og-image.png" />
+  <meta property="og:title" content="VyomQuant — Build, Backtest & Automate Crypto Trading Strategies" />
+  <meta property="og:description" content="Design systematic crypto trading strategies on a visual canvas, backtest them on vectorbt, rehearse in paper trading, then automate them on your own exchange account." />
 
-  <!-- Twitter -->
-  <meta property="twitter:card" content="summary_large_image" />
+  <!-- Twitter
+
+       `summary`, NOT `summary_large_image`. The large-image card REQUIRES an image, and with
+       the broken `twitter:image` above removed, declaring the large variant asks Twitter for
+       a card it cannot build and gets no card at all. `summary` renders from title and
+       description alone. This goes back to `summary_large_image` together with the og:image. -->
+  <meta property="twitter:card" content="summary" />
   <meta property="twitter:url" content="https://vyomquant.in/" />
-  <meta property="twitter:title" content="VyomQuant — Institutional Quantitative Trading Terminal" />
-  <meta property="twitter:description" content="Build, backtest, and deploy quantitative trading strategies with visual DAG builder, vectorized backtesting, and institutional risk management." />
-  <meta property="twitter:image" content="https://vyomquant.in/og-image.png" />
+  <meta property="twitter:title" content="VyomQuant — Build, Backtest & Automate Crypto Trading Strategies" />
+  <meta property="twitter:description" content="Design systematic crypto trading strategies on a visual canvas, backtest them on vectorbt, rehearse in paper trading, then automate them on your own exchange account." />
 
-  <!-- JSON-LD Structured Metadata -->
+  <!-- JSON-LD Structured Metadata
+
+       `operatingSystem` was "Web, Windows, macOS". For schema.org/SoftwareApplication that
+       field names the operating systems the application RUNS ON as an installable program,
+       so it was a machine-readable claim of native Windows and macOS applications — fed
+       straight to search engines as structured data. No desktop build is published: measured
+       in `algo22-terminal/releases/`, the macOS DMG is a 69-byte text placeholder, and the
+       one real artifact (the 112 MB Windows installer) is a sibling of `public/` that Vite
+       never copies into `dist/`, so it is not served either. `design/pageFields.js` records
+       all four as unavailable and `components/landing/DownloadSection.jsx` says so on the
+       page. It also listed only two of the three platforms the page itself names.
+
+       `"Web"` is the accurate value, and `browserRequirements` states the real constraint.
+       Add Windows/macOS/Linux here when a signed installer is actually downloadable.
+
+       `priceCurrency` was USD. `backend_app/core/subscription_engine.py` sets
+       `PRICE_BASE_CURRENCY = "INR"` and publishes one rupee price list; every other currency
+       is an FX conversion of it (`price_source: "fx"`). The Free plan really is 0, so the
+       figure was right and the currency named a price list that does not exist. -->
   <script type="application/ld+json">
     {
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
       "name": "VyomQuant",
-      "operatingSystem": "Web, Windows, macOS",
+      "operatingSystem": "Web",
+      "browserRequirements": "Requires a current desktop browser and a viewport at least 768px wide",
       "applicationCategory": "FinanceApplication",
       "offers": {
         "@type": "Offer",
-        "price": "0.00",
-        "priceCurrency": "USD"
+        "price": "0",
+        "priceCurrency": "INR",
+        "description": "Free plan — visual strategy builder, vectorbt backtesting, paper trading and one active strategy."
       },
-      "description": "Institutional-grade algorithmic trading platform featuring visual strategy DAG design, backtesting, and live execution."
+      "description": "Algorithmic crypto trading platform: visual strategy graph design, vectorbt backtesting, paper trading and automated execution on your own exchange account."
     }
   </script>
 
@@ -141,7 +196,14 @@
   </script>
 </head>
 
-<body class="bg-[#0a0e17] text-[#f1f5f9] antialiased selection:bg-[#00d4ff]/20 selection:text-[#00d4ff]">
+<!-- Token utilities, not hex literals. These four arbitrary values were a fifth palette:
+     `#0a0e17` is not `--color-surface-canvas` (#080A0E) and `#f1f5f9` is not
+     `--color-content-primary` (#F0F2F5), so the frame painted before React mounted was a
+     different near-black and a different off-white from the app that replaced it — a visible
+     settle on every cold load. `src/styles/tokens.css` is the one place a colour is written
+     down (Requirement 1.1), and every class below resolves to it. -->
+
+<body class="bg-surface-canvas text-content-primary antialiased selection:bg-brand/20 selection:text-brand">
   <div id="root"></div>
   <script type="module" src="/src/main.jsx"></script>
 </body>

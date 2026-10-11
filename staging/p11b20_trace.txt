@@ -1,0 +1,207 @@
+====================================================================================================
+P1. THE PROXIES reserve_quota DEPENDS ON  (backend_app/core/cache/redis_manager.py)
+====================================================================================================
+
+      async def incrby(self, key: str, amount: int) -> int:
+          val = int(self._store.get(key, 0)) + amount
+          self._store[key] = str(val)
+          return val
+
+      async def decrby(self, key: str, amount: int) -> int:
+          val = int(self._store.get(key, 0)) - amount
+          self._store[key] = str(val)
+          return val
+
+      async def expire(self, key: str, seconds: int) -> bool:
+          return True
+  
+
+      async def get(self, key: str) -> Optional[str]:
+          return self._store.get(key)
+  
+
+      async def set(self, key: str, value: str, ex: int = None, **kwargs):
+          nx = kwargs.get('nx', False)
+          if nx and key in self._store:
+              return None
+          self._store[key] = value
+          return True
+  
+
+====================================================================================================
+P1b. IS AN ATOMIC SCRIPT PATH AVAILABLE?
+====================================================================================================
+  async def eval_lua     L174   async def eval_lua(self, script: str, keys: list, args: list) -> list:
+  async def eval_lua     L635   async def eval_lua(self, script: str, keys: list, args: list) -> list:
+  async def eval\b       L214   async def eval(self, script: str, num_keys: int, *keys_and_args) -> list:
+  async def eval\b       L656   async def eval(self, script: str, num_keys: int, *keys_and_args) -> list:
+  def eval_lua           L174   async def eval_lua(self, script: str, keys: list, args: list) -> list:
+  def eval_lua           L635   async def eval_lua(self, script: str, keys: list, args: list) -> list:
+  def eval\b             L214   async def eval(self, script: str, num_keys: int, *keys_and_args) -> list:
+  def eval\b             L656   async def eval(self, script: str, num_keys: int, *keys_and_args) -> list:
+  hasattr\(client, 'eval L648   if hasattr(client, 'eval'):
+  hasattr\(client, 'eval L666   if hasattr(client, 'eval'):
+
+  MockRedisClient eval support:
+    async def incrby(self, key: str, amount: int) -> int:
+    async def decrby(self, key: str, amount: int) -> int:
+    async def eval_lua(self, script: str, keys: list, args: list) -> list:
+    async def eval(self, script: str, num_keys: int, *keys_and_args) -> list:
+
+====================================================================================================
+P1c. CALLERS OF reserve_quota AND WHAT THEY DO WITH THE USAGE VALUE
+====================================================================================================
+  backend_app/backend/strategy_service.py:1852:        allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan
+  backend_app/core/subscription_engine.py:959:    async def reserve_quota(
+  backend_app/core/usage_ledger.py:494:    allowed, current, effective = await SubscriptionEngine.reserve_quota(
+  backend_app/routers/strategies.py:2077:    allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Reso
+  tests/sandbox_lifecycle/conftest.py:228:            "backend_app.core.subscription_engine.SubscriptionEngine.reserve_quota",
+  tests/test_billing_hardening_and_failure_recovery_audit.py:234:        reads, so `reserve_quota` is what is patched rather than `get_quota_u
+  tests/test_billing_hardening_and_failure_recovery_audit.py:241:            SubscriptionEngine, "reserve_quota", new=AsyncMock(return_value=(
+  tests/test_billing_hardening_and_failure_recovery_audit.py:246:            SubscriptionEngine, "reserve_quota", new=AsyncMock(return_value=(
+  tests/test_notifications_feature_e2e.py:716:            with patch("backend_app.routers.strategies.SubscriptionEngine.reserve_quota", return
+  tests/test_strategy_lifecycle_concurrency.py:573:        "backend_app.core.subscription_engine.SubscriptionEngine.reserve_quota",
+  tests/test_task_4_3_deploy_prerequisite_gate.py:345:            "backend_app.core.subscription_engine.SubscriptionEngine.reserve_quota",
+  tests/test_task_8_2_deploy_preflight.py:143:        "backend_app.core.subscription_engine.SubscriptionEngine.reserve_quota",
+  tests/test_task_8_2_deploy_preflight.py:146:    with service_patch, quota as reserve_quota:
+  tests/test_task_8_2_deploy_preflight.py:149:    reserve_quota.assert_not_awaited()
+  tests/test_task_8_2_deployment_binding.py:378:            "backend_app.core.subscription_engine.SubscriptionEngine.reserve_quota",
+  tests/test_task_8_3_lifecycle_state_machine.py:1171:        "backend_app.core.subscription_engine.SubscriptionEngine.reserve_quota",
+
+====================================================================================================
+P2a. CONNECTION / POOL CREATION AND LIFETIME  (backend_app/backend/redis_manager.py)
+====================================================================================================
+  L2     backend/redis_manager.py — REDIS DATABASE MANAGER
+  L99        _instance: Optional['RedisManager'] = None
+  L100       _instance_lock: Optional[asyncio.Lock] = None
+  L103       def _get_instance_lock(cls) -> asyncio.Lock:
+  L105           if cls._instance_lock is None:
+  L106               cls._instance_lock = asyncio.Lock()
+  L107           return cls._instance_lock
+  L109       def __new__(cls):
+  L110           if cls._instance is None:
+  L111               cls._instance = super().__new__(cls)
+  L112               cls._instance._initialized = False
+  L113           return cls._instance
+  L116           if self._initialized:
+  L122           self._connected: bool = False
+  L125           self._initialized = True
+  L133       async def initialize(self) -> bool:
+  L140               cache = await aioredis.from_url(
+  L144                   max_connections=50
+  L148               queue = await aioredis.from_url(
+  L152                   max_connections=50
+  L156               events = await aioredis.from_url(
+  L160                   max_connections=50
+  L171               self._connected = True
+  L180               self._connected = False
+  L192           if self._connected:
+  L202               return self._connected
+  L206               if self._connected:
+  L215       async def close(self):
+  L523   _redis_manager: Optional[RedisManager] = None
+  L536   async def get_redis_manager() -> Optional[RedisManager]:
+  L545       global _redis_manager, _get_manager_last_failed
+  L548       if _redis_manager is not None and _redis_manager._connected:
+  L549           return _redis_manager
+  L553           return _redis_manager  # Still in cooldown; return whatever we have (may be None)
+  L557           return _redis_manager  # Another coroutine is already attempting — skip
+  L561           if _redis_manager is not None and _redis_manager._connected:
+  L562               return _redis_manager
+  L566               return _redis_manager
+  L568           if _redis_manager is None:
+  L569               _redis_manager = RedisManager()
+  L571           success = await _redis_manager.initialize()
+  L576       return _redis_manager
+  L580       """Compatibility proxy to allow calling redis methods directly on redis_manager."""
+  L582           from backend_app.backend.redis_manager import _redis_manager
+  L583           if _redis_manager is not None:
+  L584               if hasattr(_redis_manager, name):
+  L585                   return getattr(_redis_manager, name)
+  L586               if _redis_manager._cache is not None and hasattr(_redis_manager._cache, name):
+  L587                   return getattr(_redis_manager._cache, name)
+  L588               if _redis_manager._queue is not None and hasattr(_redis_manager._queue, name):
+  L589                   return getattr(_redis_manager._queue, name)
+  L590           raise AttributeError(f"redis_manager has no attribute '{name}' and is not initialized yet")
+  L592   redis_manager = RedisManagerCompatProxy()
+
+====================================================================================================
+P2b. HOW THE CORE MANAGER ACQUIRES AND CACHES IT
+====================================================================================================
+      async def _ensure_manager(self):
+          """Ensure the backend manager is initialized. Delegates reconnection debouncing to get_redis_manager."""
+          # Test mode: skip reassignment to allow dependency injection
+          if self._test_mode:
+              return
+  
+          from backend_app.backend.redis_manager import get_redis_manager
+          # Always call get_redis_manager; it is debounce-safe and handles reconnects internally
+          mgr = await get_redis_manager()
+          if mgr is not None:
+              self._redis_manager = mgr
+  
+
+  seams and singleton:
+    L463   class SharedRedisManager:
+    L471       _instance: Optional['SharedRedisManager'] = None
+    L472       _redis_manager = None
+    L474       _test_mode = False  # Test-only seam to bypass reassignment for dependency injection
+    L476       def __new__(cls):
+    L477           if cls._instance is None:
+    L478               cls._instance = super().__new__(cls)
+    L479               cls._instance._initialized = False
+    L480           return cls._instance
+    L491           if self._test_mode:
+    L498               self._redis_manager = mgr
+    L500       def _set_test_mode(self, enabled: bool = True):
+    L506           self._test_mode = enabled
+    L508       def _bypass_dev_mode(self, enabled: bool = True):
+    L514           self._dev_mode_bypass = enabled
+    L727           if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
+    L1488  redis_manager = SharedRedisManager()
+
+====================================================================================================
+P2c. TEST FIXTURE LIFECYCLE  (tests/conftest.py, owned by another workstream)
+====================================================================================================
+  pytest-asyncio configuration:
+    (absence of asyncio_mode means pytest-asyncio's default applies: strict,
+     function-scoped event loop per test)
+
+  autouse fixtures and loop/redis-related fixtures in conftest:
+    L82    _REDIS_SINGLETON_SEAMS = (
+    L90    @pytest.fixture(autouse=True)
+    L91    def _restore_shared_redis_singleton():
+    L107           for name in _REDIS_SINGLETON_SEAMS
+    L113           for name in _REDIS_SINGLETON_SEAMS:
+    L124   #  then calls `asyncio.set_event_loop(None)`, which flips the policy's `_set_called`
+    L126   #  rest of the process, `asyncio.get_event_loop()` no longer auto-creates a loop — it
+    L130   #  `asyncio.get_event_loop().run_until_complete(...)`, so any module that calls
+    L145   #  `get_event_loop()` gave these tests historically, so it changes nothing they relied
+    L158   def _installed_event_loop():
+    L168               return asyncio.get_event_loop_policy().get_event_loop()
+    L173   def _ensure_event_loop_installed():
+    L177       current = _installed_event_loop()
+    L182           _FALLBACK_EVENT_LOOP = asyncio.new_event_loop()
+    L183       asyncio.set_event_loop(_FALLBACK_EVENT_LOOP)
+    L186   @pytest.fixture(autouse=True)
+    L187   def _event_loop_is_always_installed():
+    L189       _ensure_event_loop_installed()
+    L193           _ensure_event_loop_installed()
+    L240   def _clear_entitlement_keys():
+    L264   @pytest.fixture(autouse=True)
+    L265   def _entitlement_state_is_per_test():
+    L283   #      @pytest.fixture(autouse=True)
+    L288   #  autouse and function-scoped, so it ran. The problem is WHICH OBJECT it reset.
+    L336   def _scan_for_limiters():
+    L385   def _reset_bound_rate_limiters():
+    L436   @pytest.fixture(autouse=True)
+    L437   def _rate_limit_counts_are_per_test():
+
+  does anything close or reset the async pool between tests?
+    aclose             in conftest: NO
+    close()            in conftest: NO
+    disconnect         in conftest: NO
+    _cache = None      in conftest: NO
+    _connected = False in conftest: NO
+    reset              in conftest: [221, 286, 288, 299, 306, 342, 385, 390, 424, 425, 428, 430, 439, 443]
+    initialize(        in conftest: NO

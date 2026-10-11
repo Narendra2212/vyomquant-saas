@@ -126,7 +126,17 @@ def get_current_user_profile(user: dict = Depends(get_current_user)):
     Get current authenticated user's profile.
     Fast (<50ms) - uses JWT token claims, no Supabase network call.
     """
-    logger.debug(f"User profile fetched: {user.get('email')}")
+    # SC-8: the email address must not reach the logs. This handler runs on every
+    # /api/auth/me call, so the line that stood here wrote a user's email to stdout — and
+    # from there into CloudWatch, with CloudWatch's retention rather than ours — on every
+    # routine profile fetch. The subject id answers the same debugging question ("whose
+    # request was this?") without carrying a direct identifier, and it is the id that every
+    # other log line in this application already correlates on.
+    #
+    # Lazy %s formatting rather than an f-string: the f-string was interpolated even when
+    # DEBUG was disabled, which is both wasted work and, for a PII field, a value
+    # materialised for no reader.
+    logger.debug("User profile fetched for subject %s", user.get("sub") or user.get("id"))
     return {
         "id": user.get("sub") or user.get("id"),
         "email": user.get("email"),

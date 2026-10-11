@@ -1,0 +1,4 @@
+  91: CANONICAL_PATH = (
+  357: def post(client, body=None, path=CANONICAL_PATH):
+  813: def test_the_endpoint_is_reachable_at_the_canonical_path(self):
+NONCE_END=P6G6

@@ -1,0 +1,573 @@
+========================================================================================================
+REDIS lifecycle (newest)
+  PHASE11B_A23R_REDIS_LIFECYCLE_READINESS.md   (24181 B, 419 lines, mtime 10-11 12:37)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-A23R — Redis Pool Lifecycle Repair (G1/G2/G3): Authorization Gate and Readiness
+    **STATUS: STOPPED AT THE PHASE 1 AUTHORIZATION GATE. NO PRODUCTION CODE WAS CHANGED. NO TEST FILE WAS CREATED.**
+    **Live trading remains OFF / NOT CERTIFIED.** Nothing in this report changes that, and nothing in
+    this report was committed or pushed.
+    Approval **A** (edit `backend_app/backend/redis_manager.py`, changes 1–4 of §6) and approval **B**
+    (create `tests/test_a23_redis_pool_lifecycle.py`) are both **NOT GRANTED**. The brief conditions
+    implementation on both being explicitly present in an authoritative record. They are not. Per the
+    brief's instruction — "If either A or B is not explicitly granted, do not edit production code or
+    create the test file" — this report is the deliverable and the work stops here.
+  -- approval-state lines (22) --
+    L9     (create `tests/test_a23_redis_pool_lifecycle.py`) are both **NOT GRANTED**. The brief conditions
+    L11    brief's instruction — "If either A or B is not explicitly granted, do not edit production code or
+    L20    | 1 | A and B are both **NOT GRANTED**. The target file is recorded as **UNOWNED**, so there is not even an iden
+    L35    | **A** | Implement changes 1–4 of §6 in `backend_app/backend/redis_manager.py` | **NOT GRANTED** | No grant exi
+    L36    | **B** | Create `tests/test_a23_redis_pool_lifecycle.py` | **NOT GRANTED** | Same. Independently nominated and 
+    L42    Every `GRANTED` token in `staging/PHASE11B_*.md` is one of exactly two things: the string
+    L43    `NOT GRANTED`, or a *request* for a grant. There are no affirmative grants for this change.
+    L46    affirmative-looking `GRANTED`, and **all 181 were false positives** — open-source licence texts,
+    L59    This is the harder half of the blocker. A missing approval can be obtained from a known owner. Here
+    L70    | `PHASE11B_A23_REDIS_LIFECYCLE_IMPLEMENTATION_REPORT.md` | 22:12:19 | 17 789 B | §6 rows 1–2 are **exactly** ap
+    L71    | `PHASE11B_A23B_REDIS_RECOVERY_COVERAGE.md` | 22:16:06 | 23 519 B | §2 row 1 "Pool lifecycle repair — G1/G2/G3 
+    L92    | 3 | `close()`'s changed contract becomes visible at `core/cache/redis_manager.py:619` | owner of `core/cache/r
+  -- status/verdict lines (14 shown of 24) --
+    L3     **STATUS: STOPPED AT THE PHASE 1 AUTHORIZATION GATE. NO PRODUCTION CODE WAS CHANGED. NO TEST FILE WAS CREATED.**
+    L5     **Live trading remains OFF / NOT CERTIFIED.** Nothing in this report changes that, and nothing in
+    L20    | 1 | A and B are both **NOT GRANTED**. The target file is recorded as **UNOWNED**, so there is not even an iden
+    L23    | 4 | The open `aclose()` floor question (sibling report's item 5, deferred to "A23R item 3") is **resolved**: n
+    L24    | 5 | G1, G2, G3 remain **reproduced, not fixed**. A23-01 remains **identified, not fixed**. R6 remains **OPEN**
+    L35    | **A** | Implement changes 1–4 of §6 in `backend_app/backend/redis_manager.py` | **NOT GRANTED** | No grant exi
+    L36    | **B** | Create `tests/test_a23_redis_pool_lifecycle.py` | **NOT GRANTED** | Same. Independently nominated and 
+    L70    | `PHASE11B_A23_REDIS_LIFECYCLE_IMPLEMENTATION_REPORT.md` | 22:12:19 | 17 789 B | §6 rows 1–2 are **exactly** ap
+    L71    | `PHASE11B_A23B_REDIS_RECOVERY_COVERAGE.md` | 22:16:06 | 23 519 B | §2 row 1 "Pool lifecycle repair — G1/G2/G3 
+    L81    **Coordination hazard, now closed:** that session nominated the identical test path
+    L92    | 3 | `close()`'s changed contract becomes visible at `core/cache/redis_manager.py:619` | owner of `core/cache/r
+    L93    | 4 | Rebuild semantics for the five `Depends(get_redis_manager)` handlers in `routers/exchange.py` | owner of t
+    L146   | 2 | A client is built and pinged before publication, and closed exactly once | **HALF-HELD** — build-and-ping-
+    L149   | 5 | `close()` is idempotent | **UNVERIFIED** — repeated `close()` is untested | HELD — change 3 |
+
+========================================================================================================
+REDIS consolidation
+  PHASE11B_A23C_REDIS_RECOVERY_CONSOLIDATION.md   (27726 B, 378 lines, mtime 10-10 22:19)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-A23C — Redis Recovery Consolidation and Approval Readiness
+    **INVESTIGATION ONLY. No production or test file was changed. No report owned by another session
+    was edited.** No Redis started, no database, exchange, network or CI contact. Nothing staged,
+    committed or pushed.
+    **Destination verified ABSENT immediately before writing.**
+    ---
+    ## 0. Headline
+  -- approval-state lines (14) --
+    L19    | 2 | `PHASE11B_A22V_REDIS_R6_VERIFICATION_AND_DESIGN.md` | 21:49 | option B **NOT GRANTED** |
+    L110   > §4: B-2′ … "Needs that owner's approval; A22 has already requested it and **has a `strict` xfail
+    L312   ## 7. Authorization — searched, and absent
+    L317   `A22V:332 | 2 | Approve option B in the same file | same | **NOT GRANTED**`.
+    L323   | **D-A23C-1** | **Approve P1** — pool lifecycle repair (items 1, 2, 3) in `backend_app/backend/redis_manager.py
+    L324   | **D-A23C-2** | **Approve P2** — loop-identity detection and rebuild in the same file | same | **NOT GRANTED** 
+    L325   | **D-A23C-3** | **Scope of P2: accessor-only, or extend to the proxy?** §4.1 recommends accessor-only now and a
+    L326   | **D-A23C-4** | **Approve P3** — runtime-health invalidation in `core/cache/redis_manager.py:753-1016` | **owne
+    L327   | **D-A23C-5** | **Approve P4** — cooldown reconciliation + locking the third `initialize()` caller | both owner
+    L328   | **D-A23C-6** | Real-Redis lane: local server (W1A **A-3**) or CI authorization | coordinator / release owner |
+    L329   | **D-A23C-7** | Create `tests/test_a23_redis_pool_lifecycle.py` and `tests/test_a23_redis_loop_identity.py` (ne
+    L330   | **D-A23C-8** | Acknowledge that `close()`'s new contract is observable from `core/cache/redis_manager.py:619` 
+  -- status/verdict lines (14 shown of 36) --
+    L11    ## 0. Headline
+    L16    | # | Report | Written | Verdict |
+    L19    | 2 | `PHASE11B_A22V_REDIS_R6_VERIFICATION_AND_DESIGN.md` | 21:49 | option B **NOT GRANTED** |
+    L30    **zero matches**. Nothing has been implemented by anyone.
+    L77    | # | Item | Status | Evidence | Fix location | Blocked by |
+    L79    | **1** | **G1 / F4** — failed `initialize()` leaks every client it built; the `except` at `:178-183` drops thre
+    L81    | **3** | **G3 / A23-01** — `close()` (`:215-224`) closes the clients but resets neither `_connected` nor the bi
+    L89    ### 2.1 What each item costs if left open
+    L94    | 3 | after shutdown, the app proceeds on closed clients and **cannot reconnect** — the dead path |
+    L127   **loop state** is not. No loop is closed; no second loop exists. A22's own exclusion table says so:
+    L134   **A22V already stated this**, in its own option B row: "Recovery from real connection loss |
+    L146   **Practical consequence:** two of the A23 brief's Phase 3 criteria ("the original closed-loop
+    L184   ### 3.3 CORRECTION 3 (to my own report 5) — the kill switch fails closed on read
+    L213   | T1 | Failure at the 1st / 2nd / 3rd client closes everything **that attempt** built, exactly once | **missing*
+
+========================================================================================================
+REDIS coverage
+  PHASE11B_A23B_REDIS_RECOVERY_COVERAGE.md   (23519 B, 378 lines, mtime 10-10 22:16)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-A23B — Redis Recovery Coverage and Authorization Reconciliation
+    **Destination check:** `staging/PHASE11B_A23B_REDIS_RECOVERY_COVERAGE.md` verified **ABSENT**
+    before writing. No existing report overwritten.
+    **READ-ONLY. No production edit, no test edit, no dependency change, no staging, no commit,
+    no push, no database or exchange call, no deployment.** Live trading **OFF / NOT CERTIFIED**.
+    ---
+    ## HEADLINE
+  -- approval-state lines (10) --
+    L13    **Every approval in this area is NOT GRANTED or UNCLEAR. Nothing is implementable today.**
+    L67    | 1 | **Pool lifecycle repair — G1 / G2 / G3** ("Step 0") | `backend/redis_manager.py` (clean) | that file's own
+    L68    | 2 | **Loop-identity recovery** (option B / B-2′) | same file | same | **NOT GRANTED** | A22V §5 row 2; A23 §2 
+    L69    | 3 | **Runtime-health invalidation in the core-cache proxy** (~25 handlers, `core/cache/redis_manager.py:753-10
+    L70    | 4 | **Cooldown behaviour changes** (A22 F5, the two-cooldown reconciliation) | both files | both owners | **NO
+    L73    Searched `staging/*.md` for a grant (`approv`, `APPROVED`, `GRANTED`, `Decision`). Every hit
+    L317   | **1** | Step 0 (G1/G2/G3) | `backend/redis_manager.py` owner | **NOT GRANTED** |
+    L319   | **3** | Option B | same owner | **NOT GRANTED** |
+    L320   | **4** | Option A — health invalidation in ~25 core-cache handlers | F5 owner | **NOT GRANTED — the R6 blocker*
+    L321   | **5** | Cooldown reconciliation | both | **NOT GRANTED** |
+  -- status/verdict lines (14 shown of 24) --
+    L11    ## HEADLINE
+    L13    **Every approval in this area is NOT GRANTED or UNCLEAR. Nothing is implementable today.**
+    L51    | `tests/test_redis_debounce.py` | ` M` | +225 / −0 | A22's. Hosts the R6 strict xfail. **Ownership recorded as 
+    L67    | 1 | **Pool lifecycle repair — G1 / G2 / G3** ("Step 0") | `backend/redis_manager.py` (clean) | that file's own
+    L68    | 2 | **Loop-identity recovery** (option B / B-2′) | same file | same | **NOT GRANTED** | A22V §5 row 2; A23 §2 
+    L69    | 3 | **Runtime-health invalidation in the core-cache proxy** (~25 handlers, `core/cache/redis_manager.py:753-10
+    L70    | 4 | **Cooldown behaviour changes** (A22 F5, the two-cooldown reconciliation) | both files | both owners | **NO
+    L71    | 5 | **Test-file ownership / creation** | `tests/test_redis_debounce.py` | A22 session | **UNCLEAR — "open"** |
+    L164   | **B-ii — stale bindings are handed out** | Resolution returns a **bound method**, possibly bound to `_cache` i
+    L220   | **Cross-loop reuse** | A19 CI webhook setup errors — `Cache SET failed … Event loop is closed` | **option B** 
+    L222   | **Shutdown-then-reuse (G3)** | closed clients handed out as healthy | **Step 0** `close()` half |
+    L246   | 1 | **Failed init closes all three locally created clients** (G1) | **none** — A22V proved the leak by probe, 
+    L317   | **1** | Step 0 (G1/G2/G3) | `backend/redis_manager.py` owner | **NOT GRANTED** |
+    L319   | **3** | Option B | same owner | **NOT GRANTED** |
+
+========================================================================================================
+REDIS loop identity
+  PHASE11B_A23_REDIS_LOOP_IDENTITY_REPORT.md   (19047 B, 303 lines, mtime 10-10 22:08)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-A23 — Redis Loop Identity (B-2′): Approval Gate — INVESTIGATION ONLY
+    **STATUS: STOPPED AT THE PHASE 1 APPROVAL GATE. NO IMPLEMENTATION WAS PERFORMED.**
+    No production code, no test, no config and no existing report was modified. No Redis server was
+    started, no database, exchange or network call was made, no CI was triggered. Nothing staged,
+    committed or pushed.
+    **Entry 2026-10-10 · destination verified ABSENT immediately before writing.**
+    **The headline is not the missing approval — it is that the approval being sought is for a change
+    that cannot satisfy its own stated verification criterion.** §4.1. Two prior reports disagree about
+  -- approval-state lines (8) --
+    L11    **The headline is not the missing approval — it is that the approval being sought is for a change
+    L17    ## 1. Phase 1 verdict — approval ABSENT, from three independent records
+    L24    | `PHASE11B_A21_REDIS_LOOP_LIFECYCLE_REPORT.md` §1 — titled **"Authorization and ownership gate — FAILED"** | "*
+    L26    | `PHASE11B_A22V_REDIS_R6_VERIFICATION_AND_DESIGN.md` §Decisions, row 2 | "Approve **option B** in the same file
+    L27    | `PHASE11B_A23_REDIS_POOL_LIFECYCLE_READINESS.md` (**concurrent session, 22:02 today**) §8 row 1 | "Implement S
+    L210   `core/cache/redis_manager.py:753-1016` (A22V decision 3, **NOT GRANTED**, and that file is dirty).
+    L277   | **A23L-1** | Approve loop-identity detection and rebuild in `backend_app/backend/redis_manager.py` (= A21 R1 =
+    L278   | **A23L-2** | Approve a **new** test file (e.g. `tests/test_a23_redis_loop_identity.py`) — `tests/test_redis_de
+  -- status/verdict lines (14 shown of 21) --
+    L3     **STATUS: STOPPED AT THE PHASE 1 APPROVAL GATE. NO IMPLEMENTATION WAS PERFORMED.**
+    L11    **The headline is not the missing approval — it is that the approval being sought is for a change
+    L17    ## 1. Phase 1 verdict — approval ABSENT, from three independent records
+    L24    | `PHASE11B_A21_REDIS_LOOP_LIFECYCLE_REPORT.md` §1 — titled **"Authorization and ownership gate — FAILED"** | "*
+    L26    | `PHASE11B_A22V_REDIS_R6_VERIFICATION_AND_DESIGN.md` §Decisions, row 2 | "Approve **option B** in the same file
+    L27    | `PHASE11B_A23_REDIS_POOL_LIFECYCLE_READINESS.md` (**concurrent session, 22:02 today**) §8 row 1 | "Implement S
+    L61    | `tests/test_redis_debounce.py` | **` M` dirty, 329 lines** | A22V §Decisions row 5: "Who owns `tests/test_redi
+    L152   **Consequence: B-2′ implemented in `get_redis_manager()` would leave the kill switch, audit trail,
+    L177   #            raise RuntimeError("Event loop is closed")
+    L197   **A22V already said this, in its own Option B assessment:**
+    L229   | "the original closed-loop failure is reproduced by the contract before the fix" | **Not by `test_r6_d`** — it 
+    L231   | "repeated access on the same live loop does not rebuild unnecessarily" | yes — the negative control A22V §321-
+    L232   | "a different or closed loop cannot reuse an invalid client/pool" | yes, **at `get_redis_manager()` only** — no
+    L277   | **A23L-1** | Approve loop-identity detection and rebuild in `backend_app/backend/redis_manager.py` (= A21 R1 =
+
+========================================================================================================
+QUOTA-01 (newest)
+  PHASE11B_A20Q_QUOTA_REFUSAL_AND_LOOP_LIFECYCLE.md   (17582 B, 314 lines, mtime 10-10 21:32)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-A20 — Quota Refusal Semantics and Async Redis Lifecycle
+    > **Output path.** The prescribed destination
+    > `staging/PHASE11B_A20_DEFECT_REMEDIATION_READINESS.md` was **absent at preflight and
+    > occupied by the time I came to write** (30,461 B, `10-10 21:20:42`, another session).
+    > Per the brief I did not overwrite it and used this explicitly reported alternative:
+    > **`staging/PHASE11B_A20Q_QUOTA_REFUSAL_AND_LOOP_LIFECYCLE.md`** (confirmed absent).
+    **Outcome.** Workstream A (quota refusal semantics) is **FIXED and tested** in a file with
+    clear sole ownership. Workstream B (async Redis lifecycle) is **ROOT-CAUSED but NOT
+    CHANGED** — every candidate target belongs to another workstream, so it stops at a
+    coordination request, as instructed.
+  -- approval-state lines (0) --
+  -- status/verdict lines (13 shown of 13) --
+    L20    | Async lifecycle | **ROOT-CAUSED. NOT FIXED.** Blocked on cross-workstream ownership |
+    L22    | QUOTA-01 | **OPEN** |
+    L23    | TENANT-01 | **OPEN** |
+    L24    | Live trading | **OFF / NOT CERTIFIED** |
+    L182   **fresh function-scoped loop** and the previous one is closed. Every call after the first
+    L194   | Case | Verdict |
+    L210   | **B-2** | `backend_app/core/cache/redis_manager.py` (owner: F5 workstream) | On use, detect a client whose loo
+    L267   | **B-2** | *(alternative)* closed/foreign-loop detection in the manager | F5 / `cache/redis_manager.py` owner |
+    L299   | **Quota correctness** | Two defects fixed in `reserve_quota`: the refusal transient and the fail-open unmeasur
+    L300   | **Async lifecycle** | **NOT FIXED.** Cause established as the `SharedRedisManager` singleton's loop-bound clie
+    L302   | **QUOTA-01** | **OPEN.** Production-path quota enforcement now has a corrected refusal contract but no real-Re
+    L303   | **TENANT-01** | **OPEN** |
+    L304   | **Live trading** | **OFF / NOT CERTIFIED** |
+
+========================================================================================================
+TENANT-01 (newest)
+  PHASE11B_TENANT01_U4_U6_INVESTIGATION_REPORT.md   (26577 B, 388 lines, mtime 10-10 20:09)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B — TENANT-01 U4–U6 read-only investigation
+    **READ-ONLY. No source, migration, test, role, grant, configuration or register edited. No
+    database or Redis contacted. Nothing staged, committed or pushed. One new artifact: this report.**
+    **Status preserved: TENANT-01 OPEN · QUOTA-01 OPEN · PostgreSQL enforcement UNEXECUTED · live
+    trading OFF / NOT CERTIFIED.**
+    Predecessor (not reproduced here): `staging/PHASE11B_TENANT01_FAST_COORDINATION_REPORT.md`.
+    **All three uncertainties are resolved, and two produce findings that are worse than recorded:**
+  -- approval-state lines (6) --
+    L19    recorded, owner earning recorded, buyer never granted access, webhook reports success.
+    L205   | 4 | `deployment_permissions` | **INSERT** (`grant_deployment_permission`, `:617`) | granted_via=`subscription`
+    L208   **Order is deliberate and documented:** money is recorded (step 2) **before** anything is granted
+    L221   `transition_written`, `entitlement_granted`, `period_start`, `period_expiry`, `from_status`,
+    L259   > recorded payment that never granted anything — which is worse than the failure it was recovering
+    L272   90% earning, `library_subscriptions` is never activated, `deployment_permissions` is never granted,
+  -- status/verdict lines (12 shown of 12) --
+    L6     **Status preserved: TENANT-01 OPEN · QUOTA-01 OPEN · PostgreSQL enforcement UNEXECUTED · live
+    L25    | property | prior | measured now | verdict |
+    L55    | A2 | `backend_app/backend/state_persistence.py:524` | `Base.metadata.create_all(self.engine)` inside its own i
+    L59    ### 2.2 Sibling trees — present, and their deployment status is unresolved
+    L68    **Marked unresolved.** If any is deployed, A1's remediation must be applied there too. This is a
+    L205   | 4 | `deployment_permissions` | **INSERT** (`grant_deployment_permission`, `:617`) | granted_via=`subscription`
+    L208   **Order is deliberate and documented:** money is recorded (step 2) **before** anything is granted
+    L298   | **process death between step 2 and step 4 (CD-8)** | **NO** | **no test constructs a fresh `_Attempt` against 
+    L305   ### 4.6 Unresolved in U6
+    L316   ## 5. Unresolved owner decisions and evidence needed
+    L325   | **D4** | **gate `create_all`** | **O3** | **U4: 4 direct sites; 93 indirect; 25 candidate dependants; 3 siblin
+    L337   | **1** | **Open CD-8** (settlement partial completion) and decide whether a reconciliation sweep for settled-bu
+
+========================================================================================================
+TENANT-01 coordination
+  PHASE11B_TENANT01_FAST_COORDINATION_REPORT.md   (31307 B, 480 lines, mtime 10-10 19:44)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B — TENANT-01 fast coordination and implementation readiness
+    **READ-ONLY. No source file edited, no migration touched, no database connected to, no role or
+    grant changed, nothing staged, committed or pushed. One new artifact: this report.**
+    **Final status carried forward: TENANT-01 OPEN · CD-4 / CD-5 / CD-7 PROPOSED (pending register
+    owner) · PostgreSQL lane UNEXECUTED · QUOTA-01 OPEN · live trading OFF / NOT CERTIFIED.**
+    **Recommendation up front: OPTION 3 — defer implementation, resolve D1 first.** The reason is
+    specific and is the main finding of this phase: **the clean file is not the right place to wire the
+    GUC, and the right place is not clean.**
+  -- approval-state lines (1) --
+    L369   | **D7** | Which isolated PostgreSQL lane and scope are authorized — and may O5's shared `staging/pgdata_r1` be 
+  -- status/verdict lines (10 shown of 10) --
+    L6     **Final status carried forward: TENANT-01 OPEN · CD-4 / CD-5 / CD-7 PROPOSED (pending register
+    L20    | property | prior comparison point | measured now | verdict |
+    L150   | R4 | `routers/strategies.py:983` | `last_execution_at` read helper; already guards `user_id` is a tenant UUID 
+    L367   | **D5** | Authorize table-by-table `FORCE ROW LEVEL SECURITY` **after** prerequisites pass? | **O4** | a new mi
+    L368   | **D6** | Authorize billing webhook remediation (CD-3 / CD-4 / CD-5) in `routers/billing.py`? | **O3** | `route
+    L369   | **D7** | Which isolated PostgreSQL lane and scope are authorized — and may O5's shared `staging/pgdata_r1` be 
+    L380   | **1 — wire one request endpoint via O1's helper** | **technically correct, ownership-blocked** | R1 (`billing.
+    L381   | **2 — modify the clean `database_pool.py`** | **available but technically wrong** | The file is clean on both 
+    L382   | **3 — defer and resolve ownership** | **RECOMMENDED** | The clean file is the wrong place; the right place is 
+    L453   | property | Phase 0 | exit | verdict |
+
+========================================================================================================
+CD-8 gate
+  PHASE11B_U9_CD8_AUTHORIZATION_GATE_AND_SCHEMA_FINDINGS.md   (19341 B, 270 lines, mtime 10-10 21:58)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-U9 — CD-8 Authorization Gate, and Four Schema Findings That Change the Plan
+    **Outcome: STOPPED at the Phase 1 decision gate. Both D8(a) and D8(b) are absent.** No source,
+    test, register or existing artifact was modified. No database, Redis or provider connection was
+    made. Nothing staged, committed or pushed.
+    **This is not an implementation report.** It exists because Phase 2 asks for the missing decision
+    plus "any new technical findings that materially change the previous plan," and this phase found
+    four of them — one of which inverts a load-bearing assumption in the U7 design.
+    ---
+  -- approval-state lines (3) --
+    L157   `uq_deployment_permissions`' `23505` as "already granted." A helper keyed on that name would
+    L177   * Snapshot columns: `expires_at, granted_at, granted_via, id, is_active, library_id, revoked_at,
+    L213   If D8(b) is granted, three changes to the U7 §5.2 design are now mandatory:
+  -- status/verdict lines (5 shown of 5) --
+    L22    | `staging/PHASE11B_A17_APPROVAL_RECONCILIATION__claude_session.md` | the repo's only approval matrix. Covers it
+    L163   **The correct shape is already in the codebase.** `_is_duplicate_reference`
+    L235   | **Q14** | Is `022_fix_library_subscriptions_updated_at.sql` applied, and does `library_subscriptions` have an 
+    L263   **CD-8: OPEN / PROPOSED.** Not accepted, not implemented, not closed. Unit-test evidence does not
+    L268   **UNEXECUTED** · live trading **OFF / NOT CERTIFIED**. No completion percentage revised.
+
+========================================================================================================
+CD-8 recovery
+  PHASE11B_U7_CD8_CRASH_RECOVERY_READINESS.md   (50243 B, 721 lines, mtime 10-10 20:48)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-U7 — CD-8 Settlement Crash-Recovery Verification
+    **Scope:** read-only investigation of the proposed CD-8 defect (marketplace settlement partial
+    completion), establishment of the exact recovery failure boundary, a regression-test plan against
+    existing seams, and a ranked remediation comparison.
+    **Status of this document:** evidence and design options only. No source, migration, schema, role,
+    grant, register or baseline was modified. No database or Redis connection was made. No test was
+    executed. Nothing was staged, committed or pushed.
+    **Carried forward unchanged:** TENANT-01 OPEN · QUOTA-01 OPEN · PostgreSQL enforcement UNEXECUTED ·
+    live trading OFF / NOT CERTIFIED. CD-7's live `billing_invoices` schema uncertainty continues to
+  -- approval-state lines (6) --
+    L293   | **Renewal** (`active → active`) | `trg_subscription_transition_guard` branch 1 (`008:1839-1841`, `IS NOT DISTI
+    L381   `len(grant.calls) == 1` cannot distinguish "granted once on delivery 1" from "granted zero times
+    L402   | T4 | W4 — crash after grant, before audit | plant all four rows | `DUPLICATE_IGNORED`; all four rows intact an
+    L408   | T10 | entitlement already granted | plant all rows **including** the permission row, with the history row miss
+    L459   **Reads needed.** Both new SELECTs are indexed and granted: `idx_lib_sub_transitions` on
+    L472   granted" (§3.5). That is a deliberate behaviour change to `grant_deployment_permission`, needing
+  -- status/verdict lines (14 shown of 16) --
+    L11    **Carried forward unchanged:** TENANT-01 OPEN · QUOTA-01 OPEN · PostgreSQL enforcement UNEXECUTED ·
+    L21    | Invariant | U4–U6 recorded value | U7 entry (measured) | Verdict |
+    L186   ### 3.1 Verdict
+    L193   ### 3.2 The already-realized instance — BUG-056
+    L292   | **Reversal** (`→ refunded`) | `(ref, TRUE)` is a distinct key, so the reversal insert is not blocked by the pa
+    L293   | **Renewal** (`active → active`) | `trg_subscription_transition_guard` branch 1 (`008:1839-1841`, `IS NOT DISTI
+    L294   | **Concurrent deliveries** | **already correct.** The losing writer's insert hits `23505` with `resumed=False` 
+    L299   ### 3.7 Separating confirmed from unverified
+    L322   **Unverified against the live database (requires D7):**
+    L349   | plant an already-committed ledger row | `FakeSupabase(settlements=[...])` — kwarg at `tests/test_settlement_se
+    L408   | T10 | entitlement already granted | plant all rows **including** the permission row, with the history row miss
+    L459   **Reads needed.** Both new SELECTs are indexed and granted: `idx_lib_sub_transitions` on
+    L471   **Idempotency.** Requires step 4 to treat `uq_deployment_permissions`' `23505` as "already
+    L475   **Reversal/renewal.** Compatible. The reversal probe is "is `status` already `refunded`"; the
+
+========================================================================================================
+W1C-02 classifier (newest)
+  PHASE11B_W1D10_CLASSIFIER_IMPLEMENTATION_READINESS.md   (27784 B, 458 lines, mtime 10-11 12:32)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B / W1D-10 — Classifier Implementation Readiness and Authorization Gate
+    **Date:** 2026-10-10
+    **Destination verified ABSENT before writing.** No existing report or artifact was overwritten.
+    ## STATUS: **IMPLEMENTATION-READY PLAN. AUTHORIZATION ABSENT. NOTHING IMPLEMENTED.**
+    No code, test, migration, snapshot, shared configuration or other workstream's artifact was
+    changed. No database or Redis connection, no snapshot recapture, no staging, commit, push or
+    CI trigger. **AP-W1D-3 remains NOT GRANTED**, rechecked against the authoritative record.
+    | | |
+  -- approval-state lines (9) --
+    L6     ## STATUS: **IMPLEMENTATION-READY PLAN. AUTHORIZATION ABSENT. NOTHING IMPLEMENTED.**
+    L10    CI trigger. **AP-W1D-3 remains NOT GRANTED**, rechecked against the authoritative record.
+    L15    | AP-W1D-3 | **NOT GRANTED** |
+    L330   None of these is granted. A specification recommendation is not a decision.
+    L340   | **AP-W1D-3** | Implement the 4-way drift classification + the 10 regression tests | Code owner | **NOT GRANTED
+    L351   AP-W1D-1 through AP-W1D-5 are all recorded NOT GRANTED in the same table.
+    L360   > **AP-W1D-3 granted** for `scripts/verify_provisioning.py` (add `WHOLE_ROW`,
+    L449   | **AP-W1D-3** | **NOT GRANTED** — rechecked; no commit, no record, no supersession |
+    L451   | **D1 / D2 / D4 / D5** | **UNRESOLVED** — recommendations recorded, none granted |
+  -- status/verdict lines (14 shown of 25) --
+    L6     ## STATUS: **IMPLEMENTATION-READY PLAN. AUTHORIZATION ABSENT. NOTHING IMPLEMENTED.**
+    L14    | W1C-02 | **OPEN** |
+    L15    | AP-W1D-3 | **NOT GRANTED** |
+    L16    | TENANT-01 / QUOTA-01 | **OPEN** |
+    L18    | Live trading | **OFF / NOT CERTIFIED** |
+    L22    ## HEADLINE
+    L166   - **`diff_snapshots()` is already less wrong than `compare()` on the multiplicity case**,
+    L185   **Option 2 — repair `compare()` only, track the other two as open defects.** Viable and
+    L196   **Scope status: `UNRESOLVED`.** No owner decision exists (§6). The above is a recommendation.
+    L200   ## 3. Output and verdict decision matrix
+    L223   | 14 | **Summary marker vs detail** | — | per-dimension marker must equal the detail verdict | — | — | `test_the
+    L320   ## 5. Unresolved owner decisions
+    L324   | **D1** | **Ambiguous-key findings: hard failure or advisory?** | hard failure with a distinct label / advisory
+    L325   | **D2** | **Reordered-identical rows: keep today's hard failure, or treat as clean?** | keep / change to clean 
+
+========================================================================================================
+W1C-02 remediation
+  PHASE11B_W1D07_W1C02_REMEDIATION_REPORT.md   (18792 B, 328 lines, mtime 10-10 21:30)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B / W1D-07 — W1C-02 Drift Comparison Remediation
+    **Date:** 2026-10-10
+    **Destination verified ABSENT before writing.** No existing report or artifact was overwritten.
+    ## STATUS: **BLOCKED — stopped at the preflight authorization gate, before any edit**
+    **No source file, test, snapshot, migration or configuration was modified.** The preflight
+    required by §1 of the brief found that the authorization this phase depends on is **explicitly
+    recorded as NOT GRANTED**, so §1's stop condition applies and implementation was not begun.
+    | | |
+  -- approval-state lines (15) --
+    L10    recorded as NOT GRANTED**, so §1's stop condition applies and implementation was not begun.
+    L14    | AP-W1D-3 (implement the classification) | **NOT GRANTED** — explicit negative on record |
+    L26    The brief states: *"Stop without editing if authorization is absent… Do not infer approval
+    L36    | **AP-W1D-1** | Evaluate per-statement completeness predicates for 022–025 …  | DB owner  | **NOT GRANTED** |
+    L37    | **AP-W1D-2** | Insert 4 ledger rows for migrations verified FULLY APPLIED …  | DB owner  | **NOT GRANTED** |
+    L39    tests (§3.5–3.6)                                             | Code owner | **NOT GRANTED** |
+    L40    | **AP-W1D-4** | Add the `_provenance` envelope and recapture the snapshot    | DB + code  | **NOT GRANTED** |
+    L41    | **AP-W1D-5** | Install `pgserver`; create the isolated cluster and role     | Coord + DB | **NOT GRANTED** |
+    L56    | Repository-wide `GRANTED` scan (all `.md/.txt/.json/.yml`, excluding vendor dirs) | 181 affirmative lines, **a
+    L60    `staging/w1d07_grant_check.py` printed *"181 affirmative 'GRANTED' line(s) found"* because it
+    L61    classified any `GRANTED` not adjacent to `NOT` as affirmative. That heuristic is too coarse
+    L78    Even if AP-W1D-3 were granted, two of the brief's own prerequisites remain unresolved:
+  -- status/verdict lines (14 shown of 22) --
+    L6     ## STATUS: **BLOCKED — stopped at the preflight authorization gate, before any edit**
+    L14    | AP-W1D-3 (implement the classification) | **NOT GRANTED** — explicit negative on record |
+    L17    | W1C-02 | **OPEN** — reproduced (W1D-06), specified, **not implemented** |
+    L19    | PostgreSQL catalog correctness / live DB verification | **NOT CLAIMED, NOT PERFORMED** |
+    L20    | TENANT-01 / QUOTA-01 / D5 Redis / live trading | **untouched** · live trading **OFF / NOT CERTIFIED** |
+    L36    | **AP-W1D-1** | Evaluate per-statement completeness predicates for 022–025 …  | DB owner  | **NOT GRANTED** |
+    L37    | **AP-W1D-2** | Insert 4 ledger rows for migrations verified FULLY APPLIED …  | DB owner  | **NOT GRANTED** |
+    L40    | **AP-W1D-4** | Add the `_provenance` envelope and recapture the snapshot    | DB + code  | **NOT GRANTED** |
+    L41    | **AP-W1D-5** | Install `pgserver`; create the isolated cluster and role     | Coord + DB | **NOT GRANTED** |
+    L56    | Repository-wide `GRANTED` scan (all `.md/.txt/.json/.yml`, excluding vendor dirs) | 181 affirmative lines, **a
+    L59    **Methodological note on my own tooling:** the automated verdict line in
+    L70    | `PHASE11B_W1D_LEDGER_AND_DRIFT_READINESS.md` | 567, 837, 932 | *"remains OPEN… analysis and a design, not an i
+    L71    | `PHASE11B_W1D05_STATIC_GUARDS_REPORT.md` | 281 | *"OPEN pending implementation and regression evidence — the c
+    L72    | `PHASE11B_W1D06_W1C02_REMEDIATION_READINESS.md` | 15, 443, 446 | *"OPEN — reproduced, remediation specified, n
+
+========================================================================================================
+W1D static drift guards
+  PHASE11B_W1D08_STATIC_DRIFT_GUARDS_REPORT.md   (19337 B, 373 lines, mtime 10-10 21:53)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B / W1D-08 — Static Drift Guards: Verification Only, No New Tests Needed
+    **Date:** 2026-10-10
+    **Destination verified ABSENT before writing.** No existing report or artifact was overwritten.
+    ## STATUS: **COMPLETE AS A VERIFICATION. NO FILE WAS CREATED OR EDITED.**
+    Both static invariants are **already covered** by `tests/test_snapshot_dimension_invariants.py`
+    (W1D-05). The brief's §3 instruction — *"First determine whether existing tests already cover
+    either invariant. Add no redundant tests"* — is the operative one: writing a new test file
+    would have duplicated working coverage. Coverage was verified rather than assumed, including
+    by mutation.
+  -- approval-state lines (8) --
+    L17    | **B — explicit classification decision** | **ALREADY COVERED, BUT AGAINST A TEST-LOCAL DECLARATION.** The prod
+    L21    | AP-W1D-3 | **NOT GRANTED** — unchanged by this phase |
+    L105   - **AP-W1D-3: NOT GRANTED.** `staging/PHASE11B_W1D_LEDGER_AND_DRIFT_READINESS.md:802`, in a
+    L252   The brief forbids it: *"Since AP-W1D-3 is not granted, do not add a production key map just to
+    L300   | Production key map added | **no** — forbidden while AP-W1D-3 is NOT GRANTED |
+    L332   implementable only once AP-W1D-3 is granted, and are recorded so the work is not re-derived:
+    L341   also NOT GRANTED).
+    L361   | **AP-W1D-3** | **NOT GRANTED** — unchanged |
+  -- status/verdict lines (14 shown of 21) --
+    L6     ## STATUS: **COMPLETE AS A VERIFICATION. NO FILE WAS CREATED OR EDITED.**
+    L16    | **A — deterministic ordering** | **ALREADY COVERED AND VERIFIED.** 6 tests, mutation-proven non-vacuous. Not a
+    L17    | **B — explicit classification decision** | **ALREADY COVERED, BUT AGAINST A TEST-LOCAL DECLARATION.** The prod
+    L21    | AP-W1D-3 | **NOT GRANTED** — unchanged by this phase |
+    L22    | W1C-02 | **OPEN** — drift-classification defect **not fixed** |
+    L24    | TENANT-01 / QUOTA-01 | **OPEN** |
+    L26    | Live trading | **OFF / NOT CERTIFIED** |
+    L105   - **AP-W1D-3: NOT GRANTED.** `staging/PHASE11B_W1D_LEDGER_AND_DRIFT_READINESS.md:802`, in a
+    L118   ## 3. Invariant A — deterministic ordering: ALREADY COVERED AND VERIFIED
+    L196   **Verdict: invariant A is already covered, strong, and non-vacuous. No new test is warranted.**
+    L207   | `test_a_declared_key_is_whole_row_or_a_valid_width` | each value is the `WHOLE_ROW` sentinel or an in-range wi
+    L230   - **A test-local duplicate already exists**, created by W1D-05 at
+    L245   **Verdict: invariant B is covered as a decision gate; its production-linked form is NOT
+    L300   | Production key map added | **no** — forbidden while AP-W1D-3 is NOT GRANTED |
+
+========================================================================================================
+Watchdog
+  PHASE11B_D5_WATCHDOG_REPAIR_REPORT.md   (29672 B, 526 lines, mtime 10-10 21:41)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-D5 — Watchdog Adjudication Repair (W-1 / W-2)
+    **W-1 FIXED · W-2 FIXED · W-2b FIXED (a third defect in the same block, found while
+    fixing W-2) · W-1b FOUND AND NOT FIXED — it blocks the benefit of W-1 and is outside this
+    phase's authorisation.**
+    Two files changed: `backend_app/backend/order_watchdog.py` (+143 / −9 attributable) and a
+    new `tests/test_d5_watchdog_adjudication_repair.py` (18 tests). No status, no migration, no
+    venue policy, no commit. **Live trading remains OFF / NOT CERTIFIED.**
+    ---
+  -- approval-state lines (0) --
+  -- status/verdict lines (11 shown of 11) --
+    L108   ### 2.2 W-2 — a persistence call with no implementation
+    L211   - **No new abstraction.** `_update_order_from_status` in this same class already persists
+    L273   | W-1 behaviour: lookup reached; confirmed order; `not_found`; inconclusive; no venue id; still open; missing ex
+    L447   | # | Requirement from the brief | Evidence | Verdict |
+    L450   | 2 | Smallest correct change consistent with the async architecture | Three `await`s removed; method left `def`
+    L461   | 13 | A fresh session can read the result after commit | second independent session over file-backed SQLite; re
+    L463   | 15 | Not assuming an ORM assignment equals a commit | the fresh-session reads are the whole point; §4.1 explai
+    L465   | 17 | W-3/W-4/W-5, venue policy, new status, migration not implemented | §5 | **MET** |
+    L466   | 18 | Adjudication works end to end in production | **NOT MET — W-1b (§2.4).** Out of this phase's authorisatio
+    L502   **W-4 and W-5 remain blocked** and their order is unchanged from D4 §6: W-5 (widening
+    L518   | 7 | Venue-side duplicate rejection unverified on all six venues | P1 | coordinator + risk | Unchanged; no sand
+
+========================================================================================================
+DUP-02 recovery
+  PHASE11B_D4_DUP02_RECOVERY_READINESS.md   (47756 B, 702 lines, mtime 10-10 20:55)
+========================================================================================================
+  -- opening 12 lines --
+    # Phase 11B-D4 — DUP-02 Recovery and Launch-Gate Readiness
+    **Read-only audit. No production code, schema, test, baseline, credential, allowlist or
+    CCXT change was made. No commit, push, CI dispatch or Git mutation. No venue was
+    contacted. No database was migrated or mutated.**
+    **Live trading: OFF / NOT CERTIFIED.**
+    Headline: the D3 guard holds, and the audit found **four defects more serious than the gap
+    it was commissioned to close**. Three are in `OrderWatchdog` — the component D3 named as the
+    single owner of adjudication — and they mean that component cannot currently perform the
+    recovery the D3 report relies on. One is a correction to D3's own DUP-01 venue table.
+  -- approval-state lines (0) --
+  -- status/verdict lines (14 shown of 19) --
+    L7     **Live trading: OFF / NOT CERTIFIED.**
+    L202   | `resolve_stale_execution` (`:1488`) | pinned to `upper(status::text) = 'EXECUTING'` → no-op, logs "no longer E
+    L205   | `event_router._handle_filled/_cancelled/_rejected` (`:152/:218/:233`) | has no status filter, **but** finds th
+    L275   **Smallest safe design, recommended not implemented.** Fix A-1 and A-2 first — they are
+    L344   | Reporting | `get_stats` (`:1569-1595`) counts PENDING/EXECUTING/COMPLETED/FAILED plus `total_count`. **`UNKNOW
+    L346   | Accounting | `event_router.py:218` already conflates cancelled into `FAILED` with the in-code note `# Or a new
+    L429   **Fail-closed approach for coinbase and kraken, designed not implemented.** Neither venue
+    L444   | kraken | whether a non-numeric `userref` is accepted, coerced or rejected; and what `parse_order` echoes back 
+    L446   | bybit | the open/closed visibility window, since the direct lookup is unusable |
+    L463   | `contract._baseline_note_parameters_risk_verdict` | present, **byte-identical** (1609 chars) |
+    L527   | Idempotency fail-closed | `tests/test_idempotent_submission_fails_closed.py` |
+    L529   | Reconciliation fail-closed | `tests/test_p10d_exchange_reconciliation_fails_safely.py`, `tests/test_reconcilia
+    L578   | 9 | **A-5** refused rows in no recovery population | P1 | D3's known gap; blocked behind 1–3 |
+    L604   | **B-1r** | D-1 | `tests/regression/baseline/live_order_path.json` | **Ratify or revert** the D3 re-record | **
+
+========================================================================================================
+Launch gate register
+  PHASE11A_LAUNCH_GATE_REGISTER.md   (9128 B, 100 lines, mtime 10-10 13:53)
+========================================================================================================
+  -- opening 12 lines --
+    # PHASE 11A — LAUNCH GATE REGISTER
+    **Revision:** HEAD `074b772a` on `main`, working tree dirty.
+    **Date:** 2026-10-10.
+    **Scope:** restricted retail crypto SaaS launch. Three separate launch tracks: **paper**,
+    **live**, **production**. Every gate links to evidence; unknown stays unknown.
+    Severity: **P0** (money/safety, blocks any launch) · **P1** (blocks the stated track) ·
+    **P2** (should fix) · **INFO**.
+    ---
+  -- approval-state lines (2) --
+    L25    | **REFERRAL-PAYOUT-SCOPE** — payouts excluded from initial release and fail safe | P1 | **MET (excluded, fail-s
+    L82    | Billing-webhook service-role write on payload `user_id` | Requires forging a signed webhook (needs the shared 
+  -- status/verdict lines (14 shown of 14) --
+    L17    | **PAPER-SANDBOX-E2E** — a paper deployment's order path verified against a venue sandbox end-to-end | P1 | **B
+    L18    | **RECON-01** — venue↔internal order/fill reconciliation operational | P1 | **OPEN** (service not started; fail
+    L20    | **KILL-SWITCH** — re-read at venue boundary, fail-closed on Redis loss | P0 | **MET** (Phase 9) | `enforce_kil
+    L21    | **QUOTA-HARD-LIMIT** — plan/account limits cannot be exceeded concurrently | P1 | **MET (logic) / UNVERIFIED (
+    L26    | **TENANT-01** — tenant isolation | P1 (for prod), P2 (for restricted paper) | **OPEN** (architectural residual
+    L28    ## B. LIVE-TRADING GATES (status: OFF / NOT CERTIFIED — unchanged)
+    L33    | **SANDBOX-ORDER-FLOW** per routable venue | P0 | **BLOCKED (no creds)** | §A PAPER-SANDBOX-E2E |
+    L34    | **RECON-01 operational** | P0 | **OPEN** | §A |
+    L35    | **EXCH-01 bitget** | P0 | **MITIGATED** (blocked from routing; test red by upstream) | sandbox report §3 |
+    L36    | Live classification | — | **TRADING LIVE — OFF / NOT CERTIFIED** | formal status retained |
+    L38    ## C. PRODUCTION GATES (status: NOT CLASSIFIED)
+    L43    | **TENANT-01 FORCE RLS** | P0 | **OPEN** | §TENANT-01 |
+    L81    | RLS enabled-not-forced + owner-role ORM connection | Requires a code path that queries without a tenant filter
+    L82    | Billing-webhook service-role write on payload `user_id` | Requires forging a signed webhook (needs the shared 
+
+========================================================================================================
+Launch blocker register
+  PHASE11_LAUNCH_BLOCKER_REGISTER.md   (60423 B, 1124 lines, mtime 10-10 14:30)
+========================================================================================================
+  -- opening 12 lines --
+    # PHASE 11 — LAUNCH BLOCKER REGISTER
+    **Companion to:** [`PHASE11_LIVE_TRADING_READINESS_AUDIT.md`](PHASE11_LIVE_TRADING_READINESS_AUDIT.md)
+    **HEAD:** `074b772ab16cece62cbfca0f2b78497be2ae56d5` (`main`), working tree dirty (249 paths)
+    **Date:** 2026-10-10
+    **Live trading:** OFF / NOT CERTIFIED throughout
+    ---
+    ## How to read this register
+    - **Class** distinguishes four genuinely different things, because they need different
+  -- approval-state lines (1) --
+    L1120  `LIVE_TRADING_AUTHORIZED` was granted by the release gate rather than set in code.
+  -- status/verdict lines (14 shown of 15) --
+    L6     **Live trading:** OFF / NOT CERTIFIED throughout
+    L21    - An `UNVERIFIED` item is **not** a claim that the control is broken. It is a claim that
+    L80    ## P11-B02 — `clientOrderId` venue mapping is unverified, and it is the only venue-side duplicate defence
+    L85    | **Class** | DEFECT (unproven mechanism on the money path) |
+    L374   **The right behaviour is already built. It is wired to nothing.**
+    L628   | **Class** | UNVERIFIED |
+    L692   # UNVERIFIED CRITICAL CONTROLS
+    L700   | **Class** | UNVERIFIED |
+    L823   ## P11-H05 — Open positions are excluded from the exposure aggregate; stale rows stop counting
+    L907   **missing `aal` claim → 403** (fails closed), top-level `aal` honoured, no session → 401.
+    L998   **fail-closed rate-limit wiring assertion can be neutralised by collection order**, which
+    L1029  ## P11-H18 — Referral payout Redis lock fails open
+    L1040  **Acceptance:** the lock fails closed; balance arithmetic is `Decimal`; the PG-gated
+    L1068  | **P11-M05** | Plan downgrade does not reclaim already-stored exchange credentials — it blocks only the next ad
+
+========================================================================================================
+Readiness scorecard
+  PHASE11A_READINESS_SCORECARD.json   (8250 B, 82 lines, mtime 10-10 13:54)
+========================================================================================================
+  -- opening 12 lines --
+    {
+    "phase": "11A",
+    "generated_at_note": "Hand-authored from measured evidence; not machine-regenerated. Revision HEAD 074b772a on main,
+    "principle": "Implementation completeness (is the code there?) is scored SEPARATELY from evidence-backed launch read
+    "status_vocabulary": ["MET", "MET_BY_CONSTRUCTION", "PARTIAL", "OPEN", "BLOCKED_ON_CREDENTIAL", "BLOCKED_ON_INFRA", 
+    "weights": {
+    "note": "Weights are declared BEFORE any percentage is computed, per the brief. They are relative importance for a R
+    "paper_track_criteria": {
+    "kill_switch_fail_closed": 0.15,
+    "paper_live_isolation": 0.15,
+    "quota_hard_limit": 0.12,
+    "tenant_isolation_for_paper": 0.10,
+  -- approval-state lines (0) --
+  -- status/verdict lines (0 shown of 0) --

@@ -283,11 +283,10 @@ class TestPaymentSucceededNotification:
         )
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        # Search from checkout.session.completed with a large enough window
-        # The notification code is nested inside the entitlement try block
-        stripe_section_start = source.find("checkout.session.completed")
-        # Use 5000 chars to ensure we capture the nested notification dispatch
-        stripe_section = source[stripe_section_start:stripe_section_start + 5000]
+        # Bounded by the branch, not by a 5,000-character guess -- see
+        # `_stripe_branch_body`. The guess failed once the MONEY-07 currency guard was
+        # added ahead of the notification, while the dispatch itself was untouched.
+        stripe_section = _stripe_branch_body(source, "checkout.session.completed")
         assert "payment_succeeded" in stripe_section, (
             "Stripe checkout.session.completed handler must dispatch payment_succeeded notification"
         )
@@ -308,12 +307,7 @@ class TestPaymentSucceededNotification:
         # docstring, which records that entitlement is granted by this webhook and not by
         # signature verification, so a file-wide `find` locates that documentation instead of
         # this branch. The window and the assertions are unchanged.
-        handler_start = source.find("async def razorpay_webhook")
-        assert handler_start != -1, "razorpay_webhook handler not found in billing.py"
-        handler = source[handler_start:]
-        captured_at = handler.find("payment.captured")
-        assert captured_at != -1, "razorpay_webhook must handle payment.captured"
-        razorpay_section = handler[captured_at:captured_at + 2500]
+        razorpay_section = _razorpay_branch_body(source, "payment.captured")
         assert "payment_succeeded" in razorpay_section
         assert "Payment Successful" in razorpay_section
 
@@ -321,6 +315,90 @@ class TestPaymentSucceededNotification:
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Renewal: invoice.payment_succeeded handler
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+def _stripe_branch_body(source: str, event_type: str) -> str:
+    """The body of one `event["type"] == ...` branch, bounded STRUCTURALLY.
+
+    The two renewal tests below used `source[idx:idx + 3000]`, which is a distance
+    assertion wearing a presence assertion's clothes. Measured: at HEAD the renewal
+    notification title sat 2,832 characters from the anchor and the test passed; after the
+    remediation added explanatory comments to the same handler it sat at 3,101 and the
+    test failed -- while the notification itself was untouched and still dispatched
+    (`billing.py:2332`). The test was reporting a code-comment length, not a defect.
+
+    Widening the constant would postpone the same failure to the next edit. The branch
+    boundary is the real scope, so it is used instead: from this branch's `event["type"]`
+    comparison up to the next one.
+
+    Deliberately NOT relaxed to a file-wide search. The window exists so the string is
+    found in the RENEWAL handler and not somewhere else in a 147,000-character router --
+    `billing.py` really does contain `payment_succeeded` in an unrelated docstring, which
+    is why the sibling Razorpay test above already anchors on its handler first.
+    """
+    marker = f'event["type"] == "{event_type}"'
+    start = source.find(marker)
+    assert start != -1, f"no branch for {event_type!r} in billing.py"
+
+    # The next branch of the same dispatch, whichever form it takes.
+    rest = source[start + len(marker):]
+    candidates = [
+        rest.find('elif event["type"] =='),
+        rest.find('elif event["type"] in'),
+        rest.find('if event["type"] =='),
+    ]
+    candidates = [c for c in candidates if c != -1]
+    end = (start + len(marker) + min(candidates)) if candidates else len(source)
+    body = source[start:end]
+    assert len(body) > 200, (
+        f"the {event_type!r} branch resolved to {len(body)} characters, which is too "
+        f"short to be the handler -- the boundary search is wrong"
+    )
+    return body
+
+
+def _razorpay_branch_body(source: str, event_name: str) -> str:
+    """The body of one Razorpay `payload.get("event") == ...` branch, bounded structurally.
+
+    The Razorpay counterpart of :func:`_stripe_branch_body`, added for the same measured
+    reason and after the same failure mode recurred.
+
+    Four tests in this file anchored on `razorpay_webhook` and then took a fixed
+    `[idx:idx + 2500]` window -- an improvement on a file-wide search, because
+    `payment.captured` also appears in `verify_razorpay_payment`'s docstring, but still a
+    distance assertion. When the MONEY-06/MONEY-07 remediation added a currency guard and
+    an obligation write to this branch, `billing_invoices` and `payment_succeeded` moved
+    beyond 2,500 characters of the anchor and two of those tests failed -- while the
+    invoice insert and the notification dispatch were both still there and still ran.
+    That is the second time a fixed window in this file has reported a comment length as
+    a defect.
+
+    The branch boundary is the real scope, so it is used: from this branch's
+    `payload.get("event")` comparison to the next one. The scoping is NOT relaxed, because
+    the reason the window existed in the first place is still true.
+    """
+    handler_start = source.find("async def razorpay_webhook")
+    assert handler_start != -1, "razorpay_webhook handler not found in billing.py"
+    handler = source[handler_start:]
+
+    marker = f'payload.get("event") == "{event_name}"'
+    start = handler.find(marker)
+    assert start != -1, f"razorpay_webhook has no branch for {event_name!r}"
+
+    rest = handler[start + len(marker):]
+    candidates = [
+        rest.find('elif payload.get("event") =='),
+        rest.find('elif payload.get("event") in'),
+        rest.find('if payload.get("event") =='),
+    ]
+    candidates = [c for c in candidates if c != -1]
+    end = (start + len(marker) + min(candidates)) if candidates else len(handler)
+    body = handler[start:end]
+    assert len(body) > 200, (
+        f"the Razorpay {event_name!r} branch resolved to {len(body)} characters, which is "
+        f"too short to be the handler -- the boundary search is wrong"
+    )
+    return body
 
 
 class TestRenewalHandler:
@@ -345,8 +423,7 @@ class TestRenewalHandler:
         )
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        renewal_idx = source.index("invoice.payment_succeeded")
-        renewal_section = source[renewal_idx:renewal_idx + 3000]
+        renewal_section = _stripe_branch_body(source, "invoice.payment_succeeded")
         assert 'billing_invoices' in renewal_section
 
     def test_renewal_dispatches_notification(self):
@@ -358,10 +435,41 @@ class TestRenewalHandler:
         )
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        renewal_idx = source.index("invoice.payment_succeeded")
-        renewal_section = source[renewal_idx:renewal_idx + 3000]
+        renewal_section = _stripe_branch_body(source, "invoice.payment_succeeded")
         assert "subscription_renewed" in renewal_section
         assert "Subscription Renewed" in renewal_section
+
+    def test_the_branch_boundary_does_not_swallow_the_next_handler(self):
+        """CONTROL: the scoping must not be so wide that any assertion would pass.
+
+        If `_stripe_branch_body` ran to the end of the file, both tests above would pass
+        no matter what the renewal handler contained. So assert the boundary actually
+        stops: the renewal branch must NOT contain the payment-FAILED handler's
+        distinctive content, and vice versa.
+        """
+        import os
+        path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "backend_app", "routers", "billing.py"
+        )
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+
+        renewal = _stripe_branch_body(source, "invoice.payment_succeeded")
+        failure = _stripe_branch_body(source, "invoice.payment_failed")
+
+        assert "invoice.payment_failed" not in renewal, (
+            "the renewal branch body ran past its own boundary into the payment-failed "
+            "handler, so the renewal assertions prove nothing about the renewal handler"
+        )
+        assert "subscription_renewed" not in failure, (
+            "the payment-failed branch body includes the renewal notification, so the "
+            "boundary search is resolving the wrong region"
+        )
+        assert len(renewal) < len(source) // 2, (
+            f"the renewal branch resolved to {len(renewal)} of {len(source)} characters, "
+            f"which is not a single branch"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -428,9 +536,7 @@ class TestBillingInvoiceInserts:
         )
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        # Find checkout.session.completed section
-        cs_idx = source.find("checkout.session.completed")
-        cs_section = source[cs_idx:cs_idx + 2500]
+        cs_section = _stripe_branch_body(source, "checkout.session.completed")
         assert 'billing_invoices' in cs_section
         assert '"provider": "stripe"' in cs_section or "'provider': 'stripe'" in cs_section
 
@@ -443,14 +549,7 @@ class TestBillingInvoiceInserts:
         )
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        # Anchored on the handler first — see the note in
-        # TestPaymentSucceededNotification.test_razorpay_payment_succeeded_notification.
-        handler_start = source.find("async def razorpay_webhook")
-        assert handler_start != -1, "razorpay_webhook handler not found in billing.py"
-        handler = source[handler_start:]
-        rz_idx = handler.find("payment.captured")
-        assert rz_idx != -1, "razorpay_webhook must handle payment.captured"
-        rz_section = handler[rz_idx:rz_idx + 2500]
+        rz_section = _razorpay_branch_body(source, "payment.captured")
         assert 'billing_invoices' in rz_section
         assert '"provider": "razorpay"' in rz_section or "'provider': 'razorpay'" in rz_section
 

@@ -1,0 +1,57 @@
+NONCE=RUNH8
+
+=== 1. CALL SITES OF THE LIVE-TRADING GATES (comments/docstrings excluded) ===
+
+assert_safe_mode: 1 call site(s)
+    backend_app/main.py:0 in <module level>()
+
+check_execution_allowed: 6 call site(s)
+    backend_app/backend/dag_engine.py:1280 in execute()
+    backend_app/backend/dag_engine.py:1512 in execute()
+    backend_app/backend/dag_engine.py:4498 in execute_plan()
+    backend_app/routers/orders.py:808 in cancel_order()
+    backend_app/routers/orders.py:929 in cancel_all()
+    backend_app/routers/portfolio.py:292 in close_all_positions()
+
+enforce_kill_switch: 0 call site(s)
+    NONE -- this control is never invoked anywhere in backend_app/
+
+validate_safety_config_integrity: 0 call site(s)
+    NONE -- this control is never invoked anywhere in backend_app/
+
+=== 2. THE ORDER PATH, CHECKED FUNCTION BY FUNCTION ===
+(does this function reference a live-trading gate in EXECUTABLE code?)
+
+  backend_app/backend/master_executor.py:357 _inner_loop()
+      -> NO GATE REFERENCE
+  backend_app/core/execution_engine.py:434 execute_with_idempotency()
+      -> NO GATE REFERENCE
+  backend_app/core/execution_engine.py:815 _execute_trade_internal()
+      -> NO GATE REFERENCE
+  backend_app/backend/exchange_executor.py:747 place_order()
+      -> NO GATE REFERENCE
+
+ANY LIVE-TRADING GATE ON THE ORDER PATH: False
+
+=== 3. WHAT execute_with_idempotency ACTUALLY CHECKS ===
+    YES  assert_live_environment
+    YES  assert_simulation_environment_matches
+    YES  get_global_kill_switch
+    YES  is_active
+    YES  _validate_strategy_exists
+    YES  check_idempotent_execution
+    YES  claim_execution
+    YES  _execute_trade_internal
+    no   validate_trade
+    no   validate_trade_request
+    no   ExecutionGuard
+    no   check_execution_allowed
+    no   ExecutionFlags
+
+=== 4. CONCLUSION ===
+The live-trading gate is NOT on the order path.
+staging/verify_live_trading_off.py verified a control that cannot refuse an
+order placed by BotRunner. Its '5/5 REFUSED' is TRUE of the function it
+called and says NOTHING about whether a live order can be placed.
+
+NONCE_END=RUNH8

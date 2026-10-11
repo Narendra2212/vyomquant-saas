@@ -1,0 +1,82 @@
+==============================================================================================
+A. GIT STATE vs A15
+==============================================================================================
+  SAME       HEAD                 074b772ab16cece62cbfca0f2b78497be2ae56d5
+  SAME       origin/main          074b772ab16cece62cbfca0f2b78497be2ae56d5
+             branch               main
+  SAME       index CONTENT digest 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d
+  SAME       staged paths         22
+             worktree: 100 unstaged-modified, 136 untracked (dir-collapsed)
+             unmerged entries: 0 OK
+
+  staged paths:
+    .github/workflows/05-security.yml
+    .kiro/security-template.md
+    algo22-terminal/src/pages/ExchangeManager.jsx
+    backend_app/core/dependencies.py
+    backend_app/core/tenant_db_context.py
+    backend_app/routers/auth.py
+    backend_app/routers/exchange.py
+    docs/adr/ADR-0006-bridge-tenancy-with-institutional-silo-tier.md
+    docs/adr/ADR-0007-per-tenant-credential-encryption-keys.md
+    docs/saas-architecture/tenant-isolation-matrix.md
+    docs/security-reviews/ALGO22_Quant_Platform_Review_10032026.md
+    scripts/verify_rls.py
+    scripts/verify_rls_enforcement.py
+    terraform/alb.tf
+    terraform/cloudtrail.tf
+    terraform/providers.tf
+    terraform/variables.tf
+    tests/test_sc3_aal_claim_propagation.py
+    tests/test_tenant_db_context.py
+    tests/test_tenant_db_context_postgres.py
+    tests/test_verify_rls_script.py
+    tests/test_worker_deployment_coverage.py
+
+==============================================================================================
+B. PROTECTED / NON-TOUCH FILES
+==============================================================================================
+  .gitignore                                              M    +15/-0
+  backend_app/core/subscription_dependencies.py           M    +253/-0
+  backend_app/routers/exchange.py                        MM    +422/-29
+  tests/test_quota01_exchange_slot_is_atomic.py          ??    clean
+
+==============================================================================================
+C. PATCH MANIFEST -- do the three candidate blobs still match?
+==============================================================================================
+  .github/workflows/01-pr-check.yml
+    SAME       PR#6 pre-image  57e2cee8 (patch expects 57e2cee8)
+    >> CHANGED worktree post   91d55a37 (patch expects 967b4a28)
+  tests/test_webhook_duplicate_delivery_real_redis.py
+    SAME       PR#6 pre-image  105b6567 (patch expects 105b6567)
+    SAME       worktree post   3ffbccde (patch expects 3ffbccde)
+  tests/test_quota01_metered_reservation_is_hard.py
+    SAME       PR#6 pre-image  f48103ac (patch expects f48103ac)
+    SAME       worktree post   7baff0b6 (patch expects 7baff0b6)
+
+==============================================================================================
+D. A15 ARTIFACTS AND OUTPUT DESTINATION
+==============================================================================================
+  PRESENT  staging/PHASE11B_A15_D5_EXECUTION_REPORT.md                      17011 bytes  mtime=2026-10-10 19:21:01
+  PRESENT  staging/p11b15_proposed_fixed.patch                              34947 bytes  mtime=2026-10-10 19:13:12
+  PRESENT  staging/p11b15_proposed.patch                                    35695 bytes  mtime=2026-10-10 19:09:14
+  PRESENT  staging/p11b15_approval_search.txt                                4082 bytes  mtime=2026-10-10 19:08:16
+  PRESENT  staging/p11b15_focused.xml                                       13259 bytes  mtime=2026-10-10 19:14:45
+  PRESENT  staging/PHASE11B_A14_D5_CONSOLIDATION_REPORT.md                  15539 bytes  mtime=2026-10-10 19:08:14
+  PRESENT  staging/PHASE11B_A12_WEBHOOK_KEYSPACE_FIX.md                     27131 bytes  mtime=2026-10-10 17:27:24
+  PRESENT  staging/PHASE11B_A12_D5_MINIMAL_REPAIR_REPORT.md                 14705 bytes  mtime=2026-10-10 18:04:36
+  PRESENT  staging/PHASE11B_A13_REAL_REDIS_VERIFICATION.md                  32686 bytes  mtime=2026-10-10 18:39:44
+  PRESENT  staging/PHASE11B_A13_D5_REPAIR_REPORT.md                         16317 bytes  mtime=2026-10-10 18:49:10
+  ABSENT   staging/PHASE11B_A16_D5_APPROVAL_HANDOFF.md
+
+==============================================================================================
+E. PR STATE AND TREE IDENTITY
+==============================================================================================
+  SAME       PR #6 head d07014d36d32  state=OPEN merged=None
+             tree=d28b6d1a5d61  reviewDecision=''  reviews=0  labels=[]
+  SAME       PR #7 head 49e70da23c28  state=OPEN merged=None
+             tree=271f13c29d3c  reviewDecision=''  reviews=0  labels=[]
+  SAME       PR #8 head a624ce89b160  state=OPEN merged=None
+             tree=271f13c29d3c  reviewDecision=''  reviews=0  labels=[]
+
+  tree identity: #7 == #8 ? True      #6 == #7 ? False

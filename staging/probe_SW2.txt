@@ -1,0 +1,105 @@
+START=2026-10-09T12:06:45.7069682+05:30
+SCRIPT=staging\anon_read_sweep.py authenticated
+[dsn] staging/pg_dsn.txt -> postgresql://127.0.0.1:58620/postgres
+==============================================================================
+BEHAVIOURAL READ SWEEP as AUTHENTICATED -- seed a row, adopt the role, count
+==============================================================================
+80 table(s) in public grant SELECT to authenticated.
+Reader identity: a DIFFERENT logged-in customer.
+Every insert and read happens inside a savepoint that is rolled back.
+------------------------------------------------------------------------------
+A. LEAKED -- a seeded row owned by another customer was readable by authenticated
+------------------------------------------------------------------------------
+  (none)
+------------------------------------------------------------------------------
+B. BLOCKED -- row present, authenticated saw zero (70 table(s))
+------------------------------------------------------------------------------
+  billing_invoices                                 0 of 19 row(s)
+  bot_ownership_claims                             0 of 1 row(s)
+  copilot_messages                                 0 of 1 row(s)
+  copilot_sessions                                 0 of 1 row(s)
+  dag_tasks                                        0 of 1 row(s)
+  deployment_permissions                           0 of 1 row(s)
+  exchange_connections                             0 of 1 row(s)
+  exchange_keys                                    0 of 19 row(s)
+  execution_records                                0 of 1 row(s)
+  fills                                            0 of 19 row(s)
+  idempotency_keys                                 0 of 1 row(s)
+  invoices                                         0 of 1 row(s)
+  library_ratings                                  0 of 1 row(s)
+  library_strategies                               0 of 23 row(s)
+  library_subscription_transitions                 0 of 1 row(s)
+  library_subscriptions                            0 of 1 row(s)
+  marketplace_backtest_evidence                    0 of 1 row(s)
+  marketplace_listings                             0 of 1 row(s)
+  marketplace_price_evaluations                    0 of 1 row(s)
+  marketplace_settlements                          0 of 1 row(s)
+  marketplace_submission_transitions               0 of 1 row(s)
+  marketplace_submissions                          0 of 1 row(s)
+  model_versions                                   0 of 1 row(s)
+  notification_settings                            0 of 1 row(s)
+  notifications                                    0 of 19 row(s)
+  order_lifecycle_transitions                      0 of 1 row(s)
+  orders                                           0 of 19 row(s)
+  paper_accounts                                   0 of 26 row(s)
+  paper_balance_events                             0 of 4 row(s)
+  paper_equity_snapshots                           0 of 1 row(s)
+  paper_events                                     0 of 1 row(s)
+  paper_fills                                      0 of 4 row(s)
+  paper_market_events                              0 of 1 row(s)
+  paper_metrics                                    0 of 1 row(s)
+  paper_orders                                     0 of 4 row(s)
+  paper_positions                                  0 of 2 row(s)
+  paper_sessions                                   0 of 19 row(s)
+  paper_trades                                     0 of 1 row(s)
+  plan_usage_ledger                                0 of 1 row(s)
+  positions                                        0 of 19 row(s)
+  processed_orders                                 0 of 1 row(s)
+  profiles                                         0 of 21 row(s)
+  reconciliation_mismatches                        0 of 1 row(s)
+  referral_codes                                   0 of 21 row(s)
+  referral_commissions                             0 of 1 row(s)
+  referral_payouts                                 0 of 1 row(s)
+  referral_profiles                                0 of 0 row(s)
+  referral_relationships                           0 of 1 row(s)
+  referral_wallets                                 0 of 21 row(s)
+  referrals                                        0 of 1 row(s)
+  risk_settings                                    0 of 19 row(s)
+  risk_settings_audit                              0 of 1 row(s)
+  security_logs                                    0 of 19 row(s)
+  signal_events                                    0 of 1 row(s)
+  signals                                          0 of 1 row(s)
+  strategies                                       0 of 19 row(s)
+  strategy_backtests                               0 of 1 row(s)
+  strategy_deployments                             0 of 1 row(s)
+  strategy_limits                                  0 of 1 row(s)
+  strategy_research_reports                        0 of 1 row(s)
+  strategy_subscriptions                           0 of 1 row(s)
+  strategy_versions                                0 of 1 row(s)
+  subscriptions                                    0 of 1 row(s)
+  support_tickets                                  0 of 1 row(s)
+  ticket_comments                                  0 of 1 row(s)
+  training_governance_decisions                    0 of 1 row(s)
+  training_jobs                                    0 of 1 row(s)
+  transaction_checkpoints                          0 of 1 row(s)
+  transaction_records                              0 of 1 row(s)
+  waitlist                                         0 of 1 row(s)
+------------------------------------------------------------------------------
+C. INTENTIONALLY PUBLIC (10 table(s))
+------------------------------------------------------------------------------
+  block_registry_snapshots                         authenticated saw 1 row(s) -- product information
+  marketplace_submission_allowed_transitions       authenticated saw 12 row(s) -- product information
+  marketplace_subscription_allowed_transitions     authenticated saw 14 row(s) -- product information
+  paper_order_allowed_transitions                  authenticated saw 10 row(s) -- product information
+  paper_session_allowed_transitions                authenticated saw 7 row(s) -- product information
+  plan_features                                    authenticated saw 1 row(s) -- product information
+  plan_limits                                      authenticated saw 1 row(s) -- product information
+  plan_migration_mapping                           authenticated saw 10 row(s) -- product information
+  plan_prices                                      authenticated saw 1 row(s) -- product information
+  plans                                            authenticated saw 5 row(s) -- product information
+------------------------------------------------------------------------------
+D. NOT PROVEN -- no row could be seeded (0 table(s))
+------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+SUMMARY: 0 leaked, 70 proven blocked, 10 intentionally public, 0 not proven
+EXITCODE=0

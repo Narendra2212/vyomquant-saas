@@ -1,0 +1,12 @@
+E         File "<unknown>", line 9
+E           """
+E           ^^^
+E       IndentationError: expected an indented block after function definition on line 2
+E         File "<unknown>", line 9
+E           """
+E           ^^^
+E       IndentationError: expected an indented block after function definition on line 2
+FAILED tests/test_port01_close_all_route_is_reachable.py::test_the_route_imports_the_canonical_safety_monitor
+FAILED tests/test_port01_close_all_route_is_reachable.py::test_the_route_still_carries_its_intended_controls
+2 failed, 5 passed, 8 warnings in 14.67s
+NONCE_END=RUNT9

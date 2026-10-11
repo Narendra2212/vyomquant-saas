@@ -1,0 +1,98 @@
+﻿=== 1. DDL FOR schema_migrations ===
+  scripts/provision_database.py
+      CREATE TABLE IF NOT EXISTS public.schema_migrations (
+      filename     text        PRIMARY KEY,
+      sha256       text        NOT NULL,
+      applied_at   timestamptz NOT NULL DEFAULT now(),
+      step         text        NOT NULL
+      );
+
+  staging/apply_migration.py
+      CREATE TABLE IF NOT EXISTS public.schema_migrations (
+      filename     text        PRIMARY KEY,
+      sha256       text        NOT NULL,
+      applied_at   timestamptz NOT NULL DEFAULT now(),
+      step         text        NOT NULL
+      );
+
+
+=== 2. WRITE SITES: what is inserted into schema_migrations ===
+  scripts/provision_database.py
+        153: CREATE TABLE IF NOT EXISTS public.schema_migrations (
+        480: "INSERT INTO public.schema_migrations (filename, sha256, step) "
+        481: "VALUES (%s, %s, %s) ON CONFLICT (filename) DO NOTHING",
+  staging/apply_migration.py
+         36: CREATE TABLE IF NOT EXISTS public.schema_migrations (
+        105: "INSERT INTO public.schema_migrations (filename, sha256, step) "
+        106: "VALUES (%s, %s, %s) ON CONFLICT (filename) DO NOTHING",
+  staging/probe_p11b_w1c_ledger_paradox.py
+        144: (r"on\s+conflict[^;]{0,160}", "ON CONFLICT clause"),
+  staging/probe_p11b_w1c_unledgered.py
+        185: print("   inserts with ON CONFLICT (filename) DO NOTHING, so a re-run cannot")
+  staging/probe_phase8_db_state.py
+        184: print(f"  HAS_ON_CONFLICT_PAYMENT_ID={'ON CONFLICT (payment_id)' in body}")
+  staging/update_audit_json.py
+        125: "strategy_id. Claimed by one statement: INSERT ... ON CONFLICT DO UPDATE "
+       1271: "fill->position->money->ledger order orphaned a POSITION on a version conflict - a "
+       1777: "schema_migrations (migration bookkeeping) and plans, plan_features, plan_limits, "
+  staging/w1d09_recorded_key.py
+         67: if re.search(r"INSERT\s+INTO\s+(public\.)?schema_migrations|ON CONFLICT|"
+
+=== 3. DOES ANY FILE APPEAR AT MORE THAN ONE STEP? ===
+  step narrative in the module docstring:
+      L24    step 0    020_declare_pre_existing_tables.sql        (first, despite its number)
+      L25    step 1    backend_app/migrations/001..019, then migrations/*
+      L26    step 2    alembic upgrade d97ffff9c3bb               (the branchpoint, NOT head)
+      L27    step 3    020 again, so strategies_source_library_id_fkey can land
+      L31    step 0    020_declare_pre_existing_tables.sql
+      L32    step 0c   alembic upgrade head                       (BEFORE the SQL set, and head)
+      L33    step 0b   archived_migrations/root_migrations/*.sql   (less the two alembic owns)
+      L34    step 1    backend_app/migrations/001..019, then migrations/*
+      L35    step 3    020 again
+      L345   step 0b   ΓÇö the marketplace/library tables the numbered set depends on.
+      L404   step 1's  files, in the order PROVISIONING_ORDER.md prescribes.
+      L544   step 0    ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      L549   step 0c   ΓÇö ALEMBIC, BEFORE the SQL set, not after ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      L602   step 0b   ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      L612   step 1    ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      L620   step 3    ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      L636   step 4    ΓÇö privilege hardening, LAST ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+      L660   step 3b   ΓÇö BUG-049 identity types, after the SQL set, before hardening ΓöÇ
+
+  artefacts mentioned at MORE THAN ONE step:
+      ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ  -> steps ['0', '1', '3']
+
+=== 4. THE RECORDING FUNCTION ===
+        340: def _sha256(text: str) -> str:
+        460: def _apply_sql(conn, path: pathlib.Path, step: str, dry_run: bool, already: dict) -> str:
+  insert context:
+        468:             print("           A migration file changed after being applied. Resolve by "
+        469:                   "hand; this tool will not re-apply a mutated file.")
+        470:             sys.exit(4)
+        471:         return "skipped (already applied)"
+        472: 
+        473:     if dry_run:
+        474:         return "would apply"
+        475: 
+        476:     with conn.cursor() as cur:
+        477:         try:
+        478:             cur.execute(text)
+        479:             cur.execute(
+        480:                 "INSERT INTO public.schema_migrations (filename, sha256, step) "
+        481:                 "VALUES (%s, %s, %s) ON CONFLICT (filename) DO NOTHING",
+        482:                 (name, digest, step),
+        483:             )
+        484:             conn.commit()
+        485:         except Exception as exc:
+        486:             conn.rollback()
+        487:             print(f"  FAILED   {name}: {type(exc).__name__}: {exc}")
+        488:             sys.exit(4)
+        489:     return "applied"
+        490: 
+        491: 
+
+=== 5. CONCLUSION (static, no database) ===
+  If the DDL's PK/UNIQUE is (filename, step) rather than (filename), or if any
+  file is recorded at two steps, then the declared key width of 1 for
+  recorded_migrations is AMBIGUOUS and would pair two distinct rows as one
+  modification. Evidence above decides it.

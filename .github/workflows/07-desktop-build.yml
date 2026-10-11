@@ -1,0 +1,346 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# 07 — NATIVE DESKTOP BUILD (Windows / macOS / Linux)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# `algo22-terminal/src-tauri/` is a real Tauri 2 project, but NOTHING in CI has ever
+# compiled it. Every job in workflows 01–06 runs on `ubuntu-latest`, and the only Tauri
+# step anywhere is the `cargo audit` in `04-nightly-audit.yml` — a DEPENDENCY audit, which
+# reads `Cargo.lock` and never invokes a linker. So the desktop application's build status
+# was unknown on all three operating systems, while `algo22-terminal/releases/` carried
+# files that looked like installers:
+#
+#     releases/windows/VyomQuant-Setup-0.1.0.exe     112,117,309 bytes   a real installer
+#     releases/mac/VyomQuant-0.1.0-universal.dmg              69 bytes   one line of text
+#     releases/linux/VyomQuant-0.1.0.AppImage                 64 bytes   one line of text
+#     releases/linux/vyomquant_0.1.0_amd64.deb                67 bytes   one line of text
+#
+# Three of the four are plain-text placeholders. That is the precise failure this workflow
+# is built to make impossible to repeat: see the `Verify bundle artifacts` step, which
+# fails the job unless every produced bundle clears a realistic minimum size.
+#
+# A local Windows build is NOT a substitute. It fails on a developer machine without the
+# MSVC toolchain with `error: linker 'link.exe' not found`, and that is an environment
+# gap rather than a code defect — `windows-latest` ships Visual Studio 2022 with the
+# MSVC v143 compiler and the Windows SDK preinstalled, so the linker is present there.
+#
+# WHAT THIS WORKFLOW DOES AND DOES NOT ESTABLISH
+# ----------------------------------------------
+# ESTABLISHES, when green: the frontend bundles, the Rust crate compiles against the
+# committed `Cargo.lock`, the Tauri bundler produces installer artifacts on that OS, and
+# those artifacts are real files of a plausible size.
+#
+# DOES NOT ESTABLISH, and must not be reported as:
+#   * code signing       — no certificate is configured on any platform.
+#   * macOS notarization — no Apple ID, team ID or app-password secret is used, so the
+#                          .app and .dmg are UNNOTARIZED and Gatekeeper will refuse them
+#                          on a user's machine.
+#   * Windows Authenticode — the NSIS/MSI output is UNSIGNED and will raise SmartScreen.
+#   * installer execution  — nothing here installs or launches the application.
+#   * functional correctness — no desktop smoke test, no WebDriver run, no login.
+#   * release readiness     — these are BUILD-VERIFICATION artifacts, which is why the
+#                             upload name below says `unsigned` and why this workflow
+#                             creates no GitHub release and publishes nothing.
+#
+# Promoting these artifacts to a release requires signing, notarization and an actual
+# install-and-launch test on each platform. Those are separate, owner-approved steps.
+#
+# SCOPE DISCIPLINE
+# ----------------
+# A NEW file rather than an edit to an existing one, deliberately:
+#   * `01-pr-check.yml` has uncommitted modifications from another workstream.
+#   * `05-security.yml` is STAGED by another workstream.
+#   * `04-nightly-audit.yml` owns dependency auditing, and the brief requires native
+#     builds to stay distinct from audits. There is no audit step in this file.
+# Editing any of those would have put this task's changes into someone else's diff.
+#
+# It is also deliberately NOT wired into the deploy path: `03-deploy.yml` and
+# `06-frontend-deploy.yml` are untouched, so nothing about shipping changes because this
+# workflow exists.
+#
+# TRIGGERS ARE NARROW ON PURPOSE. A full Rust release build on three runners is expensive,
+# and nothing in `src/` can break it that `01-pr-check.yml`'s frontend job would not catch
+# first. It runs on demand, and automatically only when the native project, the lockfiles
+# or this file change.
+
+name: 07 Desktop Build (native, unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'algo22-terminal/src-tauri/**'
+      - 'algo22-terminal/package.json'
+      - 'algo22-terminal/package-lock.json'
+      - '.github/workflows/07-desktop-build.yml'
+  pull_request:
+    paths:
+      - 'algo22-terminal/src-tauri/**'
+      - 'algo22-terminal/package.json'
+      - 'algo22-terminal/package-lock.json'
+      - '.github/workflows/07-desktop-build.yml'
+
+# Read-only. This workflow publishes nothing and creates no release, so it needs no
+# `contents: write` — withholding it is what makes "this cannot ship anything" structural
+# rather than a matter of trust.
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  # Backtraces on a bundler failure, which is otherwise a bare non-zero exit.
+  RUST_BACKTRACE: '1'
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+
+    strategy:
+      # Each OS is an independent question. Without this, the first failure cancels the
+      # other two and the report says nothing about them — which is exactly the
+      # "status unknown per platform" problem this workflow exists to end.
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows (x86_64, MSVC)
+            runner: windows-latest
+            # No `--target`: the host triple is already x86_64-pc-windows-msvc, and
+            # naming it would move the bundle output under an extra target directory for
+            # no gain.
+            target: ''
+            bundle_dir: algo22-terminal/src-tauri/target/release/bundle
+          - label: macOS (universal)
+            runner: macos-latest
+            # `macos-latest` is Apple silicon, so a default build would be arm64-only and
+            # would not run on an Intel Mac. The placeholder this replaces was named
+            # `-universal.dmg`, so universal is the intended shape.
+            target: universal-apple-darwin
+            bundle_dir: algo22-terminal/src-tauri/target/universal-apple-darwin/release/bundle
+          - label: Linux (x86_64)
+            # PINNED to 22.04, not `ubuntu-latest`. Tauri's Debian guidance is that
+            # building on a newer base raises the minimum glibc the application demands at
+            # runtime, so an AppImage built on the newest image fails on older desktops;
+            # 22.04 also carries `libwebkit2gtk-4.1-dev` in its standard repositories.
+            runner: ubuntu-22.04
+            target: ''
+            bundle_dir: algo22-terminal/src-tauri/target/release/bundle
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Linux system dependencies ──────────────────────────────────────────────
+      # Tauri 2's documented Linux prerequisites. Windows and macOS runners need no
+      # equivalent step: `windows-latest` preinstalls the MSVC v143 toolchain and the
+      # Windows SDK, and `macos-latest` preinstalls the Xcode command line tools.
+      #
+      # `libwebkit2gtk-4.1-dev` is the v2 webview — v1 used 4.0, and installing the wrong
+      # one produces a confusing pkg-config failure rather than a clear message.
+      # `patchelf` is for AppImage bundling.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          # The same cache key path workflows 04 and 06 already use, so the three agree
+          # about where the frontend lockfile lives.
+          cache-dependency-path: 'algo22-terminal/package-lock.json'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both halves of the universal binary. `rustup target add` is a no-op on the
+          # host triple, so listing them unconditionally is safe on every runner.
+          targets: ${{ matrix.target == 'universal-apple-darwin' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      # Keyed on `Cargo.lock`, so the cache is invalidated by a real dependency change and
+      # not by a source edit. `src-tauri/target` is included because a cold Tauri build
+      # compiles several hundred crates.
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            algo22-terminal/src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('algo22-terminal/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      # `npm ci`, not `npm install`: it installs exactly what `package-lock.json` pins and
+      # fails if the lockfile and `package.json` disagree. No dependency is added or
+      # upgraded by this workflow.
+      - name: Install frontend dependencies
+        working-directory: ./algo22-terminal
+        run: npm ci
+
+      # The design-token guard that `package.json`'s own `prebuild` script runs. Called
+      # out as its own step so a stale `src/design/tokens.js` reports as a token failure
+      # rather than as an opaque desktop build failure twenty minutes later.
+      - name: Verify generated design tokens are current
+        working-directory: ./algo22-terminal
+        run: node scripts/gen-tokens.mjs --check
+
+      # ── The native build ───────────────────────────────────────────────────────
+      # NO `continue-on-error`. A bundler failure must fail the job — that is the whole
+      # point, and it is the difference between this and the audit step in workflow 04,
+      # which is advisory by design.
+      #
+      # `-- --locked` forwards `--locked` to cargo, so the committed `Cargo.lock` is
+      # enforced rather than merely preferred: a build that would need to resolve a
+      # different dependency version fails instead of silently drifting.
+      #
+      # The VITE_* values are passed through if configured. They are NOT required and the
+      # build does not gate on them: `src/supabase.js` validates its configuration at
+      # runtime and falls back to an unconfigured client, so an artifact built without
+      # them compiles and launches but cannot authenticate. This workflow verifies the
+      # BUILD, so a missing secret must not be reported as a broken toolchain. An artifact
+      # intended for a human to actually use needs these set.
+      - name: Build desktop application
+        working-directory: ./algo22-terminal
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.target }}" ]; then
+            npx tauri build --target "${{ matrix.target }}" -- --locked
+          else
+            npx tauri build -- --locked
+          fi
+
+      # ── Artifact verification ──────────────────────────────────────────────────
+      # THE GATE THAT THE PLACEHOLDER FILES WOULD HAVE FAILED.
+      #
+      # `bash` on all three runners (Git Bash on Windows) so this is one script rather
+      # than a PowerShell copy that can drift from the POSIX one.
+      #
+      # Two assertions, and the second is the one that matters:
+      #   1. at least one bundle was produced;
+      #   2. EVERY bundle produced is at least MIN_BYTES.
+      #
+      # 1 MiB is far below a real Tauri bundle (the genuine Windows installer in the repo
+      # is ~107 MiB) and far above a text placeholder (64–69 bytes). It is deliberately
+      # not tuned tighter: the purpose is to catch a file that is not a binary at all, not
+      # to police bundle size.
+      - name: Verify bundle artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="${{ matrix.bundle_dir }}"
+          MIN_BYTES=$((1024 * 1024))
+
+          if [ ! -d "$BUNDLE_DIR" ]; then
+            echo "FAIL: no bundle directory at $BUNDLE_DIR"
+            exit 1
+          fi
+
+          echo "Bundle directory: $BUNDLE_DIR"
+
+          # A FILE, not a bash array built with `mapfile`. `macos-latest` runs
+          # `/bin/bash` 3.2 — Apple has not shipped bash 4 since the GPLv3 relicence —
+          # and `mapfile` is a bash 4 builtin, so the array form would have failed on
+          # exactly one of the three runners with `mapfile: command not found`. Writing
+          # the list to a file and reading it with `while read` works on bash 3.2 and
+          # also sidesteps `set -u` tripping over an empty-array expansion.
+          LIST="$(mktemp)"
+          find "$BUNDLE_DIR" -type f \
+            \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' \
+               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+            | sort > "$LIST"
+
+          COUNT=$(wc -l < "$LIST" | tr -d '[:space:]')
+          if [ "$COUNT" -eq 0 ]; then
+            echo "FAIL: the bundler produced no installer artifact under $BUNDLE_DIR"
+            echo "Directory contents for diagnosis:"
+            find "$BUNDLE_DIR" -maxdepth 3 -type f | sed 's/^/  /' || true
+            exit 1
+          fi
+
+          STATUS=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            SIZE=$(wc -c < "$f" | tr -d '[:space:]')
+            if [ "$SIZE" -lt "$MIN_BYTES" ]; then
+              echo "FAIL: $f is $SIZE bytes, below the ${MIN_BYTES}-byte floor."
+              echo "      A file this small is a placeholder, not an installer."
+              STATUS=1
+            else
+              echo "OK:   $f ($SIZE bytes)"
+            fi
+          done < "$LIST"
+
+          echo "Verified $COUNT artifact(s) on ${{ matrix.label }}."
+          exit "$STATUS"
+
+      # ── Upload ─────────────────────────────────────────────────────────────────
+      # No `if: always()`. A failed or unverified build uploads nothing, so an artifact's
+      # existence in the Actions run is itself evidence that the verification above
+      # passed. `unsigned` is in the name because these are not installable releases —
+      # see the header. `if-no-files-found: error` keeps a silently empty upload from
+      # looking like a success.
+      - name: Upload unsigned build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-unsigned-${{ runner.os }}-${{ github.sha }}
+          path: |
+            ${{ matrix.bundle_dir }}/**/*.exe
+            ${{ matrix.bundle_dir }}/**/*.msi
+            ${{ matrix.bundle_dir }}/**/*.dmg
+            ${{ matrix.bundle_dir }}/**/*.AppImage
+            ${{ matrix.bundle_dir }}/**/*.deb
+            ${{ matrix.bundle_dir }}/**/*.rpm
+          if-no-files-found: error
+          retention-days: 14
+
+  # A single place to read the per-platform outcome, so "which operating systems build?"
+  # is answered by one status rather than by opening three job logs. It does not re-run
+  # anything and claims nothing beyond the build result.
+  report:
+    name: Desktop build summary
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    steps:
+      - name: Summarise
+        shell: bash
+        run: |
+          {
+            echo "## Desktop native build — ${{ needs.build.result }}"
+            echo
+            echo "Matrix: windows-latest, macos-latest (universal), ubuntu-22.04."
+            echo
+            echo "These artifacts are **unsigned build-verification bundles**."
+            echo "Not code-signed. Not notarized. Not installed or launched by CI."
+            echo "They are not release-ready installers."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail if any platform failed
+        if: needs.build.result != 'success'
+        run: |
+          echo "At least one desktop platform did not build. See the matrix jobs."
+          exit 1

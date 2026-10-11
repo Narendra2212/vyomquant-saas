@@ -1,0 +1,12 @@
+A: target alone
+    target passed  sequence_length_10=None
+    3 passed in 3.72s
+B: all of tests/property
+    target passed  sequence_length_10=None
+    1 failed, 135 passed, 1 xfailed, 3 xpassed in 310.17s (0:05:10)
+C: target + Phase 6's three new files
+    target passed  sequence_length_10=None
+    71 passed, 26 skipped in 125.78s (0:02:05)
+D: target + paper suites
+    target passed  sequence_length_10=None
+    191 passed in 18.36s

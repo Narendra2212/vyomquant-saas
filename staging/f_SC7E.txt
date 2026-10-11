@@ -1,0 +1,48 @@
+CREATE TABLE IF NOT EXISTS public.strategies (
+id                  UUID        NOT NULL DEFAULT gen_random_uuid(),
+user_id             UUID        NOT NULL,
+name                TEXT        NOT NULL,
+symbol              TEXT        NOT NULL,
+timeframe           TEXT                 DEFAULT '5m'::text,
+buy_logic           JSONB                DEFAULT '{}'::jsonb,
+sell_logic          JSONB                DEFAULT '{}'::jsonb,
+risk                JSONB                DEFAULT '{}'::jsonb,
+indicators          JSONB                DEFAULT '[]'::jsonb,
+ml_model_path       TEXT,
+exchange_id         TEXT                 DEFAULT 'binance'::text,
+status              TEXT                 DEFAULT 'stopped'::text,
+created_at          TIMESTAMPTZ          DEFAULT now(),
+updated_at          TIMESTAMPTZ          DEFAULT now(),
+source_library_id   UUID,
+backtest_result     JSONB,
+current_version     VARCHAR(20)          DEFAULT 'v1.0'::character varying,
+environment         VARCHAR(20)          DEFAULT 'paper'::character varying,
+is_active           BOOLEAN     NOT NULL DEFAULT true,
+dag_config          JSONB,
+dag_hash            TEXT,
+dag_version         INTEGER              DEFAULT 1,
+dag_schema_version  TEXT,
+execution_order     JSONB,
+last_signal_at      TIMESTAMPTZ,
+archived_at         TIMESTAMPTZ,
+CONSTRAINT strategies_pkey PRIMARY KEY (id)
+);
+
+-- All five secondary indexes are pg_indexes' own indexdef, including the two
+-- PARTIAL ones. The predicates are the point: idx_strategies_archived_at
+-- indexes only live rows (archived_at IS NULL), which is the filter
+-- 005a_strategy_archive.sql's reads use, and idx_strategies_dag_hash skips
+-- the strategies that have no DAG. A full index on either column would be
+-- larger and would not serve those queries as well.
+CREATE INDEX IF NOT EXISTS idx_strategies_archived_at
+ON public.strategies (archived_at) WHERE (archived_at IS NULL);
+CREATE INDEX IF NOT EXISTS idx_strategies_current_version
+ON public.strategies (current_version);
+CREATE INDEX IF NOT EXISTS idx_strategies_dag_hash
+ON public.strategies (dag_hash) WHERE (dag_hash IS NOT NULL);
+--- any description column anywhere for strategies ---
+001_strategy_architecture.sql:272: description TEXT,
+006_reconcile_production_database.sql:365: description TEXT NOT NULL,
+add_support_tables.sql:15: description TEXT NOT NULL,
+create_plan_tables.sql:12: description TEXT,
+NONCE_END=SC7E

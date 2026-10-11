@@ -1,0 +1,38 @@
+sections found: 3
+
+  .github/workflows/01-pr-check.yml
+    patch pre-image 57e2cee8   PR#6 blob 57e2cee8   match=True
+    section ends with newline: True
+    hunk headers: ['@@ -213,7 +213,7 @@ jobs:', '@@ -732,7 +732,7 @@ jobs:']
+
+    isolated apply: .github/workflows/01-pr-check.yml          rc=0
+    Checking patch .github/workflows/01-pr-check.yml...
+
+  tests/test_webhook_duplicate_delivery_real_redis.py
+    patch pre-image 105b6567   PR#6 blob 105b6567   match=True
+    section ends with newline: True
+    hunk headers: ['@@ -41,6 +41,7 @@ import hmac', '@@ -83,15 +84,218 @@ WEBHOOK_SECRET = "test-webhook-secret-not-a-real-credential"', '@@ -174,9 +378,14 @@ async def real_redis_cache(billing_env):']
+
+    isolated apply: tests/test_webhook_duplicate_delivery_real_redis.py rc=0
+    Checking patch tests/test_webhook_duplicate_delivery_real_redis.py...
+
+  tests/test_quota01_metered_reservation_is_hard.py
+    patch pre-image f48103ac   PR#6 blob f48103ac   match=True
+    section ends with newline: True
+    hunk headers: ['@@ -32,7 +32,9 @@ No live order, no payment, no production. The reservation is the paper/compute m', '@@ -262,3 +264,267 @@ async def test_concurrent_reservations_are_atomic_against_real_redis():']
+
+    isolated apply: tests/test_quota01_metered_reservation_is_hard.py rc=0
+    <stdin>:96: trailing whitespace.
+        
+    Checking patch tests/test_quota01_metered_reservation_is_hard.py...
+    warning: 1 line adds whitespace errors.
+
+ALL THREE concatenated, newline-normalised                     rc=0
+    <stdin>:466: trailing whitespace.
+        
+    Checking patch .github/workflows/01-pr-check.yml...
+    Checking patch tests/test_webhook_duplicate_delivery_real_redis.py...
+    Checking patch tests/test_quota01_metered_reservation_is_hard.py...
+    warning: 1 line adds whitespace errors.
+
+CONCLUSION: concatenation now applies cleanly

@@ -1,0 +1,7 @@
+START=2026-10-09T13:19:13.9336122+05:30
+SCRIPT=staging\probe_pg_activity.py 
+BACKENDS=1
+  pid=15256 state=active wait=None/None xact_age=0:00:00 query_age=0:00:00 blocked_by=[]
+      q= SELECT pid, state, wait_event_type, wait_event, now() - xact_start AS xact_age, now() - query_start AS query_age, pg_blocking_pids(pid) AS blocked_by, left(reg
+ADVISORY_LOCKS=0
+EXITCODE=0

@@ -167,8 +167,8 @@ BEGIN
     CREATE POLICY "risk_settings_owner_access" ON public.risk_settings
         FOR ALL
         TO authenticated
-        USING (auth.uid()::text = user_id)
-        WITH CHECK (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text)
+        WITH CHECK (auth.uid()::text = user_id::text);
 
     CREATE POLICY "risk_settings_service_role" ON public.risk_settings
         FOR ALL
@@ -206,8 +206,8 @@ BEGIN
     CREATE POLICY "strategy_limits_owner_access" ON public.strategy_limits
         FOR ALL
         TO authenticated
-        USING (auth.uid()::text = user_id)
-        WITH CHECK (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text)
+        WITH CHECK (auth.uid()::text = user_id::text);
 
     CREATE POLICY "strategy_limits_service_role" ON public.strategy_limits
         FOR ALL
@@ -240,7 +240,7 @@ BEGIN
     CREATE POLICY "risk_audit_owner_read" ON public.risk_settings_audit
         FOR SELECT
         TO authenticated
-        USING (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text);
 
     CREATE POLICY "risk_audit_service_role" ON public.risk_settings_audit
         FOR ALL
@@ -314,8 +314,8 @@ BEGIN
     CREATE POLICY "notif_settings_owner_access" ON public.notification_settings
         FOR ALL
         TO authenticated
-        USING (auth.uid()::text = user_id)
-        WITH CHECK (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text)
+        WITH CHECK (auth.uid()::text = user_id::text);
 
     CREATE POLICY "notif_settings_service_role" ON public.notification_settings
         FOR ALL
@@ -345,7 +345,7 @@ BEGIN
     CREATE POLICY "security_logs_owner_read" ON public.security_logs
         FOR SELECT
         TO authenticated
-        USING (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text);
 
     CREATE POLICY "security_logs_service_role" ON public.security_logs
         FOR ALL
@@ -491,8 +491,8 @@ BEGIN
     CREATE POLICY "backtests_owner_access" ON public.strategy_backtests
         FOR ALL
         TO authenticated
-        USING (auth.uid()::text = user_id)
-        WITH CHECK (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text)
+        WITH CHECK (auth.uid()::text = user_id::text);
 
     CREATE POLICY "backtests_service_role" ON public.strategy_backtests
         FOR ALL
@@ -532,8 +532,8 @@ BEGIN
     CREATE POLICY "reports_owner_access" ON public.strategy_research_reports
         FOR ALL
         TO authenticated
-        USING (auth.uid()::text = user_id)
-        WITH CHECK (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text)
+        WITH CHECK (auth.uid()::text = user_id::text);
 
     CREATE POLICY "reports_service_role" ON public.strategy_research_reports
         FOR ALL
@@ -744,8 +744,8 @@ BEGIN
     CREATE POLICY "ref_profiles_owner_access" ON public.referral_profiles
         FOR ALL
         TO authenticated
-        USING (auth.uid()::text = user_id)
-        WITH CHECK (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text)
+        WITH CHECK (auth.uid()::text = user_id::text);
 
     CREATE POLICY "ref_profiles_service" ON public.referral_profiles
         FOR ALL
@@ -779,8 +779,8 @@ BEGIN
     CREATE POLICY "exchange_conn_owner_access" ON public.exchange_connections
         FOR ALL
         TO authenticated
-        USING (auth.uid()::text = user_id)
-        WITH CHECK (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text)
+        WITH CHECK (auth.uid()::text = user_id::text);
 
     CREATE POLICY "exchange_conn_service" ON public.exchange_connections
         FOR ALL
@@ -818,8 +818,8 @@ BEGIN
     CREATE POLICY "billing_invoices_owner_access" ON public.billing_invoices
         FOR ALL
         TO authenticated
-        USING (auth.uid()::text = user_id)
-        WITH CHECK (auth.uid()::text = user_id);
+        USING (auth.uid()::text = user_id::text)
+        WITH CHECK (auth.uid()::text = user_id::text);
 
     CREATE POLICY "billing_invoices_service" ON public.billing_invoices
         FOR ALL
@@ -985,35 +985,35 @@ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'orders') THEN
         DROP POLICY IF EXISTS "orders_owner_access" ON public.orders;
         DROP POLICY IF EXISTS "orders_service_role" ON public.orders;
-        CREATE POLICY "orders_owner_access" ON public.orders FOR ALL TO authenticated USING (auth.uid()::text = tenant_id) WITH CHECK (auth.uid()::text = tenant_id);
+        CREATE POLICY "orders_owner_access" ON public.orders FOR ALL TO authenticated USING (auth.uid()::text = tenant_id::text) WITH CHECK (auth.uid()::text = tenant_id::text);
         CREATE POLICY "orders_service_role" ON public.orders FOR ALL TO service_role USING (true) WITH CHECK (true);
     END IF;
 
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'fills') THEN
         DROP POLICY IF EXISTS "fills_owner_access" ON public.fills;
         DROP POLICY IF EXISTS "fills_service_role" ON public.fills;
-        CREATE POLICY "fills_owner_access" ON public.fills FOR ALL TO authenticated USING (auth.uid()::text = tenant_id) WITH CHECK (auth.uid()::text = tenant_id);
+        CREATE POLICY "fills_owner_access" ON public.fills FOR ALL TO authenticated USING (auth.uid()::text = tenant_id::text) WITH CHECK (auth.uid()::text = tenant_id::text);
         CREATE POLICY "fills_service_role" ON public.fills FOR ALL TO service_role USING (true) WITH CHECK (true);
     END IF;
 
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'positions') THEN
         DROP POLICY IF EXISTS "positions_owner_access" ON public.positions;
         DROP POLICY IF EXISTS "positions_service_role" ON public.positions;
-        CREATE POLICY "positions_owner_access" ON public.positions FOR ALL TO authenticated USING (auth.uid()::text = tenant_id) WITH CHECK (auth.uid()::text = tenant_id);
+        CREATE POLICY "positions_owner_access" ON public.positions FOR ALL TO authenticated USING (auth.uid()::text = tenant_id::text) WITH CHECK (auth.uid()::text = tenant_id::text);
         CREATE POLICY "positions_service_role" ON public.positions FOR ALL TO service_role USING (true) WITH CHECK (true);
     END IF;
 
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'invoices') THEN
         DROP POLICY IF EXISTS "invoices_owner_access" ON public.invoices;
         DROP POLICY IF EXISTS "invoices_service_role" ON public.invoices;
-        CREATE POLICY "invoices_owner_access" ON public.invoices FOR SELECT TO authenticated USING (auth.uid()::text = user_id);
+        CREATE POLICY "invoices_owner_access" ON public.invoices FOR SELECT TO authenticated USING (auth.uid()::text = user_id::text);
         CREATE POLICY "invoices_service_role" ON public.invoices FOR ALL TO service_role USING (true) WITH CHECK (true);
     END IF;
 
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'subscriptions') THEN
         DROP POLICY IF EXISTS "subscriptions_owner_access" ON public.subscriptions;
         DROP POLICY IF EXISTS "subscriptions_service_role" ON public.subscriptions;
-        CREATE POLICY "subscriptions_owner_access" ON public.subscriptions FOR SELECT TO authenticated USING (auth.uid()::text = user_id);
+        CREATE POLICY "subscriptions_owner_access" ON public.subscriptions FOR SELECT TO authenticated USING (auth.uid()::text = user_id::text);
         CREATE POLICY "subscriptions_service_role" ON public.subscriptions FOR ALL TO service_role USING (true) WITH CHECK (true);
     END IF;
 
@@ -1024,6 +1024,31 @@ BEGIN
         CREATE POLICY "execution_records_service" ON public.execution_records FOR ALL TO service_role USING (true) WITH CHECK (true);
     END IF;
 END $$;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- NOTE: PRIVILEGE HARDENING FOR THE TABLES ABOVE LIVES ELSEWHERE, ON PURPOSE
+-- ══════════════════════════════════════════════════════════════════════════
+-- PART 11 creates owner-access policies on tables it does not create, and it never
+-- enabled ROW LEVEL SECURITY on any of them. A policy on a table whose relrowsecurity
+-- is false is never consulted, so until this pass those policies were inert and the
+-- tables were fully reachable with the browser's anon key -- 22 exposures, measured by
+-- staging/billing_exposure_probe.py, including anon reading every customer's invoices
+-- and stored card metadata.
+--
+-- Enabling RLS and narrowing privileges was tried HERE first, and could not work. This
+-- file runs in the middle of the sequence and migrations/create_plan_tables.sql runs
+-- after it, so the IF EXISTS guards silently skipped tables that did not exist yet, and
+-- the tables created later inherited Supabase's default GRANT ALL regardless. Measured
+-- after that attempt: anon still held DELETE, INSERT, TRUNCATE and UPDATE on all five
+-- plan tables.
+--
+-- A privilege posture can only be asserted once every object it applies to exists. So it
+-- is applied LAST, by scripts/provision_database.py STEP 4, from
+--
+--     migrations/hardening/999_privilege_hardening.sql
+--
+-- which also carries a preflight that ABORTS provisioning if any table with a
+-- per-customer column is still readable by anon.
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- PART 12: KEY PERFORMANCE INDEXES

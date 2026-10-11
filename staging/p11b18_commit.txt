@@ -1,0 +1,50 @@
+==================================================================================================
+PRE-COMMIT RECHECKS (immediately before building)
+==================================================================================================
+  remote PR #6 head : d07014d36d32c63db44f8fb9659933c0e84e82f2  == expected parent
+  checked-out branch: main
+  shared index digest: 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME
+  staged paths: 22
+  pre-image .github/workflows/01-pr-check.yml                    57e2cee8ea448266efafa1441c2443a3c668e06e
+  pre-image tests/test_webhook_duplicate_delivery_real_redis.py  105b65671b279efb958905c718e1831719ad26ee
+  pre-image tests/test_quota01_metered_reservation_is_hard.py    f48103ac79a2b7adf76339aab0f2861168b1defc
+
+  read-tree d07014d36d32 -> rc=0
+  apply --cached (private index) -> rc=0
+    <stdin>:466: trailing whitespace.
+        
+    warning: 1 line adds whitespace errors.
+  write-tree -> 844bf038a3a6fbd48af47638b46f1d4ff257d1fe  == preflight candidate
+  paths changed vs parent (3): ['.github/workflows/01-pr-check.yml', 'tests/test_quota01_metered_reservation_is_hard.py', 'tests/test_webhook_duplicate_delivery_real_redis.py']
+
+  commit-tree -> f5b99e57e1f7644bdbb10712e21f85e2ff236920 (rc=0)
+
+==================================================================================================
+COMMIT VERIFICATION
+==================================================================================================
+  commit : f5b99e57e1f7644bdbb10712e21f85e2ff236920
+  parent : d07014d36d32c63db44f8fb9659933c0e84e82f2
+  tree   : 844bf038a3a6fbd48af47638b46f1d4ff257d1fe
+  author/date: Narendra2212 <nt3441449@gmail.com>  Sat Oct 10 20:30:56 2026 +0530
+  subject: D5': align the real-Redis gate database and add production-path quota coverage
+
+  numstat vs parent:
+    2	2	.github/workflows/01-pr-check.yml
+    266	0	tests/test_quota01_metered_reservation_is_hard.py
+    277	14	tests/test_webhook_duplicate_delivery_real_redis.py
+  shortstat: 3 files changed, 545 insertions(+), 16 deletions(-)
+
+  workflow diff in the commit:
+    @@ -213,7 +213,7 @@ jobs:
+    -          AERORA_TEST_REDIS_URL: redis://localhost:6379/15
+    +          AERORA_TEST_REDIS_URL: redis://localhost:6379/0
+    @@ -732,7 +732,7 @@ jobs:
+    -      AERORA_TEST_REDIS_URL: redis://localhost:6379/15
+    +      AERORA_TEST_REDIS_URL: redis://localhost:6379/0
+
+  exchange-slot test in the commit vs parent: True
+
+  shared index digest after build: 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME
+  checked-out branch after build : main
+  local PR#6 branch ref untouched: True
+  private index removed: True

@@ -1,0 +1,71 @@
+==============================================================================
+subscription_dependencies.py - the two non-slot-lock hunks, verbatim
+==============================================================================
+  @@ -45,2 +45,3 @@ from __futur  +import asyncio
+  @@ -49,2 +50,6 @@ import loggi  +import random
+  @@ -49,2 +50,6 @@ import loggi  +import time
+  @@ -49,2 +50,6 @@ import loggi  +import uuid
+  @@ -49,2 +50,6 @@ import loggi  +from contextlib import asynccontextmanager
+  @@ -872,2 +877,250 @@ async de  +#: How long the per-account connection-slot lock may be held. The window it covers is one
+  @@ -872,2 +877,250 @@ async de  +#: ``exchange_keys`` read plus one upsert — milliseconds — so this is generous by two orders of
+  @@ -872,2 +877,250 @@ async de  +#: magnitude and exists only so a worker killed mid-write cannot wedge the account's own key
+  @@ -872,2 +877,250 @@ async de  +#: storage until someone notices. The venue handshake is deliberately OUTSIDE the lock.
+  @@ -872,2 +877,250 @@ async de  +_SLOT_LOCK_TTL_SECONDS = 15
+  @@ -872,2 +877,250 @@ async de  +
+  @@ -872,2 +877,250 @@ async de  +#: How long a contender WAITS for its turn before giving up with a 409.
+  @@ -872,2 +877,250 @@ async de  +#:
+  @@ -872,2 +877,250 @@ async de  +#: A non-blocking lock was the first implementation and it was wrong in a way worth recording:
+  @@ -872,2 +877,250 @@ async de  +#: it refused every contender immediately, so a customer connecting five venues from the UI at
+  @@ -872,2 +877,250 @@ async de  +#: once got one success and four 409s against a plan that permitted all five. That is
+
+  Does the slot-lock block reference the newly imported names?
+    asyncio.   used in slot-lock block: True
+    random.    used in slot-lock block: True
+
+==============================================================================
+routers/exchange.py - hunks that DO mention a slot-lock symbol
+==============================================================================
+
+  @@ -24 +25,2 @@ from backend_app.core.models import Exchange
+    -from backend_app.core.subscription_dependencies import check_exchange_connection_slot
+    +from backend_app.core.subscription_dependencies import (
+    +    check_exchange_connection_slot, exchange_connection_slot_guard)
+
+  @@ -199,0 +373,14 @@ async def store_keys(
+    +
+    +    THE LIMIT IS CHECKED TWICE, ON PURPOSE (QUOTA-01)
+    +    -------------------------------------------------
+    +    The call below is a FAST PRE-CHECK: it refuses an over-limit account in milliseconds and,
+    +    more importantly, refuses it before the credential in this request body is sent anywhere.
+    +    It is an optimisation and a credential-hygiene measure, not the control — it reads the
+    +    account's venue set and returns, and by the time the row is written that figure is stale.
+    +
+    +    The CONTROL is ``exchange_connection_slot_guard`` further down, which re-reads the same
+    +    figure under a per-account cross-process lock and holds that lock across the vault write,
+    +    so the read that authorises the write and the write itself are one critical section. Two
+    +    concurrent requests for two DIFFERENT venues previously both passed a single free slot; a
+    +    Free account, whose limit is one, finished holding two venue credentials.
+    +    Regression: tests/test_quota01_exchange_slot_is_atomic.py
+
+  @@ -221,10 +420,24 @@ async def store_keys(
+    -        vault.store_exchange_keys(
+    -            user_id=user["id"],
+    -            exchange_id=body.exchange_id,
+    -            raw_api_key=body.api_key,
+    -            raw_secret=body.secret_key,
+    -            raw_password=body.password,
+    -            raw_secret_key=body.secret_key,
+    -            label=getattr(body, "label", None),
+    -            uid=getattr(body, "uid", None),
+    -        )
+    +        # QUOTA-01: the authoritative slot decision and the write it authorises, in one
+    +        # critical section per account. The guard re-reads the venue set under a cross-process
+    +        # lock, so a concurrent request for a DIFFERENT venue cannot also be told the last slot
+    +        # is free. It refuses rather than admits when the lock cannot be taken (409 contended,
+
+==============================================================================
+routers/exchange.py - other workstream markers present in the worktree copy
+==============================================================================
+    AUTH-01    occurrences: 2
+    CONN-01    occurrences: 5
+    QUOTA-01   occurrences: 2

@@ -1,0 +1,7 @@
+START=2026-10-08T20:39:11.7153069+05:30
+DSN=postgresql://postgres:@127.0.0.1:57227/postgres
+FILES=tests\test_paper01_paper_live_isolation.py tests\test_paper02_unfunded_order_state_postgres.py
+.............................                                            [100%]
+29 passed in 104.51s (0:01:44)
+EXITCODE=0
+END=2026-10-08T20:41:02.1949539+05:30

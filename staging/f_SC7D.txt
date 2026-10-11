@@ -1,0 +1,17 @@
+020_declare_pre_existing_tables.sql:270: CREATE TABLE IF NOT EXISTS public.strategies (
+--- ORM / models ---
+dag_task.py:151: nodes: List[Dict[str, Any]] = Field(..., description="DAG nodes")
+dag_task.py:152: edges: List[Dict[str, Any]] = Field(..., description="DAG edges")
+dag_task.py:153: symbols: List[str] = Field(default_factory=list, description="Trading symbols")
+dag_task.py:154: timeframe: Optional[str] = Field(None, description="Data timeframe")
+dag_task.py:172: dag_config: DAGConfig = Field(..., description="DAG configuration")
+dag_task.py:173: priority: int = Field(default=5, ge=1, le=10, description="Task priority 1-10")
+dag_task.py:174: max_retries: int = Field(default=3, ge=0, le=10, description="Maximum retry attempts")
+dag_task.py:175: scheduled_for: Optional[datetime] = Field(None, description="Scheduled execution time")
+dag_task.py:182: status: Optional[TaskStatus] = Field(None, description="Task status")
+dag_task.py:183: progress: Optional[float] = Field(None, ge=0.0, le=100.0, description="Execution progress")
+--- _rows() in the test ---
+219: "description": "unchanged",
+372: f"/api/strategies/{STRATEGY_ID}", json={"description": "edited"}
+376: assert sb.row("strategies", STRATEGY_ID)["description"] == "edited"
+NONCE_END=SC7D

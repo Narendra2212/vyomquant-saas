@@ -1,0 +1,62 @@
+============================================================================================
+1. GIT STATE vs A14
+============================================================================================
+  SAME       HEAD                                           now=074b772ab16cece62cbfca0f2b78497be2ae56d5
+  SAME       origin/main                                    now=074b772ab16cece62cbfca0f2b78497be2ae56d5
+  branch: main
+  >> CHANGED index raw checksum (stat-sensitive)            now=4a23178d4d771f86e8d4eb810fce192cc6011dcca9068f39ecc4567b4bfb0f62
+                                                            A14=3dbf1cb07e58b1e9ffb1a70154f9c008ad539188f45ab2cbe2b367fc1caf5676
+  SAME       index CONTENT digest                           now=7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d
+  tracked index entries: 2104
+  SAME       staged path count                              now=22
+  unmerged (conflict) entries: 0  OK
+
+  staged paths + HEAD->index numstat:
+    89	1	.github/workflows/05-security.yml
+    196	0	.kiro/security-template.md
+    55	13	algo22-terminal/src/pages/ExchangeManager.jsx
+    35	1	backend_app/core/dependencies.py
+    300	0	backend_app/core/tenant_db_context.py
+    11	1	backend_app/routers/auth.py
+    268	15	backend_app/routers/exchange.py
+    297	0	docs/adr/ADR-0006-bridge-tenancy-with-institutional-silo-tier.md
+    306	0	docs/adr/ADR-0007-per-tenant-credential-encryption-keys.md
+    239	0	docs/saas-architecture/tenant-isolation-matrix.md
+    199	0	docs/security-reviews/ALGO22_Quant_Platform_Review_10032026.md
+    186	31	scripts/verify_rls.py
+    572	0	scripts/verify_rls_enforcement.py
+    24	1	terraform/alb.tf
+    246	0	terraform/cloudtrail.tf
+    21	6	terraform/providers.tf
+    28	0	terraform/variables.tf
+    180	0	tests/test_sc3_aal_claim_propagation.py
+    263	0	tests/test_tenant_db_context.py
+    332	0	tests/test_tenant_db_context_postgres.py
+    204	0	tests/test_verify_rls_script.py
+    310	0	tests/test_worker_deployment_coverage.py
+
+============================================================================================
+2. D5' FILE BLOB IDENTITIES vs A14
+============================================================================================
+  SAME       tests/test_webhook_duplicate_delivery_real_redis.py now=3ffbccde
+  SAME       tests/test_quota01_metered_reservation_is_hard.py now=7baff0b6
+  SAME       tests/test_quota01_exchange_slot_is_atomic.py  now=2d7ccbbb
+  SAME       tests/real_redis_gate.py                       now=d40a1bb7
+  SAME       .github/workflows/01-pr-check.yml              now=91d55a37
+
+============================================================================================
+3. LIVE PR STATE vs A14
+============================================================================================
+  SAME       PR #6 head                                     now=d07014d36d32c63db44f8fb9659933c0e84e82f2
+    state=OPEN draft=False merged=None base=main reviewDecision= labels=[]
+  SAME       PR #7 head                                     now=49e70da23c2858ffc9a6f34d5db4521401477c82
+    state=OPEN draft=False merged=None base=main reviewDecision= labels=[]
+  SAME       PR #8 head                                     now=a624ce89b16005b0c73197005d6d0672737dad65
+    state=OPEN draft=False merged=None base=main reviewDecision= labels=[]
+
+  remote heads now:
+    49e70da23c2858ffc9a6f34d5db4521401477c82	refs/heads/ci/d5-prime-real-redis
+    d07014d36d32c63db44f8fb9659933c0e84e82f2	refs/heads/ci/d5-real-redis-quota-evidence
+    a624ce89b16005b0c73197005d6d0672737dad65	refs/heads/ci/d5-real-redis-switch
+    f4dae03316c67cb036029813d5704d1602949952	refs/heads/fix/perf-vault-singleton
+    074b772ab16cece62cbfca0f2b78497be2ae56d5	refs/heads/main

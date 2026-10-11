@@ -73,19 +73,45 @@ class TestRateLimitBackendSelection:
         rate_limit_module = importlib.import_module("backend_app.core.rate_limit")
         with pytest.raises(RuntimeError) as exc_info:
             importlib.reload(rate_limit_module)
-        assert "REDIS_URL environment variable is missing" in str(exc_info.value)
+        # API-03 rewrote this message. The assertion checks the DIAGNOSTIC CONTENT the
+        # old literal was standing in for -- it names the variable, names the subsystem
+        # and says the condition is fatal -- rather than the old exact sentence
+        # "REDIS_URL environment variable is missing". The control (it raises) is
+        # unchanged; only the wording moved.
+        message = str(exc_info.value)
+        assert "REDIS_URL" in message
+        assert "rate limit" in message.lower()
+        assert "fatal" in message.lower()
 
-    def test_ambiguous_environment_without_redis_falls_back_to_safe(self, monkeypatch):
-        """When no ENV/VYOMQUANT_MODE/AERORA_MODE is set, get_vyomquant_mode returns 'safe'
-        which is in DEV_TEST_ENVS — so in-memory limiter is used without raising."""
-        monkeypatch.delenv("ENV", raising=False)
-        monkeypatch.delenv("VYOMQUANT_MODE", raising=False)
-        monkeypatch.delenv("AERORA_MODE", raising=False)
-        monkeypatch.delenv("REDIS_URL", raising=False)
-        
+    def test_ambiguous_environment_without_redis_now_depends_on_dev_mode(
+        self, monkeypatch
+    ):
+        """UPDATED BY API-03. 'safe' is a trading mode and is no longer an environment.
+
+        This test used to read: "When no ENV/VYOMQUANT_MODE/AERORA_MODE is set,
+        get_vyomquant_mode returns 'safe' which is in DEV_TEST_ENVS — so in-memory limiter
+        is used without raising."
+
+        That premise is gone. API-03 removed the ``get_vyomquant_mode`` read, because a
+        trading mode says what the system may do with money and nothing about how many
+        processes are running; ``safe`` and ``paper`` are no longer on the allow-list.
+
+        With nothing set at all the limiter now REFUSES. It only falls back to memory when
+        something declares the environment local -- here ``DEV_MODE``. Both halves are
+        asserted, because the test would otherwise have kept passing for a reason it did
+        not state: the suite-wide ``DEV_MODE=true`` from ``tests/conftest.py``.
+        """
+        for name in ("ENV", "ENVIRONMENT", "VYOMQUANT_MODE", "AERORA_MODE", "REDIS_URL",
+                     "DEV_MODE"):
+            monkeypatch.delenv(name, raising=False)
+
         rate_limit_module = importlib.import_module("backend_app.core.rate_limit")
+        with pytest.raises(RuntimeError):
+            importlib.reload(rate_limit_module)
+
+        # ...and with the environment declared local, memory is permitted again.
+        monkeypatch.setenv("DEV_MODE", "true")
         mod = importlib.reload(rate_limit_module)
-        # 'safe' default is in DEV_TEST_ENVS so in-memory limiter is used
         assert mod.limiter is not None
         assert mod.limiter._storage_uri == "memory://"
 
@@ -112,4 +138,9 @@ class TestRateLimitBackendSelection:
         # Production environment should fail hard if Redis initialization fails
         with pytest.raises(RuntimeError) as exc_info:
             importlib.reload(rate_limit_module)
-        assert "Failed to initialize Redis rate limit storage" in str(exc_info.value)
+        # API-03 rewrote this message; see the note on the sibling test above. The
+        # diagnostic content asserted here is what the old literal "Failed to initialize
+        # Redis rate limit storage" was standing in for.
+        message = str(exc_info.value)
+        assert "rate limit" in message.lower()
+        assert "unreachable" in message.lower() or "fatal" in message.lower()

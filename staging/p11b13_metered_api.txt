@@ -1,0 +1,45 @@
+==============================================================================
+tests/test_quota01_metered_reservation_is_hard.py - API provenance per test
+==============================================================================
+
+  test_concurrent_reservations_admit_exactly_the_limit_and_no_more  (line 67)
+    real-Redis gated : False
+    production API   : NONE
+    raw Redis calls  : none
+
+  test_a_sequential_run_to_the_limit_then_one_more_refuses  (line 101)
+    real-Redis gated : False
+    production API   : NONE
+    raw Redis calls  : none
+
+  test_a_zero_allowance_reserves_nothing_and_accumulates_nothing  (line 119)
+    real-Redis gated : False
+    production API   : NONE
+    raw Redis calls  : none
+
+  test_an_unlimited_plan_always_admits  (line 133)
+    real-Redis gated : False
+    production API   : NONE
+    raw Redis calls  : none
+
+  test_reservations_are_isolated_per_user  (line 144)
+    real-Redis gated : False
+    production API   : NONE
+    raw Redis calls  : none
+
+  test_the_full_enforce_quota_path_refuses_at_the_limit  (line 166)
+    real-Redis gated : False
+    production API   : enforce_quota, sd.enforce
+    raw Redis calls  : none
+
+  test_concurrent_reservations_are_atomic_against_real_redis  (line 229)
+    real-Redis gated : True
+    production API   : NONE
+    raw Redis calls  : aioredis.from_url, client.decrby, client.delete, client.get(, client.incr, client.incrby
+
+==============================================================================
+VERDICT
+==============================================================================
+  test_concurrent_reservations_are_atomic_against_real_redis
+    exercises production quota API against real Redis: NO
+    exercises raw Redis commands only               : YES

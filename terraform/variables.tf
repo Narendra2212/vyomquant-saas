@@ -45,3 +45,31 @@ variable "redis_node_type" {
   type        = string
   default     = "cache.t4g.micro"
 }
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+#  SC-20: audit trail and threat detection
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+variable "cloudtrail_retention_days" {
+  description = "Days to retain CloudTrail log objects before expiry. 365 is the floor most audit regimes assume; lower it only against a written retention policy."
+  type        = number
+  default     = 365
+}
+
+variable "enable_guardduty" {
+  description = <<-EOT
+    Enable Amazon GuardDuty threat detection.
+
+    DEFAULT false, and the default is about COST, not merit. CloudTrail's first
+    management-event trail is free (you pay only S3 storage, cents at this volume), so it
+    is enabled unconditionally in cloudtrail.tf. GuardDuty is billed per million CloudTrail
+    events and per GB of VPC flow and DNS logs analysed, so switching it on changes the
+    monthly bill — that is an account-owner decision, not a default this file should make
+    on someone's behalf.
+
+    For a platform holding broker API credentials and moving customer money, turning this
+    on is the right call. Set it to true when you have agreed the spend.
+  EOT
+  type        = bool
+  default     = false
+}

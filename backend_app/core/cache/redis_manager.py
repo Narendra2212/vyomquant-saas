@@ -28,6 +28,46 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+#: The ``ENV`` values in which substituting an in-process dict for Redis is acceptable.
+#:
+#: Acceptable means "there is no second process to coordinate with". On a developer
+#: machine or in the test suite that is true. In any deployed environment it is false,
+#: and the consequence of getting it wrong is a distributed lock that reports success
+#: separately in every pod — see :meth:`SharedRedisManager._get_active_cache`.
+#:
+#: Kept as an alias of the canonical set in ``core/runtime_env.py`` so the two cannot
+#: diverge; the name stays because it is part of this module's established surface.
+from backend_app.core.runtime_env import LOCAL_STATE_ENVS as _MOCK_CACHE_ENVS  # noqa: E402
+
+
+def _mock_cache_is_acceptable() -> bool:
+    """Whether an in-memory cache may stand in for Redis.
+
+    FAILS CLOSED. Reads ``DEV_MODE`` and the real ``ENV`` / ``ENVIRONMENT`` variables
+    only — never ``VYOMQUANT_MODE``, which is a trading mode (``safe``/``paper``/
+    ``live``) and not a deployment environment. Confusing the two is the defect this
+    function replaces: the old check compared the trading mode against ``"production"``,
+    a value it can never hold, so it always permitted the mock.
+
+    An unset ``ENV`` returns ``False``. That is deliberately stricter than the
+    module-level ``DEV_MODE`` constant, which treats only ``development`` as dev: an
+    unconfigured deployment must not be handed a fake distributed lock.
+
+    Read per call rather than cached, because the test suite sets these with
+    ``monkeypatch.setenv`` and a cached value would make the decision depend on import
+    order.
+
+    Delegates to ``core/runtime_env.py``, which is now the single home for this
+    judgement. ``core/rate_limit.py`` needed the identical decision -- may this process
+    substitute local state for shared state? -- and had got it wrong in the same way, by
+    reading the trading mode. Two copies of a fail-closed rule are two things to drift,
+    so there is one.
+    """
+    from backend_app.core.runtime_env import local_state_is_acceptable
+
+    return local_state_is_acceptable()
+
+
 # DEV_MODE detection
 DEV_MODE = os.environ.get("DEV_MODE", "false").lower() == "true" or \
            os.environ.get("ENV", "").lower() == "development"
@@ -292,6 +332,23 @@ class MockRedisClient:
     async def xgroup_create(self, stream: str, group: str, id: str = "$", mkstream: bool = False):
         """Mock xgroup_create for streams - no-op"""
         return True
+
+    async def xautoclaim(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        min_idle_time: int,
+        start_id: str = "0-0",
+        count: int = 10,
+    ):
+        """Mock xautoclaim - nothing is ever pending in the in-memory store."""
+        return (start_id, [], [])
+
+    async def xpending(self, stream: str, group: str):
+        """Mock xpending - no consumer groups exist in the in-memory store."""
+        return None
+
     
     async def zpopmin(self, key: str, count: int = 1):
         """Mock zpopmin for sorted sets - returns empty list"""
@@ -617,17 +674,74 @@ class SharedRedisManager:
             raise AttributeError(f"Redis client {type(client)} does not support Lua script execution")
 
     async def _get_active_cache(self):
-        """Get active Redis cache client or mock client in non-production environments."""
+        """The real Redis client, the in-memory mock in dev/test, or ``None``.
+
+        ``None`` means "no cache is available". Every proxy method on this class already
+        treats that as a miss or a refusal, which is the fail-closed direction.
+
+        ═══════════════════════════════════════════════════════════════════════════
+        WHY THE FALLBACK BELOW IS NOT A MODE COMPARISON ANY MORE
+        ═══════════════════════════════════════════════════════════════════════════
+        The last branch used to read::
+
+            from backend_app.core.safety_config import get_vyomquant_mode
+            if get_vyomquant_mode() != "production":
+                return self._mock_client
+            return None
+
+        ``get_vyomquant_mode()`` returns ``VYOMQUANT_MODE``, whose documented values are
+        ``safe`` / ``paper`` / ``live`` (``core/deployment_config.py``). **None of them is
+        ``"production"``** — that is a value of the separate ``ENV`` variable. So the
+        comparison was between two different vocabularies and could never be false, and
+        the ``return None`` below it was unreachable.
+
+        Reproduced during the pre-launch audit with the exact ECS task-definition
+        settings (``ENV=production``, ``VYOMQUANT_MODE=paper``, ``DEV_MODE=false``) and
+        Redis unreachable::
+
+            get_vyomquant_mode()                 = 'paper'
+            get_vyomquant_mode() != "production" -> True
+            _get_active_cache() returned         : MockRedisClient
+
+        WHY THAT IS A TRADING DEFECT AND NOT A CACHING ONE. This manager backs two
+        controls that must be global rather than per-process:
+
+          * ``master_executor``'s execution lock —
+            ``set(f"execution:{user}:{symbol}:{execution_id}", nx=True, ex=30)``
+          * ``IdempotentExchangeSubmission.claim_submission``'s ``SET NX`` claim
+
+        ``MockRedisClient`` is backed by a plain ``dict`` on a module-global instance, so
+        it is **per process**. Every pod therefore wins its own ``NX`` and both controls
+        silently become no-ops across pods — while still reporting success. That last
+        clause is what makes it worse than an outage: no exception is raised, so the
+        fail-closed handling added for the duplicate-submission defect never fires,
+        because it defends against a store that *errors*, not one that *lies*. N pods
+        consuming one signal produce N real orders.
+
+        So an unavailable cache in a non-development deployment now returns ``None``.
+        A refused lock makes ``BotRunner`` skip the tick and ``claim_submission`` refuse,
+        which is the correct answer to "I cannot coordinate with the other workers".
+
+        Regression: tests/test_redis_fallback_does_not_fake_a_distributed_lock.py
+        """
         if DEV_MODE and not getattr(self, '_dev_mode_bypass', False):
             return self._mock_client
-        
+
         await self._ensure_manager()
         if self._redis_manager and getattr(self._redis_manager, "cache", None):
             return self._redis_manager.cache
-        
-        from backend_app.core.safety_config import get_vyomquant_mode
-        if get_vyomquant_mode() != "production":
+
+        # No real cache. The in-memory stand-in is only ever acceptable where there is
+        # no second process to coordinate with — i.e. a developer machine or the test
+        # suite, which `DEV_MODE` above already covers. Anywhere else, say so.
+        if _mock_cache_is_acceptable():
             return self._mock_client
+
+        logger.error(
+            "Redis is unavailable and this is not a development environment, so no "
+            "cache is being substituted. Distributed locks and idempotency claims will "
+            "refuse rather than silently succeed per-process."
+        )
         return None
 
     async def keys(self, pattern: str = "*") -> list:
@@ -1272,6 +1386,72 @@ class SharedRedisManager:
                 logging.getLogger(__name__).warning(f"Redis XGROUP_CREATE failed for '{stream}': {e}")
                 return False
         return False
+
+    async def xautoclaim(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        min_idle_time: int,
+        start_id: str = "0-0",
+        count: int = 10,
+    ):
+        """Reclaim entries abandoned in a consumer group's PEL, with fail-soft behavior.
+
+        WORKER-01. An entry delivered by XREADGROUP stays in the Pending Entries List
+        until it is XACKed. If the consumer that took it dies first -- or declines to ACK
+        because the job failed -- nothing redelivers it on its own. Without this call a
+        command sits pending forever, which is the silent-loss half of WORKER-01.
+
+        Returns ``(next_start_id, entries, deleted_ids)`` exactly as redis-py does, so the
+        caller can page through the PEL. On any failure it returns an empty claim rather
+        than raising, matching every other stream proxy here: a reaper that crashed the
+        worker loop would be worse than one that finds nothing this pass.
+
+        ``min_idle_time`` is milliseconds. Pass a comfortable multiple of the poll
+        interval -- a threshold inside one poll period does not detect abandonment, it
+        manufactures it by stealing entries from a consumer that is still working on them
+        (the rule ``training_worker.MIN_STALE_TO_INTERVAL_RATIO`` states for heartbeats).
+        """
+        empty = (start_id, [], [])
+        if DEV_MODE:
+            return empty
+
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                return await self._redis_manager.events.xautoclaim(
+                    stream, group, consumer, min_idle_time, start_id=start_id, count=count
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Redis XAUTOCLAIM failed for '{stream}'/'{group}': {e}"
+                )
+                return empty
+        return empty
+
+    async def xpending(self, stream: str, group: str):
+        """Summarise a consumer group's PEL, with fail-soft behavior.
+
+        Used for observability -- "how many commands are stuck?" is the question that
+        makes a dead-letter stream actionable. Returns ``None`` when unavailable, which is
+        distinguishable from a real summary reporting zero pending entries.
+        """
+        if DEV_MODE:
+            return None
+
+        await self._ensure_manager()
+        if self._redis_manager and self._redis_manager.events:
+            try:
+                return await self._redis_manager.events.xpending(stream, group)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Redis XPENDING failed for '{stream}'/'{group}': {e}"
+                )
+                return None
+        return None
 
     async def zpopmin(self, key: str, count: int = 1):
         """Pop minimum scores from sorted set with fail-soft behavior."""

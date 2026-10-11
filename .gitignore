@@ -358,3 +358,18 @@ deleted_files*.md
 # deploy. It is a snapshot of live ECS state, never a source of truth — committing it
 # is how stale configuration gets replayed over production.
 task-def-rendered.json
+
+# Local verification infrastructure (pre-launch verification pass).
+#
+# `staging/` holds the re-runnable verifiers the launch readiness report cites --
+# verify_schema.py, rls_inventory.py, exposure_check.py, fk_typecheck.py,
+# verify_live_trading_off.py, run_pg_lane.py, try_alembic_head.py, bootstrap_pg.py --
+# which are small and worth keeping. What must never be committed is what they produce
+# and what they download: PostgreSQL data directories, the Redis build, and run logs.
+#
+# POST_LAUNCH_IMPROVEMENTS.md item 12: anything here worth running regularly belongs in
+# scripts/ and in CI rather than in a directory named staging.
+staging/pgdata*/
+staging/redis/
+staging/*.log
+staging/pg_dsn.txt

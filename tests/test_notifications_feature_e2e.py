@@ -359,8 +359,19 @@ async def test_support_ticket_status_resolution_generates_notification():
 
 @pytest.mark.asyncio
 async def test_exchange_connection_lifecycle_generates_notifications():
-    """Verify exchange connection and disconnection produce real user notifications."""
-    user = {"id": "usr_exch_trader_01", "email": "exch@quant.io", "role": "user"}
+    """Verify exchange connection and disconnection produce real user notifications.
+
+    ``aal: "aal2"`` is required because AUTH-01 wired ``require_aal2`` to
+    POST /api/exchanges/keys and DELETE /api/exchanges/{id}; without it this caller gets
+    403 and never reaches the notification dispatch this test is about. The claim is
+    supplied on the user rather than by overriding ``require_aal2``, so the real control
+    still runs -- stubbing it out would let this test keep passing if AUTH-01 were
+    reverted.
+    """
+    user = {
+        "id": "usr_exch_trader_01", "email": "exch@quant.io", "role": "user",
+        "aal": "aal2",
+    }
     mock_vault = MagicMock()
     mock_vault.store_exchange_keys = MagicMock(return_value=None)
     mock_redis = MagicMock()

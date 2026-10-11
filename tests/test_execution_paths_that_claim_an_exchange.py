@@ -203,7 +203,9 @@ def _stated_environment(value: ast.AST | None) -> str | None:
     return None
 
 
-def _call_sites(name: str, receiver: str | None = None) -> list[str]:
+def _call_sites(
+    name: str, receiver: str | None = None, *, production_only: bool = False
+) -> list[str]:
     """``["path:lineno"]`` for every CALL to ``name``, found by parsing.
 
     Calls only -- a definition, an import or a comment naming the function is not a
@@ -211,10 +213,19 @@ def _call_sites(name: str, receiver: str | None = None) -> list[str]:
     requires the call to be an attribute access whose target renders to that name, so
     ``initialize`` can be asked about the orchestrator specifically rather than about
     every object in the repository that happens to have a method of that name.
+
+    ``production_only`` excludes ``tests/``. REACHABILITY IS A PROPERTY OF SHIPPED CODE.
+    A test that calls a dangerous entry point in order to assert that it REFUSES is
+    evidence that the path is safe, not evidence that it is reachable in production -- and
+    counting it as a caller makes the measurement say the opposite of the truth. Use it
+    only for "does production reach this", never to excuse a real caller.
     """
     sites: list[str] = []
     for dirpath, dirnames, filenames in os.walk(ROOT):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        if production_only and pathlib.Path(dirpath).name == "tests":
+            dirnames[:] = []
+            continue
         for filename in filenames:
             if not filename.endswith(".py"):
                 continue
@@ -316,9 +327,47 @@ class TestNoneOfTheThreePathsIsReachable:
         assert "status_code=400" in source
 
     def test_nothing_calls_the_idempotent_exchange_submission(self):
-        """Its only entry point, and its singleton accessor, have no callers."""
-        assert _call_sites("submit_order_idempotent") == []
-        assert _call_sites("get_idempotent_exchange_submission") == []
+        """Its only entry point, and its singleton accessor, have no callers.
+
+        ``production_only`` because ``tests/test_live_orders_are_bounded_by_account_equity.py``
+        and ``tests/test_idempotent_submission_fails_closed.py`` now call
+        ``submit_order_idempotent`` deliberately, to assert that it refuses. Those calls
+        are the opposite of the hazard this test measures, and counting them would make
+        the assertion read as "the path became reachable" when what actually happened is
+        that it became provably sealed. The question asked of shipped code is unchanged.
+        """
+        assert _call_sites("submit_order_idempotent", production_only=True) == []
+        assert _call_sites("get_idempotent_exchange_submission", production_only=True) == []
+
+    def test_the_idempotent_submission_path_refuses_live_orders_outright(self):
+        """And now it does not merely lack callers -- it refuses.
+
+        "Nothing calls it" is a fact about today's wiring that the next commit can
+        change. The path builds an engine declared LIVE and calls ``execute_trade``,
+        which hardcodes ``source="bot_runner"``, so it would inherit the bot runner's
+        authorisation to place real orders while performing no risk evaluation of its
+        own. It is sealed at the point of submission, which is a property of the code
+        rather than of the call graph.
+        """
+        refusal = _function(
+            "backend_app/backend/distributed_execution/idempotent_exchange_submission.py",
+            "submit_order_idempotent",
+        )
+
+        returned_errors = {
+            value_node.value
+            for node in ast.walk(refusal)
+            if isinstance(node, ast.Dict)
+            for key_node, value_node in zip(node.keys, node.values)
+            if isinstance(key_node, ast.Constant)
+            and key_node.value == "error"
+            and isinstance(value_node, ast.Constant)
+        }
+
+        assert "RISK_EVALUATION_REQUIRED" in returned_errors, (
+            "submit_order_idempotent no longer refuses live orders; it would place an "
+            "unrisk-checked order with bot_runner authorisation"
+        )
 
     def test_the_signal_endpoint_is_mounted_but_cannot_succeed(self):
         """Finding 1's reachability: mounted, reachable, and a 500 every time."""

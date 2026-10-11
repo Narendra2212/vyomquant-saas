@@ -1,0 +1,287 @@
+# Phase 11B-A15 — D5′ Owner Coordination and Approval-Gated Execution
+
+**Outcome: the Phase 1 approval gate is NOT satisfied. No approval exists for any of items
+A–E, so no Git or remote mutation was performed.** The prepared candidate is re-verified,
+reproducible, and ready; this report is the handoff.
+
+**I must also report an error of my own: in A14 I overwrote a concurrent workstream's
+`staging/PHASE11B_A14_D5_CONSOLIDATION_REPORT.md`.** Details and mitigation in §7.
+
+QUOTA-01 OPEN. TENANT-01 OPEN. Live trading OFF / NOT CERTIFIED.
+
+---
+
+## 1. Phase 0 — Fresh baseline (re-verified, nothing trusted from history)
+
+| Item | Value | vs A14 |
+|---|---|---|
+| branch / HEAD | `main` / `074b772a` | unchanged |
+| `refs/heads/main` = `origin/main` | `074b772a` | unchanged |
+| D5′ branch local = remote | `d07014d3` | unchanged |
+| **staged-content fingerprint** | `CF474F1B83FD37173F0AD3F2B5417D07CE4B26DC66A5CF4D6697AE9ACB568767` | **identical** |
+| staged / unstaged | 22 / 100 | unchanged |
+| A15 report path | free before writing | — |
+
+Staged-content identity (`git ls-files -s`) is used as the principal invariant, as instructed —
+the raw `.git/index` SHA-256 is unreliable because Git rewrites its stat cache on ordinary reads.
+
+### 1a. PRs — unchanged, all failing, none reviewed
+
+| PR | Head | Tree | State | mergeStateStatus | reviewDecision | Latest run |
+|---|---|---|---|---|---|---|
+| #6 | `d07014d3` | `d28b6d1a…` | OPEN | UNSTABLE | *(empty)* | `38047483583` failure |
+| #7 | `49e70da2` | **`271f13c2…`** | OPEN | UNSTABLE | *(empty)* | `38044138718` failure |
+| #8 | `a624ce89` | **`271f13c2…`** | OPEN | UNSTABLE | *(empty)* | `38046625040` failure |
+
+#7 ≡ #8 tree-identity re-verified this phase.
+
+### 1b. Prepared blobs — all three still match
+
+| Artifact | Expected | Measured | Source |
+|---|---|---|---|
+| Workflow candidate | `a2f39ebb` | **`a2f39ebbe76d4e75be7075080587c00d47094456`** | rebuilt deterministically from `d07014d3` + worktree comment block |
+| Webhook test | `3ffbccde` | **`3ffbccde68c3b57485a9971d4977c34aff598b47`** | worktree (webhook owner's F2/F3) |
+| Metered quota test | `7baff0b6` | **`7baff0b64f0c7441f4192a9a6b2df53e7a68dce9`** | worktree (my A13 production-path tests) |
+| Gate (unchanged) | — | `d40a1bb7…` | matches the owner's recorded hash |
+| Slot-lock test (unchanged) | — | `2d7ccbbb…` | matches the owner's recorded hash |
+
+The workflow candidate is **reproducible**: rebuilding from scratch yields the same blob, with
+`2` env assignments rewritten, `0` env lines left on `/15`, the historical `/15` narrative in the
+comment preserved, `d5-redis-diagnostics` retained and `provisioning-and-isolation` absent.
+
+### 1c. Independent convergence — the concurrent agent's plan matches mine exactly
+
+`staging/p11b15_patch_plan.txt` (concurrent, 24 `p11b15_*` artifacts, all preserved):
+
+```
+AERORA_TEST_REDIS_URL in PR #6:  216: …/15    735: …/15   -> both must become /0
+provisioning-and-isolation: absent from PR #6 and MUST NOT be added
+lines changed by the gate-database edit: 2 (expected 2)
+webhook  PR#6=383  worktree=646  DIFFERS
+metered  PR#6=264  worktree=530  DIFFERS
+slot     PR#6=867  worktree=867  identical
+slot-lock test removal is NOT in this patch (needs separate approval)
+shared .git/index before == after
+```
+
+Two workstreams reached the identical consolidation independently, and neither acted. Their
+patch is `staging/p11b15_proposed.patch` (+545 / −16 across 3 files).
+
+### 1d. Implementation state
+
+| File | State | Staged | Unstaged | Bearing |
+|---|---|---|---|---|
+| `backend_app/backend/redis_manager.py` | **clean** | — | — | **F4 unfixed, unowned** |
+| `backend_app/core/subscription_engine.py` | clean | — | — | `reserve_quota` is in every PR |
+| `backend_app/core/subscription_dependencies.py` | ` M` | — | +253 / −0 | F1 impl, worktree-only |
+| `backend_app/routers/exchange.py` | **`MM`** | **+268 / −15** | +154 / −14 | F1 entangled |
+| `backend_app/routers/billing.py` | ` M` | — | **+700 / −40** | **does NOT address F5** (§6) |
+| `backend_app/core/cache/redis_manager.py` | ` M` | — | +185 / −5 | F5 fail-soft proxies |
+
+### 1e. Gate, probe, collection
+
+- Webhook keyspace probe present in the worktree (13 markers: `_prove_one_keyspace`,
+  `_app_cache_url`, `KEYSPACE SPLIT`).
+- Gate classification: `unset → skip`; `/0`, unreachable port, and non-loopback all **→ fail**.
+  No configured endpoint can produce a silent skip.
+- Collection across the three D5′ files: **37 tests** (9 metered + 6 webhook + 22 slot).
+
+## 2. Phase 1 — Approval gate: NOT SATISFIED
+
+Determined by two independent means: my own PR query, and the concurrent agent's exhaustive
+search (`staging/p11b15_approval_search.txt`, which scanned **127 staging documents**).
+
+| Item | Decision required | Evidence found | Status |
+|---|---|---|---|
+| **A** Canonical PR (#6 or #7) | yes | All three PRs: `reviewDecision` empty, **0 reviews**, 0 labels, 0 assignees; the only comment on each is auto-generated by `coderabbitai`. The sole repo-side hits are *requests* in A13/A14, not grants. | **ABSENT** |
+| **B** Webhook owner approves carrying their F2/F3 file in the canonical PR | yes | `PHASE11B_A12_WEBHOOK_KEYSPACE_FIX.md` tracks `ci/d5-prime-real-redis` (**#7**) and states "no remote action of any kind". A stated preference, **not** an approval to carry the file in #6. | **ABSENT** |
+| **C** F1 disposition (ship guard, or defer slot tests) | yes | No signal from the `exchange.py` / `subscription_dependencies.py` owner anywhere. | **ABSENT** |
+| **D** Commit + push + trigger CI | yes | None. | **ABSENT** |
+| **E** Close duplicate PR | yes | None. | **ABSENT** |
+
+Per the instruction — "If any required approval is absent, prepare the exact handoff and stop" —
+**Phase 2 was not entered.** No commit, push, PR edit, closure, or CI trigger.
+
+### Recommendation on A (unchanged, now triply concordant)
+
+**#6**, because it is the sole carrier of the `d5-redis-diagnostics` job — the only mechanism
+that produced per-test JUnit artifacts and the `state=run` gate proof. This recommendation is
+made by: this task's prompt, my A14 report, and the concurrent agent (surviving fragment:
+`| A | **Canonical PR = #6**, close #7 and #8 | … or name #7 instead and I will port the
+diagnostic job |`).
+
+**The one genuine tension:** the webhook file's owner targets **#7**. Adopting #6 carries their
+file, so item B needs their explicit agreement regardless of which PR you pick.
+
+## 3. Exact handoff — the approved-candidate manifest
+
+Commit parent `d07014d3` (if #6 is canonical). Three paths, nothing else:
+
+| Path | New blob | Replaces | Change |
+|---|---|---|---|
+| `.github/workflows/01-pr-check.yml` | `a2f39ebb` | `57e2cee8` | comment block 5→37 lines; **both** `AERORA_TEST_REDIS_URL` `/15`→`/0` (lines 216, 735). Diagnostic job and historical `/15` narrative preserved; `provisioning-and-isolation` not added. |
+| `tests/test_webhook_duplicate_delivery_real_redis.py` | `3ffbccde` | `105b6567` | adopt owner's F2/F3 file **unchanged** |
+| `tests/test_quota01_metered_reservation_is_hard.py` | `7baff0b6` | `f48103ac` | +266 lines: 3 helpers + 2 production-path `reserve_quota` tests |
+
+**Excluded by design, pending separate approval:** `subscription_dependencies.py`, either
+version of `exchange.py`, and any removal of `tests/test_quota01_exchange_slot_is_atomic.py`.
+
+**Expected CI after this commit — stated so it is not mistaken for a green run:** it should fix
+the 2 webhook keyspace failures and add 2 production-path quota tests, but the **21 slot-lock
+failures persist by construction** until F1 lands. The job will remain RED.
+
+## 4. Commands and CI runs actually executed this phase
+
+Read-only only. **No CI run was triggered.**
+
+| Action | Result |
+|---|---|
+| `git rev-parse` / `ls-files -s` / `status` / `diff --numstat` | baseline §1 |
+| `gh pr view 6,7,8 --json …` | §1a (read-only) |
+| `git rev-parse <sha>^{tree}` ×3 | #7≡#8 confirmed |
+| `git hash-object` ×4 + deterministic workflow rebuild | §1b blobs confirmed |
+| `git apply --cached --check` in a **private index** seeded from HEAD | F1 entanglement re-confirmed (§6) |
+| `pytest --collect-only` (3 D5′ files) | 37 collected |
+| `real_redis_gate._classify` ×4 | skip / fail / fail / fail |
+| CI runs inspected (existing, not triggered) | `38047483583` (#6), `38044138718` (#7), `38046625040` (#8) |
+
+## 5. Real-Redis results vs skips (kept separate)
+
+**Local:** Redis **not reachable**; nothing installed. Local runs produce only opt-out skips,
+which are **not** evidence. From A14's measurements, unchanged: opt-out = 26 passed / **11
+skipped**; configured-but-unreachable = 3 failed / **0 skipped** (proving my two new tests fail
+closed); adjacent regressions = 84 passed.
+
+**CI (actual real-Redis execution), baseline-relative node IDs:**
+
+| Node ID | #6 `38047483583` | #7 `38044138718` | Classification |
+|---|---|---|---|
+| `…metered…::test_concurrent_reservations_are_atomic_against_real_redis` | PASS | PASS | raw Redis atomicity — **not** production path |
+| `…metered…::test_production_reserve_quota_*` (×2) | n/a | n/a | **not in any PR yet** |
+| `…slot…::test_the_slot_lock_is_mutually_exclusive_against_real_redis` | **FAIL** | **FAIL** | **F1** — `AttributeError: … _slot_lock_key`; cannot run against the PR's code |
+| `…slot…::test_the_guard_admits_exactly_the_limit_against_real_redis` | **FAIL** | **FAIL** | **F1**, same |
+| `…slot…` other 19 | **FAIL** | **FAIL** | **F1**, same |
+| `…slot…::test_retrying_a_refused_request_does_not_eventually_succeed` | PASS | PASS | the lone survivor |
+| `…webhook…::test_the_lock_is_recorded_in_redis_under_the_documented_key` | **FAIL** | **FAIL** | keyspace split (F2/F3 fix not in any PR) |
+| `…webhook…::test_an_in_flight_delivery_blocks_a_concurrent_one` | **FAIL** | **FAIL** | keyspace split, reverse direction |
+| `…webhook…::test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind` | PASS | PASS | **VACUOUS** — asserts absence in a DB the app never writes |
+| `…webhook…` other 3 | PASS | PASS | handler↔handler, keyspace-independent |
+
+**Pre-existing baseline failures (NOT D5′),** identical on `6c5660a1` before D5′ existed:
+`test_tenant_isolation_matrix`, `test_no_credential_in_api_response_body`,
+`test_strategy_status_publish`, `test_task_6_1_backtest_execute`, `test_validation_sweep`,
+`test_task_33_2_rate_limit_keys`, `test_tenant_isolation_library_paper`,
+`test_ml_deployment_guards`, `test_task_8_4_runtime_readiness_gate`.
+
+The `d5-redis-diagnostics` job reported `success` **only** because of `continue-on-error`; the
+authoritative counts are its JUnit artifacts (slot 22/21 failures, metered 7/0, webhook 6/2).
+
+## 6. F1 / F4 / F5 — tracked separately
+
+**F1 — exchange-slot guard. BLOCKED, re-verified this phase.**
+```
+                 guard def   store_keys refs
+HEAD                  0            0
+PR #6 / PR #7         0            0
+INDEX                 —            0
+WORKTREE              1            3
+git apply --cached --check (private index = HEAD):
+  error: patch failed: backend_app/routers/exchange.py:366   exit 1
+staged layer: 268 / 15  (tenant-isolation / RLS / credential-vault workstream)
+```
+Only that owner can land it. I copied nothing and removed nothing.
+
+**F4 — `get_redis_url` discards an explicit DB and captures `REDIS_URL` at import. UNOWNED.**
+`backend_app/backend/redis_manager.py` is **clean**, so unfixed. Call-site inventory taken this
+phase — the production blast radius is exactly three calls, all inside `initialize()`:
+`get_redis_url(REDIS_DB_CACHE)` L141, `(REDIS_DB_QUEUE)` L149, `(REDIS_DB_EVENTS)` L157. Every
+other reference is a test or a `staging/` probe. Changing it alters connection behaviour for
+every deployment, so it stays out of D5′. Until it is fixed, the `/0` alignment plus the
+derived-URL probe are compensations, not a fix.
+
+**F5 — webhook idempotency asymmetry on cache faults. UNOWNED, confirmed from current code.**
+`SharedRedisManager` proxies are fail-soft: `get` swallows every exception and returns `None`
+(L757-765); `set` returns `False` (L767-775). In `razorpay_webhook` that means:
+- a cache **read** fault is indistinguishable from "key absent" → the handler proceeds → the
+  webhook is processed **again** → **fails OPEN** (double settlement risk);
+- a cache **write** fault returns `False` → read as a lock collision → returns `duplicate` →
+  **fails CLOSED** (lost settlement).
+
+Opposite directions from the same outage. The concurrent `billing.py` change (+700/−40) does
+**not** address this — its only idempotency reference is a SQL function returning NULL on replay
+(DB-level, a different concern), which may later converge with F5 but does not close it today.
+Billing-critical; needs its own review.
+
+## 7. Incident — I overwrote a concurrent workstream's A14 report
+
+**What happened.** In A14 I created `staging/PHASE11B_A14_D5_CONSOLIDATION_REPORT.md` with a
+whole-file write without first checking whether the path existed. A concurrent agent had already
+written a report there (≥307 lines). The current file is **258 lines, mine**
+(mtime 2026-10-10 19:08:14). Their version is gone.
+
+**Recoverability: none.** `staging/` is untracked (`??`, never in HEAD), so there is no git copy.
+The only surviving trace is three lines quoted in `staging/p11b15_approval_search.txt`:
+```
+…A14…:31   **Proposed canonical PR: #6 (`ci/d5-real-redis-quota-evidence`).** …
+…A14…:141  ## 3. Proposed canonical PR — #6, with the counter-argument stated
+…A14…:307  | A | **Canonical PR = #6**, close #7 and #8 | §3; or name #7 instead …
+```
+
+**Impact assessment.** Their conclusion — canonical PR **#6**, close #7/#8, with an A–E approval
+table — is the same as mine and as this task's recommendation, so **no decision was corrupted**.
+Their *evidence* also largely survives: all 24 `p11b15_*` artifacts (proposed patches, JUnit
+output, verification and isolation scripts, the approval search) are intact and were **not**
+touched this phase. What was lost is their prose reasoning and counter-argument.
+
+**Mitigation applied.** For this phase I checked the A15 path for pre-existence before writing
+(it was free), as the prompt requires. Recommended standing rule: never whole-file-write a
+`staging/` report without an existence check, and prefer suffixing a workstream tag when a
+collision is possible.
+
+## 8. Shared-state preservation
+
+| Check | Result |
+|---|---|
+| staged-content fingerprint, before → after | `CF474F1B…` → **`CF474F1B…`** (identical) |
+| staged entries | 22 → 22 |
+| `HEAD` / `refs/heads/main` / `origin/main` | `074b772a`, unmoved |
+| D5′ branch local / remote | `d07014d3` / `d07014d3`, **unmoved** |
+| PRs #6 / #7 / #8 | all still OPEN; none edited, closed, re-targeted or merged |
+| Tracked files modified this phase | **none** |
+| Concurrent `p11b15_*` artifacts | **24 preserved, none modified or deleted** |
+| Concurrent webhook / `subscription_dependencies` / `exchange.py` / `billing.py` | not edited |
+| `git add` / commit / push / CI trigger / merge | **none** |
+| My own helper scripts | removed |
+
+## 9. QUOTA-01 / TENANT-01 disposition
+
+**QUOTA-01 OPEN.** Real-Redis acceptance is **FAILED**, not merely unverified — the tests ran
+against a reachable Redis (`state=run`) and 23 failed.
+
+| Claim | Status |
+|---|---|
+| D5′ opt-in reaches CI; gate executes rather than skipping | **PROVEN** (`38047483583`, `state=run`) |
+| Configured-but-unreachable Redis fails, never skips | **PROVEN** locally (3 failed / 0 skipped) |
+| Redis INCR/DECR atomicity | proven — a Redis property, not application evidence |
+| Production `reserve_quota` against real Redis | **prepared, UNEXECUTED** — not in any PR |
+| Exchange-slot concurrency + release safety | **NO EVIDENCE** — F1, implementation in no commit |
+| Webhook idempotency against real Redis | 4/6 pass, 1 of those **vacuously**; 2 fail; fix prepared but UNEXECUTED |
+| Webhook behaviour under cache fault | **F5 — fails open on read fault.** Unowned |
+| order-rate / daily-trade / active-order ceilings | **OPEN** — not implemented |
+| Slot-lock release non-atomicity residual | **OPEN**, documented |
+
+**TENANT-01 OPEN** (untouched by this phase).
+
+Live trading remains **OFF / NOT CERTIFIED**.
+
+## 10. What I need from you
+
+1. **A** — canonical PR: **#6** (recommended) or #7.
+2. **B** — webhook owner's agreement to carry `3ffbccde` in the canonical PR.
+3. **C** — F1: ship the guard with its `exchange.py` integration under its owner, or defer
+   `tests/test_quota01_exchange_slot_is_atomic.py` to a separate approved change.
+4. **D** — authorization to commit the §3 manifest, push, and await CI.
+5. **E** — authorization to close the #7/#8 duplicate (only after the canonical PR has the
+   approved content).
+
+Each is independent; granting one does not imply the others.

@@ -1,0 +1,19 @@
+    + FullyQualifiedErrorId
+   : NativeCommandError
+[OK  ] 1. get_or_create_account writes a paper_accounts row
+[OK  ] 2. place_order persists order+fill+position
+[OK  ] 3. BotPaperLedger.record_fill returns the stored figures
+[OK  ] 4. ExecutionEngine PAPER branch persists a fill
+[OK  ] 5. engine cash/equity == stored cash/equity
+[OK  ] 6. cash + position market value == equity (from the database)
+[OK  ] 7. a repeated execution_id adds no fill and moves no money
+ROW COUNTS
+  paper_accounts           1
+  paper_orders             3
+  paper_fills              3
+  paper_positions          1
+  paper_balance_events     3
+  paper_trades             0
+  paper_equity_snapshots   0
+VERDICT=ALL_PASS of 7
+NONCE_END=P6A2

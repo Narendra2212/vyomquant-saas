@@ -1,0 +1,206 @@
+====================================================================================================
+A. CONSUMERS THAT WOULD SEE A REBUILT MANAGER
+====================================================================================================
+  1. FastAPI dependency injection:
+    backend_app/routers/exchange.py:318:    redis_manager=Depends(get_redis_manager),
+    backend_app/routers/exchange.py:534:    redis_manager=Depends(get_redis_manager),
+    backend_app/routers/exchange.py:670:    redis_manager=Depends(get_redis_manager),
+    backend_app/routers/exchange.py:772:    redis_manager=Depends(get_redis_manager)
+    backend_app/routers/exchange.py:1138:    redis_manager=Depends(get_redis_manager),
+
+    context around exchange.py:318
+       311  
+       312  
+       313  @router.post("/keys")
+       314  async def store_keys(
+       315      body: ExchangeKeysRequest,
+       316      user: dict = Depends(require_aal2),
+       317      vault=Depends(get_vault),
+       318      redis_manager=Depends(get_redis_manager),
+       319      supabase: Any = Depends(get_request_supabase),
+       320  ):
+       321      """
+       322      Store encrypted exchange API keys in vault.
+
+    context around exchange.py:534
+       527  
+       528  
+       529  @router.get("")
+       530  @router.get("/")
+       531  async def list_exchanges(
+       532      user: dict = Depends(get_current_user),
+       533      supabase: Any = Depends(get_request_supabase),
+       534      redis_manager=Depends(get_redis_manager),
+       535      vault=Depends(get_vault),
+       536  ):
+       537      """
+       538      List user's connected exchanges with full metadata.
+
+    context around exchange.py:670
+       663  
+       664  
+       665  @router.delete("/{exchange_id}")
+       666  async def delete_connection(
+       667      exchange_id: str,
+       668      user: dict = Depends(require_aal2),
+       669      supabase: SupabaseClient = Depends(get_request_supabase),
+       670      redis_manager=Depends(get_redis_manager),
+       671  ):
+       672      """
+       673      Delete exchange connection with safety checks.
+       674      Warns if bots are running, strategies exist, or positions are open.
+
+    context around exchange.py:772
+       765  
+       766  
+       767  @router.get("/schema/{exchange_id}")
+       768  @router.get("/{exchange_id}/connection-schema")
+       769  async def get_exchange_auth_schema(
+       770      exchange_id: str,
+       771      user: dict = Depends(get_current_user),
+       772      redis_manager=Depends(get_redis_manager)
+       773  ):
+       774      """
+       775      Returns the dynamic authentication schema for a specific exchange.
+       776      Sourced from authoritative ExchangeConnectionSchemaRegistry with Redis caching.
+
+    context around exchange.py:1138
+      1131  # ═══════════════════════════════════════════════════════════════════════════
+      1132  
+      1133  
+      1134  @router.get("/connections")
+      1135  async def list_user_connections(
+      1136      user: dict = Depends(get_current_user),
+      1137      supabase: Any = Depends(get_request_supabase),
+      1138      redis_manager=Depends(get_redis_manager),
+      1139      vault=Depends(get_vault),
+      1140  ):
+      1141      """
+      1142      Get all active exchange connections for the user without exposing secrets.
+
+  -> a handler receives the manager object as a per-request dependency, so a rebuild
+     between requests is picked up; a rebuild DURING a request is not. exchange.py is
+     also the AUTH-01 / CONN-01 / TENANT-01 file, so the semantics intersect that work.
+
+  2. Direct awaiters of get_redis_manager():
+    backend_app/backend/asset_universe.py:557:        return await get_redis_manager()
+    backend_app/backend/strategy_service.py:6170:        manager = await get_redis_manager()
+    backend_app/backend/training_worker.py:3226:        manager = await get_redis_manager()
+    backend_app/core/cache/redis_manager.py:496:        mgr = await get_redis_manager()
+
+  3. The compat proxy and the core shared manager re-resolve each access:
+     backend/redis_manager.py:580-590   RedisManagerCompatProxy.__getattr__ re-imports
+     core/cache/redis_manager.py:489-498 _ensure_manager() re-assigns from get_redis_manager()
+
+====================================================================================================
+B. EVERY CALLER OF RedisManager.close()  -- F3 blast radius
+====================================================================================================
+  backend_app/core/cache/redis_manager.py:619:            await self._redis_manager.close()
+  scripts/test_data_stream_worker.py:90:    await redis_manager.close()
+  scripts/test_event_bus.py:98:    await redis_manager.close()
+  scripts/test_execution_worker.py:106:    await redis_manager.close()
+  scripts/test_order_event_flow.py:57:    await redis_manager.close()
+  scripts/test_order_event_flow.py:86:    await redis_manager.close()
+  scripts/test_order_event_flow.py:114:    await redis_manager.close()
+  scripts/test_strategy_worker.py:131:    await redis_manager.close()
+  backend_app/backend/portfolio_management.py:2580:    position = await manager.close_position(
+
+  total distinct close() call sites: 9
+
+====================================================================================================
+C. THE EXACT LINES THE PROPOSED PLAN WOULD TOUCH
+====================================================================================================
+
+  __init__ -- where a loop handle would be recorded  (L113-126)
+     113          return cls._instance
+     114  
+     115      def __init__(self):
+     116          if self._initialized:
+     117              return
+     118  
+     119          self._cache: Optional[aioredis.Redis] = None
+     120          self._queue: Optional[aioredis.Redis] = None
+     121          self._events: Optional[aioredis.Redis] = None
+     122          self._connected: bool = False
+     123          self._last_failed_at: float = 0.0   # monotonic timestamp of last failed connect()
+     124          self._reconnect_lock: Optional[asyncio.Lock] = None  # per-instance debounce lock
+     125          self._initialized = True
+     126  
+
+  initialize() -- F3 close-before-replace, F4 partial cleanup  (L133-185)
+     133      async def initialize(self) -> bool:
+     134          """
+     135          Initialize all Redis connections.
+     136          Returns True on success, False on failure (does not raise).
+     137          """
+     138          try:
+     139              # Cache (DB 0) - short-lived, LRU eviction
+     140              cache = await aioredis.from_url(
+     141                  get_redis_url(REDIS_DB_CACHE),
+     142                  encoding="utf-8",
+     143                  decode_responses=True,
+     144                  max_connections=50
+     145              )
+     146  
+     147              # Queue (DB 1) - persistent, AOF
+     148              queue = await aioredis.from_url(
+     149                  get_redis_url(REDIS_DB_QUEUE),
+     150                  encoding="utf-8",
+     151                  decode_responses=True,
+     152                  max_connections=50
+     153              )
+     154  
+     155              # Events (DB 2) - time-series, streams
+     156              events = await aioredis.from_url(
+     157                  get_redis_url(REDIS_DB_EVENTS),
+     158                  encoding="utf-8",
+     159                  decode_responses=True,
+     160                  max_connections=50
+     161              )
+     162  
+     163              # Verify connectivity before committing to self.*
+     164              await cache.ping()
+     165              await queue.ping()
+     166              await events.ping()
+     167  
+     168              self._cache = cache
+     169              self._queue = queue
+     170              self._events = events
+     171              self._connected = True
+     172              logger.info(
+     173                  f"[RedisManager] Connected to 3 databases: "
+     174                  f"cache(DB{REDIS_DB_CACHE}), queue(DB{REDIS_DB_QUEUE}), events(DB{REDIS_DB_EVENTS})"
+     175              )
+     176              return True
+     177  
+     178          except Exception as e:
+     179              logger.error(f"[RedisManager] Failed to connect: {e}")
+     180              self._connected = False
+     181              self._last_failed_at = time.monotonic()
+     182              return False
+     183  
+     184      async def try_reconnect(self) -> bool:
+     185          """
+
+  close() -- the supported teardown  (L215-224)
+     215      async def close(self):
+     216          """Close all Redis connections."""
+     217          if self._cache:
+     218              await self._cache.close()
+     219          if self._queue:
+     220              await self._queue.close()
+     221          if self._events:
+     222              await self._events.close()
+     223          logger.info("[RedisManager] All connections closed")
+     224  
+
+  get_redis_manager() fast path -- loop check insertion point  (L545-553)
+     545      global _redis_manager, _get_manager_last_failed
+     546  
+     547      # Fast path — already initialised and connected
+     548      if _redis_manager is not None and _redis_manager._connected:
+     549          return _redis_manager
+     550  
+     551      now = time.monotonic()
+     552      if now - _get_manager_last_failed < _RECONNECT_COOLDOWN:
+     553          return _redis_manager  # Still in cooldown; return whatever we have (may be None)

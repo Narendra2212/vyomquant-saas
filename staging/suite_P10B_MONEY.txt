@@ -1,0 +1,72 @@
+START=2026-10-10T05:20:20.6069472+05:30
+FILES=tests/test_paper_order_lifecycle_writes.py tests/test_single_execution_pipeline.py tests/test_execution_engine_accounting_identity.py tests/test_simulated_orders_reach_the_simulator.py tests/test_atomic_order_cancellation_fix.py tests/test_paper_live_separation.py tests/test_paper_no_random.py tests/test_execution_paths_that_claim_an_exchange.py tests/test_trade04_live_order_gate_at_venue_boundary.py tests/property/test_paper_order_lifecycle.py
+........................................................................ [ 21%]
+........................................................................ [ 42%]
+................................................ssss..F................. [ 63%]
+........................................................................ [ 84%]
+......................................................                   [100%]
+================================== FAILURES ===================================
+_______ TestPlaceOrderNeverConstructsTheLiveAdapter.test_a_market_order _______
+tests\test_paper_live_separation.py:284: in test_a_market_order
+    order = _run_coroutine(
+tests\test_paper_order_lifecycle_writes.py:149: in _run_coroutine
+    return _harness_loop().run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\aa\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py:691: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend_app\backend\paper_trading_service.py:1256: in place_order
+    from backend_app.routers.risk import (
+backend_app\routers\risk.py:27: in <module>
+    from backend_app.core.dependencies import (
+backend_app\core\dependencies.py:56: in <module>
+    from supabase import Client as SupabaseClient
+.venv\Lib\site-packages\supabase\__init__.py:6: in <module>
+    from ._async.auth_client import AsyncSupabaseAuthClient as ASupabaseAuthClient
+.venv\Lib\site-packages\supabase\_async\auth_client.py:3: in <module>
+    from gotrue import (
+.venv\Lib\site-packages\gotrue\__init__.py:6: in <module>
+    from ._async.gotrue_admin_api import AsyncGoTrueAdminAPI  # type: ignore # noqa: F401
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\gotrue\_async\gotrue_admin_api.py:6: in <module>
+    from ..helpers import (
+.venv\Lib\site-packages\gotrue\helpers.py:27: in <module>
+    from .types import (
+.venv\Lib\site-packages\gotrue\types.py:205: in <module>
+    class User(BaseModel):
+.venv\Lib\site-packages\pydantic\_internal\_model_construction.py:200: in __new__
+    set_model_fields(cls, bases, config_wrapper, types_namespace)
+.venv\Lib\site-packages\pydantic\_internal\_model_construction.py:469: in set_model_fields
+    fields, class_vars = collect_model_fields(cls, bases, config_wrapper, types_namespace, typevars_map=typevars_map)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\_internal\_fields.py:132: in collect_model_fields
+    type_hints = get_cls_type_hints_lenient(cls, types_namespace)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\_internal\_typing_extra.py:228: in get_cls_type_hints_lenient
+    hints[name] = eval_type_lenient(value, globalns, localns)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\_internal\_typing_extra.py:240: in eval_type_lenient
+    return eval_type_backport(value, globalns, localns)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\_internal\_typing_extra.py:264: in eval_type_backport
+    return typing._eval_type(  # type: ignore
+C:\Users\aa\AppData\Local\Programs\Python\Python312\Lib\typing.py:415: in _eval_type
+    return t._evaluate(globalns, localns, type_params, recursive_guard=recursive_guard)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\aa\AppData\Local\Programs\Python\Python312\Lib\typing.py:947: in _evaluate
+    eval(self.__forward_code__, globalns, localns),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:1: in <module>
+    ???
+C:\Users\aa\AppData\Local\Programs\Python\Python312\Lib\typing.py:395: in inner
+    return _caches[func](*args, **kwds)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\aa\AppData\Local\Programs\Python\Python312\Lib\typing.py:1481: in __getitem__
+    params = tuple(_type_check(p, msg) for p in params)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   MemoryError
+=========================== short test summary info ===========================
+FAILED tests/test_paper_live_separation.py::TestPlaceOrderNeverConstructsTheLiveAdapter::test_a_market_order
+1 failed, 337 passed, 4 skipped in 303.18s (0:05:03)
+EXITCODE=1
+END=2026-10-10T05:25:40.0926269+05:30

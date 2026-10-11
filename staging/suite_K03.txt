@@ -1,0 +1,6 @@
+START=2026-10-09T12:49:11.9914046+05:30
+FILES=tests\test_trade02_kill_switch_fails_closed.py
+............................                                             [100%]
+28 passed in 75.06s (0:01:15)
+EXITCODE=0
+END=2026-10-09T12:50:36.1236897+05:30

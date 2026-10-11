@@ -1,0 +1,6 @@
+E           AssertionError: assert 'reclaimed_stale' is 'claimed'
+E            +  where 'reclaimed_stale' = BotClaim(user_id='fc1d34e7-a0f7-4cfd-8b6a-cca3c076e96b', symbol='BTC/T40572f', owner_token='d0e1188b-61df-4a76-aaa7-eb684c4ec1aa', worker_name='w1', outcome='reclaimed_stale').outcome
+E            +  and   'claimed' = bo.CLAIMED
+FAILED tests/test_work03_bot_ownership_claims_postgres.py::test_a_first_claim_is_granted
+1 failed, 20 passed in 25.83s
+NONCE_END=W3C3

@@ -1,0 +1,9 @@
+ATTR get_pool present on redis_manager : False
+ATTR pool     present on redis_manager : True
+redis_manager class                    : SharedRedisManager
+CALL get_pool()                        : raised AttributeError: 'SharedRedisManager' object has no attribute 'get_pool'
+report_health() log records            : 1
+   > [probe_worker] Failed to update health key in Redis: 'SharedRedisManager' object has no attribute 'get_pool'
+
+VERDICT: heartbeat silently swallowed  : True
+VERDICT: worker:health:* key written   : False

@@ -1,0 +1,96 @@
+==============================================================================
+BILLING ACCESS MATRIX -- executed against real PostgreSQL
+==============================================================================
+user A = aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+user B = bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
+Two billing rows per table, one owned by each user.
+
+------------------------------------------------------------------------------
+CONTEXT
+------------------------------------------------------------------------------
+invoices
+    RLS enabled=True  forced=False  policies=2
+    anon          = (none)
+    authenticated = SELECT
+    service_role  = DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+payment_methods
+    RLS enabled=True  forced=False  policies=2
+    anon          = (none)
+    authenticated = (none)
+    service_role  = DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+subscriptions
+    RLS enabled=True  forced=False  policies=2
+    anon          = (none)
+    authenticated = SELECT
+    service_role  = DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+
+==============================================================================
+TABLE: invoices
+==============================================================================
+  [DENIED_PRIVILEGE ] anon                       read ALL rows
+                       -> permission denied for table invoices
+  [DENIED_PRIVILEGE ] anon                       read user A's row by primary key
+                       -> permission denied for table invoices
+  [VISIBLE          ] authenticated as aaaaaaaa  read ALL rows
+                       -> 1 row(s) owners=['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa']
+  [EMPTY            ] authenticated as aaaaaaaa  read user B's row by primary key  <-- CROSS-TENANT READ
+                       -> 0 row(s) owners=[]
+  [EMPTY            ] authenticated as bbbbbbbb  read user A's row by primary key  <-- CROSS-TENANT READ
+                       -> 0 row(s) owners=[]
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  UPDATE user B's row  <-- CROSS-TENANT WRITE
+                       -> permission denied for table invoices
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  DELETE user B's row  <-- CROSS-TENANT DELETE
+                       -> permission denied for table invoices
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  INSERT a row owned by user B  <-- FORGED OWNERSHIP
+                       -> permission denied for table invoices
+  [VISIBLE          ] service_role               read ALL rows (expected: all, BYPASSRLS)
+                       -> 2 row(s) owners=['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb']
+
+==============================================================================
+TABLE: payment_methods
+==============================================================================
+  [DENIED_PRIVILEGE ] anon                       read ALL rows
+                       -> permission denied for table payment_methods
+  [DENIED_PRIVILEGE ] anon                       read user A's row by primary key
+                       -> permission denied for table payment_methods
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  read ALL rows
+                       -> permission denied for table payment_methods
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  read user B's row by primary key  <-- CROSS-TENANT READ
+                       -> permission denied for table payment_methods
+  [DENIED_PRIVILEGE ] authenticated as bbbbbbbb  read user A's row by primary key  <-- CROSS-TENANT READ
+                       -> permission denied for table payment_methods
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  UPDATE user B's row  <-- CROSS-TENANT WRITE
+                       -> permission denied for table payment_methods
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  DELETE user B's row  <-- CROSS-TENANT DELETE
+                       -> permission denied for table payment_methods
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  INSERT a row owned by user B  <-- FORGED OWNERSHIP
+                       -> permission denied for table payment_methods
+  [VISIBLE          ] service_role               read ALL rows (expected: all, BYPASSRLS)
+                       -> 2 row(s) owners=['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb']
+
+==============================================================================
+TABLE: subscriptions
+==============================================================================
+  [DENIED_PRIVILEGE ] anon                       read ALL rows
+                       -> permission denied for table subscriptions
+  [DENIED_PRIVILEGE ] anon                       read user A's row by primary key
+                       -> permission denied for table subscriptions
+  [VISIBLE          ] authenticated as aaaaaaaa  read ALL rows
+                       -> 1 row(s) owners=['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa']
+  [EMPTY            ] authenticated as aaaaaaaa  read user B's row by primary key  <-- CROSS-TENANT READ
+                       -> 0 row(s) owners=[]
+  [EMPTY            ] authenticated as bbbbbbbb  read user A's row by primary key  <-- CROSS-TENANT READ
+                       -> 0 row(s) owners=[]
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  UPDATE user B's row  <-- CROSS-TENANT WRITE
+                       -> permission denied for table subscriptions
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  DELETE user B's row  <-- CROSS-TENANT DELETE
+                       -> permission denied for table subscriptions
+  [DENIED_PRIVILEGE ] authenticated as aaaaaaaa  INSERT a row owned by user B  <-- FORGED OWNERSHIP
+                       -> permission denied for table subscriptions
+  [VISIBLE          ] service_role               read ALL rows (expected: all, BYPASSRLS)
+                       -> 2 row(s) owners=['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb']
+
+==============================================================================
+RESULT
+==============================================================================
+No cross-customer or anonymous access succeeded.

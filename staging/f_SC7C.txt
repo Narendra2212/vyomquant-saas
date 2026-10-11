@@ -1,0 +1,5 @@
+allowlisted (13): ['backtest_result', 'buy_logic', 'dag_config', 'exchange_id', 'execution_order', 'indicators', 'ml_model_path', 'name', 'risk', 'sell_logic', 'status', 'symbol', 'timeframe']
+refused (19): ['archived_at', 'cloned_from', 'created_at', 'current_version', 'dag_hash', 'dag_schema_version', 'dag_version', 'environment', 'id', 'is_active', 'is_published', 'is_read_only', 'is_subscribed', 'last_signal_at', 'marketplace_listing_id', 'source_library_id', 'subscription_id', 'updated_at', 'user_id']
+allowlist entries that are NOT columns: []
+non-column body keys: ['edges', 'graph_json', 'nodes']
+NONCE_END=SC7C

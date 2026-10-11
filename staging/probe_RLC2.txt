@@ -1,0 +1,77 @@
+START=2026-10-09T12:09:10.8439270+05:30
+SCRIPT=staging\probe_referral_ledger_currency.py 
+DSN=postgresql://postgres:@127.0.0.1:58620/postgres
+
+=== referral_commissions  regclass=referral_commissions
+  COLUMN_COUNT=15
+    id                         uuid                         null=NO  default=gen_random_uuid()
+    referrer_id                uuid                         null=NO  default=None
+    referred_id                uuid                         null=NO  default=None
+    referral_relationship_id   uuid                         null=YES default=None
+    payment_id                 character varying            null=NO  default=None
+    subscription_tier          character varying            null=NO  default=None
+    payment_amount_usd         numeric                      null=NO  default=None
+    commission_rate            numeric                      null=YES default=0.2000
+    commission_amount_usd      numeric                      null=NO  default=None
+    status                     character varying            null=YES default='pending'::character varying
+    reversal_reason            text                         null=YES default=None
+    created_at                 timestamp with time zone     null=YES default=now()
+    updated_at                 timestamp with time zone     null=YES default=now()
+    paid_at                    timestamp with time zone     null=YES default=None
+    reversed_at                timestamp with time zone     null=YES default=None
+  HAS_CURRENCY=False
+  CONSTRAINT referral_commissions_pkey: PRIMARY KEY (id)
+  CONSTRAINT referral_commissions_referral_relationship_id_fkey: FOREIGN KEY (referral_relationship_id) REFERENCES referral_relationships(id) ON DELETE SET NULL
+  CONSTRAINT referral_commissions_referred_id_fkey: FOREIGN KEY (referred_id) REFERENCES profiles(id) ON DELETE CASCADE
+  CONSTRAINT referral_commissions_referrer_id_fkey: FOREIGN KEY (referrer_id) REFERENCES profiles(id) ON DELETE CASCADE
+  CONSTRAINT referral_commissions_status_check: CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'approved'::character varying, 'paid'::character varying, 'reversed'::character varying])::text[])))
+  ROW_COUNT=0
+  rls=True forced=False owner=postgres
+
+=== referral_wallets  regclass=referral_wallets
+  COLUMN_COUNT=13
+    id                         uuid                         null=NO  default=gen_random_uuid()
+    user_id                    uuid                         null=NO  default=None
+    balance_usd                numeric                      null=YES default=0.00
+    total_earned_usd           numeric                      null=YES default=0.00
+    pending_usd                numeric                      null=YES default=0.00
+    payout_method              character varying            null=YES default=None
+    payout_details             jsonb                        null=YES default='{}'::jsonb
+    created_at                 timestamp with time zone     null=YES default=now()
+    updated_at                 timestamp with time zone     null=YES default=now()
+    pending_balance_usd        numeric                      null=YES default=0.00
+    approved_balance_usd       numeric                      null=YES default=0.00
+    paid_balance_usd           numeric                      null=YES default=0.00
+    lifetime_earnings_usd      numeric                      null=YES default=0.00
+  HAS_CURRENCY=False
+  CONSTRAINT chk_non_negative_balances: CHECK (((pending_balance_usd >= (0)::numeric) AND (approved_balance_usd >= (0)::numeric) AND (paid_balance_usd >= (0)::numeric) AND (lifetime_earnings_usd >= (0)::numeric)))
+  CONSTRAINT referral_wallets_pkey: PRIMARY KEY (id)
+  CONSTRAINT referral_wallets_user_id_fkey: FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+  CONSTRAINT uq_referral_wallets_user: UNIQUE (user_id)
+  ROW_COUNT=20
+  rls=True forced=False owner=postgres
+
+=== referral_payouts  regclass=referral_payouts
+  COLUMN_COUNT=9
+    id                         uuid                         null=NO  default=gen_random_uuid()
+    user_id                    uuid                         null=NO  default=None
+    amount_usd                 numeric                      null=NO  default=None
+    payout_method              character varying            null=NO  default=None
+    payout_details             jsonb                        null=YES default='{}'::jsonb
+    status                     character varying            null=YES default='pending'::character varying
+    created_at                 timestamp with time zone     null=YES default=now()
+    updated_at                 timestamp with time zone     null=YES default=now()
+    processed_at               timestamp with time zone     null=YES default=None
+  HAS_CURRENCY=False
+  CONSTRAINT referral_payouts_pkey: PRIMARY KEY (id)
+  CONSTRAINT referral_payouts_status_check: CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'processing'::character varying, 'completed'::character varying, 'rejected'::character varying])::text[])))
+  CONSTRAINT referral_payouts_user_id_fkey: FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+  ROW_COUNT=0
+  rls=True forced=False owner=postgres
+
+=== INSTALLED FUNCTIONS THAT WRITE THE REFERRAL LEDGER
+  create_referral_code_for_user(uuid)
+      names_currency=False comm=False wallet=True payout=False
+  process_referral_commission(uuid,character varying,character varying,numeric)
+      names_currency=False comm=True wallet=True payout=False
+EXITCODE=0

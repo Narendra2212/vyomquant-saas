@@ -1,0 +1,64 @@
+START=2026-10-09T01:25:21.0884309+05:30
+FILES=tests\test_lib04_a_broken_client_is_503_not_500.py
+........FFFFFFFF...                                                      [100%]
+================================== FAILURES ===================================
+__ test_unpublish_answers_503_whatever_the_client_raised[httpx.ConnectError] __
+tests\test_lib04_a_broken_client_is_503_not_500.py:237: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:205: in _unpublish
+    _undecorated(lib.unpublish_strategy)(
+E   TypeError: unpublish_strategy() got an unexpected keyword argument 'request'
+__ test_unpublish_answers_503_whatever_the_client_raised[httpx.ReadTimeout] ___
+tests\test_lib04_a_broken_client_is_503_not_500.py:237: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:205: in _unpublish
+    _undecorated(lib.unpublish_strategy)(
+E   TypeError: unpublish_strategy() got an unexpected keyword argument 'request'
+_ test_unpublish_answers_503_whatever_the_client_raised[httpx.RemoteProtocolError] _
+tests\test_lib04_a_broken_client_is_503_not_500.py:237: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:205: in _unpublish
+    _undecorated(lib.unpublish_strategy)(
+E   TypeError: unpublish_strategy() got an unexpected keyword argument 'request'
+_ test_unpublish_answers_503_whatever_the_client_raised[psycopg2.InterfaceError] _
+tests\test_lib04_a_broken_client_is_503_not_500.py:237: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:205: in _unpublish
+    _undecorated(lib.unpublish_strategy)(
+E   TypeError: unpublish_strategy() got an unexpected keyword argument 'request'
+_____ test_unpublish_answers_503_whatever_the_client_raised[RuntimeError] _____
+tests\test_lib04_a_broken_client_is_503_not_500.py:237: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:205: in _unpublish
+    _undecorated(lib.unpublish_strategy)(
+E   TypeError: unpublish_strategy() got an unexpected keyword argument 'request'
+____ test_unpublish_answers_503_whatever_the_client_raised[AttributeError] ____
+tests\test_lib04_a_broken_client_is_503_not_500.py:237: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:205: in _unpublish
+    _undecorated(lib.unpublish_strategy)(
+E   TypeError: unpublish_strategy() got an unexpected keyword argument 'request'
+______ test_unpublish_answers_503_whatever_the_client_raised[ValueError] ______
+tests\test_lib04_a_broken_client_is_503_not_500.py:237: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:205: in _unpublish
+    _undecorated(lib.unpublish_strategy)(
+E   TypeError: unpublish_strategy() got an unexpected keyword argument 'request'
+_______ test_unpublish_answers_503_whatever_the_client_raised[KeyError] _______
+tests\test_lib04_a_broken_client_is_503_not_500.py:237: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:205: in _unpublish
+    _undecorated(lib.unpublish_strategy)(
+E   TypeError: unpublish_strategy() got an unexpected keyword argument 'request'
+=========================== short test summary info ===========================
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[httpx.ConnectError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[httpx.ReadTimeout]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[httpx.RemoteProtocolError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[psycopg2.InterfaceError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[RuntimeError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[AttributeError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[ValueError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[KeyError]
+8 failed, 11 passed in 8.80s
+EXITCODE=1
+END=2026-10-09T01:25:34.0510145+05:30

@@ -154,8 +154,16 @@ class ExchangeCertificationRegistry:
             reduce_only=False,
             post_only=True,
             leverage=False,
-            sandbox=True,
-            known_limitations=["Spot trading only", "Futures and derivatives not supported on standard CCXT coinbase adapter"]
+            # EXCH-04 (Phase 11A): corrected False. ccxt 4.3.92's coinbase raises
+            # NotSupported("coinbase does not have a sandbox URL") when sandbox mode is
+            # armed -- measured in tests/exchange_sandbox/test_sandbox_routing_contract.py
+            # and staging/EXCHANGE_SANDBOX_CERTIFICATION.md. The hand-written True was a
+            # false capability claim. No runtime path reads this field (sandbox support
+            # for the API/UI is read from ccxt's own has['sandbox'] at runtime, and the
+            # live-deployment preflight gates on is_production_certified, not sandbox), so
+            # this correction removes an overclaim without changing any routing or gating.
+            sandbox=False,
+            known_limitations=["Spot trading only", "Futures and derivatives not supported on standard CCXT coinbase adapter", "No public CCXT sandbox endpoint (sandbox mode raises NotSupported on ccxt 4.3.92)"]
         )
         self._health_status["coinbase"] = RuntimeExchangeHealth.HEALTHY
 
@@ -221,8 +229,12 @@ class ExchangeCertificationRegistry:
             reduce_only=True,
             post_only=True,
             leverage=True,
-            sandbox=True,
-            known_limitations=["Level 4: Undergoing final live latency certification"]
+            # EXCH-04 (Phase 11A): corrected False. ccxt 4.3.92's kucoin raises
+            # NotSupported("kucoin does not have a sandbox URL") when sandbox mode is
+            # armed -- measured, same as coinbase above. The hand-written True was a false
+            # capability claim; no runtime path consumes this field.
+            sandbox=False,
+            known_limitations=["Level 4: Undergoing final live latency certification", "No public CCXT sandbox endpoint (sandbox mode raises NotSupported on ccxt 4.3.92)"]
         )
         self._health_status["kucoin"] = RuntimeExchangeHealth.DEGRADED
 

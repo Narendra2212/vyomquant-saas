@@ -63,11 +63,99 @@ jobs:
       - name: Build Docker image for scanning
         run: docker build -t trading-platform:scan -f Dockerfile .
 
+      # Pinned to a release tag. This was `@master`, a mutable ref: whatever that branch
+      # pointed at ran here with access to the job. In February 2026 the Trivy project's
+      # own repository was compromised through a `pull_request_target` workflow and a
+      # privileged token was extracted, so "the upstream of my CI scanner is a trusted
+      # input" is not an assumption this pipeline should make. A tag can still be moved,
+      # but it is not rewritten on every upstream merge.
+      #
+      # NOTE ON FIRST RUN: this pins a specific Trivy version where the job previously
+      # tracked master, so the vulnerability database and check set may differ from the
+      # last green run. The gate is unchanged (CRITICAL, exit-code 1); if it fails, read
+      # it as a finding to triage rather than as a regression from this pin.
       - name: Run Trivy Scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'trading-platform:scan'
           format: 'table'
           exit-code: '1'
           ignore-unfixed: true
           severity: 'CRITICAL'
+
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #  SC-29: INFRASTRUCTURE-AS-CODE SCANNING
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #
+  # Nothing in this repository inspected Terraform. bandit reads Python, safety and
+  # pip-audit read dependency manifests, Trivy above reads the container image — and the
+  # ~20 `.tf` files that declare the VPC, the ALB, the IAM roles, the security groups and
+  # the secrets went unexamined by any of them. A security review found a weak ALB TLS
+  # policy, a plaintext listener reachable in production, a wildcard `kms:Decrypt`
+  # resource and local Terraform state in that gap; every one of those is a check a
+  # scanner already ships.
+  #
+  # THRESHOLD: CRITICAL blocks, HIGH and below report. That is not a new convention — it
+  # is the one `03-deploy.yml` already documents for the container scan and the one the
+  # job above uses. Gating a brand-new scanner on HIGH would fail the pipeline on its
+  # first run over pre-existing findings, which trains people to bypass it.
+  #
+  # SCOPE: the IaC directories only, not the repository. A repo-wide secret scan trips on
+  # the deliberate fixtures in `tests/` (`test_credential_vault_strength.py` carries a
+  # fake EC private key, `test_log_redaction.py` a PEM header), and a scanner that cries
+  # wolf on its first run is a scanner someone disables. Repo-wide and git-history secret
+  # scanning is worth adding, but it needs an ignore file written first.
+  iac-scan:
+    name: Trivy IaC Misconfiguration & Secret Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      # The gate. CRITICAL only, so it blocks on something that is unambiguously wrong.
+      - name: Trivy IaC scan — terraform/ (blocking, CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'terraform'
+          scanners: 'misconfig,secret'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL'
+          hide-progress: true
+
+      - name: Trivy IaC scan — aerora_quant_platform/infrastructure/ (blocking, CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'aerora_quant_platform/infrastructure'
+          scanners: 'misconfig,secret'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL'
+          hide-progress: true
+
+      # The report. Everything down to MEDIUM, non-blocking, kept as an artifact so the
+      # backlog is visible and can be ratcheted down rather than discovered later.
+      - name: Trivy IaC report — all severities to MEDIUM (non-blocking)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'terraform'
+          scanners: 'misconfig,secret'
+          format: 'json'
+          output: 'reports/trivy-iac-report.json'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          hide-progress: true
+
+      - name: Upload IaC Scan Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iac-scan-report
+          path: reports/

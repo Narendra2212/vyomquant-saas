@@ -43,10 +43,15 @@ there isn't one to name.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
 import os
+import random
+import time
+import uuid
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, Mapping, Optional
 
@@ -868,6 +873,254 @@ async def check_exchange_connection_slot(
         raise build_quota_refusal(
             Resource.EXCHANGE_CONNECTIONS.value, context.plan, len(existing), limit
         ).as_http()
+
+
+#: How long the per-account connection-slot lock may be held. The window it covers is one
+#: ``exchange_keys`` read plus one upsert — milliseconds — so this is generous by two orders of
+#: magnitude and exists only so a worker killed mid-write cannot wedge the account's own key
+#: storage until someone notices. The venue handshake is deliberately OUTSIDE the lock.
+_SLOT_LOCK_TTL_SECONDS = 15
+
+#: How long a contender WAITS for its turn before giving up with a 409.
+#:
+#: A non-blocking lock was the first implementation and it was wrong in a way worth recording:
+#: it refused every contender immediately, so a customer connecting five venues from the UI at
+#: once got one success and four 409s against a plan that permitted all five. That is
+#: over-refusal — safe, but a fabricated failure on a legitimate request. Caught by
+#: ``tests/test_quota01_exchange_slot_is_atomic.py::test_eight_concurrent_stores_admit_exactly_the_limit``.
+#:
+#: Two seconds is roughly two orders of magnitude more than the critical section needs (a read
+#: and an upsert), so a contender that still cannot get in has met something pathological — a
+#: wedged worker, or a caller hammering the endpoint — and a 409 telling it to retry is then the
+#: honest answer rather than a premature one.
+_SLOT_LOCK_WAIT_SECONDS = 2.0
+
+#: Poll interval while waiting. Jittered at the call site so that N contenders released at once
+#: do not retry in lockstep and starve each other.
+_SLOT_LOCK_POLL_SECONDS = 0.02
+
+
+def _slot_lock_key(user_id: str, resource: str) -> str:
+    return f"entitlement:slotlock:{resource}:{user_id}"
+
+
+async def _acquire_slot_lock(lock_key: str, token: str, user_id: str) -> str:
+    """Take the per-account slot lock, waiting a bounded time for a contender.
+
+    Returns ``"acquired"``, ``"contended"`` (the wait budget expired with someone else holding
+    it) or ``"unavailable"`` (the lock store could not be reached). The caller maps the latter
+    two onto refusals; there is no fourth answer, and in particular no "proceed anyway".
+
+    ``SET NX`` is the primitive — the same one ``master_executor`` uses for its execution lock —
+    because it holds ACROSS PROCESSES, which an ``asyncio.Lock`` would not, and this runs under
+    several workers.
+    """
+    deadline = time.monotonic() + _SLOT_LOCK_WAIT_SECONDS
+    while True:
+        try:
+            if await redis_manager.set(lock_key, token, nx=True, ex=_SLOT_LOCK_TTL_SECONDS):
+                return "acquired"
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Connection-slot lock store raised for %s: %s", user_id, exc)
+            return "unavailable"
+
+        # The acquire was refused. Distinguish "someone holds it" from "there is no lock store":
+        # the facade returns falsy for both, and they are different events deserving different
+        # answers. A holder that releases in this gap is reported as unavailable rather than
+        # contended — both refuse, so the misclassification costs an error code, never an
+        # admission.
+        try:
+            holder = await redis_manager.get(lock_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Connection-slot lock read-back raised for %s: %s", user_id, exc)
+            return "unavailable"
+        if not holder:
+            return "unavailable"
+
+        if time.monotonic() >= deadline:
+            return "contended"
+        # Jittered so contenders released together do not collide on every retry.
+        await asyncio.sleep(_SLOT_LOCK_POLL_SECONDS * (0.5 + random.random()))
+
+
+async def _release_slot_lock(lock_key: str, token: str, user_id: str) -> str:
+    """Release the slot lock ONLY if this caller still holds it.
+
+    WHY THIS IS NOT A BARE ``DELETE`` (found in the Phase 10 Workstream C closeout review)
+    -------------------------------------------------------------------------------------
+    The first implementation deleted the key unconditionally. The ownership token was written
+    as the lock's VALUE and then never read, which is the classic unlock defect: if a holder's
+    critical section outlives ``_SLOT_LOCK_TTL_SECONDS``, the key expires, a WAITING request
+    acquires it legitimately, and the original holder's ``finally`` then deletes **that
+    request's** lock. A third request can now acquire while the second is still inside its
+    critical section — two concurrent writers, which is precisely the overshoot this guard
+    exists to prevent.
+
+    The window is narrow (the critical section is one ``exchange_keys`` read plus one upsert,
+    against a 15-second TTL) but it is not theoretical: a GC pause or a stalled database call
+    is enough, and the consequence is silent.
+
+    Returns ``"released"``, ``"absent"`` (no key came back), ``"not-owner"`` (someone else
+    holds it now — deliberately NOT deleted) or ``"unverified"`` (the store raised, so the TTL
+    is left to do it). Every outcome except ``"released"`` declines to delete, so the unsafe
+    direction is not reachable from any of them.
+
+    ``"absent"`` IS TWO CAUSES THIS FACADE CANNOT SEPARATE, AND SAYS SO. ``redis_manager.get``
+    is fail-SOFT: it catches every exception and returns ``None``. So a missing key (the TTL
+    really did fire) and an unreachable cache are the same observation here. The action is
+    identical either way — do not delete — but the log must not assert a cause it cannot know,
+    which is why the message names both. This is the same facade property that made
+    ``HardQuotaEnforcer``'s usage counting fail open; it is survivable here only because every
+    branch declines to delete rather than proceeding.
+
+    HONEST LIMITATION. Read-then-compare-then-delete is not atomic, so a key that expires
+    between the read and the delete can still be mis-deleted. The atomic form is a Lua
+    compare-and-delete, which is not portable here: this repository's cache facade exposes
+    ``eval`` as a purpose-built idempotency-script emulator (``core/cache/redis_manager.py``),
+    not a general interpreter, so a Lua release would behave differently in the development
+    lane than in production — and a lock that behaves differently per environment is worse
+    than one with a narrow race. The remaining window is recorded as a residual risk in
+    ``staging/PHASE10_WSC_COORDINATOR_REVIEW.md``.
+
+    A ``"not-owner"`` result also means mutual exclusion was ALREADY lost before this call, so
+    it is logged at ERROR: the write this guard wrapped may have raced, and that is an operator
+    signal rather than a tidy-up detail.
+    """
+    try:
+        holder = await redis_manager.get(lock_key)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Connection-slot lock ownership could not be verified for %s (%s); not deleting, "
+            "it will expire in %ss.",
+            user_id,
+            exc,
+            _SLOT_LOCK_TTL_SECONDS,
+        )
+        return "unverified"
+
+    if holder is None:
+        logger.error(
+            "Connection-slot lock for %s was not present at release time. Either the critical "
+            "section outlived the %ss TTL — in which case another request may have entered it "
+            "concurrently and this account's connection limit may have been exceeded — or the "
+            "lock store is unreachable and returned nothing. This facade cannot tell those "
+            "apart. Nothing was deleted.",
+            user_id,
+            _SLOT_LOCK_TTL_SECONDS,
+        )
+        return "absent"
+
+    if str(holder) != token:
+        logger.error(
+            "Connection-slot lock for %s is held by a DIFFERENT request at release time: this "
+            "request's lock expired mid-write and was re-acquired. Not deleting another "
+            "holder's lock. The connection limit may have been exceeded for this account.",
+            user_id,
+        )
+        return "not-owner"
+
+    try:
+        await redis_manager.delete(lock_key)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Connection-slot lock release failed for %s (%s); it will expire in %ss.",
+            user_id,
+            exc,
+            _SLOT_LOCK_TTL_SECONDS,
+        )
+        return "unverified"
+    return "released"
+
+
+@asynccontextmanager
+async def exchange_connection_slot_guard(
+    user: dict,
+    supabase: Any,
+    exchange_id: str,
+):
+    """Serialise one account's connection-slot decision with the write it authorises.
+
+    QUOTA-01: WHY THE DEPENDENCY ALONE IS NOT ENOUGH
+    ------------------------------------------------
+    :func:`check_exchange_connection_slot` reads the account's venue set, decides, and returns;
+    the handler then writes the row. Between those two steps the figure it decided on is stale.
+    Two concurrent requests for DIFFERENT venues therefore both read ``len(existing) == limit-1``
+    and both pass — measured in ``staging/p10c_probe_before.txt``: a Free account, whose limit is
+    ONE, ends up holding two venue credentials.
+
+    ``exchange_keys`` carries ``UNIQUE (user_id, exchange_id)``, which dedupes the SAME venue and
+    is why a double-submit of one venue was never a problem. It says nothing about the number of
+    distinct rows, which is what the plan limit is about.
+
+    WHAT THIS DOES, AND WHAT IT DOES NOT
+    ------------------------------------
+    It takes a short per-account lock, RE-READS the venue set inside it, decides again, and holds
+    the lock across the caller's write. So the read that authorises a write and the write itself
+    are one critical section, per account. Concurrent requests for the same account serialise;
+    requests for different accounts do not contend at all, because the key is per user.
+
+    The lock is ``SET NX`` on the shared cache — the same primitive ``master_executor`` uses for
+    its execution lock — so it holds ACROSS PROCESSES, which an ``asyncio.Lock`` would not. That
+    matters because this runs under multiple workers.
+
+    It is NOT a database constraint, and it is weaker than one. The durable fix has the shape
+    WORK-03 used for bots: a constraint in the schema, which holds regardless of what any
+    application process believes. That is a shared migration and is recorded as a coordinator
+    dependency in ``staging/PHASE10_WSC_QUOTA_CONNECTION_SAFETY.md`` rather than taken unilaterally here.
+
+    FAIL-CLOSED, FOR THE SAME REASON THE USAGE READ IS
+    --------------------------------------------------
+    If the lock cannot be taken the request is refused, never admitted:
+
+    * lock held by another request for this account → WAIT briefly, then 409 if it is still
+      held. Concurrent requests for one account are legitimate — a customer connecting several
+      venues from the UI at once — so they are serialised rather than refused. The 409 is for a
+      contender that could not get in within ``_SLOT_LOCK_WAIT_SECONDS``, which means something
+      pathological, not ordinary concurrency.
+    * lock store UNREACHABLE → 503, immediately. A guard that cannot run has not run, and
+      admitting on the grounds that the guard is broken is precisely the fail-OPEN shape
+      ``HardQuotaEnforcer`` was deprecated for.
+
+    See :func:`_acquire_slot_lock` for how the two are told apart.
+    """
+    user_id = user["id"]
+    resource = Resource.EXCHANGE_CONNECTIONS.value
+    lock_key = _slot_lock_key(user_id, resource)
+    token = uuid.uuid4().hex
+
+    outcome = await _acquire_slot_lock(lock_key, token, user_id)
+    if outcome == "contended":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "EXCHANGE_CONNECTION_CHANGE_IN_FLIGHT",
+                "message": (
+                    "Another exchange connection change for this account is still being "
+                    "processed. Try again in a few seconds."
+                ),
+            },
+        )
+    if outcome != "acquired":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "ENTITLEMENT_SLOT_LOCK_UNAVAILABLE",
+                "message": (
+                    "The exchange connection limit could not be enforced safely, so the "
+                    "request was not permitted to proceed. Try again in a moment."
+                ),
+            },
+        )
+
+    try:
+        # The authoritative decision. Re-read inside the lock: the pre-check the handler already
+        # ran happened before the venue handshake and is an optimisation, not the control.
+        await check_exchange_connection_slot(user, supabase, exchange_id)
+        yield
+    finally:
+        # Ownership-checked: a bare delete would drop a SUCCESSOR's lock if this critical
+        # section had outlived the TTL. See :func:`_release_slot_lock`.
+        await _release_slot_lock(lock_key, token, user_id)
 
 
 async def check_strategy_version_quota(

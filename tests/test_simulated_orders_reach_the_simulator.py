@@ -479,6 +479,20 @@ async def test_which_combinations_can_actually_place_a_real_order(
     executor = _Executor() if holds_executor else None
     engine = _engine(engine_environment, executor=executor)
 
+    # TRADE-05. This row drives `_execute_trade_internal` directly, skipping
+    # `execute_with_idempotency` where the risk verdict is recorded. The gateway now
+    # refuses a live order whose `_live_risk_approved` is not True, so without this the
+    # two ADMITTED live rows would report `reached=False` for the wrong reason and this
+    # matrix would stop measuring what the environment guards do.
+    #
+    # Set for every row, not only the live ones, so the matrix keeps measuring exactly
+    # one variable. The risk requirement itself is asserted from the public entry point in
+    # tests/test_trade04_live_order_gate_at_venue_boundary.py.
+    engine._live_risk_approved = True
+    engine._live_risk_reason = "risk approved (test precondition)"
+    engine._live_tenant_id = "00000000-0000-0000-0000-000000000001"
+    engine._live_strategy_id = "s-1"
+
     verdict, _raised = await _guard_verdict(engine, order_environment)
     if verdict == REFUSED:
         assert not may_reach_exchange, (
@@ -487,6 +501,10 @@ async def test_which_combinations_can_actually_place_a_real_order(
             f"refused it"
         )
         return
+
+    # `_guard_verdict` goes through `execute_with_idempotency`, which overwrites the
+    # verdict with its own (unset) default. Re-establish it for the direct call below.
+    engine._live_risk_approved = True
 
     await engine._execute_trade_internal(
         execution_id="e-4",

@@ -1,0 +1,11 @@
+NONCE=RUNF6
+CONFIG: documented local: ENV=development, no REDIS_URL   (child rc=0)
+limiter storage: memory://  shared=False
+imported OK: 14/14
+CONFIG: test-suite shape: ENV=testing, DEV_MODE=true, REDIS_URL=''   (child rc=0)
+limiter storage: memory://  shared=False
+imported OK: 14/14
+CONFIG: workspace .env as-is (ENV absent, REDIS_URL unreachable)   (child rc=0)
+limiter storage: memory://  shared=False
+imported OK: 14/14
+NONCE_END=RUNF6

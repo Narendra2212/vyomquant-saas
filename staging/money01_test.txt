@@ -1,0 +1,95 @@
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(01b041a7-108d-4643-afbe-53ed5e6f4860) already exists.
+        """The happy path. Asserted first, so a fix that broke crediting is caught."""
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(01b041a7-108d-4643-afbe-53ed5e6f4860) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': '01b041a7-108d-4643-afbe-53ed5e6f4860', 'c': 'CODE01B041A7'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(b8103370-d8b3-43f6-9b1d-9564b6a7496f) already exists.
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(b8103370-d8b3-43f6-9b1d-9564b6a7496f) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': 'b8103370-d8b3-43f6-9b1d-9564b6a7496f', 'c': 'CODEB8103370'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(101e3215-d0a3-40a1-a982-e78c4791d4ee) already exists.
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(101e3215-d0a3-40a1-a982-e78c4791d4ee) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': '101e3215-d0a3-40a1-a982-e78c4791d4ee', 'c': 'CODE101E3215'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(fa3525ef-d377-4c85-a11f-f1ed15eb8ba1) already exists.
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(fa3525ef-d377-4c85-a11f-f1ed15eb8ba1) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': 'fa3525ef-d377-4c85-a11f-f1ed15eb8ba1', 'c': 'CODEFA3525EF'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(61ac654b-4223-48a4-8792-9b3020d86e66) already exists.
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(61ac654b-4223-48a4-8792-9b3020d86e66) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': '61ac654b-4223-48a4-8792-9b3020d86e66', 'c': 'CODE61AC654B'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(60230894-e127-403f-82f4-0185f35fe3f9) already exists.
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(60230894-e127-403f-82f4-0185f35fe3f9) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': '60230894-e127-403f-82f4-0185f35fe3f9', 'c': 'CODE60230894'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(be524f3c-5763-4077-8f81-21554425c0bc) already exists.
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(be524f3c-5763-4077-8f81-21554425c0bc) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': 'be524f3c-5763-4077-8f81-21554425c0bc', 'c': 'CODEBE524F3C'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(618c9601-a433-4066-a31d-fb5c2c8874c4) already exists.
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(618c9601-a433-4066-a31d-fb5c2c8874c4) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': '618c9601-a433-4066-a31d-fb5c2c8874c4', 'c': 'CODE618C9601'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E       psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(9363bd4d-19b8-4882-b0b2-e0777f774120) already exists.
+E       sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "uq_referral_codes_user"
+E       DETAIL:  Key (user_id)=(9363bd4d-19b8-4882-b0b2-e0777f774120) already exists.
+E       
+E       [SQL: INSERT INTO public.referral_codes (user_id, code) VALUES (%(u)s, %(c)s) RETURNING id]
+E       [parameters: {'u': '9363bd4d-19b8-4882-b0b2-e0777f774120', 'c': 'SELF9363BD4D'}]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:941: IntegrityError
+E               psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "uq_referral_codes_user"
+E               DETAIL:  Key (user_id)=(33bad997-4266-4917-ae3f-093ca77c5235) already exists.
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_a_single_payment_creates_one_commission_and_moves_the_wallet
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_replaying_the_same_payment_is_a_no_op
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_a_direct_duplicate_insert_is_refused_by_the_database
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_two_different_payments_each_credit
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_a_null_payment_id_is_refused
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_a_non_positive_payment_is_refused[0]
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_a_non_positive_payment_is_refused[-50.00]
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_a_non_positive_payment_is_refused[NULL]
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_self_referral_is_refused_by_the_schema
+FAILED tests/test_money01_referral_commission_idempotence_postgres.py::test_two_concurrent_workers_cannot_both_credit
+10 failed, 7 passed in 42.38s

@@ -10,7 +10,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS risk_settings (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
     max_daily_loss DECIMAL(10, 2) NOT NULL DEFAULT 500.00,
     max_positions INTEGER NOT NULL DEFAULT 10,
     max_leverage INTEGER NOT NULL DEFAULT 3,
@@ -30,8 +30,8 @@ ALTER TABLE risk_settings ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "risk_settings_authenticated_owner" ON risk_settings
     FOR ALL
     TO authenticated
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
+    USING (auth.uid()::text = user_id)
+    WITH CHECK (auth.uid()::text = user_id);
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- PHASE 2: Create strategy_limits table
@@ -39,7 +39,7 @@ CREATE POLICY "risk_settings_authenticated_owner" ON risk_settings
 
 CREATE TABLE IF NOT EXISTS strategy_limits (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
     strategy_id TEXT NOT NULL,
     max_position_size DECIMAL(10, 2) NOT NULL DEFAULT 1000.00,
     max_daily_trades INTEGER NOT NULL DEFAULT 100,
@@ -62,8 +62,8 @@ ALTER TABLE strategy_limits ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "strategy_limits_authenticated_owner" ON strategy_limits
     FOR ALL
     TO authenticated
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
+    USING (auth.uid()::text = user_id)
+    WITH CHECK (auth.uid()::text = user_id);
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- PHASE 3: Create risk_settings_audit table for audit trail
@@ -71,7 +71,7 @@ CREATE POLICY "strategy_limits_authenticated_owner" ON strategy_limits
 
 CREATE TABLE IF NOT EXISTS risk_settings_audit (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
     event_type TEXT NOT NULL CHECK (event_type IN ('created', 'updated', 'kill_switch_activated', 'kill_switch_deactivated')),
     previous_values JSONB,
     new_values JSONB,
@@ -93,7 +93,7 @@ ALTER TABLE risk_settings_audit ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "risk_settings_audit_read_own" ON risk_settings_audit
     FOR SELECT
     TO authenticated
-    USING (auth.uid() = user_id);
+    USING (auth.uid()::text = user_id);
 
 CREATE POLICY "risk_settings_audit_insert_service" ON risk_settings_audit
     FOR INSERT
@@ -159,3 +159,26 @@ CREATE TRIGGER log_risk_settings_changes_trigger
     EXECUTE FUNCTION log_risk_settings_changes();
 
 COMMIT;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- PROVISIONING FIX (found by scripts/provision_database.py against staging)
+-- ══════════════════════════════════════════════════════════════════════════
+-- The three `user_id` columns in this file were declared `TEXT NOT NULL
+-- REFERENCES profiles(id) ON DELETE CASCADE`, and `public.profiles.id` is `uuid`.
+-- That combination is doubly impossible:
+--
+--   1. A foreign key from `text` to `uuid` is refused outright --
+--      `42804 DatatypeMismatch: foreign key constraint ... cannot be implemented`.
+--   2. The RLS policies in this same file compare `auth.uid()::text = user_id`, and
+--      `auth.uid()` returns `uuid`, so the comparison is refused as well --
+--      `42883 UndefinedFunction: operator does not exist: uuid = text`,
+--      which is the error that actually aborted the run.
+--
+-- Both point the same way, so the columns are now `UUID`: the foreign key targets a
+-- `uuid` primary key and the policy compares against a `uuid`, and nothing in this file
+-- wanted text. Contrast `migrations/005_create_referral_profiles_table.sql`, where the
+-- policy casts (`auth.uid()::text = user_id`) and the column genuinely is meant to be
+-- text -- there the foreign key was the mistake, here the column type was.
+--
+-- These tables are created by this file alone, so changing the declared type introduces
+-- no drift against anything else in the repository.

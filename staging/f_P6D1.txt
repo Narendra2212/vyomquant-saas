@@ -1,0 +1,6 @@
+E   AssertionError: these create_order/cancel_order call sites are on receivers this inventory does not know about, so it cannot say whether they reach a real exchange:
+E   AssertionError: assert Decimal('99999.50') == Decimal('99999.75')
+FAILED tests/test_paper01_paper_live_isolation.py::test_every_venue_write_site_is_classified
+FAILED tests/test_paper01_paper_live_isolation.py::test_a_paper_fill_through_the_ledger_issues_no_exchange_call
+2 failed, 10 passed in 68.97s (0:01:08)
+NONCE_END=P6D1

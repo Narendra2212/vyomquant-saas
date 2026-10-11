@@ -1,0 +1,46 @@
+==================================================================================================
+PRE-PUSH RECHECKS
+==================================================================================================
+  remote refs/heads/ci/d5-real-redis-quota-evidence
+    now      : d07014d36d32c63db44f8fb9659933c0e84e82f2
+    expected : d07014d36d32c63db44f8fb9659933c0e84e82f2  MATCH
+  commit descends from the expected head : True
+  fast-forward (remote head is ancestor) : True
+  commit changes exactly the 3 approved paths : True
+    ['.github/workflows/01-pr-check.yml', 'tests/test_quota01_metered_reservation_is_hard.py', 'tests/test_webhook_duplicate_delivery_real_redis.py']
+  shared index digest : 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME
+  checked-out branch  : main
+  PR #6 association   : {"headRefName":"ci/d5-real-redis-quota-evidence","headRefOid":"d07014d36d32c63db44f8fb9659933c0e84e82f2","number":6}
+
+  ALL PRE-PUSH CONDITIONS PASS: True
+
+==================================================================================================
+PUSH  (no --force, no --force-with-lease, single refspec)
+==================================================================================================
+  $ git push origin f5b99e57e1f7644bdbb10712e21f85e2ff236920:refs/heads/ci/d5-real-redis-quota-evidence
+  rc = 0
+  stderr: remote: 
+  stderr: remote: GitHub found 183 vulnerabilities on Narendra2212/vyomquant-saas's default branch (6 critical, 47 high, 87 moderate, 43 low). To find out more, visit:        
+  stderr: remote:      https://github.com/Narendra2212/vyomquant-saas/security/dependabot        
+  stderr: remote: 
+  stderr: To https://github.com/Narendra2212/vyomquant-saas.git
+  stderr:    d07014d3..f5b99e57  f5b99e57e1f7644bdbb10712e21f85e2ff236920 -> ci/d5-real-redis-quota-evidence
+
+==================================================================================================
+POST-PUSH VERIFICATION FROM THE GIT HOST
+==================================================================================================
+  ls-remote refs/heads/ci/d5-real-redis-quota-evidence -> f5b99e57e1f7644bdbb10712e21f85e2ff236920  == our commit
+  other D5 branches unchanged:
+    refs/heads/ci/d5-prime-real-redis                49e70da23c2858ffc9a6f34d5db4521401477c82  SAME
+    refs/heads/ci/d5-real-redis-switch               a624ce89b16005b0c73197005d6d0672737dad65  SAME
+    refs/heads/main                                  074b772ab16cece62cbfca0f2b78497be2ae56d5  SAME
+
+  gh pr view 6 (host-side truth):
+    {"headRefName":"ci/d5-real-redis-quota-evidence","headRefOid":"f5b99e57e1f7644bdbb10712e21f85e2ff236920","mergeStateStatus":"UNSTABLE","mergedAt":null,"number":6,"state":"OPEN"}
+  gh pr view 7: {"headRefOid":"49e70da23c2858ffc9a6f34d5db4521401477c82","mergedAt":null,"number":7,"state":"OPEN"}
+  gh pr view 8: {"headRefOid":"a624ce89b16005b0c73197005d6d0672737dad65","mergedAt":null,"number":8,"state":"OPEN"}
+
+  shared index digest after push : 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME
+  checked-out branch after push  : main
+  local main HEAD after push     : 074b772ab16cece62cbfca0f2b78497be2ae56d5
+  local refs/heads/ci/d5-real-redis-quota-evidence ref : d07014d36d32c63db44f8fb9659933c0e84e82f2

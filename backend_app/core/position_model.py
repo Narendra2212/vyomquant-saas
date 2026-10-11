@@ -595,11 +595,41 @@ class PositionRepository:
         return results, total
     
     def create(self, data: PositionCreate, auto_commit: bool = True) -> PositionModel:
-        """Create a new position."""
+        """Create a new position.
+
+        ``exchange_id`` IS PERSISTED, AND WAS NOT BEFORE. This method constructed the
+        ``PositionModel`` from ten of ``PositionCreate``'s eleven fields and silently
+        dropped ``exchange_id``, so every position ever created through this repository
+        had ``exchange_id = NULL`` -- while the field was declared on ``PositionBase``
+        (line 256), present as a column on the model (line 379), accepted from every
+        caller, and returned by ``to_dict()`` (line 416). Nothing complained because the
+        column is nullable and the value round-tripped in memory on the object the caller
+        already held.
+
+        WHAT THAT BROKE. ``core/consistency_checker.py`` builds the local position map
+        reconciliation compares against the venue with:
+
+            db.query(PositionModel).filter(and_(
+                PositionModel.tenant_id == tenant_id,
+                PositionModel.exchange_id == exchange_id,
+            )).all()
+
+        Against a column that is always NULL, ``exchange_id == 'binance'`` matches
+        nothing. So reconciliation found zero local positions for every tenant on every
+        run, and the comparison it exists to perform could only ever conclude that the
+        venue's positions correspond to nothing held locally. A reconciler that cannot
+        see local state does not detect drift; it reports the whole book as unmatched, or
+        nothing at all, depending on how its caller reads an empty map.
+
+        Found by running a position through this repository and then issuing the
+        reconciler's own query -- see
+        ``tests/test_position_lifecycle_postgres.py::test_the_reconciliation_query_runs``.
+        """
         position = PositionModel(
             position_id=data.position_id or f"pos_{uuid4().hex[:16]}",
             tenant_id=data.tenant_id,
             strategy_id=data.strategy_id,
+            exchange_id=data.exchange_id,
             symbol=data.symbol.upper(),
             side=data.side,
             size=data.size,

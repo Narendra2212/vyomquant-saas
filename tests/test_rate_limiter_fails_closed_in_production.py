@@ -61,27 +61,51 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 MODULE = "backend_app.core.rate_limit"
 
-#: Verbatim from rate_limit.py. Restated here so a change to either is deliberate.
+#: The environments in which per-process limits are permitted.
+#:
+#: UPDATED BY API-03. This set was previously restated verbatim from ``rate_limit.py``'s
+#: own ``DEV_TEST_ENVS``, which contained ``"safe"``, ``"paper"`` and ``"ambiguous"``.
+#: Those first two are **trading modes**, not deployment environments, and their presence
+#: here was the defect: ``startup.sh`` resolves ``VYOMQUANT_MODE`` to ``paper`` when
+#: nothing sets it, so the documented production trading mode selected per-process rate
+#: limiting. ``"ambiguous"`` was dead -- this file's own
+#: ``test_nothing_set_resolves_to_safe_and_the_ambiguous_branch_is_dead`` proved the
+#: branch that assigned it could never run.
+#:
+#: The allow-list now lives in ``core/runtime_env.LOCAL_STATE_ENVS`` and contains no
+#: trading mode at all. Restated here, as before, so a change to either side is
+#: deliberate: every entry is an environment permitted to run unlimited.
 EXPECTED_DEV_TEST_ENVS = {
     "testing",
     "test",
     "development",
     "dev",
     "local",
-    "safe",
-    "paper",
-    "ambiguous",
 }
 
+#: Trading modes that must NEVER appear on the allow-list. Named explicitly rather than
+#: left implied by the set above, because re-adding one is the exact regression API-03
+#: fixed and it would otherwise read as a harmless addition.
+FORBIDDEN_ON_ALLOW_LIST = {"safe", "paper", "live", "production", "staging", "prod"}
 
-def _reload(monkeypatch, *, env=None, mode=None, redis_url=None):
+
+def _reload(monkeypatch, *, env=None, mode=None, redis_url=None, dev_mode=None):
     """Re-import the limiter under a specific environment.
 
     Every variable it reads is set or removed explicitly, so a value inherited from the
     developer's shell cannot decide the outcome.
+
+    ``DEV_MODE`` was added to that list by API-03, which routed the limiter's environment
+    decision through ``core/runtime_env.local_state_is_acceptable()`` -- a function that
+    reads ``DEV_MODE``. Omitting it here was not harmless: ``tests/conftest.py`` sets
+    ``DEV_MODE=true`` for the whole suite, so every case in this file silently ran with it
+    set, and that is how the ``DEV_MODE``-overrides-``ENV`` fail-open went unnoticed by
+    the API-03 suite while this file caught it.
     """
-    for name in ("ENV", "VYOMQUANT_MODE", "AERORA_MODE", "REDIS_URL"):
+    for name in ("ENV", "VYOMQUANT_MODE", "AERORA_MODE", "REDIS_URL", "DEV_MODE"):
         monkeypatch.delenv(name, raising=False)
+    if dev_mode is not None:
+        monkeypatch.setenv("DEV_MODE", dev_mode)
     if env is not None:
         monkeypatch.setenv("ENV", env)
     if mode is not None:
@@ -118,44 +142,50 @@ class TestProductionFailsClosed:
                 redis_url="redis://127.0.0.1:1/0",
             )
 
-        assert "rate limit storage" in str(caught.value).lower()
+        # API-03 rewrote the refusal message. Asserted on diagnostic content rather than
+        # the old literal "rate limit storage": it must name the subsystem and say the
+        # store is unreachable, so an operator reading one log line knows what to fix.
+        message = str(caught.value).lower()
+        assert "rate limit" in message
+        assert "unreachable" in message
 
-    def test_nothing_set_resolves_to_safe_and_the_ambiguous_branch_is_dead(
+    def test_nothing_set_now_fails_closed_instead_of_resolving_to_safe(
         self, monkeypatch
     ):
-        """With neither variable set the environment is ``safe``, never ``ambiguous``.
+        """UPDATED BY API-03. Silence used to mean ``safe``; it now means refuse.
 
-        The module reads::
+        This test previously asserted ``module.env == "safe"`` and that ``"ambiguous"``
+        was still a dead entry in ``DEV_TEST_ENVS``, recording as measured that::
 
             env_raw = os.getenv("ENV") or get_vyomquant_mode(default="safe")
-            if env_raw:
-                env = env_raw.lower()
-            else:
-                # Ambiguous environment: neither ENV nor VYOMQUANT_MODE is set
-                env = "ambiguous"
 
-        ``get_vyomquant_mode(default="safe")`` always returns a non-empty string, so
-        ``env_raw`` is always truthy and the ``else`` can never run. ``"ambiguous"`` is
-        therefore dead -- both as an assigned value and as its entry in
-        ``DEV_TEST_ENVS`` -- and the comment describing an ambiguous environment
-        describes a state the module cannot reach.
+        always produced a non-empty string, so the ``else: env = "ambiguous"`` branch
+        could never run. Its own message said "the dead 'ambiguous' entry was removed
+        from DEV_TEST_ENVS -- fine, but update this test".
 
-        The practical outcome is the same (``safe`` is on the allow-list, so memory
-        storage either way), which is why this is recorded rather than fixed: removing
-        the branch changes no behaviour, and leaving it is misleading about what happens
-        when nothing is configured. Asserted as measured.
+        API-03 removed the ``get_vyomquant_mode`` read entirely: a trading mode says what
+        the system may do with money and nothing about how many processes are running.
+        With nothing set the environment is now the empty string, which is NOT on the
+        allow-list, so the limiter refuses rather than silently choosing per-process
+        counters. That is the whole point -- an unconfigured deployment is protected
+        rather than guessed at.
         """
-        module = _reload(monkeypatch)
+        with pytest.raises(RuntimeError) as caught:
+            _reload(monkeypatch)
 
-        assert module.env == "safe", (
-            f"env resolved to {module.env!r}; if the 'ambiguous' branch is now "
-            f"reachable, this module's fallback story has changed"
+        message = str(caught.value)
+        assert "REDIS_URL" in message
+        assert "ENV=<unset>" in message, (
+            f"the refusal should name the unset environment, got: {message}"
         )
-        assert "ambiguous" in module.DEV_TEST_ENVS, (
-            "the dead 'ambiguous' entry was removed from DEV_TEST_ENVS -- fine, but "
-            "update this test"
+
+    def test_an_unset_environment_is_not_called_safe_anywhere(self, monkeypatch):
+        """The trading mode must not re-enter the environment decision by any route."""
+        module = _reload(monkeypatch, env="development", mode="live")
+
+        assert module.env == "development", (
+            f"VYOMQUANT_MODE leaked back into the environment decision: {module.env!r}"
         )
-        assert module.limiter is not None
 
     @pytest.mark.parametrize("env", ["production", "staging", "prod", "live"])
     def test_no_non_dev_environment_can_use_memory_storage(self, monkeypatch, env):
@@ -165,6 +195,45 @@ class TestProductionFailsClosed:
         with pytest.raises(RuntimeError):
             _reload(monkeypatch, env=env)
 
+    @pytest.mark.parametrize("env", ["production", "staging", "prod", "live"])
+    def test_dev_mode_cannot_override_a_declared_non_local_environment(
+        self, monkeypatch, env
+    ):
+        """REGRESSION for a production fail-open found by the full suite.
+
+        ``core/runtime_env.local_state_is_acceptable()`` read::
+
+            if os.environ.get("DEV_MODE", "false") in _TRUTHY:
+                return True
+            return deployment_environment() in LOCAL_STATE_ENVS
+
+        ``DEV_MODE`` short-circuited, so it was never compared against ``ENV``. A
+        deployment with ``ENV=production`` and a leftover ``DEV_MODE=true`` therefore
+        resolved to *local*: the limiter logged "explicitly local environment
+        'production'" and used a per-process counter behind N replicas, with only a
+        warning. One stale environment variable disabled the control.
+
+        A declared non-local environment must win. The limiter must refuse here exactly
+        as it does without ``DEV_MODE``.
+        """
+        with pytest.raises(RuntimeError) as caught:
+            _reload(monkeypatch, env=env, dev_mode="true")
+
+        assert "REDIS_URL" in str(caught.value)
+
+    def test_dev_mode_still_works_where_the_environment_is_silent(self, monkeypatch):
+        """POSITIVE CONTROL: the fix above must not make ``DEV_MODE`` useless.
+
+        Without this, the previous test would also pass if ``DEV_MODE`` had simply been
+        deleted from the implementation, and a developer with no ``ENV`` set could no
+        longer start the application at all.
+        """
+        module = _reload(monkeypatch, dev_mode="true")
+
+        assert module.limiter is not None
+        assert module.config.local_allowed is True
+        assert module.config.is_shared is False
+
 
 # ---------------------------------------------------------------------------
 # 2. The dev/test allow-list is exactly what it says
@@ -173,13 +242,34 @@ class TestProductionFailsClosed:
 
 class TestTheDevTestAllowListIsDeclared:
     def test_the_allow_list_has_not_grown(self, monkeypatch):
-        """A new entry here is a new environment permitted to run unlimited."""
-        module = _reload(monkeypatch, env="test")
+        """A new entry here is a new environment permitted to run unlimited.
 
-        assert set(module.DEV_TEST_ENVS) == EXPECTED_DEV_TEST_ENVS, (
-            f"the dev/test rate-limit allow-list changed to "
-            f"{sorted(module.DEV_TEST_ENVS)}; each entry is an environment allowed to "
-            f"use per-process in-memory limits"
+        Re-pointed by API-03: the allow-list moved from ``rate_limit.DEV_TEST_ENVS`` to
+        ``core/runtime_env.LOCAL_STATE_ENVS``, so that the limiter and
+        ``redis_manager`` -- which had answered the same question differently -- share
+        one definition. The control is unchanged; only its address moved.
+        """
+        from backend_app.core import runtime_env
+
+        assert set(runtime_env.LOCAL_STATE_ENVS) == EXPECTED_DEV_TEST_ENVS, (
+            f"the local-state allow-list changed to "
+            f"{sorted(runtime_env.LOCAL_STATE_ENVS)}; each entry is an environment "
+            f"allowed to use per-process in-memory limits and a fake distributed lock"
+        )
+
+    def test_no_trading_mode_is_on_the_allow_list(self, monkeypatch):
+        """The API-03 defect, pinned so it cannot return.
+
+        ``safe`` and ``paper`` were on the old list. They are trading modes, and
+        ``startup.sh`` resolves ``VYOMQUANT_MODE`` to ``paper`` when nothing sets it, so
+        the documented production trading mode selected per-process rate limiting.
+        """
+        from backend_app.core import runtime_env
+
+        overlap = set(runtime_env.LOCAL_STATE_ENVS) & FORBIDDEN_ON_ALLOW_LIST
+        assert not overlap, (
+            f"{sorted(overlap)} appear on the local-state allow-list. A trading mode is "
+            f"not a deployment environment, and a production environment is not local."
         )
 
     def test_a_dev_environment_without_redis_uses_memory(self, monkeypatch):
@@ -187,21 +277,25 @@ class TestTheDevTestAllowListIsDeclared:
 
         assert module.limiter is not None
 
-    def test_paper_mode_with_no_env_falls_back_to_memory(self, monkeypatch):
-        """The residual gap, pinned.
+    def test_paper_mode_with_no_env_now_refuses(self, monkeypatch):
+        """UPDATED BY API-03: the recorded gap this test pinned is CLOSED.
 
-        ``startup.sh`` resolves ``VYOMQUANT_MODE`` to ``paper`` when nothing sets it, and
-        ``paper`` is on the allow-list, so a deployment that sets the mode and not ``ENV``
-        gets per-process limits. Not reachable here -- every ECS task definition sets
-        ``ENV=production`` -- but it depends on a task-definition variable rather than on
-        code, so it is recorded.
+        It previously asserted ``module.env == "paper"`` and that a limiter was still
+        initialised, recording that a deployment setting ``VYOMQUANT_MODE`` and not
+        ``ENV`` would land on the allow-list via ``paper`` and get per-process limits.
+        Its own message said: "if it now refuses, this recorded gap is closed and this
+        test should go."
+
+        It refuses. The test is kept rather than removed, inverted into the regression
+        that the gap stays closed -- deleting it would leave nothing asserting that a
+        trading mode cannot select the rate-limit backend.
         """
-        module = _reload(monkeypatch, mode="paper")
+        with pytest.raises(RuntimeError) as caught:
+            _reload(monkeypatch, mode="paper")
 
-        assert module.env == "paper"
-        assert module.limiter is not None, (
-            "paper mode with no ENV no longer initialises a limiter; if it now refuses, "
-            "this recorded gap is closed and this test should go"
+        message = str(caught.value)
+        assert "ENV=<unset>" in message, (
+            f"VYOMQUANT_MODE=paper still resolved to an environment: {message}"
         )
 
 

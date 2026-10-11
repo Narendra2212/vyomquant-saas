@@ -1,0 +1,113 @@
+ M backend_app/alembic/versions/6f1b3d9c8a7e_add_referrals.py
+ M backend_app/alembic/versions/add_foreign_keys_20260817.py
+ M backend_app/backend/backtesting_engine.py
+ M backend_app/backend/distributed_execution/idempotent_exchange_submission.py
+ M backend_app/backend/exchange_executor.py
+ M backend_app/backend/fee_engine.py
+ M backend_app/backend/fleet_manager.py
+ M backend_app/backend/master_executor.py
+ M backend_app/backend/transactional_execution_manager.py
+ M backend_app/core/auth_middleware.py
+ M backend_app/core/cache/redis_manager.py
+ M backend_app/core/config.py
+ M backend_app/core/execution_engine.py
+ M backend_app/core/models/billing.py
+ M backend_app/core/models/dag_task.py
+ M backend_app/core/models/execution_tables.py
+ M backend_app/core/position_model.py
+ M backend_app/core/rate_limit.py
+ M backend_app/core/risk_engine.py
+ M backend_app/core/worker_base.py
+ M backend_app/main.py
+ M backend_app/migrations/001_strategy_architecture.sql
+ M backend_app/migrations/009_paper_trading.sql
+ M backend_app/routers/billing.py
+ M backend_app/routers/portfolio.py
+ M backend_app/routers/referral.py
+ M backend_app/routers/strategies.py
+ M backend_app/workers/command_worker.py
+ M tests/property/test_tenant_isolation_matrix.py
+ M tests/regression/baseline/live_order_path.json
+ M tests/regression/baseline/surface_exchange_connection.json
+ M tests/test_atomic_order_cancellation_fix.py
+ M tests/test_backtest_key_contract.py
+ M tests/test_billing_e2e.py
+ M tests/test_end_to_end_api_suite.py
+ M tests/test_execution_paths_that_claim_an_exchange.py
+ M tests/test_live_risk_gate_enforcement.py
+ M tests/test_no_credential_in_api_response_body.py
+ M tests/test_no_hs256_fallback_in_production.py
+ M tests/test_notifications_feature_e2e.py
+ M tests/test_paper_live_separation.py
+ M tests/test_position_delta_race_condition_fix.py
+ M tests/test_rate_limit_backend.py
+ M tests/test_rate_limiter_fails_closed_in_production.py
+ M tests/test_simulated_orders_reach_the_simulator.py
+ M tests/test_single_execution_pipeline.py
+ M tests/test_task_5_3_rename_strategy.py
+?? backend_app/alembic/versions/a1b2c3d4e5f6_normalize_tenant_id_to_uuid.py
+?? backend_app/alembic/versions/b2c3d4e5f6a7_positions_canonical_shape.py
+?? backend_app/alembic/versions/c3d4e5f6a7b8_library_ratings_nullable_rating.py
+?? backend_app/alembic/versions/d4e5f6a7b8c9_bug049_normalize_user_id_to_uuid.py
+?? backend_app/core/bot_ownership.py
+?? backend_app/core/live_execution_gate.py
+?? backend_app/core/readiness.py
+?? backend_app/core/runtime_env.py
+?? backend_app/migrations/022_fix_library_subscriptions_updated_at.sql
+?? backend_app/migrations/023_remediate_privilege_escalation.sql
+?? backend_app/migrations/024_remediate_referral_double_commission.sql
+?? backend_app/migrations/025_work03_bot_ownership_claims.sql
+?? tests/test_api01_strategies_update_allowlist.py
+?? tests/test_api03_rate_limit_storage_is_fail_closed.py
+?? tests/test_api04_store_failure_after_startup.py
+?? tests/test_auth01_require_aal2_is_wired.py
+?? tests/test_billing_data_isolation_postgres.py
+?? tests/test_bug016_backtest_impact.py
+?? tests/test_bug049_identity_types_postgres.py
+?? tests/test_bug049_sql_and_alembic_agree.py
+?? tests/test_bug056_library_subscriptions_updated_at_postgres.py
+?? tests/test_bug057_listing_moderation_authz_postgres.py
+?? tests/test_cross_tenant_read_sweep_postgres.py
+?? tests/test_exchange_executor_cache_is_per_tenant.py
+?? tests/test_execution_engine_accounting_identity.py
+?? tests/test_fee_denomination_is_not_assumed.py
+?? tests/test_idempotent_submission_fails_closed.py
+?? tests/test_jwt_secret_is_production_grade.py
+?? tests/test_live_orders_are_bounded_by_account_equity.py
+?? tests/test_money01_referral_commission_idempotence_postgres.py
+?? tests/test_money02_billing_amount_precision.py
+?? tests/test_obs01_readiness_reflects_dependencies.py
+?? tests/test_obs04_worker_heartbeat_is_written.py
+?? tests/test_order_normalization_and_venue_idempotency.py
+?? tests/test_orm_models_match_provisioned_schema.py
+?? tests/test_pgcrypto_preflight_postgres.py
+?? tests/test_port01_close_all_route_is_reachable.py
+?? tests/test_position_lifecycle_postgres.py
+?? tests/test_production_security_probe_rolls_back_postgres.py
+?? tests/test_quota01_enforcement_is_wired.py
+?? tests/test_redis_fallback_does_not_fake_a_distributed_lock.py
+?? tests/test_referral_money_lifecycle_postgres.py
+?? tests/test_risk_engine_accumulators_are_decimal.py
+?? tests/test_schema_drift_checker_is_read_only_postgres.py
+?? tests/test_sharpe_annualization_matches_timeframe.py
+?? tests/test_signup_integration_postgres.py
+?? tests/test_tenant_isolation_rls_postgres.py
+?? tests/test_tenant_referential_integrity_postgres.py
+?? tests/test_tenant01_cross_tenant_matrix_postgres.py
+?? tests/test_test_token_fallback_fails_closed.py
+?? tests/test_trade03_second_write_path_is_gated.py
+?? tests/test_trade04_live_order_gate_at_venue_boundary.py
+?? tests/test_webhook_duplicate_delivery_real_redis.py
+?? tests/test_work01_command_durability.py
+?? tests/test_work03_bot_ownership_claims_postgres.py
+A  backend_app/core/tenant_db_context.py
+A  tests/test_sc3_aal_claim_propagation.py
+A  tests/test_tenant_db_context.py
+A  tests/test_tenant_db_context_postgres.py
+A  tests/test_verify_rls_script.py
+A  tests/test_worker_deployment_coverage.py
+M  backend_app/core/dependencies.py
+M  backend_app/routers/auth.py
+MM backend_app/routers/exchange.py
+COUNT=111
+NONCE_END=VF1C

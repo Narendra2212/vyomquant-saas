@@ -198,6 +198,51 @@ async def global_kill_switch(
         raise HTTPException(400, "Reason for global kill switch must not be empty.")
 
     try:
+        # ═══════════════════════════════════════════════════════════════════
+        # KILL-03: ENGAGE THE AUTHORITATIVE SWITCH *FIRST*
+        # ═══════════════════════════════════════════════════════════════════
+        # This endpoint used to call `fleet.shutdown_all()` and nothing else.
+        # `fleet_manager.shutdown_all` (fleet_manager.py:311-325) iterates a snapshot of
+        # the IN-PROCESS `_active_fleet` dict and calls `stop_bot` on each member. Its
+        # docstring says "Global kill switch". It is not one:
+        #
+        #   * bots running in another pod or worker process are untouched;
+        #   * nothing durable records that trading is stopped, so a restarted worker, a
+        #     newly scheduled bot or a second replica resumes immediately;
+        #   * the endpoint never referenced `GlobalKillSwitch`, so the one mechanism that
+        #     IS read on the live order path was left unengaged.
+        #
+        # Measured: zero references to `GlobalKillSwitch`, `get_global_kill_switch` or the
+        # Redis key anywhere in this file before this change.
+        #
+        # ORDER IS LOAD-BEARING. The authoritative state is written BEFORE the local
+        # fleet is torn down. If `shutdown_all()` raised partway through (it iterates and
+        # awaits per bot), the previous code left some bots running and nothing recorded
+        # — and this handler's `except` turns that into a 500, so the operator is told the
+        # halt failed while some bots keep trading. Engaging the switch first means every
+        # order path is refused even if the teardown then fails: `activate()` latches
+        # in-process immediately and writes Redis for the other processes.
+        #
+        # `activate()` also registers an independent HOLD keyed on this operator, so a
+        # later reset cannot clear this halt without acknowledging it (KILL-02).
+        from backend_app.core.global_safety import get_global_kill_switch
+
+        kill_switch = get_global_kill_switch()
+        await kill_switch.activate(
+            reason=reason,
+            triggered_by=f"operator:{admin.get('email') or admin.get('id') or 'unknown'}",
+            operator_id=admin.get("id"),
+            operator_email=admin.get("email"),
+            # The dependency that established this caller's authority. `get_operator_user`
+            # requires `app_metadata.role == "operator"` exactly — `admin` and `support`
+            # are refused. Recorded so the trail distinguishes an authorized halt from a
+            # claimed one, which is the KILL-02 defect in its activation half.
+            authorization_source="fastapi:get_operator_user",
+        )
+
+        # Still done, and still useful: stopping the local fleet promptly frees resources
+        # and halts this pod's bots without waiting for each to notice the switch on its
+        # next order attempt. It is no longer the ONLY effect.
         await fleet.shutdown_all()
 
         # Immutable Audit Log
@@ -216,14 +261,76 @@ async def global_kill_switch(
             ),
             name="admin_alert_global_kill"
         )
+        # The response now reports the AUTHORITATIVE state rather than asserting an
+        # outcome. `get_status()` re-reads the switch and the hold set, so an operator
+        # sees what every worker will see and what a reset would have to acknowledge —
+        # instead of a fixed "HALTED" string that was true of this pod only.
+        status = await kill_switch.get_status()
         return {
             "status": "HALTED",
-            "message": "All bots stopped. Platform is in standby mode.",
+            "message": (
+                "Global kill switch ENGAGED. New order submissions are refused at the "
+                "venue boundary in every process. Resting orders and open positions are "
+                "NOT closed — this platform's emergency policy is to refuse new orders."
+            ),
             "reason": reason,
+            "kill_switch_active": status["kill_switch_active"],
+            "holds": status["holds"],
+            "holds_readable": status["holds_readable"],
         }
     except Exception as e:
         logger.critical(f"Global kill switch failed: {e}")
         raise HTTPException(500, f"Kill switch error: {e}")
+
+
+@router.get("/kill-switch")
+async def kill_switch_status(
+    admin: dict = Depends(get_admin_user),
+):
+    """The authoritative halt state, and what a reset would have to acknowledge.
+
+    KILL-03, the observability half. The brief for this control requires "a way to verify
+    that every execution worker observes the halt", and before this endpoint there was no
+    way to read the global switch over HTTP at all — `/api/admin/fleet-status` reports
+    this pod's in-process `_active_fleet`, which is the very thing that made
+    `/kill-all` look like it worked.
+
+    WHAT THIS DOES AND DOES NOT PROVE. It returns the authoritative state as read from the
+    shared backend, plus the registered holds. Because every worker reads that same
+    backend on its own order path (`execution_engine.py:770`) and again at the venue
+    boundary (`exchange_executor.place_order`), agreement here is agreement everywhere —
+    the state is not replicated per worker, so there is nothing to diverge. What it cannot
+    do is prove a given worker process is alive and looping; that is what
+    `/api/admin/fleet-status` and the heartbeat surfaces are for.
+
+    `holds_readable: false` means the hold set could not be read. Reported rather than
+    rendered as an empty list, because "no holds" and "I do not know" are precisely the
+    two facts KILL-01 conflated.
+
+    Read-only, and deliberately `get_admin_user` rather than `get_operator_user`: seeing
+    whether the platform is halted is a strictly weaker capability than halting it, and
+    `admin`/`support` need it to answer "why is nothing trading".
+    """
+    from backend_app.core.global_safety import get_global_kill_switch
+
+    status = await get_global_kill_switch().get_status()
+    return {
+        "kill_switch_active": status["kill_switch_active"],
+        "local_latch_active": status["local_latch_active"],
+        "redis_failure_at": status["redis_failure_at"],
+        "probe_interval_seconds": status["probe_interval_seconds"],
+        "holds": status["holds"],
+        "holds_readable": status["holds_readable"],
+        "enforcement": {
+            "gateway": "backend_app/core/execution_engine.py::execute_with_idempotency",
+            "venue_boundary": (
+                "backend_app/backend/exchange_executor.py::place_order "
+                "(enforce_kill_switch, immediately before create_order)"
+            ),
+            "policy": "refuse new orders; resting orders and open positions untouched",
+            "fail_closed": True,
+        },
+    }
 
 
 @router.post("/reinitialize")

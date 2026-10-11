@@ -1,0 +1,35 @@
+10 create_order/cancel_order call sites in backend_app/
+============================================================================================
+receiver                   method         site
+--------------------------------------------------------------------------------------------
+_exchange                  create_order   backend_app/backend/exchange_executor.py:1081
+_exchange                  cancel_order   backend_app/backend/exchange_executor.py:1147
+exchange                   cancel_order   backend_app/backend/transactional_execution_manager.py:1050
+exchange                   create_order   backend_app/backend/transactional_execution_manager.py:1137
+execution_engine           cancel_order   backend_app/routers/orders.py:915
+order_repo                 create_order   backend_app/core/database_scaling.py:617
+self                       cancel_order   backend_app/core/order_state_engine.py:745
+service                    cancel_order   backend_app/routers/paper_trading.py:249
+state_service              create_order   backend_app/core/reconciliation_engine.py:754
+state_service              cancel_order   backend_app/core/reconciliation_engine.py:756
+
+BY RECEIVER
+============================================================================================
+  '_exchange': 2
+      backend_app/backend/exchange_executor.py:1081 (create_order)
+      backend_app/backend/exchange_executor.py:1147 (cancel_order)
+  'exchange': 2
+      backend_app/backend/transactional_execution_manager.py:1050 (cancel_order)
+      backend_app/backend/transactional_execution_manager.py:1137 (create_order)
+  'execution_engine': 1
+      backend_app/routers/orders.py:915 (cancel_order)
+  'order_repo': 1
+      backend_app/core/database_scaling.py:617 (create_order)
+  'self': 1
+      backend_app/core/order_state_engine.py:745 (cancel_order)
+  'service': 1
+      backend_app/routers/paper_trading.py:249 (cancel_order)
+  'state_service': 2
+      backend_app/core/reconciliation_engine.py:754 (create_order)
+      backend_app/core/reconciliation_engine.py:756 (cancel_order)
+NONCE_END=P6D3

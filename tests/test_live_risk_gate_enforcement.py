@@ -29,6 +29,52 @@ from backend_app.routers.risk import (
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# AN EXPLICIT "KILL SWITCH IS NOT ENGAGED" PRECONDITION
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ADDED BY KILL-01, AND IT IS A PRECONDITION THESE TESTS ALWAYS RELIED ON — they just
+# never said so.
+#
+# The two positive tests below drive the real `ExecutionEngine`, whose first gate is an
+# inline `get_global_kill_switch().is_active()` check (`execution_engine.py:720-740`).
+# No Redis runs in the test environment, so `redis_manager` is an uninitialised
+# `__getattr__` proxy that raises `AttributeError` on `.get`. `GlobalKillSwitch._redis_get`
+# used to swallow that and return `None`, and `is_active()` read `None` as "switch off" —
+# so the orders sailed through and reached the CCXT mock.
+#
+# That was KILL-01: the kill switch failed OPEN whenever its backend could not be read.
+# With it fixed, an unreadable backend fails CLOSED, and these two tests correctly began
+# reporting `status == "blocked"`. They were green only because of the defect.
+#
+# Supplying the stub does not weaken anything. The subject of one test is "an approved
+# order reaches CCXT exactly once" and of the other is "a retry does not place a second
+# order"; neither is about the kill switch, and both need it demonstrably NOT engaged to
+# measure what they claim. The refusal case stays covered by
+# `test_unapproved_live_order_never_reaches_ccxt` — which passed throughout, because a
+# refusal test cannot be broken by an extra refusal.
+
+
+class _KillSwitchNotEngaged:
+    """A kill switch that is readable and reports "off", stated rather than assumed."""
+
+    def __init__(self) -> None:
+        self.checked = 0
+
+    async def is_active(self) -> bool:
+        self.checked += 1
+        return False
+
+
+def _kill_switch_off(monkeypatch) -> _KillSwitchNotEngaged:
+    """Install the stub the way `tests/test_execution_environment_guard.py` does."""
+    import backend_app.core.global_safety as global_safety
+
+    stub = _KillSwitchNotEngaged()
+    monkeypatch.setattr(global_safety, "get_global_kill_switch", lambda: stub)
+    return stub
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # MOCK CCXT ADAPTER FIXTURE
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -204,11 +250,28 @@ async def test_flash_crash_blocks_live_ccxt_submission():
 # ═══════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
-async def test_risk_approved_live_order_invokes_ccxt_exactly_once():
+async def test_risk_approved_live_order_invokes_ccxt_exactly_once(monkeypatch):
+    """UPDATED FOR TRADE-05, NOT RELAXED.
+
+    This test is named for a risk-APPROVED order but never passed a risk verdict: it
+    called `execute_with_idempotency` and expected the order to reach CCXT anyway. That
+    was the TRADE-05 defect exactly -- the engine placed live orders without any risk
+    evaluation, and this test encoded that as correct.
+
+    `risk_approved` is now a required property of the live call: it defaults to `None`
+    and the venue branch refuses anything that is not `True`
+    (`execution_engine.py:1022`). The verdict is supplied here the way the gateway
+    supplies it, so the test still asserts what its name claims -- an APPROVED order
+    reaches CCXT exactly once -- rather than asserting that an unevaluated one does.
+
+    The refusal case it used to cover by accident is now covered on purpose, by
+    `test_unapproved_live_order_never_reaches_ccxt` below.
+    """
     user_id = str(uuid4())
     tenant_uuid = UUID(user_id)
     mock_ccxt = MockCCXTExchangeExecutor()
-    
+    kill_switch = _kill_switch_off(monkeypatch)
+
     engine = ExecutionEngine(
         portfolio_state={"total_equity": Decimal("100000.0"), "available_balance": Decimal("100000.0")},
         exchange_executor=mock_ccxt
@@ -219,6 +282,13 @@ async def test_risk_approved_live_order_invokes_ccxt_exactly_once():
             repo_instance = MagicMock()
             repo_instance.check_idempotent_execution.return_value = ("exec_1234567890", "proceed", None)
             repo_instance.claim_execution.return_value = (True, MagicMock())
+            # TRADE-01: the live path claims through the capacity reservation, which
+            # returns a 3-tuple. A bare MagicMock cannot be unpacked into three values,
+            # so the return has to be stated. Granting, because this test's subject is
+            # the risk gate and the CCXT call count, not capacity.
+            repo_instance.claim_execution_within_capacity.return_value = (
+                True, MagicMock(), None,
+            )
             MockRepo.return_value = repo_instance
             
             result = await engine.execute_with_idempotency(
@@ -228,12 +298,64 @@ async def test_risk_approved_live_order_invokes_ccxt_exactly_once():
                 side="buy",
                 size=Decimal("0.1"),
                 price=Decimal("60000.0"),
-                source="bot_runner"
+                source="bot_runner",
+                risk_approved=True,
+                risk_reason="InstitutionalRiskManager: APPROVED",
             )
             
             # Assert CCXT was called exactly once
             assert mock_ccxt.place_order_mock.call_count == 1
             assert result["status"] == "completed"
+
+    # The precondition was real, not decorative: the engine genuinely consulted the kill
+    # switch on the way through. If this ever reads 0 the gate has been removed from the
+    # live path and the stub above would be hiding it.
+    assert kill_switch.checked >= 1, (
+        "the engine never consulted the kill switch on the live order path"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unapproved_live_order_never_reaches_ccxt():
+    """THE NEGATIVE CONTROL FOR TRADE-05, in the file that used to contradict it.
+
+    Identical to the positive test above except that no risk verdict is passed. The
+    order must be refused BEFORE the exchange call, and the oracle is the CCXT call
+    count -- not the returned status, because a refusal that still placed the order
+    would be the worst of both.
+    """
+    tenant_uuid = UUID(str(uuid4()))
+    mock_ccxt = MockCCXTExchangeExecutor()
+
+    engine = ExecutionEngine(
+        portfolio_state={"total_equity": Decimal("100000.0"), "available_balance": Decimal("100000.0")},
+        exchange_executor=mock_ccxt
+    )
+
+    with patch.object(engine, '_validate_strategy_exists', return_value=True):
+        with patch('backend_app.core.execution_engine.ExecutionRecordRepository') as MockRepo:
+            repo_instance = MagicMock()
+            repo_instance.check_idempotent_execution.return_value = ("exec_unapproved", "proceed", None)
+            repo_instance.claim_execution.return_value = (True, MagicMock())
+            MockRepo.return_value = repo_instance
+
+            result = await engine.execute_with_idempotency(
+                tenant_id=tenant_uuid,
+                strategy_id="strat_unapproved_live",
+                symbol="BTC/USDT",
+                side="buy",
+                size=Decimal("0.1"),
+                price=Decimal("60000.0"),
+                source="bot_runner",
+                # risk_approved deliberately omitted -- defaults to None
+            )
+
+    assert mock_ccxt.place_order_mock.call_count == 0, (
+        "a live order with no risk verdict reached the exchange"
+    )
+    assert result["status"] != "completed", (
+        f"an unevaluated live order reported success: {result}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -241,11 +363,19 @@ async def test_risk_approved_live_order_invokes_ccxt_exactly_once():
 # ═══════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
-async def test_live_idempotency_prevents_duplicate_ccxt_submission():
+async def test_live_idempotency_prevents_duplicate_ccxt_submission(monkeypatch):
+    """UPDATED FOR TRADE-05, NOT RELAXED -- same reason as the positive test above.
+
+    The subject here is idempotency, not the risk gate: a retry must not place a second
+    exchange order. Reaching the exchange at all now requires a risk verdict, so the
+    verdict is supplied on both calls. Without it the first call would be refused and
+    the test would be measuring the refusal rather than the idempotency.
+    """
     user_id = str(uuid4())
     tenant_uuid = UUID(user_id)
     mock_ccxt = MockCCXTExchangeExecutor()
-    
+    _kill_switch_off(monkeypatch)
+
     engine = ExecutionEngine(
         portfolio_state={"total_equity": Decimal("100000.0"), "available_balance": Decimal("100000.0")},
         exchange_executor=mock_ccxt
@@ -260,6 +390,10 @@ async def test_live_idempotency_prevents_duplicate_ccxt_submission():
                 ("exec_idem_1", "skip_return_result", {"order_id": "mock_exchange_ord_999888"})
             ]
             repo_instance.claim_execution.return_value = (True, MagicMock())
+            # TRADE-01, same reason as the positive test above.
+            repo_instance.claim_execution_within_capacity.return_value = (
+                True, MagicMock(), None,
+            )
             MockRepo.return_value = repo_instance
             
             # Call 1: Original submission
@@ -270,7 +404,9 @@ async def test_live_idempotency_prevents_duplicate_ccxt_submission():
                 side="buy",
                 size=Decimal("0.1"),
                 price=Decimal("60000.0"),
-                source="bot_runner"
+                source="bot_runner",
+                risk_approved=True,
+                risk_reason="InstitutionalRiskManager: APPROVED",
             )
             assert res1["status"] == "completed"
             assert mock_ccxt.place_order_mock.call_count == 1
@@ -283,7 +419,9 @@ async def test_live_idempotency_prevents_duplicate_ccxt_submission():
                 side="buy",
                 size=Decimal("0.1"),
                 price=Decimal("60000.0"),
-                source="bot_runner"
+                source="bot_runner",
+                risk_approved=True,
+                risk_reason="InstitutionalRiskManager: APPROVED",
             )
             
             assert res2["status"] == "skipped_completed"

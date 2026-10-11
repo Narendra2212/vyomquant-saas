@@ -1010,6 +1010,20 @@ def capture_live_order_path() -> Dict[str, Any]:
     def build_engine(log: _CallLog) -> Any:
         engine = engine_module.ExecutionEngine.__new__(engine_module.ExecutionEngine)
         engine.exchange_executor = None
+        # ADDED BY TRADE-01. `__new__` bypasses `__init__`, so this engine had no
+        # `current_equity` at all. That went unnoticed because the harness stubs
+        # `_execute_trade_internal`, which is where the pre-existing per-order ceiling
+        # check reads it — so the bare engine never had to state what the account was
+        # worth. The capacity reservation reads it at claim time, and an engine that
+        # cannot state its equity is refused (the per-order check's own documented
+        # fail-closed policy, applied earlier).
+        #
+        # 100000 against the representative intent's notional of 0.25 x 61234.50 =
+        # 15308.625, so the order is comfortably fundable and the scenario named
+        # `representative_intent_completes` continues to represent an order that
+        # completes. This makes the capture MORE faithful to a live order, not less: a
+        # live order on an engine with no readable equity is not representative of one.
+        engine.current_equity = Decimal("100000")
 
         def validate(tenant_id: Any, strategy_id: str) -> bool:
             log.record("ExecutionEngine._validate_strategy_exists", returns="bool")
@@ -1043,6 +1057,23 @@ def capture_live_order_path() -> Dict[str, Any]:
         def claim_execution(self, execution_id: str, tenant_id: Any) -> Tuple[bool, Any]:
             self._log.record("ExecutionRecordRepository.claim_execution", returns="tuple[bool, record]")
             return True, {"execution_id": execution_id}
+
+        def claim_execution_within_capacity(
+            self, execution_id: str, tenant_id: Any, **kwargs: Any
+        ) -> Tuple[bool, Any, Any]:
+            """TRADE-01: the live path claims through a capacity reservation.
+
+            Recorded as its own collaborator call because it IS one — the live order path
+            now reserves against the account's ceiling in the same transaction as the
+            claim. `claim_execution` above is kept and still recorded for the declared
+            simulator path, which does not reserve.
+            """
+            self._log.record(
+                "ExecutionRecordRepository.claim_execution_within_capacity",
+                arguments=sorted(kwargs),
+                returns="tuple[bool, record, refusal_reason]",
+            )
+            return True, {"execution_id": execution_id}, None
 
         def update_status(self, **kwargs: Any) -> None:
             self._log.record(

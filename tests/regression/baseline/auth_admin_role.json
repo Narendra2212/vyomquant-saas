@@ -1,4 +1,5 @@
 {
+  "_baseline_note_kill_all_authoritative_state_report": "KILL-02/KILL-03 AUTHORISE three ADDED keys on the return dict of `global_kill_switch` (POST /api/admin/kill-all): `kill_switch_active`, `holds` and `holds_readable`. Before the fix the handler fanned out `fleet.shutdown_all()` and reported only {status, message, reason}, while the authoritative `GlobalKillSwitch` was never engaged on this route (KILL-03: `enforce_kill_switch` had zero call sites and `/api/admin/kill-all` did not reference `GlobalKillSwitch` at all). The handler now ACTIVATES the authoritative switch BEFORE the fleet fan-out -- the order is load-bearing, because `shutdown_all` can raise partway and must not leave the switch disengaged -- and reports the switch's resulting authoritative state (`kill_switch_active`) and the active-hold registry (`holds`, `holds_readable`) that KILL-02's hold set introduced, so an operator sees what the halt actually did rather than only that the fan-out was attempted. These are ADDITIONS: `status`, `message` and `reason` are unchanged in name, type and meaning. This is NOT one of the five paper additive fields; it is authorised by finding, which is the other re-record path the differ documents. Evidence: tests/test_kill03_authoritative_global_halt.py (42 passed), including the activate-before-shutdown ordering and the state reported back to the operator.",
   "admin_routes": [
     {
       "handler_count": 1,
@@ -121,6 +122,9 @@
           "raises": [],
           "returns": [
             {
+              "holds": "computed",
+              "holds_readable": "computed",
+              "kill_switch_active": "computed",
               "message": "str",
               "reason": "computed",
               "status": "str"

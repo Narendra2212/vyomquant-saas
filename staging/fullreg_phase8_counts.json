@@ -1,0 +1,365 @@
+{
+  "lanes": {
+    "ci": {
+      "lane": "CI lane (AUTHORITATIVE, Phase 8)",
+      "description": "No DATABASE_URL and no AERORA_TEST_DATABASE_URL. Reproduces 01-pr-check.yml's 'Run Unit Tests' job, so the figures stay comparable to the Phase 5/6/7 baselines. Every PostgreSQL-only suite SKIPS here. Run after migrations 026 and 027, the KILL-01/TRADE-02 kill-switch fixes, the TRADE-01 capacity reservation and the TRADE-06 claim-predicate fix.",
+      "status": "COMPLETED",
+      "collected": 13997,
+      "collected_source": "junit testsuite@tests (pytest -q printed no collected line)",
+      "passed": 13468,
+      "failed": 2,
+      "errors": 0,
+      "skipped": 518,
+      "xfailed": 6,
+      "xpassed": 3,
+      "duration_seconds": 3823.43,
+      "command": "pytest tests -q -p no:cacheprovider -o addopts= --timeout=1800 --timeout-method=thread --tb=line -rfE",
+      "artifact": "staging/fullreg_raw_FULLREG_P8.txt; junit staging/fullreg_FULLREG_P8.xml",
+      "summary_line": "2 failed, 13468 passed, 518 skipped, 6 xfailed, 3 xpassed, 1964 warnings in 3823.43s (1:03:43)",
+      "arithmetic_check": "2 + 13468 + 518 + 6 + 3 = 13997 == collected 13997",
+      "junit": {
+        "header_attributes": {
+          "tests": 13997,
+          "failures": 2,
+          "errors": 0,
+          "skipped": 524
+        },
+        "counted_elements": {
+          "passed": 13471,
+          "skipped": 518,
+          "xfailed": 6,
+          "failed": 2
+        },
+        "total_testcases": 13997,
+        "top_skip_reasons": [
+          [
+            "PostgreSQL unavailable: connection to server at \"127.0.0.1\", port 62674 failed: Connection refused (0x0000274D",
+            104
+          ],
+          [
+            "needs a real PostgreSQL instance: SQLite has no uuid type, no referential ON DELETE actions worth testing here",
+            76
+          ],
+          [
+            "AERORA_TEST_DATABASE_URL is unset or not PostgreSQL.",
+            47
+          ],
+          [
+            "needs a real PostgreSQL instance: this defect and its fix live in column privileges, RLS policies and role swi",
+            40
+          ],
+          [
+            "AERORA_TEST_DATABASE_URL is unset or not PostgreSQL. Row level security is a PostgreSQL mechanism; there is no",
+            29
+          ],
+          [
+            "TRADE-01 is a concurrency defect. The reservation is a PostgreSQL advisory lock and the proof is a genuine mul",
+            28
+          ],
+          [
+            "AERORA_TEST_DATABASE_URL is unset or not PostgreSQL. Row level security and table privileges are PostgreSQL me",
+            27
+          ],
+          [
+            "the invariant is a NOT NULL column with a CHECK constraint and the proof needs real transactions and two real ",
+            24
+          ],
+          [
+            "needs a real PostgreSQL instance: the invariant is a partial unique index and the proof is a genuine two-conne",
+            17
+          ],
+          [
+            "needs a real PostgreSQL through DATABASE_URL; provided by the database-tests job in .github/workflows/01-pr-ch",
+            14
+          ],
+          [
+            "Requires running backend server",
+            13
+          ],
+          [
+            "needs a real PostgreSQL instance: the script measures RLS behaviour as the anon/authenticated roles, none of w",
+            13
+          ]
+        ]
+      },
+      "junit_cross_check": {
+        "junit.tests == collected": true,
+        "junit.failures == failed": true,
+        "junit.errors == errors": true,
+        "junit.skipped == skipped + xfailed": true,
+        "counted elements total == collected": true,
+        "counted passed == passed + xpassed": true,
+        "counted failed == failed": true
+      },
+      "junit_reconciliation": "junit's `skipped` header attribute folds xfailed in, and its element-level pass count counts xpassed as a pass. So junit.skipped should equal skipped + xfailed, and the counted passed elements should equal passed + xpassed. The two sources disagree BY DESIGN; the reconciliation is the check, not the agreement.",
+      "failed_ids": [
+        "tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic",
+        "tests/test_bandit_sast_gate_is_green.py::test_every_interpolation_into_sql_is_constrained_before_it_gets_there"
+      ]
+    },
+    "postgresql": {
+      "lane": "PostgreSQL lane (AUTHORITATIVE, Phase 8)",
+      "description": "AERORA_TEST_DATABASE_URL set from staging/pg_dsn.txt against a local PostgreSQL 16.2 with migrations 026 and 027 applied, so the PostgreSQL-only suites actually execute rather than skipping. SECOND run of this lane: FULLREG_P8PG surfaced two failures outside the Phase 7 set, one of which (the WORK-03 heartbeat freshness assertion) was a test defect FIXED after that run completed - so its figures no longer described HEAD and the lane was re-measured.",
+      "status": "COMPLETED",
+      "collected": 13997,
+      "collected_source": "junit testsuite@tests (pytest -q printed no collected line)",
+      "passed": 13922,
+      "failed": 2,
+      "errors": 0,
+      "skipped": 64,
+      "xfailed": 6,
+      "xpassed": 3,
+      "duration_seconds": 8109.02,
+      "command": "pytest tests -q -p no:cacheprovider -o addopts= --timeout=1800 --timeout-method=thread --tb=line -rfE",
+      "artifact": "staging/fullreg_raw_FULLREG_P8PG2.txt; junit staging/fullreg_FULLREG_P8PG2.xml",
+      "summary_line": "2 failed, 13922 passed, 64 skipped, 6 xfailed, 3 xpassed, 1973 warnings in 8109.02s (2:15:09)",
+      "arithmetic_check": "2 + 13922 + 64 + 6 + 3 = 13997 == collected 13997",
+      "junit": {
+        "header_attributes": {
+          "tests": 13997,
+          "failures": 2,
+          "errors": 0,
+          "skipped": 70
+        },
+        "counted_elements": {
+          "passed": 13925,
+          "skipped": 64,
+          "xfailed": 6,
+          "failed": 2
+        },
+        "total_testcases": 13997,
+        "top_skip_reasons": [
+          [
+            "needs a real PostgreSQL through DATABASE_URL; provided by the database-tests job in .github/workflows/01-pr-ch",
+            14
+          ],
+          [
+            "Requires running backend server",
+            13
+          ],
+          [
+            "DATABASE_URL does not name a PostgreSQL server (or psycopg2 is absent). The database-level half of clause 1.16",
+            7
+          ],
+          [
+            "AERORA_TEST_REDIS_URL is unset or unreachable. The two-phase idempotency lock is a Redis mechanism and there i",
+            6
+          ],
+          [
+            "No server is answering at http://127.0.0.1:8000 (ConnectionError), so this smoke test has nothing to read. Sta",
+            4
+          ],
+          [
+            "Frontend module not found at expected location",
+            2
+          ],
+          [
+            "needs a real PostgreSQL through DATABASE_URL for SELECT ... FOR UPDATE; provided by the database-tests job in ",
+            2
+          ],
+          [
+            "`authenticated` holds no SELECT on payment_methods; its policy cannot be exercised from this role. Not a pass ",
+            1
+          ],
+          [
+            "this interpreter already canonicalises +00:00 to timezone.utc",
+            1
+          ],
+          [
+            "this platform/user cannot create symlinks",
+            1
+          ],
+          [
+            "the validator refuses a two-feed graph before the preview does",
+            1
+          ],
+          [
+            "Test environment Supabase configuration issue",
+            1
+          ]
+        ]
+      },
+      "junit_cross_check": {
+        "junit.tests == collected": true,
+        "junit.failures == failed": true,
+        "junit.errors == errors": true,
+        "junit.skipped == skipped + xfailed": true,
+        "counted elements total == collected": true,
+        "counted passed == passed + xpassed": true,
+        "counted failed == failed": true
+      },
+      "junit_reconciliation": "junit's `skipped` header attribute folds xfailed in, and its element-level pass count counts xpassed as a pass. So junit.skipped should equal skipped + xfailed, and the counted passed elements should equal passed + xpassed. The two sources disagree BY DESIGN; the reconciliation is the check, not the agreement.",
+      "failed_ids": [
+        "tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic",
+        "tests/test_bandit_sast_gate_is_green.py::test_every_interpolation_into_sql_is_constrained_before_it_gets_there"
+      ]
+    }
+  },
+  "intermediate_lanes": {
+    "postgresql_first_run": {
+      "lane": "PostgreSQL lane (intermediate, pre-heartbeat-fix)",
+      "description": "Kept rather than discarded: this is the run that FOUND both failures outside the Phase 7 set, which is the only reason either is disposed of. Its four failures were the two retained false positives, the clock-dependent protected-logic substring collision (TEST-06, retained), and the heartbeat freshness assertion (fixed).",
+      "status": "COMPLETED",
+      "collected": 13997,
+      "collected_source": "junit testsuite@tests (pytest -q printed no collected line)",
+      "passed": 13920,
+      "failed": 4,
+      "errors": 0,
+      "skipped": 64,
+      "xfailed": 6,
+      "xpassed": 3,
+      "duration_seconds": 2987.66,
+      "command": "pytest tests -q -p no:cacheprovider -o addopts= --timeout=1800 --timeout-method=thread --tb=line -rfE",
+      "artifact": "staging/fullreg_raw_FULLREG_P8PG.txt; junit staging/fullreg_FULLREG_P8PG.xml",
+      "summary_line": "4 failed, 13920 passed, 64 skipped, 6 xfailed, 3 xpassed, 1973 warnings in 2987.66s (0:49:47)",
+      "arithmetic_check": "4 + 13920 + 64 + 6 + 3 = 13997 == collected 13997",
+      "junit": {
+        "header_attributes": {
+          "tests": 13997,
+          "failures": 4,
+          "errors": 0,
+          "skipped": 70
+        },
+        "counted_elements": {
+          "passed": 13923,
+          "skipped": 64,
+          "xfailed": 6,
+          "failed": 4
+        },
+        "total_testcases": 13997,
+        "top_skip_reasons": [
+          [
+            "needs a real PostgreSQL through DATABASE_URL; provided by the database-tests job in .github/workflows/01-pr-ch",
+            14
+          ],
+          [
+            "Requires running backend server",
+            13
+          ],
+          [
+            "DATABASE_URL does not name a PostgreSQL server (or psycopg2 is absent). The database-level half of clause 1.16",
+            7
+          ],
+          [
+            "AERORA_TEST_REDIS_URL is unset or unreachable. The two-phase idempotency lock is a Redis mechanism and there i",
+            6
+          ],
+          [
+            "No server is answering at http://127.0.0.1:8000 (ConnectionError), so this smoke test has nothing to read. Sta",
+            4
+          ],
+          [
+            "Frontend module not found at expected location",
+            2
+          ],
+          [
+            "needs a real PostgreSQL through DATABASE_URL for SELECT ... FOR UPDATE; provided by the database-tests job in ",
+            2
+          ],
+          [
+            "`authenticated` holds no SELECT on payment_methods; its policy cannot be exercised from this role. Not a pass ",
+            1
+          ],
+          [
+            "this interpreter already canonicalises +00:00 to timezone.utc",
+            1
+          ],
+          [
+            "this platform/user cannot create symlinks",
+            1
+          ],
+          [
+            "the validator refuses a two-feed graph before the preview does",
+            1
+          ],
+          [
+            "Test environment Supabase configuration issue",
+            1
+          ]
+        ]
+      },
+      "junit_cross_check": {
+        "junit.tests == collected": true,
+        "junit.failures == failed": true,
+        "junit.errors == errors": true,
+        "junit.skipped == skipped + xfailed": true,
+        "counted elements total == collected": true,
+        "counted passed == passed + xpassed": true,
+        "counted failed == failed": true
+      },
+      "junit_reconciliation": "junit's `skipped` header attribute folds xfailed in, and its element-level pass count counts xpassed as a pass. So junit.skipped should equal skipped + xfailed, and the counted passed elements should equal passed + xpassed. The two sources disagree BY DESIGN; the reconciliation is the check, not the agreement.",
+      "failed_ids": [
+        "tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic",
+        "tests/test_bandit_sast_gate_is_green.py::test_every_interpolation_into_sql_is_constrained_before_it_gets_there",
+        "tests/test_subscriber_restricted_operations.py::TestThePermittedOperationsAreReachable::test_the_permitted_paths_disclose_no_protected_logic_either",
+        "tests/test_work03_bot_ownership_claims_postgres.py::test_the_heartbeat_loop_refreshes_a_real_claim"
+      ]
+    }
+  },
+  "accounting_convention": "XFAILED AND XPASSED, AND WHY THE TWO SOURCES DISAGREE BY DESIGN. pytest's terminal summary counts xfailed and xpassed as their own categories, so the arithmetic that reconciles against `collected` is failed + passed + skipped + xfailed + xpassed. The JUnit XML does not have those categories: its `testsuite@skipped` attribute FOLDS xfailed into skipped, and its per-element count FOLDS xpassed into passed. In Phase 7 that showed as 472 = 466 + 6 on the header and 13389 = 13386 + 3 on the elements. So a direct attribute-to-summary comparison is expected to differ by exactly the xfail and xpass counts, and the cross-check accounts for that rather than treating it as a discrepancy. `pytest -q` prints no 'collected N items' line, so `collected` is taken from the junit `tests` attribute; that source is recorded on every lane so a reader can see the cross-check is not comparing a figure with itself.",
+  "why_two_lanes": "Reporting only the CI lane would report a pass on tests that never ran, because that lane skips every PostgreSQL-only suite by design. Reporting only the PostgreSQL lane would not be comparable to the earlier baselines. The difference between the two IS the infrastructure-gated surface, so both result sets are preserved separately and neither is merged into the other.",
+  "baseline_phase_7": {
+    "ci": {
+      "collected": 13892,
+      "passed": 13410,
+      "failed": 7,
+      "errors": 0,
+      "skipped": 466,
+      "xfailed": 6,
+      "xpassed": 3,
+      "duration_seconds": 1871.39,
+      "nonce": "FULLREG_P7B"
+    },
+    "postgresql": {
+      "collected": 13892,
+      "passed": 13805,
+      "failed": 14,
+      "errors": 0,
+      "skipped": 64,
+      "xfailed": 6,
+      "xpassed": 3,
+      "duration_seconds": 1762.14,
+      "nonce": "FULLREG_P7BPG"
+    }
+  },
+  "substrate": "LOCAL PostgreSQL 16.2 via pgserver. No production database was connected to in any phase of this audit, so every database figure here is local-substrate evidence.",
+  "delta_vs_phase_7_ci_lane": {
+    "collected": 105,
+    "passed": 58,
+    "failed": -5,
+    "skipped": 52,
+    "xfailed": 0,
+    "xpassed": 0
+  },
+  "delta_vs_phase_7_postgresql_lane": {
+    "collected": 105,
+    "passed": 117,
+    "failed": -12,
+    "skipped": 0,
+    "xfailed": 0,
+    "xpassed": 0
+  },
+  "infrastructure_gated_surface": {
+    "skipped_in_ci_lane": 518,
+    "skipped_in_postgresql_lane": 64,
+    "skips_converted_to_runs": 454,
+    "note": "The reduction is the number of tests the CI lane could not measure and the PostgreSQL lane did. A test that still skips in the PostgreSQL lane needs something else - Redis, a running HTTP server, a built frontend bundle - and those are named in the top skip reasons."
+  },
+  "lanes_with_outstanding_failures": {
+    "ci": {
+      "failed": 2,
+      "failed_ids": [
+        "tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic",
+        "tests/test_bandit_sast_gate_is_green.py::test_every_interpolation_into_sql_is_constrained_before_it_gets_there"
+      ]
+    },
+    "postgresql": {
+      "failed": 2,
+      "failed_ids": [
+        "tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic",
+        "tests/test_bandit_sast_gate_is_green.py::test_every_interpolation_into_sql_is_constrained_before_it_gets_there"
+      ]
+    }
+  },
+  "fully_green": false
+}

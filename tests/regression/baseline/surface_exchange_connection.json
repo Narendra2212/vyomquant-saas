@@ -1,5 +1,6 @@
 {
-  "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. POST /api/exchange/keys gained ONE additive parameter, `supabase=Depends(get_request_supabase)`, and lost none. The handler needs a request-scoped persistence client to count the caller's existing exchange connections against their plan's limit (Free 1, Trader 2, Pro Quant 5, Business 8). The gate distinguishes a NEW connection from a key ROTATION \u2014 `exchange_keys` holds one row per (user, venue) \u2014 so an account at its limit can still replace credentials for a venue it already holds, which is a security-relevant operation a plan limit must not obstruct. No request body field, response field or credential-handling behaviour changed.",
+  "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. POST /api/exchange/keys gained ONE additive parameter, `supabase=Depends(get_request_supabase)`, and lost none. The handler needs a request-scoped persistence client to count the caller's existing exchange connections against their plan's limit (Free 1, Trader 2, Pro Quant 5, Business 8). The gate distinguishes a NEW connection from a key ROTATION — `exchange_keys` holds one row per (user, venue) — so an account at its limit can still replace credentials for a venue it already holds, which is a security-relevant operation a plan limit must not obstruct. No request body field, response field or credential-handling behaviour changed.",
+  "_baseline_note_sc27_error_detail_shape": "RE-RECORDED by the SC-27 response-detail fix in backend_app/routers/exchange.py. AUTHORISATION: a security review found that store_keys, test_connection and test_stored_connection answered HTTPException(400, f\"...{str(e)}\"), where e is a ccxt exception raised by a connection attempt made with the api key and secret the caller had submitted in that same request body. ccxt authentication errors routinely quote the venue response and the request parameters they failed on, so an arbitrary third-party string was reflected to the client on the one request guaranteed to be holding live broker credentials. delete_connection and get_exchange_auth_schema echoed Supabase/PostgREST and ccxt text the same way, naming this deployment's schema. WHAT MOVED: the `raises` entry of five handlers, and nothing else. Each now carries a structured detail of shape {error: str, message: str} whose message is this repository's own copy, in place of a string detail built from the exception. The failure is classified against ccxt's exception hierarchy (PermissionDenied -> 403, AuthenticationError -> 400, RateLimitExceeded -> 429, NetworkError -> 503, ValueError -> 400, unclassified -> 502) so the caller still learns which of the four actionable causes applies; the provider text goes to the operator log with exc_info instead. WHAT DID NOT MOVE: the handler set (8, unchanged), every handler's parameters, every response key set and type map, and the 404 status on the stored-credential lookup that the frontend branches on. No request body field and no credential-handling behaviour changed. CLIENT: algo22-terminal/src/pages/ExchangeManager.jsx sanitizeErrorMessage gained an object branch, because a structured detail is not a string and every refusal would otherwise have collapsed into its generic fallback. Its string branch is unchanged.",
   "api_call_count": 8,
   "api_calls": [
     {
@@ -25,10 +26,19 @@
             },
             "user": {
               "annotation": "dict",
-              "depends_on": "get_current_user"
+              "depends_on": "require_aal2"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "EXCHANGE_DISCONNECT_FAILED",
+              "status_code": 500
+            }
+          ],
           "returns": [
             {
               "message": "str",
@@ -155,7 +165,16 @@
               "depends_on": "get_current_user"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "EXCHANGE_SCHEMA_UNAVAILABLE",
+              "status_code": 500
+            }
+          ],
           "returns": [
             "computed",
             "computed"
@@ -266,14 +285,29 @@
             },
             "user": {
               "annotation": "dict",
-              "depends_on": "get_current_user"
+              "depends_on": "require_aal2"
             },
             "vault": {
               "annotation": "_empty",
               "depends_on": "get_vault"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": {
+                "error": "computed",
+                "message": "computed"
+              },
+              "status_code": 500
+            },
+            {
+              "detail_type": {
+                "error": "computed",
+                "message": "str"
+              },
+              "status_code": 400
+            }
+          ],
           "returns": [
             {
               "message": "str",
@@ -350,7 +384,15 @@
               "depends_on": "get_vault"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": {
+                "error": "computed",
+                "message": "str"
+              },
+              "status_code": 404
+            }
+          ],
           "returns": [
             {
               "exchange": "str",
@@ -377,5 +419,6 @@
   ],
   "supabase_auth_calls": [],
   "surface": "exchange_connection",
-  "unresolved_usages": []
+  "unresolved_usages": [],
+  "_baseline_note_auth01_require_aal2_on_credential_endpoints": "AUTH-01 AUTHORISES the `user` dependency of `delete_connection` (DELETE /api/exchanges/{exchangeId}) and `store_keys` (POST /api/exchanges/keys) moving from `get_current_user` to `require_aal2`. Those two endpoints delete and store exchange API credentials -- the highest-value write surface in the application -- and `require_aal2`'s own docstring already named them as MUST-apply while they were bound to plain authentication. `require_aal2` resolves the same user object and additionally requires a step-up (AAL2) session, so the binding is STRICTLY STRONGER: every request that used to be authorised still is, unless it lacks step-up. No response field, status code or parameter name changed. The other seven `get_current_user` bindings in this surface are deliberately unchanged, which is why this note names two handlers rather than the surface. Evidence: tests/test_auth01_require_aal2_is_wired.py (16 passed). Remaining gap, tracked separately as AUTH-03: billing checkout, verify-payment, payment-methods, referral payouts and three marketplace routes are still on plain authentication."
 }

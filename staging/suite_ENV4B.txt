@@ -1,0 +1,6 @@
+START=2026-10-08T22:43:09.4224733+05:30
+FILES=tests\test_env04_production_router_requires_explicit_enablement.py
+.............................................                            [100%]
+45 passed in 48.91s
+EXITCODE=0
+END=2026-10-08T22:44:05.2981004+05:30

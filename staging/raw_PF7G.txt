@@ -1,0 +1,17 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- C:\aerora_quant_backend_updated_final1\.venv\Scripts\python.exe
+hypothesis profile 'default'
+rootdir: C:\aerora_quant_backend_updated_final1
+configfile: pytest.ini
+plugins: anyio-4.14.2, hypothesis-6.165.10, platformdirs-4.12.2, asyncio-1.4.0, timeout-2.3.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 900.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 3 items
+
+tests/property/test_order_idempotence_under_retry.py::test_order_idempotence_under_generated_retry_and_restart_sequences PASSED [ 33%]
+tests/property/test_order_idempotence_under_retry.py::test_this_module_never_constructs_a_live_venue_adapter PASSED [ 66%]
+tests/property/test_order_idempotence_under_retry.py::test_the_sequence_generator_never_places_a_second_first_submission PASSED [100%]
+
+============================== 3 passed in 6.47s ==============================

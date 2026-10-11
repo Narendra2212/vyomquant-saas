@@ -1,0 +1,117 @@
+====================================================================================================
+WEBHOOK: why did the application cache manager REFUSE the write?
+====================================================================================================
+
+  per-test result lines:
+    tests/test_webhook_duplicate_delivery_real_redis.py::test_the_credential_gate_refuses_test_keys PASSED [ 16%]
+    tests/test_webhook_duplicate_delivery_real_redis.py::test_a_redelivered_webhook_is_ignored PASSED [ 33%]
+    tests/test_webhook_duplicate_delivery_real_redis.py::test_the_lock_is_recorded_in_redis_under_the_documented_key ERR
+    tests/test_webhook_duplicate_delivery_real_redis.py::test_a_different_event_id_is_not_deduplicated ERROR [ 66%]
+    tests/test_webhook_duplicate_delivery_real_redis.py::test_an_in_flight_delivery_blocks_a_concurrent_one ERROR [ 83%]
+    tests/test_webhook_duplicate_delivery_real_redis.py::test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind
+
+  every 'Cache SET failed' / 'Cache GET failed' line, verbatim:
+    L100  WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:app-wrote:3effca46113f42e3ae326f06
+    L183  WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:app-wrote:8496fd119dc846d48b2e2972
+    L266  WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:app-wrote:733c3f3bdbe64bbdab297424
+    L349  WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:app-wrote:d61671fd9b07453498d74d4e
+
+  lines mentioning an event loop or connection state:
+    L100  WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:app-wrote:3effca46113f42e3ae326f06
+    L183  WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:app-wrote:8496fd119dc846d48b2e2972
+    L266  WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:app-wrote:733c3f3bdbe64bbdab297424
+    L349  WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:app-wrote:d61671fd9b07453498d74d4e
+
+  first setup-error block in full:
+    _ ERROR at setup of test_the_lock_is_recorded_in_redis_under_the_documented_key _
+    
+    real_redis_cache = <backend_app.core.cache.redis_manager.SharedRedisManager object at 0x7f821db3dad0>
+    
+        @pytest_asyncio.fixture
+        async def redis_client(real_redis_cache):
+            """A synchronous client on the SAME keyspace as the application cache, proven.
+    
+            Was `_redis.Redis.from_url(REDIS_URL, ...)` -- the opt-in URL, whose database index
+            the application overrides -- which is the Phase 11B-A9 keyspace split. It now resolves
+            through `_app_cache_url()`, and `_prove_one_keyspace()` demonstrates the agreement
+            before any test body runs rather than leaving it assumed.
+    
+            Teardown is unchanged in intent and now actually effective: because this client is
+            finally on the database the handler writes to, deleting the registered keys removes
+            the handler's locks instead of deleting nothing from an unrelated database.
+            """
+            import redis as _redis
+    
+            client = _redis.Redis.from_url(_app_cache_url(), decode_responses=True)
+            created: list[str] = []
+            try:
+    >           await _prove_one_keyspace(real_redis_cache, client)
+    
+    tests/test_webhook_duplicate_delivery_real_redis.py:501:
+    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+    
+    manager = <backend_app.core.cache.redis_manager.SharedRedisManager object at 0x7f821db3dad0>
+    client = <redis.client.Redis(<redis.connection.ConnectionPool(<redis.connection.Connection(host=localhost,port=6379,db=0)>)>)>
+    
+        async def _prove_one_keyspace(manager, client) -> None:
+            """Prove the test client and the application cache manager see the SAME keys. F3.
+    
+            This is the assertion whose absence let Phase 11B-A6 ship a green-looking run in which
+
+  did the keyspace probe ever report a SPLIT?  NO -- it failed earlier, on the refused write
+
+====================================================================================================
+METERED: the production reserve_quota failure, in context
+====================================================================================================
+
+  per-test result lines:
+    tests/test_quota01_metered_reservation_is_hard.py::test_concurrent_reservations_admit_exactly_the_limit_and_no_more 
+    tests/test_quota01_metered_reservation_is_hard.py::test_a_sequential_run_to_the_limit_then_one_more_refuses PASSED [
+    tests/test_quota01_metered_reservation_is_hard.py::test_a_zero_allowance_reserves_nothing_and_accumulates_nothing PA
+    tests/test_quota01_metered_reservation_is_hard.py::test_an_unlimited_plan_always_admits PASSED [ 44%]
+    tests/test_quota01_metered_reservation_is_hard.py::test_reservations_are_isolated_per_user PASSED [ 55%]
+    tests/test_quota01_metered_reservation_is_hard.py::test_the_full_enforce_quota_path_refuses_at_the_limit PASSED [ 66
+    tests/test_quota01_metered_reservation_is_hard.py::test_concurrent_reservations_are_atomic_against_real_redis PASSED
+    tests/test_quota01_metered_reservation_is_hard.py::test_production_reserve_quota_admits_exactly_the_limit_against_re
+    tests/test_quota01_metered_reservation_is_hard.py::test_production_zero_allowance_writes_no_meter_against_real_redis
+
+  failure block in full:
+
+  WHICH ASSERTIONS PASSED BEFORE THE FAILING ONE?
+    the hard-limit assertion (len(allowed) == limit)     assertion message present in output: True
+    production reader vs limit                           assertion message present in output: True
+    raw key vs limit                                     assertion message present in output: True
+    refusal usage bound  <-- THIS ONE FAILED             assertion message present in output: True
+    post-exhaustion retry                                assertion message present in output: False
+
+  Reading: an assertion message only appears when that assertion FAILS. Only the
+  refusal-usage message appears, so the hard-limit check, the get_quota_usage/raw-key
+  agreement checks all PASSED and the failure is specifically the usage figure a
+  REFUSED reservation reports back.
+
+====================================================================================================
+BLOCKING LANE STATUS NOW
+====================================================================================================
+  run 38061973739 status=in_progress conclusion=None updated=2026-10-10T15:04:47Z
+    114241894533  success      Frontend Build & Unit Tests
+    114241894736  success      Code Quality & Static Audit
+    114241894841  success      Format Backlog (report only)
+    114242427268  in_progress  Unit & Integration Tests
+    114242427270  success      D5' Real-Redis Diagnostics (non-blocking)
+    114242427274  success      Database Tests (PostgreSQL)
+    114242427294  success      Execution Tests (production posture)
+    114242427306  success      Docker Build Validation
+
+====================================================================================================
+SUPERSEDED -- DO NOT CITE THE "WHICH ASSERTIONS PASSED" SECTION ABOVE
+====================================================================================================
+  That section inferred which assertions had passed by searching the log for each assertion's
+  message text. The inference is INVALID: pytest echoes the entire source of a failing test
+  under --tb=long, so an assertion's message string appears whether or not that assertion fired.
+  All four strings were present for that reason alone.
+
+  Superseded by staging/p11b19_detail2.txt, which reads the '>' marker pytest places on the
+  actual raising line. The authoritative finding is:
+      raising line = `assert 0 <= usage <= limit`   (tests/..._metered_...py:469)
+      everything above it passed, including `assert len(allowed) == limit`
+  Retained, annotated, rather than deleted, so the correction is auditable.

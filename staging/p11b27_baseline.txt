@@ -1,0 +1,78 @@
+
+==============================================================================================
+1. BASELINE
+==============================================================================================
+  branch       : main
+  HEAD         : 074b772ab16cece62cbfca0f2b78497be2ae56d5
+  origin/main  : 074b772ab16cece62cbfca0f2b78497be2ae56d5   equal=True
+  ahead/behind : 0	0
+  digest A14   : 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME
+  digest W1D11 : 98ae5bdf2af9a0ae74d27ae88c028d4a60166e098fffeb6b0c3d0d6651cc2704  SAME
+  staged       : 22   (A26: 22)
+  unstaged     : 102   (A26: 102)
+  untracked    : 140   (A26: 140)
+  unmerged     : 0   (A26: 0)
+  tracked      : 2104   (A26: 2104)
+  worktrees    : 1
+  stash        : 2
+
+==============================================================================================
+2. PHASE-0 FINGERPRINTS  (A26-recorded -> now)
+==============================================================================================
+  8f432d994d9d0a8b9f707b7f18fbb4e27c0a5db2  ??    scripts/verify_provisioning.py  SAME
+  f853c1482ca295440c78e4f25a8989438fab041e  ??    scripts/verify_schema_drift.py  SAME
+  6e194f43a832d1f9cb0f99efd88dd204c5b3c444  ??    scripts/verify_production_schema.py  SAME
+  5106dd5916424c9b795a5b393e36afc21c4ba9b4  ??    tests/test_snapshot_dimension_invariants.py  SAME
+  fcffbe8e01367aa7f99fffe2677267821fb8424d  ??    tests/test_drift_classification.py  SAME
+  7e238620bc22f0ad246f0ebc373b7032c6b28ef0  clean staging/PHASE11B_W1D_LEDGER_AND_DRIFT_READINESS.md
+  6578397ceaad4d202d5a078b3d9cf58ab47a9415  clean staging/PHASE11B_W1D13_CLASSIFIER_IMPLEMENTATION_REPORT.md
+  cae700eba5f56b98325284b98b6851b25d011d62  clean staging/PHASE11B_A26_DECISION_SHEET.md
+  a3849d4acd7afcf4e53054fc85b16c786776eada   M    backend_app/main.py  SAME
+  256f03994b395d383fc49dd5b87a456ba68d99cb   M    backend_app/core/subscription_engine.py  SAME
+  a67092359cb74ad372a9337d3fd523e42f6ba06c   M    backend_app/backend/order_watchdog.py  SAME
+  d0603bac8d2acd7f4aa12d93943430e3db6c5591   M    backend_app/backend/exchange_reconciliation.py  SAME
+  b95c0cbba07a50cb9069d320e8aa669f5cd5afc5  clean tests/exchange_sandbox/harness.py  SAME
+  bc8f63d0f621c414280849c4a3adb4d554361664  clean staging/PHASE11A_READINESS_SCORECARD.json
+
+==============================================================================================
+3. REPORTS NEWER THAN W1D13 (10-11 13:34)
+==============================================================================================
+  10-11 13:34:12    15509 B  PHASE11B_W1D13_CLASSIFIER_IMPLEMENTATION_REPORT.md
+  10-11 13:39:50    12489 B  PHASE11B_D9_DECISION_PACKET.md
+  10-11 13:44:51    12869 B  PHASE11B_W1D14_D5_SIGNOFF_GATE_REPORT.md
+  10-11 13:44:52    22706 B  PHASE11B_A26_DECISION_SHEET.md
+  10-11 14:22:11    18143 B  PHASE11B_A23E6_GOVERNANCE_DECISION_PACKET.md
+
+==============================================================================================
+4. TARGETED RECORD EXISTENCE
+==============================================================================================
+  *W1D14*          -> 3
+      PHASE11B_W1D14_D5_SIGNOFF_GATE_REPORT.md
+      w1d14_gate.py
+      w1d14_gate.txt
+  *W1D1[4-9]*      -> 3
+      PHASE11B_W1D14_D5_SIGNOFF_GATE_REPORT.md
+      w1d14_gate.py
+      w1d14_gate.txt
+  *A23E6*          -> 1
+      PHASE11B_A23E6_GOVERNANCE_DECISION_PACKET.md
+  *GOVERNANCE*     -> 1
+      PHASE11B_A23E6_GOVERNANCE_DECISION_PACKET.md
+  *GRANT*          -> 2
+      w1d07_grant.txt
+      w1d07_grant_check.py
+  *APPROVAL*       -> 6
+      PHASE11B_A10_D5_APPROVAL_READINESS.md
+      PHASE11B_A16_D5_APPROVAL_HANDOFF.md
+      PHASE11B_A17_APPROVAL_RECONCILIATION__claude_session.md
+      PHASE11B_W1D11_CLASSIFIER_APPROVAL_HANDOFF.md
+      p11b15_approval_search.py
+      p11b15_approval_search.txt
+
+==============================================================================================
+5. CREDENTIAL HYGIENE (status only -- NO content read)
+==============================================================================================
+  exchange_keys.json             exists=True   tracked=False  gitignored=True
+  .env                           exists=True   tracked=False  gitignored=True
+  .env.corrupt.backup            exists=True   tracked=False  gitignored=True
+  staging/pg_dsn.txt             exists=True   tracked=False  gitignored=True

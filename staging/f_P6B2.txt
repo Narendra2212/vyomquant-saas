@@ -1,0 +1,16 @@
+LOG ERROR
+invariant: the fill of
+=== unfundable market buy: buy 100 @ 50000 ===
+  RESULT: refused PaperError: PAPER_INVARIANT_VIOLATION: The operation was undone because an accounting check did not hold. Your balances, positions and results are unchanged.
+  ORDER   state=ACCEPTED legacy=OPEN filled=0E-10 reason=None
+  order rows: 1
+=== fundable market buy: buy 0.01 @ 50000 ===
+  RESULT: accepted, status=FILLED
+  ORDER   state=FILLED legacy=FILLED filled=0.0100000000 reason=None
+  order rows: 1
+=== sell with no position: sell 0.01 @ 50000 ===
+  RESULT: accepted, status=FILLED
+  ORDER   state=FILLED legacy=FILLED filled=0.0100000000 reason=None
+  order rows: 1
+DONE
+NONCE_END=P6B2

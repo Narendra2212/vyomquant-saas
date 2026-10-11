@@ -498,6 +498,33 @@ def _whole_number(value: Any, what: str) -> Optional[int]:
 #: docstring on why a vacuously failing assertion is worse than none.
 PROTECTED_LOGIC_TOKEN_MIN_LENGTH: int = 3
 
+#: A token made ENTIRELY of digits (optionally with one decimal point / sign), e.g. a
+#: threshold value like ``233`` or ``3.2502``.
+#:
+#: TEST-06. Such a token is matched on a NUMERIC-VALUE BOUNDARY, not as a bare substring,
+#: and the distinction is the whole fix.
+#:
+#: The containment check is substring containment, which is right for a distinctive string
+#: like a node id ``n_zzq_secret`` - it is a leak wherever it appears. But a bare integer
+#: is different: ``"233" in text`` is true of the timestamp ``1760036233``, the count
+#: ``2337``, the price ``233.90`` and a request id that happens to contain those digits.
+#: The seeded strategy carries ``"ema_zzq_secret_window": 233``, so every response whose
+#: body contained the digits 2-3-3 anywhere -- which depends on the wall clock, via
+#: timestamps -- failed or passed at random. Measured: the same test failed in one full
+#: run and passed in the next with no change to it or to the code it examines.
+#:
+#: Matching a numeric token only when it stands as its own value (not flanked by another
+#: digit or a decimal point, and not merely a prefix of a longer number) is DETERMINISTIC
+#: and still catches a real leak: a parameter value returned in its own field, as a list
+#: element, or as a word inside free text is a value boundary and matches; the same digits
+#: buried inside an unrelated larger number are not that value and do not. This neither
+#: exempts short tokens nor imposes a minimum length -- ``233`` is still a protected token
+#: and is still searched for; what changes is that it is searched for as the NUMBER 233
+#: rather than as the three characters "233".
+import re as _re
+
+_NUMERIC_TOKEN_RE = _re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+
 #: The ``strategies`` columns that express how a strategy decides (Glossary: Protected_Logic).
 STRATEGY_PROTECTED_LOGIC_COLUMNS: Tuple[str, ...] = (
     "buy_logic",
@@ -685,6 +712,25 @@ def assert_contains_no_protected_logic(
     if not candidates:
         return
 
+    # TEST-06. Partition the tokens by how they must be matched. A distinctive string
+    # (node id, indicator name, path segment, hash) is matched by substring containment,
+    # which is correct and deterministic for it. A purely numeric token is matched on a
+    # value boundary, because bare substring containment of a number collides with
+    # timestamps, counts and ids and makes the verdict depend on the wall clock. See
+    # `_NUMERIC_TOKEN_RE` for the full argument.
+    string_tokens = [t for t in candidates if not _NUMERIC_TOKEN_RE.match(t)]
+    numeric_tokens = [t for t in candidates if _NUMERIC_TOKEN_RE.match(t)]
+
+    # One compiled matcher per numeric token: the number must not be flanked by another
+    # digit or a decimal point on either side, so `233` matches the value 233, the word
+    # "233" in free text, and `233` as a list element, but NOT `1760036233`, `2337`,
+    # `233.9` or `0.2335`. `(?<![\d.])` / `(?![\d.])` are the value boundaries; the token
+    # itself may legitimately contain a decimal point (`3.2502`), so it is escaped.
+    numeric_matchers = [
+        (t, _re.compile(r"(?<![\d.])" + _re.escape(t) + r"(?![\d.])"))
+        for t in numeric_tokens
+    ]
+
     exempt: FrozenSet[str] = (
         STRUCTURAL_RESPONSE_KEYS
         if structural_keys is None
@@ -693,10 +739,16 @@ def assert_contains_no_protected_logic(
 
     for path, scalar in _walk_with_path(response, "$", set(), exempt):
         text = str(scalar)
-        for token in candidates:
+        for token in string_tokens:
             if token in text:
                 raise AssertionError(
                     f"Protected_Logic token {token!r} appears in the response at {path}"
+                )
+        for token, matcher in numeric_matchers:
+            if matcher.search(text):
+                raise AssertionError(
+                    f"Protected_Logic value {token!r} appears as a distinct number in the "
+                    f"response at {path}"
                 )
 
 

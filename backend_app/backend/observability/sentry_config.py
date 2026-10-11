@@ -57,13 +57,45 @@ def before_send(event: Dict[str, Any], hint: Dict[str, Any]) -> Optional[Dict[st
 
 def initialize_sentry(
     dsn: Optional[str] = None,
-    environment: str = "production",
+    environment: str = "unknown",
     release: str = "1.0.0",
     traces_sample_rate: float = 0.1,    # 10% transaction tracing
     profiles_sample_rate: float = 1.0,  # 100% profile tracing
+    trading_mode: Optional[str] = None,
 ):
     """
     Initialize Sentry with tracing and profiling capabilities.
+
+    ``environment`` and ``trading_mode`` ARE TWO DIMENSIONS, NOT ONE (ENV-06).
+
+      deployment environment   development / testing / staging / production
+                               — where the process runs, how many replicas, whose data
+      trading mode             safe / paper / live
+                               — what the process is allowed to do with money
+
+    ``main.py`` used to pass ``environment=get_vyomquant_mode("production")``, so Sentry's
+    ``environment`` tag was the TRADING MODE. With the documented production setting
+    ``VYOMQUANT_MODE=paper``, every production event was filed under an environment called
+    ``paper``, alongside events from developer machines in paper mode — and there was no
+    environment called ``production`` for an alert rule, a release-health query or an
+    issue filter to select. The same substitution had already been found and fixed in
+    ``core/rate_limit.py`` (API-03) and ``core/cache/redis_manager.py``; this was the
+    reporting-side copy of it.
+
+    BOTH ARE NOW RECORDED, INDEPENDENTLY. ``environment`` is the deployment environment,
+    read from ``runtime_env.deployment_environment()`` by the caller. ``trading_mode`` is
+    attached as a global scope tag, so every event carries it and it remains filterable —
+    nothing is lost by separating them, which is the point: an event in
+    ``environment=production, trading_mode=paper`` is a different thing from one in
+    ``environment=development, trading_mode=paper``, and the single-tag version could not
+    say which it had.
+
+    ``environment`` defaults to ``"unknown"`` rather than ``"production"``. A caller that
+    does not say where it is running should produce a visibly unlabelled stream rather than
+    a convincing-looking production one — mislabelling is worse than admitting ignorance,
+    because an alert rule cannot tell the difference.
+
+    Regression: tests/test_api05_documentation_exposure_matrix.py
     """
     if not SENTRY_AVAILABLE:
         return False
@@ -93,7 +125,20 @@ def initialize_sentry(
             # Do not send personally identifiable information
             send_default_pii=False,
         )
-        logger.info(f"Sentry initialized successfully | Environment: {environment} | Traces Sample Rate: {traces_sample_rate} | Profiling Sample Rate: {profiles_sample_rate}")
+
+        # ENV-06: the trading mode is a SECOND dimension, carried as its own tag rather
+        # than impersonating the deployment environment. Set on the global scope, so every
+        # event and transaction from this process carries it without each call site
+        # remembering to.
+        if trading_mode:
+            sentry_sdk.set_tag("trading_mode", trading_mode)
+
+        logger.info(
+            f"Sentry initialized successfully | Environment: {environment} | "
+            f"Trading mode: {trading_mode or 'not reported'} | "
+            f"Traces Sample Rate: {traces_sample_rate} | "
+            f"Profiling Sample Rate: {profiles_sample_rate}"
+        )
         return True
     except Exception as e:
         logger.error(f"Failed to initialize Sentry: {e}")

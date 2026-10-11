@@ -1975,13 +1975,32 @@ def _matrix_app(store: MatrixStore, caller: str) -> Iterator[TestClient]:
     * ``routers.library.redis_manager`` - replaced by a stub that never caches, so no endpoint can
       answer the second request of a pair from the first one's cached body. ``_CACHED_CATEGORIES``
       is cleared for the same reason.
-    * the plan gates ``require_marketplace_access`` / ``require_marketplace_publish`` /
-      ``check_marketplace_publish_quota``. These are SUBSCRIPTION-PLAN gates, not tenant gates:
-      left in place they refuse every write route with "requires a higher subscription plan", and
-      every cell would then pass on a refusal that says nothing about isolation. Overriding them is
-      what lets the attempt reach the tenant boundary. ``get_admin_user`` is deliberately NOT
-      overridden - the Admin_Reviewer role is an authorisation this file has no business granting
-      itself, and the admin rows say so in their ``owner_control_note``.
+    * EVERY plan gate a ``/api/library`` write can hit - the feature guards
+      ``require_marketplace_access`` / ``require_marketplace_subscribe`` /
+      ``require_marketplace_publish`` and the quota gates ``check_marketplace_publish_quota`` /
+      ``check_marketplace_subscription_quota`` / ``check_strategy_quota``. These are
+      SUBSCRIPTION-PLAN gates, not tenant gates: left in place they refuse every write route with
+      "requires a higher subscription plan", and every cell would then pass on a refusal that says
+      nothing about isolation. Overriding them is what lets the attempt reach the tenant boundary.
+      ``get_admin_user`` is deliberately NOT overridden - the Admin_Reviewer role is an
+      authorisation this file has no business granting itself, and the admin rows say so in their
+      ``owner_control_note``.
+
+      THE LIST MUST BE KEPT COMPLETE, AND HAS BEEN INCOMPLETE ONCE. It originally named only
+      ``require_marketplace_access``, ``require_marketplace_publish`` and
+      ``check_marketplace_publish_quota``. ``59b08de4`` ("Add the five-plan VyomQuant pricing
+      ladder and enforce it end to end") then put ``require_marketplace_subscribe`` +
+      ``check_marketplace_subscription_quota`` in front of ``POST /{library_id}/checkout`` and
+      ``check_strategy_quota`` in front of ``POST /{library_id}/clone``, and did not touch this
+      file. Those are route DEPENDENCIES, so they resolve before the handler body runs any lookup -
+      and the two cells stopped reaching the tenant boundary at all. Both then answered a plan
+      refusal identically for a foreign identifier and an absent one, which reads exactly like a
+      closed Requirement 21.4 gap and is not one: with the gates overridden, both reproduce their
+      pinned pair unchanged. A plan gate added in front of a route therefore SILENCES this sweep
+      on that route until it is named here; adding one without adding it here converts a recorded
+      disclosure into a false pass. ``require_marketplace_access`` is retained even though
+      ``subscription_dependencies`` now resolves it to BROWSE (which every plan holds), because a
+      route declaration may still reference the deprecated name.
 
     The rate limiter is suspended and restored: this sweep makes far more requests a minute from
     one address than any limit allows, and a 429 on the second request of a pair would be a
@@ -2037,10 +2056,18 @@ def _matrix_app(store: MatrixStore, caller: str) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[get_request_supabase] = lambda: store
+    # Every plan gate a `/api/library` write can hit. See the docstring: these are plan gates,
+    # not tenant gates, and a route dependency left in place refuses BEFORE the handler body
+    # performs the lookup whose two answers this sweep compares. Keep this complete - `59b08de4`
+    # added the subscribe and strategy-quota gates without adding them here, and the checkout and
+    # clone cells silently stopped reaching the tenant boundary.
     for gate in (
         plan_gates.require_marketplace_access,
+        plan_gates.require_marketplace_subscribe,
         plan_gates.require_marketplace_publish,
         plan_gates.check_marketplace_publish_quota,
+        plan_gates.check_marketplace_subscription_quota,
+        plan_gates.check_strategy_quota,
     ):
         app.dependency_overrides[gate] = lambda: True
 

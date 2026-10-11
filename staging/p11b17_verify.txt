@@ -1,0 +1,91 @@
+================================================================================================
+0. ARE THE QUOTED WORKTREE BLOB IDS STORED OBJECTS OR COMPUTED DIGESTS?
+================================================================================================
+  (claim raised by the concurrent A17 report; checking it directly)
+    .github/workflows/01-pr-check.yml                    91d55a379115  in-ODB=False
+    tests/test_webhook_duplicate_delivery_real_redis.py  3ffbccde68c3  in-ODB=False
+    tests/test_quota01_metered_reservation_is_hard.py    7baff0b64f0c  in-ODB=False
+    PR#6:.github/workflows/01-pr-check.yml               57e2cee8ea44  in-ODB=True   <- patch PRE-image
+
+  Reading: TRUE but not consequential. `git hash-object` computes without writing,
+  which is the correct non-mutating way to fingerprint a worktree file for drift
+  detection. Patch applicability depends on the PRE-image, which IS a stored object.
+
+================================================================================================
+3. SLOT-GUARD INTEGRATION TRACE
+================================================================================================
+
+  symbol presence  (HEAD = what CI runs today)
+    symbol                             SD@HEAD SD@work   | EX@HEAD EX@index EX@work  
+    _slot_lock_key                     -       yes       | -       -       -        
+    _acquire_slot_lock                 -       yes       | -       -       -        
+    _release_slot_lock                 -       yes       | -       -       -        
+    exchange_connection_slot_guard     -       yes       | -       -       yes      
+    check_exchange_connection_slot     yes     yes       | yes     yes     yes      
+
+  store_keys: which limit call does each state use?
+    HEAD       lines=84    check_exchange_connection_slot=yes  guard=no  vault.store_exchange_keys=yes
+    index      lines=120   check_exchange_connection_slot=yes  guard=no  vault.store_exchange_keys=yes
+    worktree   lines=214   check_exchange_connection_slot=yes  guard=yes  vault.store_exchange_keys=yes
+        The CONTROL is ``exchange_connection_slot_guard`` further down, which re-reads the same
+        async with exchange_connection_slot_guard(user, supabase, body.exchange_id):
+        vault.store_exchange_keys(
+
+  other workstreams sharing exchange.py (markers in the STAGED version):
+  markers added only in the WORKTREE (unstaged, i.e. the guard workstream):
+    ['AUTH-01', 'CONN-01', 'QUOTA-01']
+
+  does each production file's unstaged patch apply onto HEAD?  (private index)
+    backend_app/core/subscription_dependencies.py        rc=0  APPLIES
+    backend_app/routers/exchange.py                      rc=1  REJECTED
+        error: patch failed: backend_app/routers/exchange.py:366
+        error: backend_app/routers/exchange.py: patch does not apply
+
+  tests/test_quota01_exchange_slot_is_atomic.py: 22 tests; symbols it requires:
+    _slot_lock_key                     referenced 12 time(s)
+    _acquire_slot_lock                 referenced 3 time(s)
+    _release_slot_lock                 referenced 18 time(s)
+    exchange_connection_slot_guard     referenced 33 time(s)
+    check_exchange_connection_slot     referenced 12 time(s)
+
+================================================================================================
+4. THREE-PATH PATCH MANIFEST, RECOMPUTED AND VERIFIED
+================================================================================================
+
+  path                                                 patch-pre  PR#6       match
+
+  git apply --cached --check (private index = current PR #6 head): rc=0  APPLIES CLEANLY
+    <stdin>:466: trailing whitespace.
+        
+    warning: 1 line adds whitespace errors.
+
+  WORKFLOW: what the patch actually changes
+    hunks: ['@@ -213,7 +213,7 @@ jobs:', '@@ -732,7 +732,7 @@ jobs:']
+    +2 / -2
+      -          AERORA_TEST_REDIS_URL: redis://localhost:6379/15
+      -      AERORA_TEST_REDIS_URL: redis://localhost:6379/15
+      +          AERORA_TEST_REDIS_URL: redis://localhost:6379/0
+      +      AERORA_TEST_REDIS_URL: redis://localhost:6379/0
+    diagnostics job in PR#6 base      : True
+    patch touches the diagnostics job?: False
+    patch touches provisioning job?   : False
+
+  TESTS: preservation and skip/fail disposition
+
+    tests/test_webhook_duplicate_delivery_real_redis.py
+      tests: base=6  new=6  removed=none  added=none
+      pytest.skip( : base=1  new=1
+      pytest.fail( : base=0  new=6
+      require_real_redis() calls: base=2 new=2
+
+    tests/test_quota01_metered_reservation_is_hard.py
+      tests: base=7  new=9  removed=none  added=['test_production_reserve_quota_admits_exactly_the_limit_against_real_redis', 'test_production_zero_allowance_writes_no_meter_against_real_redis']
+      pytest.skip( : base=0  new=0
+      pytest.fail( : base=0  new=4
+      require_real_redis() calls: base=1 new=3
+
+================================================================================================
+PRESERVATION
+================================================================================================
+  index content digest before/after: 7379218b992868bb / 7379218b992868bb  SAME
+  private index file removed: True

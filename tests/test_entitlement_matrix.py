@@ -354,6 +354,7 @@ class _Query:
         self.op = "select"
         self.payload: Optional[Dict[str, Any]] = None
         self.columns: Optional[str] = None
+        self.row_limit: Optional[int] = None
 
     def select(self, cols: Any) -> "_Query":
         self.columns = cols
@@ -368,6 +369,14 @@ class _Query:
         return self
 
     def single(self) -> "_Query":
+        return self
+
+    def limit(self, count: int) -> "_Query":
+        # Present because the product uses it (LIB-03): ``clone_strategy``'s step-1 listing
+        # lookup and step-6 source lookup now ask for ``.limit(1)`` instead of ``.single()``.
+        # A double that lags the client surface the handler actually calls turns a product
+        # change into an ``AttributeError`` that says nothing about the product.
+        self.row_limit = count
         return self
 
     def execute(self) -> _Resp:
@@ -443,23 +452,33 @@ class EntitlementRowStore:
                         }
                     ]
                 )
-            # clone_strategy's own step-1 lookup calls `.single()` and reads `lib_resp.data` as
-            # a bare mapping (`lib_entry["is_active"]`), never as a list - so the response here
-            # carries the row directly on `.data`, matching what `.single()` returns in the
-            # real driver. It is active, approved, not self-owned by the caller, and
-            # cloning-enabled, so every refusal a cell in this file observes on the clone
-            # column is the entitlement gate's, and only the entitlement gate's.
+            # clone_strategy's own step-1 lookup. It asks for `.limit(1)` and reads
+            # `lib_resp.data` as a LIST, so the response here carries a one-element list -
+            # which is what the real driver returns for a limited select.
+            #
+            # It used to call `.single()` and read `.data` as a bare mapping, and this double
+            # returned a bare mapping to match. `.single()` asks PostgREST for
+            # `application/vnd.pgrst.object+json`, which answers 406 PGRST116 for zero rows,
+            # so a listing that did not exist raised instead of returning empty and the
+            # handler's own `if not ...: -> 404` branch was unreachable (LIB-03). The product
+            # reads a list now; so does this.
+            #
+            # The row is active, approved, not self-owned by the caller, and cloning-enabled,
+            # so every refusal a cell in this file observes on the clone column is the
+            # entitlement gate's, and only the entitlement gate's.
             return _Resp(
-                {
-                    "id": LISTING_ID,
-                    "author_id": OWNER_ID,
-                    "source_strategy_id": OWNER_STRATEGY_ID,
-                    "name": "Matrix Fixture Strategy",
-                    "is_active": True,
-                    "moderation_status": "approved",
-                    "clone_count": 0,
-                    "source_cloning_enabled": True,
-                }
+                [
+                    {
+                        "id": LISTING_ID,
+                        "author_id": OWNER_ID,
+                        "source_strategy_id": OWNER_STRATEGY_ID,
+                        "name": "Matrix Fixture Strategy",
+                        "is_active": True,
+                        "moderation_status": "approved",
+                        "clone_count": 0,
+                        "source_cloning_enabled": True,
+                    }
+                ]
             )
         if query.table_name == "strategy_versions":
             if self.raise_on == "strategy_versions":

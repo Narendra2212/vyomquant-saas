@@ -136,7 +136,11 @@
 
 import { useId } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Zap } from 'lucide-react';
+// `PanelLeftClose`/`PanelLeftOpen` are lucide's own pair for exactly this control, so the
+// collapsed and expanded states are distinguished by SHAPE and not only by rotation —
+// which is what keeps the two states apart for a reader who cannot compare them
+// side by side. Same icon set as every other glyph in the shell.
+import { PanelLeftClose, PanelLeftOpen, Zap } from 'lucide-react';
 
 import { cssVar } from '../design/tokens';
 
@@ -151,6 +155,28 @@ export const SIDEBAR_BRAND_HEIGHT_PX = 56;
 
 /** The account slot's height (§6.1). Reserved whether or not the slot is filled. */
 export const SIDEBAR_FOOTER_HEIGHT_PX = 56;
+
+/**
+ * The collapse control's row height.
+ *
+ * ITS OWN ROW, AND NOT A CORNER OF THE BRAND BLOCK. At rail width the whole track is
+ * 56px and the brand block spends 28 of those on the brand glyph plus 24 on its `px-3`
+ * padding — there is no room beside it for a second control, so a toggle living in the
+ * brand block would have to either shrink the glyph at rail width or disappear exactly
+ * where it is most needed (the collapsed state is the one a trader has to get back out
+ * of). A dedicated row is the same height in BOTH modes, so toggling moves the nav list
+ * by zero pixels, which is what Requirement 2.2 asks of shell chrome.
+ *
+ * 36 rather than 56: this is a control, not a landmark, and it should not read as a third
+ * block of equal weight to the brand and account blocks.
+ */
+export const SIDEBAR_TOGGLE_HEIGHT_PX = 36;
+
+/** The accessible name and tooltip for each state. The name states the ACTION. */
+export const SIDEBAR_TOGGLE_LABELS = Object.freeze({
+  collapse: 'Collapse sidebar',
+  expand: 'Expand sidebar',
+});
 
 /**
  * The root's chrome. `overflow-hidden` is what stops a long label or the account card
@@ -238,6 +264,78 @@ function NavEntry({ entry, active, rail }) {
 }
 
 /**
+ * The collapse control.
+ *
+ * A REAL `<button type="button">`, so it is in the tab order, responds to Enter and Space
+ * and is announced as a button — none of which a `<div onClick>` gives for free, and the
+ * keyboard half is explicitly required of this control.
+ *
+ * WHAT IT ANNOUNCES. The accessible name is the ACTION ("Collapse sidebar" / "Expand
+ * sidebar") rather than the state, because the name is what a screen reader reads when
+ * focus lands and a trader needs to know what pressing it will do. The STATE goes in
+ * `aria-expanded`, which is the attribute built for it, and `aria-controls` points at the
+ * nav list that actually changes shape. The name is present at BOTH widths — it is the
+ * only text on the control at rail width, where the label is `sr-only`, so an icon-only
+ * button still has a name.
+ *
+ * `title` as well, matching `NavEntry`'s pointer tooltip at rail width. `ds/Tooltip` would
+ * be the richer instrument and is deliberately not used: this component sits in the import
+ * graph of every authenticated route, and the shell's convention is to pay for nothing it
+ * can get from a native attribute (see `App.jsx`'s direct-module ds imports).
+ *
+ * NO WIDTH TRANSITION, ON PURPOSE. The shell's track width changes in one frame.
+ * Animating it would re-fire `ds/Chart`'s `ResizeObserver` and every recharts
+ * `ResponsiveContainer` on the route once per frame for the duration, and
+ * DESIGN_SYSTEM_V2.md limits motion to 120–180ms colour and opacity — not geometry. The
+ * colour transition below is within that budget.
+ *
+ * @param {Object} props
+ * @param {boolean} props.rail Whether the sidebar is currently the 56px rail.
+ * @param {boolean} props.collapsed The trader's REQUEST, which is what the button toggles.
+ * @param {() => void} props.onToggle
+ * @param {string} props.controls The id of the element whose shape changes.
+ */
+function CollapseToggle({ rail, collapsed, onToggle, controls }) {
+  const Icon = collapsed ? PanelLeftOpen : PanelLeftClose;
+  const label = collapsed ? SIDEBAR_TOGGLE_LABELS.expand : SIDEBAR_TOGGLE_LABELS.collapse;
+
+  return (
+    <div
+      data-shell="sidebar-toggle"
+      className="flex shrink-0 items-center border-b border-line-subtle px-2"
+      style={{ height: `${SIDEBAR_TOGGLE_HEIGHT_PX}px` }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        // The STATE. `!collapsed` rather than `!rail`: this reports what the control's own
+        // next press will change, and below laptop width the gate forces the rail
+        // regardless — but `canCollapse` is false there and this button is not rendered at
+        // all, so the two can never disagree in practice.
+        aria-expanded={!collapsed}
+        aria-controls={controls}
+        aria-label={label}
+        title={label}
+        data-collapsed={collapsed ? 'true' : 'false'}
+        className={
+          (rail
+            ? 'flex h-7 w-full items-center justify-center rounded-md '
+            : 'flex h-7 w-full items-center gap-2 rounded-md px-1.5 ')
+          + 'text-content-secondary transition-colors hover:bg-surface-raised '
+          + 'hover:text-content-primary focus-visible:outline-2 '
+          + 'focus-visible:outline-offset-2 focus-visible:outline-brand'
+        }
+      >
+        <Icon size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
+        {/* Same discipline as `NavEntry`'s label: clipped at rail width, never removed,
+            so the button keeps a name from its own content as well as its `aria-label`. */}
+        <span className={rail ? 'sr-only' : 'truncate text-small'}>{label}</span>
+      </button>
+    </div>
+  );
+}
+
+/**
  * The primary navigation sidebar.
  *
  * Takes no required props, so `<Sidebar />` is a complete mount — which is what a focused
@@ -256,7 +354,11 @@ export default function Sidebar({ accountMenu = null, className = '', style, ...
   // The gate's decision, not a breakpoint of our own. Outside a `ResponsiveGate` this
   // is `'expanded'`, which is what a focused unit test and today's un-rewired `App.jsx`
   // both want — the gate is what collapses the rail; its absence is not.
-  const { sidebarMode } = useViewportAccess();
+  // `sidebarMode` is the RESOLVED mode — viewport floor and trader preference already
+  // reconciled by `sidebarModeFor`. `collapsed` is the raw request and is read only by the
+  // toggle, which has to be honest about its own state; nothing about the LAYOUT below
+  // consults it, so there is one answer to "how wide is this" and it is `sidebarMode`.
+  const { sidebarMode, collapsed, canCollapse, toggleSidebar } = useViewportAccess();
   const rail = sidebarMode === 'rail';
   const width = SIDEBAR_WIDTH_PX[rail ? 'rail' : 'expanded'];
 
@@ -266,6 +368,9 @@ export default function Sidebar({ accountMenu = null, className = '', style, ...
   const activeId = activeNavId(location.pathname);
 
   const headingBase = useId();
+  // The nav's own id, so the toggle's `aria-controls` names the element that actually
+  // changes shape rather than the whole `<aside>` it is itself inside.
+  const navId = `${headingBase}sidebar-nav`;
 
   return (
     <aside
@@ -306,9 +411,29 @@ export default function Sidebar({ accountMenu = null, className = '', style, ...
         )}
       </div>
 
+      {/* The collapse control, between the brand block and the nav. OUTSIDE `<nav>`
+          deliberately: the nav landmark is navigation, and a button that resizes chrome is
+          not a destination — `tests/unit/shell/sidebar.test.jsx` asserts the nav holds ten
+          anchors and no buttons, which is the contract that says so.
+
+          Omitted entirely below laptop width, where `sidebarModeFor` forces the rail and
+          the control could not change anything (Requirement 19.4). */}
+      {canCollapse ? (
+        <CollapseToggle
+          rail={rail}
+          collapsed={collapsed}
+          onToggle={toggleSidebar}
+          controls={navId}
+        />
+      ) : null}
+
       {/* `aria-label="Main"` rather than "Main navigation": the element is already a
           navigation landmark, and the role is appended by the screen reader. */}
-      <nav aria-label="Main" className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-2">
+      <nav
+        id={navId}
+        aria-label="Main"
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-2"
+      >
         {NAV_GROUPS.map((group, index) => {
           const headingId = `${headingBase}nav-${group.id}`;
           return (

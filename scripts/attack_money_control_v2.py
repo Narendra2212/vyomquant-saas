@@ -256,7 +256,13 @@ print("=" * 72)
 from backend_app.workers.command_worker import CommandWorker
 from backend_app.backend.dag_worker import DAGWorker
 
-cmd_src = inspect.getsource(CommandWorker.process_iteration)
+# Scoped to the whole class rather than to `process_iteration` alone. The check this
+# looks for lives in `CommandWorker._dispatch` since the WORK-01 durability fix split
+# "read the stream / decide whether to ACK" from "execute one command"; pinning the scan
+# to one method name reported the control missing when it had only moved. Broadening it
+# keeps the check honest -- deleting the subscription gate anywhere in the class still
+# fails here -- while no longer depending on which method hosts it.
+cmd_src = inspect.getsource(CommandWorker)
 dag_src = inspect.getsource(DAGWorker._atomic_claim_task)
 
 if "get_user_subscription" in cmd_src and "cancelled" in cmd_src:

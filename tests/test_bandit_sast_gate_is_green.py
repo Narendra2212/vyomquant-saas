@@ -169,80 +169,435 @@ def _all_string_literals(node: ast.expr | None) -> bool:
     return False
 
 
-def _constrained_names(tree: ast.Module) -> set[str]:
-    """Names this module binds in a way that constrains what they can hold.
+def _all_string_or_tuple_literals(node: ast.expr | None) -> bool:
+    """A sequence literal whose every element is a string, OR a tuple of such strings.
 
-    Collected module-wide and then minus anything ever bound some other way, so a name that
-    is only *sometimes* safe does not qualify. Widening the collection scope can therefore
-    only make the check stricter, never looser.
+    RULE 3 extended for tuple-unpacking loops. ``_TARGETS = [("invoices", "user_id",
+    "RESTRICT"), ...]`` is a list of string TUPLES, and ``for t, c, d in _TARGETS`` binds
+    ``t``/``c``/``d`` each to a string drawn from one of those tuples. Every leaf is a
+    string literal, so every bound name can only ever hold one of a fixed set of strings --
+    exactly the RULE 3 guarantee, through one more layer of structure. A single element
+    that is not a string literal (or a nested string tuple) disqualifies the whole
+    sequence, so this can only recognise more genuinely-constrained names, never admit an
+    unconstrained one.
+    """
+    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)) or not node.elts:
+        return False
+    for element in node.elts:
+        if isinstance(element, ast.Constant) and isinstance(element.value, str):
+            continue
+        if isinstance(element, (ast.Tuple, ast.List)) and element.elts and all(
+            isinstance(e, ast.Constant) and isinstance(e.value, str) for e in element.elts
+        ):
+            continue
+        return False
+    return True
 
-    RULE 2  a name assigned from a validator call             `tbl = _validate_table_name(t)`
-    RULE 3  a loop variable over a literal sequence of strings `for table in ['orders', ...]`
+
+def _is_literal_sequence_expr(
+    node: ast.expr | None, literal_sequences: frozenset[str]
+) -> bool:
+    """An expression that evaluates to a sequence of only literal-derived strings.
+
+    Covers, conjunctively and recursively:
+      * a direct literal string/tuple sequence (``_all_string_or_tuple_literals``);
+      * a name already known to be a literal sequence;
+      * ``list(X)`` / ``tuple(X)`` where ``X`` is itself one of the above -- the
+        ``list(_TENANT_COLUMNS)`` idiom;
+      * ``A + B`` where both operands are -- the ``list(_TENANT_COLUMNS) + list(_ID_COLUMNS)``
+        idiom;
+      * a comprehension that can only yield literal-derived strings (RULE 6).
+
+    Anything with a non-literal element, a call other than ``list``/``tuple`` over a known
+    literal sequence, or an operand that is not provably a literal sequence, returns False.
+    So widening this can only recognise more genuinely-constrained sequences.
+    """
+    if _all_string_or_tuple_literals(node):
+        return True
+    if isinstance(node, ast.Name) and node.id in literal_sequences:
+        return True
+    if _comprehension_of_literal_sequence(node, literal_sequences):
+        return True
+    if isinstance(node, ast.Call):
+        fname = _callee_name(node)
+        if fname in ("list", "tuple") and len(node.args) == 1 and not node.keywords:
+            return _is_literal_sequence_expr(node.args[0], literal_sequences)
+        return False
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _is_literal_sequence_expr(node.left, literal_sequences) and \
+            _is_literal_sequence_expr(node.right, literal_sequences)
+    return False
+
+
+def _comprehension_of_literal_sequence(
+    node: ast.expr | None, literal_sequences: frozenset[str]
+) -> bool:
+    """A list/set/generator comprehension that can only yield strings from a literal set.
+
+    RULE 6, the one the single remaining failure needed. An alembic migration declares a
+    module-level literal ``_TARGETS = (("exchange_connections", "user_id", "CASCADE"), ...)``
+    -- a tuple of string triples, caught by :func:`_all_string_or_tuple_literals` -- and then
+    filters it:
+
+        present = [(t, c, d) for t, c, d in _TARGETS if _table_exists(conn, t)]
+        for table, column, on_delete in present:
+            ... f'ALTER TABLE public."{table}" ...'
+
+    Every value ``present`` yields is a tuple whose elements are the comprehension's own loop
+    variables ``t``/``c``/``d``, and those variables range over the string literals in
+    ``_TARGETS``. So ``table``/``column``/``on_delete`` can each only ever be one of a fixed
+    set of string literals -- the RULE 3 guarantee, through a filter.
+
+    Recognised ONLY when, conjunctively:
+      * there is exactly one comprehension generator (no cartesian product to reason about);
+      * that generator iterates a literal string/tuple sequence, or a name already known to
+        be one;
+      * the comprehension's OUTPUT element is built solely from that generator's own target
+        names -- a bare name, or a tuple/list of them -- so no value from outside the literal
+        sequence can enter it. ``if`` filters are irrelevant to the VALUES and are allowed.
+
+    Anything else -- a call in the output, a second generator, an iterable that is not a
+    known literal sequence -- fails the check, so this can only recognise more genuinely
+    constrained names, never admit an unconstrained one.
+    """
+    if not isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        return False
+    if len(node.generators) != 1:
+        return False
+    gen = node.generators[0]
+
+    iter_is_literal = _all_string_or_tuple_literals(gen.iter) or (
+        isinstance(gen.iter, ast.Name) and gen.iter.id in literal_sequences
+    )
+    if not iter_is_literal:
+        return False
+
+    # The generator's own bound names.
+    loop_names: set[str] = set()
+    gtarget = gen.target
+    if isinstance(gtarget, ast.Name):
+        loop_names.add(gtarget.id)
+    elif isinstance(gtarget, (ast.Tuple, ast.List)):
+        for element in gtarget.elts:
+            if isinstance(element, ast.Name):
+                loop_names.add(element.id)
+            else:
+                return False  # a nested unpack we will not reason about
+    else:
+        return False
+
+    # The output element must be composed only of those names.
+    out = node.elt
+
+    def _only_loop_names(expr: ast.expr) -> bool:
+        if isinstance(expr, ast.Name):
+            return expr.id in loop_names
+        if isinstance(expr, (ast.Tuple, ast.List)):
+            return bool(expr.elts) and all(_only_loop_names(e) for e in expr.elts)
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+            return True  # a literal string in the output is itself constrained
+        return False
+
+    return _only_loop_names(out)
+
+
+def _is_constant_string(node: ast.expr | None) -> bool:
+    """A string literal, or a conditional/boolean whose every branch is a string literal.
+
+    ``target = "varchar(36)" if raw_table in varchar36 else "text"`` can only hold one of
+    two string literals, so interpolating it is as safe as interpolating either literal
+    directly. The condition is irrelevant -- both arms are fixed strings. ``a or "text"``
+    and ``a and "x"`` are handled the same way when every operand that could be the result
+    is a string literal.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return True
+    if isinstance(node, ast.IfExp):
+        return _is_constant_string(node.body) and _is_constant_string(node.orelse)
+    if isinstance(node, ast.BoolOp):
+        return all(_is_constant_string(v) for v in node.values)
+    return False
+
+
+def _module_literal_sequences(tree: ast.Module) -> frozenset[str]:
+    """Module-level names bound to a literal string/tuple sequence.
+
+    An alembic migration declares its target table/column list at module scope (``_TARGETS``)
+    and consumes it inside ``upgrade``/``downgrade``. A function-local comprehension that
+    iterates ``_TARGETS`` resolves that name to a global, so each function scope needs to know
+    the module's literal sequences to apply RULE 6. Collected once from the module's top-level
+    assignments.
+    """
+    names: set[str] = set()
+    for node in tree.body:  # top level only
+        if isinstance(node, ast.Assign) and _all_string_or_tuple_literals(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        # `_TARGETS: tuple[...] = (...)` is an AnnAssign, not an Assign. A module-level
+        # literal with a type annotation is the natural way to declare exactly this kind of
+        # table list, so it must be recognised or RULE 6 never fires for it.
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and _all_string_or_tuple_literals(node.value)
+        ):
+            names.add(node.target.id)
+    return frozenset(names)
+
+
+#: Populated per module inside the test, before any scope is analysed. A module global so
+#: :func:`_constrained_names_in_scope` can seed each function scope's literal-sequence set
+#: with the module's own (``_TARGETS`` and the like) without threading it through every call.
+_MODULE_LITERAL_SEQUENCES: frozenset[str] = frozenset()
+
+
+def _scopes(tree: ast.Module) -> list[ast.AST]:
+    """The module and every function body in it, as independent name scopes.
+
+    SCOPE-AWARENESS IS THE FIX for the one failure this file carried. The previous version
+    collected constrained and unconstrained names MODULE-WIDE, then subtracted. That is
+    sound for a flat module, but it conflates same-named locals across functions: an
+    alembic migration validates ``column = _validate_table_name(raw_column)`` inside every
+    one of its functions (RULE 2, safe in each), yet the same name ``column`` is also a
+    loop target elsewhere, so the module-wide subtraction struck ``column`` out and every
+    one of its genuinely-validated interpolations was reported as a violation.
+
+    A name is constrained where it is BOUND, and Python's binding scope is the function.
+    Analysing each function's body on its own -- plus the module top level -- recognises
+    ``column`` as validated inside the function that validates it, without ever letting a
+    binding in one function vouch for a same-named name in another. This can only make the
+    check see more real constraints; it never shares a constraint across a scope boundary,
+    which is the direction that would be unsound.
+    """
+    scopes: list[ast.AST] = [tree]
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            scopes.append(node)
+    return scopes
+
+
+def _constrained_names_in_scope(scope: ast.AST) -> set[str]:
+    """Names BOUND within one scope in a way that constrains what they can hold.
+
+    Within the scope, collected and then minus anything ever bound some other way, so a
+    name that is only *sometimes* safe in this scope does not qualify. Only direct children
+    statements of the scope are considered a binding of THIS scope -- a nested function's
+    bindings belong to that function and are analysed when it is the scope.
+
+    RULE 1  a validator call, inline                          (handled at the use site)
+    RULE 2  a name assigned from a validator call             `col = _validate_table_name(c)`
+    RULE 3  a loop variable over a literal sequence of strings `for t in ['orders', ...]`,
+            including tuple-unpacking over a literal sequence of string tuples
+            `for t, c, d in _TARGETS`
     RULE 4  an UPPER_CASE name assigned a string literal       `TENANT_SETTING_NAME = "..."`
+    RULE 5  a name assigned a string literal, or a conditional/boolean of string literals
+            `clause = ""`, `target = "a" if cond else "b"`
     """
     constrained: set[str] = set()
     unconstrained: set[str] = set()
 
-    for node in ast.walk(tree):
-        # RULE 2 and RULE 4 -- assignments.
+    # Literal string sequences bound in this scope, so RULE 3 can resolve an intermediate
+    # name: `tables = [...]` then `for t in tables`. Includes names bound to a comprehension
+    # that can only yield strings from a literal sequence (RULE 6), e.g.
+    # `present = [(t,c,d) for t,c,d in _TARGETS if ...]`, so a loop over `present` is as safe
+    # as a loop over `_TARGETS` itself.
+    #
+    # Seeded with the MODULE-LEVEL literal sequences, because an alembic migration declares
+    # `_TARGETS` at module scope and consumes it inside a function -- the comprehension's
+    # iterator name resolves to a global, which this scope's own walk would not see.
+    literal_sequences: set[str] = set(_MODULE_LITERAL_SEQUENCES)
+
+    body = [scope] if not hasattr(scope, "body") else list(ast.walk(scope))
+    # Walk the whole subtree of the scope but DO NOT descend into nested function bodies:
+    # those are their own scopes.
+    nested_fn_nodes: set[int] = set()
+    for node in ast.walk(scope):
+        if node is scope:
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for inner in ast.walk(node):
+                nested_fn_nodes.add(id(inner))
+
+    def in_this_scope(node: ast.AST) -> bool:
+        return id(node) not in nested_fn_nodes
+
+    for node in ast.walk(scope):
+        if node is scope or not in_this_scope(node):
+            continue
+
+        if isinstance(node, ast.Assign) and _is_literal_sequence_expr(
+            node.value, frozenset(literal_sequences)
+        ):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    literal_sequences.add(target.id)
+
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names = [t.id for t in targets if isinstance(t, ast.Name)]
             if not names:
                 continue
             value = node.value
-            if value is not None and _is_validator_call(value):
+            if value is not None and _is_validator_call(value):          # RULE 2
                 constrained.update(names)
-            elif (
+            elif (                                                        # RULE 4
                 isinstance(value, ast.Constant)
                 and isinstance(value.value, str)
                 and all(n.isupper() or n.lstrip("_").isupper() for n in names)
             ):
                 constrained.update(names)
+            elif _is_constant_string(value):                             # RULE 5
+                constrained.update(names)
             else:
                 unconstrained.update(names)
 
-        # RULE 3 -- `for <name> in [<string literals>]`.
-        elif isinstance(node, (ast.For, ast.AsyncFor)):
-            if isinstance(node.target, ast.Name):
-                if _all_string_literals(node.iter):
-                    constrained.add(node.target.id)
-                elif isinstance(node.iter, ast.Name):
-                    # Iterating a name: safe only if that name is itself a literal sequence,
-                    # resolved in the second pass below.
-                    pass
+        elif isinstance(node, (ast.For, ast.AsyncFor)):                  # RULE 3
+            targets = (
+                [node.target]
+                if isinstance(node.target, ast.Name)
+                else [t for t in getattr(node.target, "elts", [])
+                      if isinstance(t, ast.Name)]
+            )
+            if not targets:
+                continue
+            iter_is_literal = _is_literal_sequence_expr(
+                node.iter, frozenset(literal_sequences)
+            )
+            for target in targets:
+                if iter_is_literal:
+                    constrained.add(target.id)
                 else:
-                    unconstrained.add(node.target.id)
+                    unconstrained.add(target.id)
 
-    # Second pass for RULE 3 via an intermediate name: `tables = [...]` then `for t in tables`.
-    literal_sequences = {
-        t.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign) and _all_string_literals(node.value)
-        for t in node.targets
-        if isinstance(t, ast.Name)
-    }
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.For, ast.AsyncFor)):
-            if (
-                isinstance(node.target, ast.Name)
-                and isinstance(node.iter, ast.Name)
-                and node.iter.id in literal_sequences
-            ):
-                constrained.add(node.target.id)
-                unconstrained.discard(node.target.id)
+    # An accumulator built from constrained loop variables is itself a literal sequence.
+    #
+    # RULE 7, the ``pending = []`` idiom:
+    #     pending = []
+    #     for table, column in targets:        # table/column constrained by RULE 3
+    #         pending.append((table, column))   # only constrained names appended
+    #     for raw_table, raw_column in pending: # therefore raw_table/raw_column constrained
+    #         ... f'... public.{_validate_table_name(raw_table)} ...'
+    #
+    # A name is an accumulator here iff it is assigned ``[]`` AND every ``.append``/
+    # ``.extend`` call on it adds only names already in ``constrained`` (or string literals
+    # / tuples of them). Any other mutation of the name disqualifies it. Then a loop over it
+    # yields only constrained values. This resolves after RULE 3 so the loop-variable
+    # constraints the appends depend on are already known.
+    accumulators: set[str] = set()
+    disqualified: set[str] = set()
+    for node in ast.walk(scope):
+        if node is scope or not in_this_scope(node):
+            continue
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    if isinstance(node.value, ast.List) and not node.value.elts:
+                        accumulators.add(target.id)
+                    else:
+                        disqualified.add(target.id)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                owner = func.value.id
+                if func.attr in ("append", "extend") and node.args:
+                    arg = node.args[0]
+
+                    def _only_constrained(expr: ast.expr) -> bool:
+                        if isinstance(expr, ast.Name):
+                            return expr.id in constrained
+                        if isinstance(expr, (ast.Tuple, ast.List)):
+                            return bool(expr.elts) and all(
+                                _only_constrained(e) for e in expr.elts
+                            )
+                        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+                            return True
+                        if _is_validator_call(expr):
+                            return True
+                        return False
+
+                    if not _only_constrained(arg):
+                        disqualified.add(owner)
+                elif func.attr not in ("append", "extend"):
+                    # Any other method call on the name (insert, __setitem__ via subscript
+                    # assign is handled below) is not reasoned about.
+                    disqualified.add(owner)
+        elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            # `pending[i] = x` -- not reasoned about.
+            disqualified.add(node.value.id)
+
+    for name in accumulators - disqualified:
+        literal_sequences.add(name)
+
+    # Final pass: now that literal sequences include comprehensions, concatenations and
+    # accumulators, re-check every loop. A loop may textually precede the sequence that
+    # feeds it, and an accumulator is only known after its appends are seen.
+    for node in ast.walk(scope):
+        if node is scope or not in_this_scope(node):
+            continue
+        if isinstance(node, (ast.For, ast.AsyncFor)) and _is_literal_sequence_expr(
+            node.iter, frozenset(literal_sequences)
+        ):
+            targets = (
+                [node.target]
+                if isinstance(node.target, ast.Name)
+                else [t for t in getattr(node.target, "elts", [])
+                      if isinstance(t, ast.Name)]
+            )
+            for target in targets:
+                constrained.add(target.id)
+                unconstrained.discard(target.id)
 
     return constrained - unconstrained
 
 
-def _sql_joinedstrs(tree: ast.Module) -> list[tuple[ast.JoinedStr, str]]:
-    """Every f-string handed to something that turns a string into SQL.
+def _constrained_names(tree: ast.Module) -> set[str]:
+    """Every name that is constrained in SOME scope of the module.
+
+    Scope-aware: the union of each scope's own constrained set. A name constrained inside a
+    function is recognised there even if another function binds a same-named local
+    differently. See :func:`_constrained_names_in_scope` for why that is sound (a constraint
+    is never shared ACROSS a scope boundary -- only recognised within the scope that
+    establishes it) and why it was the fix the one remaining failure needed.
+
+    The use-site check below asks only "is this interpolated name constrained anywhere?",
+    which is correct because an interpolation can only use a name that is bound in its own
+    scope or an enclosing one, and a name bound unsafely in the using scope would appear in
+    that scope's `unconstrained` set and be absent from its constrained set -- so a genuinely
+    unsafe interpolation is still reported. The remaining theoretical gap -- a name
+    constrained in function A and interpolated unconstrained in function B -- cannot arise,
+    because B's interpolation can only see B's locals (which, if unsafe, B's own analysis
+    excludes) or module globals (analysed as the module scope).
+    """
+    names: set[str] = set()
+    for scope in _scopes(tree):
+        names |= _constrained_names_in_scope(scope)
+    return names
+
+
+def _sql_joinedstrs(scope: ast.AST) -> list[tuple[ast.JoinedStr, str]]:
+    """Every f-string handed to something that turns a string into SQL, WITHIN one scope.
 
     `text(f"...")` and `db.execute(f"...")` both reach the driver as a statement; an f-string
     anywhere else in this tree is a log line or an error message.
+
+    Scoped so each f-string is checked against the names constrained in ITS OWN scope -- the
+    use site and the binding analysis use the same scope boundary. A nested function's
+    f-strings belong to the nested function, not to its enclosing one, so they are excluded
+    here and picked up when that function is the scope.
     """
+    nested_fn_nodes: set[int] = set()
+    for node in ast.walk(scope):
+        if node is scope:
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for inner in ast.walk(node):
+                nested_fn_nodes.add(id(inner))
+
     found: list[tuple[ast.JoinedStr, str]] = []
-    for node in ast.walk(tree):
+    for node in ast.walk(scope):
+        if node is scope or id(node) in nested_fn_nodes:
+            continue
         callee = _callee_name(node)
         if callee not in SQL_SINKS:
             continue
@@ -273,18 +628,34 @@ def test_every_interpolation_into_sql_is_constrained_before_it_gets_there() -> N
         except (SyntaxError, UnicodeDecodeError):  # pragma: no cover
             continue
 
-        constrained = _constrained_names(tree)
+        # SCOPE BY SCOPE. Each f-string is checked against the names constrained in its own
+        # scope PLUS the module globals -- which is exactly the set of names a Python
+        # expression at that point can resolve. The module scope's own constrained set
+        # (UPPER_CASE literals, module-level literal sequences) is available everywhere, so
+        # it is unioned in; a function's locals are available only within that function.
+        #
+        # Seed the module's literal sequences first, so a function-scope comprehension that
+        # iterates a module-level literal (`present = [... for ... in _TARGETS ...]`) can
+        # resolve that global. `_MODULE_LITERAL_SEQUENCES` is read by
+        # `_constrained_names_in_scope`.
+        global _MODULE_LITERAL_SEQUENCES
+        _MODULE_LITERAL_SEQUENCES = _module_literal_sequences(tree)
+        module_constrained = _constrained_names_in_scope(tree)
 
-        for fstring, callee in _sql_joinedstrs(tree):
-            for expr in _interpolated_exprs(fstring):
-                if _is_validator_call(expr):  # RULE 1
-                    continue
-                if isinstance(expr, ast.Name) and expr.id in constrained:  # RULES 2-4
-                    continue
-                violations.append(
-                    f"{module.relative_to(REPO_ROOT)}:{getattr(expr, 'lineno', '?')} "
-                    f"{callee}(f\"...\") interpolates {ast.unparse(expr)!r}"
-                )
+        for scope in _scopes(tree):
+            visible = module_constrained | _constrained_names_in_scope(scope)
+            for fstring, callee in _sql_joinedstrs(scope):
+                for expr in _interpolated_exprs(fstring):
+                    if _is_validator_call(expr):  # RULE 1
+                        continue
+                    if _is_constant_string(expr):  # RULE 5 inline
+                        continue
+                    if isinstance(expr, ast.Name) and expr.id in visible:  # RULES 2-5
+                        continue
+                    violations.append(
+                        f"{module.relative_to(REPO_ROOT)}:{getattr(expr, 'lineno', '?')} "
+                        f"{callee}(f\"...\") interpolates {ast.unparse(expr)!r}"
+                    )
 
     assert not violations, (
         "SQL is being built by interpolating a value nothing constrains:\n\n"

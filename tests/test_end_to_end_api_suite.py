@@ -73,9 +73,41 @@ def test_health_live_endpoint():
 
 
 def test_health_ready_endpoint():
+    """OBS-01: readiness is now MEASURED, so this contract changed deliberately.
+
+    This test used to assert `res.json() == {"status": "ready"}` with a 200. That
+    assertion was pinning the defect: the endpoint returned that literal unconditionally,
+    having probed nothing, so an orchestrator would route production traffic to a pod
+    with no database and no Redis.
+
+    It is UPDATED rather than deleted, because the property worth keeping -- the endpoint
+    answers, and answers in a documented shape -- is still worth keeping. What it may no
+    longer do is assert that a readiness probe returns a constant.
+
+    Under the test environment (`ENV=testing`, `DEV_MODE=true` from conftest) Redis is
+    not a required dependency, so readiness turns on the database alone and either answer
+    is legitimate here. The status code and body are therefore asserted as a CONTRACT:
+    200 iff READY, 503 iff NOT_READY, with the blocking dependencies named either way.
+
+    The dependency-by-dependency behaviour is asserted properly, with induced outages, in
+    tests/test_obs01_readiness_reflects_dependencies.py (28 tests).
+    """
     res = client.get("/health/ready")
-    assert res.status_code == 200
-    assert res.json() == {"status": "ready"}
+
+    assert res.status_code in (200, 503), (
+        f"readiness answered {res.status_code}; it must be 200 (ready) or 503 (not "
+        f"ready) so a load balancer can act on it"
+    )
+    body = res.json()
+    assert body["status"] in ("READY", "NOT_READY")
+    assert (res.status_code == 200) == (body["status"] == "READY"), (
+        "the HTTP status and the body disagree about readiness, which is how a "
+        "not-ready pod stays in rotation"
+    )
+    # The evidence must travel with the verdict.
+    assert "dependencies" in body and "blocking" in body
+    if body["status"] == "NOT_READY":
+        assert body["blocking"], "NOT_READY without naming what is blocking"
 
 
 def test_health_comprehensive_endpoint():

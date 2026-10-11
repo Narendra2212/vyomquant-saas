@@ -1,0 +1,16 @@
+TOTAL LINES 593
+42: # REDIS_URL takes precedence over individual host/port/password
+43: REDIS_URL = os.getenv("REDIS_URL", "").strip()
+49: def get_redis_url(db: int = 0) -> str:
+52:     If REDIS_URL is provided, it is used as the base URL with the DB number appended.
+57:     if REDIS_URL:
+58:         # Parse existing REDIS_URL and append DB number
+60:         from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+62:         parsed = urlparse(REDIS_URL)
+68:         # Redis-py supports both ?db=0 and /0 syntax
+69:         query_params['db'] = str(db)
+86:         return f"redis://{auth}{REDIS_HOST}:{REDIS_PORT}/{db}"
+140:             cache = await aioredis.from_url(
+148:             queue = await aioredis.from_url(
+156:             events = await aioredis.from_url(
+536: async def get_redis_manager() -> Optional[RedisManager]:

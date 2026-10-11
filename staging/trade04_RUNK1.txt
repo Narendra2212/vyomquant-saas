@@ -1,0 +1,213 @@
+                environment. For a while NO caller in the repository passed this
+                LIVE, `assert_live_environment` passed it, and it was recorded with an
+            - status: 'completed' | 'skipped_completed' | 'skipped_executing' | 'failed' | 'blocked'
+            # Fall-safe: if safety system check errors, block trading
+                'message': f'Safety check failed: {ks_err} - trading execution blocked'
+                allow_failed_retry=True
+            elif action == 'skip_failed_no_retry':
+                # Failed and retry disabled
+                    'status': 'skipped_failed',
+                    'message': 'Previous execution failed, retry disabled'
+            # matching how `_current_validation_token` is already passed to the executor.
+                    # Execution failed - store error BEFORE returning
+                    error_result = serialize_decimals({
+                        'error': trade_result,
+                        'failed_at': datetime.utcnow().isoformat(),
+                    # SET status = 'failed', result = ?, updated_at = now()
+                        status=ExecutionStatus.FAILED,
+                        result=error_result
+                        'status': 'failed',
+                        'result': error_result,
+                        'message': f'Trade execution failed: {trade_result}'
+                # Unexpected error - store error BEFORE returning
+                error_result = serialize_decimals({
+                    'error': str(e),
+                    'failed_at': datetime.utcnow().isoformat(),
+                # SET status = 'failed', result = ?, updated_at = now()
+                    status=ExecutionStatus.FAILED,
+                    result=error_result
+                    'status': 'failed',
+                    'result': error_result,
+                    'message': f'Unexpected error: {str(e)}'
+E           AttributeError: 'object' object has no attribute 'close'
+backend_app\core\execution_engine.py:839: AttributeError
+                environment. For a while NO caller in the repository passed this
+                LIVE, `assert_live_environment` passed it, and it was recorded with an
+            - status: 'completed' | 'skipped_completed' | 'skipped_executing' | 'failed' | 'blocked'
+            # Fall-safe: if safety system check errors, block trading
+                'message': f'Safety check failed: {ks_err} - trading execution blocked'
+                allow_failed_retry=True
+            elif action == 'skip_failed_no_retry':
+                # Failed and retry disabled
+                    'status': 'skipped_failed',
+                    'message': 'Previous execution failed, retry disabled'
+            # matching how `_current_validation_token` is already passed to the executor.
+                    # Execution failed - store error BEFORE returning
+                    error_result = serialize_decimals({
+                        'error': trade_result,
+                        'failed_at': datetime.utcnow().isoformat(),
+                    # SET status = 'failed', result = ?, updated_at = now()
+                        status=ExecutionStatus.FAILED,
+                        result=error_result
+                        'status': 'failed',
+                        'result': error_result,
+                        'message': f'Trade execution failed: {trade_result}'
+                # Unexpected error - store error BEFORE returning
+                error_result = serialize_decimals({
+                    'error': str(e),
+                    'failed_at': datetime.utcnow().isoformat(),
+                # SET status = 'failed', result = ?, updated_at = now()
+                    status=ExecutionStatus.FAILED,
+                    result=error_result
+                    'status': 'failed',
+                    'result': error_result,
+                    'message': f'Unexpected error: {str(e)}'
+E           AttributeError: 'object' object has no attribute 'close'
+backend_app\core\execution_engine.py:839: AttributeError
+                environment. For a while NO caller in the repository passed this
+                LIVE, `assert_live_environment` passed it, and it was recorded with an
+            - status: 'completed' | 'skipped_completed' | 'skipped_executing' | 'failed' | 'blocked'
+            # Fall-safe: if safety system check errors, block trading
+                'message': f'Safety check failed: {ks_err} - trading execution blocked'
+                allow_failed_retry=True
+            elif action == 'skip_failed_no_retry':
+                # Failed and retry disabled
+                    'status': 'skipped_failed',
+                    'message': 'Previous execution failed, retry disabled'
+            # matching how `_current_validation_token` is already passed to the executor.
+                    # Execution failed - store error BEFORE returning
+                    error_result = serialize_decimals({
+                        'error': trade_result,
+                        'failed_at': datetime.utcnow().isoformat(),
+                    # SET status = 'failed', result = ?, updated_at = now()
+                        status=ExecutionStatus.FAILED,
+                        result=error_result
+                        'status': 'failed',
+                        'result': error_result,
+                        'message': f'Trade execution failed: {trade_result}'
+                # Unexpected error - store error BEFORE returning
+                error_result = serialize_decimals({
+                    'error': str(e),
+                    'failed_at': datetime.utcnow().isoformat(),
+                # SET status = 'failed', result = ?, updated_at = now()
+                    status=ExecutionStatus.FAILED,
+                    result=error_result
+                    'status': 'failed',
+                    'result': error_result,
+                    'message': f'Unexpected error: {str(e)}'
+E           AttributeError: 'object' object has no attribute 'close'
+backend_app\core\execution_engine.py:839: AttributeError
+                environment. For a while NO caller in the repository passed this
+                LIVE, `assert_live_environment` passed it, and it was recorded with an
+            - status: 'completed' | 'skipped_completed' | 'skipped_executing' | 'failed' | 'blocked'
+            # Fall-safe: if safety system check errors, block trading
+                'message': f'Safety check failed: {ks_err} - trading execution blocked'
+                allow_failed_retry=True
+            elif action == 'skip_failed_no_retry':
+                # Failed and retry disabled
+                    'status': 'skipped_failed',
+                    'message': 'Previous execution failed, retry disabled'
+            # matching how `_current_validation_token` is already passed to the executor.
+                    # Execution failed - store error BEFORE returning
+                    error_result = serialize_decimals({
+                        'error': trade_result,
+                        'failed_at': datetime.utcnow().isoformat(),
+                    # SET status = 'failed', result = ?, updated_at = now()
+                        status=ExecutionStatus.FAILED,
+                        result=error_result
+                        'status': 'failed',
+                        'result': error_result,
+                        'message': f'Trade execution failed: {trade_result}'
+                # Unexpected error - store error BEFORE returning
+                error_result = serialize_decimals({
+                    'error': str(e),
+                    'failed_at': datetime.utcnow().isoformat(),
+                # SET status = 'failed', result = ?, updated_at = now()
+                    status=ExecutionStatus.FAILED,
+                    result=error_result
+                    'status': 'failed',
+                    'result': error_result,
+                    'message': f'Unexpected error: {str(e)}'
+E           AttributeError: 'object' object has no attribute 'close'
+backend_app\core\execution_engine.py:839: AttributeError
+                environment. For a while NO caller in the repository passed this
+                LIVE, `assert_live_environment` passed it, and it was recorded with an
+            - status: 'completed' | 'skipped_completed' | 'skipped_executing' | 'failed' | 'blocked'
+            # Fall-safe: if safety system check errors, block trading
+                'message': f'Safety check failed: {ks_err} - trading execution blocked'
+                allow_failed_retry=True
+            elif action == 'skip_failed_no_retry':
+                # Failed and retry disabled
+                    'status': 'skipped_failed',
+                    'message': 'Previous execution failed, retry disabled'
+            # matching how `_current_validation_token` is already passed to the executor.
+                    # Execution failed - store error BEFORE returning
+                    error_result = serialize_decimals({
+                        'error': trade_result,
+                        'failed_at': datetime.utcnow().isoformat(),
+                    # SET status = 'failed', result = ?, updated_at = now()
+                        status=ExecutionStatus.FAILED,
+                        result=error_result
+                        'status': 'failed',
+                        'result': error_result,
+                        'message': f'Trade execution failed: {trade_result}'
+                # Unexpected error - store error BEFORE returning
+                error_result = serialize_decimals({
+                    'error': str(e),
+                    'failed_at': datetime.utcnow().isoformat(),
+                # SET status = 'failed', result = ?, updated_at = now()
+                    status=ExecutionStatus.FAILED,
+                    result=error_result
+                    'status': 'failed',
+                    'result': error_result,
+                    'message': f'Unexpected error: {str(e)}'
+E           AttributeError: 'object' object has no attribute 'close'
+backend_app\core\execution_engine.py:839: AttributeError
+                environment. For a while NO caller in the repository passed this
+                LIVE, `assert_live_environment` passed it, and it was recorded with an
+            - status: 'completed' | 'skipped_completed' | 'skipped_executing' | 'failed' | 'blocked'
+            # Fall-safe: if safety system check errors, block trading
+                'message': f'Safety check failed: {ks_err} - trading execution blocked'
+                allow_failed_retry=True
+            elif action == 'skip_failed_no_retry':
+                # Failed and retry disabled
+                    'status': 'skipped_failed',
+                    'message': 'Previous execution failed, retry disabled'
+            # matching how `_current_validation_token` is already passed to the executor.
+                    # Execution failed - store error BEFORE returning
+                    error_result = serialize_decimals({
+                        'error': trade_result,
+                        'failed_at': datetime.utcnow().isoformat(),
+                    # SET status = 'failed', result = ?, updated_at = now()
+                        status=ExecutionStatus.FAILED,
+                        result=error_result
+                        'status': 'failed',
+                        'result': error_result,
+                        'message': f'Trade execution failed: {trade_result}'
+                # Unexpected error - store error BEFORE returning
+                error_result = serialize_decimals({
+                    'error': str(e),
+                    'failed_at': datetime.utcnow().isoformat(),
+                # SET status = 'failed', result = ?, updated_at = now()
+                    status=ExecutionStatus.FAILED,
+                    result=error_result
+                    'status': 'failed',
+                    'result': error_result,
+                    'message': f'Unexpected error: {str(e)}'
+E           AttributeError: 'object' object has no attribute 'close'
+backend_app\core\execution_engine.py:839: AttributeError
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\execution_record.py:130: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.8/migration/
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\execution_record.py:136: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.8/migration/
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\execution_record.py:142: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.8/migration/
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\pydantic_models.py:350: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.8/migration/
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\pydantic_models.py:413: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.8/migration/
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\pydantic_models.py:552: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.8/migration/
+    'failed_at': datetime.utcnow().isoformat(),
+FAILED tests/test_trade04_live_order_gate_at_venue_boundary.py::test_every_prerequisite_valid_reaches_the_exchange
+FAILED tests/test_trade04_live_order_gate_at_venue_boundary.py::test_risk_not_evaluated_blocks_the_exchange_write
+FAILED tests/test_trade04_live_order_gate_at_venue_boundary.py::test_risk_explicitly_rejected_blocks_the_exchange_write
+FAILED tests/test_trade04_live_order_gate_at_venue_boundary.py::test_an_unreadable_equity_blocks_the_exchange_write
+FAILED tests/test_trade04_live_order_gate_at_venue_boundary.py::test_an_order_above_the_notional_ceiling_blocks_the_exchange_write
+FAILED tests/test_trade04_live_order_gate_at_venue_boundary.py::test_execute_trade_cannot_place_a_live_order
+6 failed, 25 passed, 19 warnings in 22.42s
+NONCE_END=RUNK1

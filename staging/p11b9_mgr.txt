@@ -1,0 +1,48 @@
+15:     from backend_app.core.cache.redis_manager import redis_manager
+24: import json
+25: import logging
+26: import os
+27: from typing import Any, Optional
+161:         from backend_app.core.distributed_idempotency import PROCESSING_LOCK_MARKER
+263:         import fnmatch
+270:         import time
+431:     async def _ensure_manager(self):
+437:         from backend_app.backend.redis_manager import get_redis_manager
+446:         When enabled, _ensure_manager() skips reassignment to allow dependency injection.
+447:         Must be called before any operations that would trigger _ensure_manager().
+477:         await self._ensure_manager()
+495:         await self._ensure_manager()
+511:         await self._ensure_manager()
+540:         await self._ensure_manager()
+544:         await self._ensure_manager()
+548:         await self._ensure_manager()
+552:         await self._ensure_manager()
+556:         await self._ensure_manager()
+566:         await self._ensure_manager()
+572:         await self._ensure_manager()
+624:         await self._ensure_manager()
+628:         from backend_app.core.safety_config import get_vyomquant_mode
+878:         await self._ensure_manager()
+883:                 import logging
+893:         await self._ensure_manager()
+896:                 import json
+903:                 import logging
+913:         await self._ensure_manager()
+918:                 import logging
+931:         await self._ensure_manager()
+937:             import asyncio
+938:             import json
+950:                     import logging
+963:                 import logging
+966:                     import sentry_sdk
+974:             import logging
+1234:         await self._ensure_manager()
+1241:                 import logging
+1251:         await self._ensure_manager()
+1256:                 import logging
+1266:         await self._ensure_manager()
+1271:                 import logging
+1281:         await self._ensure_manager()
+1286:                 import logging
+1296:         await self._ensure_manager()
+1301:                 import logging

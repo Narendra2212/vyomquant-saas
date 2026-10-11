@@ -322,6 +322,78 @@ REJECTED_INTENTS: Tuple[Tuple[str, Dict[str, Any]], ...] = (
 #: for.
 FORCED_SWITCH = 2
 
+#: The two sides, FORCED into every example rather than drawn.
+#:
+#: WHY THIS IS FORCED AND NOT DRAWN
+#: --------------------------------
+#: ``side`` decides which way all six intents go, so a buy-side set and a sell-side set are
+#: genuinely different arithmetic: realized PnL is computed against a cost basis, a different
+#: balance column moves, and the position ends up in a different place. Both are worth racing,
+#: so the census has a floor on each - ``EXAMPLES // 5`` = 20 on ``side_buy`` and on
+#: ``side_sell``, justified by "a fair draw over a hundred examples gives about fifty of each".
+#:
+#: Measured, that floor was never safe. Drawn mid-sequence it landed at 68.0 / 32.0 with the
+#: minority bucket's minimum at 22. Drawn FIRST (the draw-order remedy) the bias went - mean
+#: 50.0 - but the per-run variance roughly doubled, so the minimum did not reliably improve:
+#: across 110 independent in-test runs the minimum was **16, an actual floor breach**
+#: (``staging/p23_measure_P23BPIN.txt`` run 15, and the four-module group in P-23B), with
+#: minima of 21-23 recurring. Reordering can remove a bias; it cannot make a floor on a drawn
+#: value certain.
+#:
+#: So this dimension is now driven the way ``test_paper_idempotence.py`` drives its three
+#: ``SUBMIT_FLAVOURS`` and its four fill scenarios, and the way
+#: :data:`LIMIT2_ORDER_TYPES` is already driven here: every example exercises EVERY value, so
+#: each bucket receives one mark per example and its floor of 20 becomes an arithmetic
+#: consequence of the forcing - 100 against 20, at any seed, in any lane.
+#:
+#: THE ORACLE PREMISE IS PRESERVED, WHICH IS THE WHOLE REASON THIS IS SAFE
+#: ----------------------------------------------------------------------
+#: The generator's docstring requires ONE side per intent set, because a buy and a sell on one
+#: symbol are order-dependent and the oracle's twenty-four-permutation agreement depends on
+#: same-side commutativity. Forcing does not violate that: each VARIANT still carries a single
+#: side across all six of its intents (``_ConfluenceCase.intent`` reads ``self.side`` for every
+#: one of them, and no ``REJECTED_INTENTS`` entry overrides it), and each variant gets its own
+#: oracle. Two one-sided sets are compared, never one two-sided set.
+#:
+#: COST, STATED RATHER THAN HIDDEN
+#: ------------------------------
+#: With :data:`LIMIT2_ORDER_TYPES` this makes four variants per example, each with its own
+#: twenty-four permutation oracle and its own pair of interleaved runs. No floor was lowered, no
+#: assertion relaxed, and ``max_examples`` is unchanged at 100. Measurement:
+#: ``staging/PHASE10_P23C_SIDE_COVERAGE_REPORT.md``.
+SIDES: Tuple[str, ...] = ("buy", "sell")
+
+#: The second money-writer's two order types, FORCED into every example rather than drawn.
+#:
+#: WHY THIS IS FORCED AND NOT DRAWN
+#: --------------------------------
+#: ``limit2`` is the second of the four raced intents that moves money, and whether it is a
+#: second resting limit order or a second market order decides which version-guarded write
+#: site it contends on. Both are worth racing, so the census has a floor on each.
+#:
+#: It used to be ``draw(st.sampled_from(("limit", "market")))``, with floors of
+#: ``EXAMPLES // 5`` = 20 on each bucket justified by "a fair draw over a hundred examples
+#: gives about fifty of each". Measured over 20 independent in-test runs, it did not: the
+#: draw landed at 65.8 / 34.2, and the minority bucket's minimum was 22 against a floor of
+#: 20 - a margin of 1.10x. Drawing it first in the generator removed the BIAS (mean moved to
+#: 47.6 / 52.4) but raised the per-run variance, so the minimum only moved 22 -> 23 and the
+#: margin stayed at 1.15x. Full measurement:
+#: ``staging/PHASE10_P23_DRAW_ORDER_REPORT.md``.
+#:
+#: A floor on a drawn value cannot be guaranteed by reordering, so this dimension is now
+#: driven the way ``test_paper_idempotence.py`` drives its three ``SUBMIT_FLAVOURS`` and its
+#: four fill scenarios: every example exercises EVERY value, so each bucket receives exactly
+#: one mark per example and its floor of 20 becomes an arithmetic consequence of the forcing
+#: - 100 against 20, at any seed, in any lane - rather than a bet on a draw frequency.
+#:
+#: COST, STATED RATHER THAN HIDDEN
+#: ------------------------------
+#: The whole per-example pipeline - the twenty-four permutation oracle and both interleaved
+#: runs - is driven once per value, so one example now costs about twice what it did. No
+#: floor was lowered, no assertion relaxed, ``max_examples`` is unchanged at 100, and the
+#: ``side`` draw-order fix is untouched.
+LIMIT2_ORDER_TYPES: Tuple[str, ...] = ("limit", "market")
+
 #: Extra switch points may only come AFTER :data:`FORCED_SWITCH`, never before it.
 #:
 #: This is not tidiness. A release at read 1 would move the account *before* the submission's read
@@ -375,6 +447,51 @@ class _ConfluenceCase:
         self.limit2_order_type = limit2_order_type
         self.switch_at = switch_at
         self.nested_switch_at = nested_switch_at
+
+    def with_side(self, side: str) -> "_ConfluenceCase":
+        """This same generated case, with the side every intent takes replaced.
+
+        One of the two dimensions this property FORCES rather than draws (see :data:`SIDES`).
+        The side is replaced for the WHOLE case, so the variant stays one-sided across all six
+        intents and the oracle's same-side commutativity premise holds for it - which is what
+        makes forcing safe here. Every other field is carried across unchanged.
+        """
+        return _ConfluenceCase(
+            key_suffix=self.key_suffix,
+            side=side,
+            quantities=self.quantities,
+            limit_prices=self.limit_prices,
+            close=self.close,
+            fee_rate=self.fee_rate,
+            slippage_rate=self.slippage_rate,
+            rejected_intent=self.rejected_intent,
+            limit2_order_type=self.limit2_order_type,
+            switch_at=self.switch_at,
+            nested_switch_at=self.nested_switch_at,
+        )
+
+    def with_limit2_order_type(self, order_type: str) -> "_ConfluenceCase":
+        """This same generated case, with ``limit2``'s order type replaced.
+
+        The one dimension this property FORCES rather than draws (see
+        :data:`LIMIT2_ORDER_TYPES`). Every other field is carried across unchanged, so the two
+        variants of one example differ in exactly that order type and in nothing else - which
+        is what makes "both values were raced against this generated intent set" the claim,
+        rather than "both values were raced against some intent set".
+        """
+        return _ConfluenceCase(
+            key_suffix=self.key_suffix,
+            side=self.side,
+            quantities=self.quantities,
+            limit_prices=self.limit_prices,
+            close=self.close,
+            fee_rate=self.fee_rate,
+            slippage_rate=self.slippage_rate,
+            rejected_intent=self.rejected_intent,
+            limit2_order_type=order_type,
+            switch_at=self.switch_at,
+            nested_switch_at=self.nested_switch_at,
+        )
 
     def key(self, name: str) -> str:
         return f"{name}-{self.key_suffix}"
@@ -474,6 +591,67 @@ def confluent_intent_sets(draw: Any) -> _ConfluenceCase:
     beyond the forced one is generated; every quantity, price, rate, rejection reason, side and key
     is drawn.
     """
+    # ── DRAW ORDER: ``side`` is drawn FIRST, deliberately ─────────────────────────────────
+    #
+    # ``side`` is the only remaining draw in this function whose census floor is a
+    # DISTRIBUTION claim (``EXAMPLES // 5`` = 20 on each of ``side_buy`` / ``side_sell``, see
+    # :data:`P23_FLOORS`), and that floor's stated rationale is that a fair two-way draw gives
+    # "about fifty of each". Measured over 20 independent IN-TEST runs with it drawn in its
+    # original position, it did not: ``side`` landed at mean 68.0 / 32.0 and the minority
+    # bucket reached 22 against a floor of 20 - a margin of 1.10x on a floor whose reasoning
+    # assumed ~2.5x.
+    #
+    # The cause was draw order, not the sampler. Every other draw here consumes an
+    # unpredictable amount of the underlying choice sequence: ``quantities`` and ``prices``
+    # are ``unique=True`` lists (internal rejection sampling), ``key_suffix`` is a 1-16
+    # character ``st.text``, and ``switch_at`` / ``nested_switch_at`` are variable-size
+    # ``st.sets``. In the original order ``side`` was drawn immediately after ``key_suffix``,
+    # directly downstream of that variable consumption.
+    #
+    # This is the same effect, and the same remedy, as
+    # ``tests/property/test_order_idempotence_under_retry.py``'s generator already documents
+    # for its own ``flavour`` draw ("empirical sampling put ``market`` at roughly 30% of
+    # draws instead of the intended 50/50 ... Moving ``flavour`` to be the FIRST draw in the
+    # function removes the dependency on draw order entirely"). Drawing ``side`` before any
+    # filtered or variable-length draw removes the dependency rather than only relocating it
+    # past the one draw implicated. Measured after the move: mean 50.0 / 50.0, minimum 33,
+    # margin 1.65x. Full measurement: ``staging/PHASE10_P23_DRAW_ORDER_REPORT.md``.
+    #
+    # ``limit2_order_type`` was hoisted here too, for the same reason, and that was measured
+    # to be INSUFFICIENT for it: the bias went but the per-run variance rose, so its minority
+    # bucket only moved 22 -> 23 (margin 1.15x). It is now FORCED into every example instead -
+    # see :data:`LIMIT2_ORDER_TYPES`. Reordering can remove a bias; it cannot make a floor on
+    # a drawn value certain.
+    #
+    # WHY THE FORCED DIMENSION IS STILL DRAWN HERE, AND WHY THAT IS DELIBERATE
+    # -----------------------------------------------------------------------
+    # The draw below is REDUNDANT - ``check`` overrides it with every
+    # :data:`LIMIT2_ORDER_TYPES` value - and it is kept anyway, on measured grounds. Deleting
+    # it shortens this function's choice sequence by one draw, which shifts every later draw's
+    # position and, measured, shifted ``side``'s distribution enough to BREACH its floor: the
+    # four-module regression group (this file plus ``test_paper_idempotence``,
+    # ``test_order_idempotence_under_retry`` and ``test_property_coverage``) failed with
+    # ``side_buy occurred 16 time(s), floor 20`` with the draw deleted, having passed with it
+    # present. Keeping the draw pins the choice sequence to the shape ``side``'s own fix was
+    # measured against, so one dimension's remedy cannot silently damage another's.
+    #
+    # It is therefore a PIN, not an oversight, and
+    # ``test_the_forced_limit2_dimension_is_pinned_not_drawn`` asserts that the body ignores
+    # whatever it produces - so the redundancy can never quietly become live again.
+    # Measurement: ``staging/PHASE10_P23B_DETERMINISTIC_COVERAGE_REPORT.md``.
+    #
+    # Nothing else changes: the same strategies, the same floors, the same assertions, the
+    # same ``max_examples``.
+    # BOTH of these draws are now PINS: ``check`` forces every :data:`SIDES` value and every
+    # :data:`LIMIT2_ORDER_TYPES` value against each generated case, so neither drawn value is
+    # read. They are retained, not deleted, for the measured reason recorded above: removing a
+    # draw shortens this function's choice sequence, shifts every later draw, and was measured
+    # to push ``side`` into an actual floor breach. Keeping them pins the choice sequence to
+    # the shape every distribution measurement in the two prior reports was taken against.
+    # ``test_the_forced_dimensions_are_pinned_not_drawn`` asserts both stay assigned-and-unread.
+    _pinned_side = draw(st.sampled_from(("buy", "sell")))
+    _pinned_limit2_order_type = draw(st.sampled_from(("limit", "market")))
+
     quantities = draw(
         st.lists(st.sampled_from(QUANTITY_POOL), min_size=5, max_size=5, unique=True)
     )
@@ -490,14 +668,21 @@ def confluent_intent_sets(draw: Any) -> _ConfluenceCase:
                 max_size=16,
             )
         ),
-        side=draw(st.sampled_from(("buy", "sell"))),
+        # FORCED, not drawn - see :data:`SIDES`. ``check`` drives every value through
+        # ``with_side``, so whatever is placed here is replaced on every iteration.
+        side=SIDES[0],
         quantities=quantities,
         limit_prices=prices,
         close=draw(st.sampled_from(CLOSES)),
         fee_rate=draw(st.sampled_from(FEE_RATES)),
         slippage_rate=draw(st.sampled_from(SLIPPAGE_RATES)),
         rejected_intent=draw(st.sampled_from(REJECTED_INTENTS)),
-        limit2_order_type=draw(st.sampled_from(("limit", "market"))),
+        # FORCED, not drawn. ``check`` drives EVERY :data:`LIMIT2_ORDER_TYPES` value against
+        # this generated case through ``with_limit2_order_type``, so whatever is placed here is
+        # replaced on every iteration. ``_pinned_limit2_order_type`` is drawn above and
+        # deliberately NOT used - see the draw-order note there for the measurement that says
+        # deleting that draw breaks ``side``'s floor.
+        limit2_order_type=LIMIT2_ORDER_TYPES[0],
         switch_at=frozenset({FORCED_SWITCH})
         | frozenset(
             draw(
@@ -1344,24 +1529,41 @@ def test_p23_concurrent_intents_match_a_sequential_order(request: Any) -> None:
     def check(case: _ConfluenceCase) -> None:
         recorder.start()
         recorder.mark("examples")
-        recorder.mark(f"side_{case.side}")
-        recorder.mark(
-            "limit2_was_a_second_limit_order"
-            if case.limit2_order_type == "limit"
-            else "limit2_was_a_second_market_order"
-        )
 
-        keys = frozenset(case.key(name) for name in SUCCEEDING_NAMES)
-        oracle = _sequential_oracle(case, SUCCEEDING_NAMES, keys)
-        recorder.mark("sequential_permutations_agreed")
-        recorder.mark("permutations_replayed", 24)
+        # EVERY side and EVERY ``limit2`` order type, against THIS generated intent set -
+        # forced, not drawn. See :data:`SIDES` and :data:`LIMIT2_ORDER_TYPES` for why, and for
+        # the measurements that say reordering those draws was not enough.
+        #
+        # Each of the four variants is a genuinely different intent set - ``side`` flows into
+        # all six intents and ``limit2_order_type`` into ``limit2``'s order type - so each gets
+        # its OWN twenty-four permutation oracle and its OWN pair of interleaved runs, both
+        # contending on their own version-guarded write site. Nothing is shared between
+        # variants, which is why every per-variant census bucket quadruples rather than a
+        # counter being bumped four times.
+        #
+        # Each variant stays ONE-SIDED across all its intents, so the oracle's same-side
+        # commutativity premise holds for every one of them.
+        for side in SIDES:
+            recorder.mark(f"side_{side}")
+            for limit2_order_type in LIMIT2_ORDER_TYPES:
+                variant = case.with_side(side).with_limit2_order_type(limit2_order_type)
+                recorder.mark(
+                    "limit2_was_a_second_limit_order"
+                    if limit2_order_type == "limit"
+                    else "limit2_was_a_second_market_order"
+                )
 
-        _assert_one_concurrent_run_matches_the_oracle(
-            case, "limit", "starved_limit", oracle, keys, recorder
-        )
-        _assert_one_concurrent_run_matches_the_oracle(
-            case, "market", "starved_market", oracle, keys, recorder
-        )
+                keys = frozenset(variant.key(name) for name in SUCCEEDING_NAMES)
+                oracle = _sequential_oracle(variant, SUCCEEDING_NAMES, keys)
+                recorder.mark("sequential_permutations_agreed")
+                recorder.mark("permutations_replayed", 24)
+
+                _assert_one_concurrent_run_matches_the_oracle(
+                    variant, "limit", "starved_limit", oracle, keys, recorder
+                )
+                _assert_one_concurrent_run_matches_the_oracle(
+                    variant, "market", "starved_market", oracle, keys, recorder
+                )
         recorder.finish()
 
     try:
@@ -1376,6 +1578,142 @@ def test_p23_concurrent_intents_match_a_sequential_order(request: Any) -> None:
 # ══════════════════════════════════════════════════════════════════════════
 # THE LITERALS THIS FILE WROTE DOWN, HELD AGAINST THEIR SOURCES
 # ══════════════════════════════════════════════════════════════════════════
+
+
+def test_the_forced_dimensions_are_pinned_not_drawn() -> None:
+    """``side`` and ``limit2_order_type`` are FORCED by the body; their draws are pins.
+
+    Four claims, because the arrangement is deliberate and would otherwise look like a bug:
+
+    1. Every :data:`SIDES` and :data:`LIMIT2_ORDER_TYPES` value really produces different
+       intents - so forcing them is four different races, not one race counted four times.
+    2. Each forced variant is ONE-SIDED across all six of its intents, which is what the
+       oracle's twenty-four-permutation commutativity premise requires. If a variant were ever
+       two-sided the oracle would stop being a valid oracle, silently.
+    3. The property body iterates both tuples and never consults ``case.side`` or
+       ``case.limit2_order_type``, so no generated value can decide coverage.
+    4. ``confluent_intent_sets`` still draws both into ``_pinned_side`` and
+       ``_pinned_limit2_order_type`` and never reads either. Those draws are PINS on the choice
+       sequence: deleting one was measured to shift ``side``'s distribution enough to breach
+       ``side``'s own floor (``side_buy occurred 16 time(s), floor 20``). If someone removes
+       them as dead code, this test and that measurement are the record of why they are there.
+    """
+    import ast
+    from pathlib import Path
+
+    # 1. the two values are genuinely different work
+    probe = _ConfluenceCase(
+        key_suffix="pin",
+        side="buy",
+        quantities=QUANTITY_POOL[:5],
+        limit_prices=LIMIT_PRICE_POOL[:3],
+        close=CLOSES[0],
+        fee_rate=FEE_RATES[0],
+        slippage_rate=SLIPPAGE_RATES[0],
+        rejected_intent=REJECTED_INTENTS[0],
+        limit2_order_type=LIMIT2_ORDER_TYPES[0],
+        switch_at=frozenset({FORCED_SWITCH}),
+        nested_switch_at=frozenset({FORCED_SWITCH}),
+    )
+    assert set(LIMIT2_ORDER_TYPES) == {"limit", "market"}, LIMIT2_ORDER_TYPES
+    assert set(SIDES) == {"buy", "sell"}, SIDES
+
+    seen = {}
+    for order_type in LIMIT2_ORDER_TYPES:
+        intent = probe.with_limit2_order_type(order_type).intent("limit2")
+        seen[order_type] = intent["order_type"]
+        assert intent["order_type"] == order_type, (
+            f"with_limit2_order_type({order_type!r}) produced order_type "
+            f"{intent['order_type']!r}; the forced dimension is not reaching the intent"
+        )
+    assert len(set(seen.values())) == len(LIMIT2_ORDER_TYPES), (
+        f"the forced values collapse to the same intent: {seen} - forcing both would then be "
+        f"the same race counted twice"
+    )
+
+    # 2. every forced variant is ONE-SIDED across all six intents - the oracle's premise
+    variant_fingerprints = set()
+    for side in SIDES:
+        for order_type in LIMIT2_ORDER_TYPES:
+            variant = probe.with_side(side).with_limit2_order_type(order_type)
+            sides_in_play = {
+                str(variant.intent(name)["side"])
+                for name in ("limit", "market", "limit2", "rejected",
+                             "starved_limit", "starved_market")
+            }
+            assert sides_in_play == {side}, (
+                f"variant(side={side!r}, limit2={order_type!r}) is not one-sided: its intents "
+                f"carry sides {sorted(sides_in_play)}. The oracle compares twenty-four "
+                f"permutations and only commutes for SAME-SIDE fills, so a two-sided variant "
+                f"would silently stop being a valid oracle"
+            )
+            variant_fingerprints.add(
+                (side, order_type, variant.intent("limit2")["order_type"])
+            )
+    assert len(variant_fingerprints) == len(SIDES) * len(LIMIT2_ORDER_TYPES), (
+        f"the forced combinations are not distinct: {sorted(variant_fingerprints)} - four "
+        f"variants must be four different intent sets, not one counted four times"
+    )
+
+    # ``confluent_intent_sets`` is wrapped by ``@st.composite``, so ``inspect.getsourcefile``
+    # on it answers "<string>"; this module's own ``__file__`` is the honest source.
+    source = Path(__file__).read_text(encoding="utf-8-sig")
+    tree = ast.parse(source)
+
+    # 3. the body forces both dimensions and never consults the generated fields
+    property_fn = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "test_p23_concurrent_intents_match_a_sequential_order"
+    )
+    body_src = ast.get_source_segment(source, property_fn) or ""
+    assert "for limit2_order_type in LIMIT2_ORDER_TYPES" in body_src, (
+        "the property body no longer iterates LIMIT2_ORDER_TYPES, so the dimension is not "
+        "forced and its census floor is back to being a bet on a draw"
+    )
+    assert "for side in SIDES" in body_src, (
+        "the property body no longer iterates SIDES, so the side dimension is not forced and "
+        "its census floor is back to being a bet on a draw - which was measured to breach "
+        "(side_buy occurred 16 time(s), floor 20)"
+    )
+    assert "with_limit2_order_type" in body_src and "with_side" in body_src, (
+        "the property body no longer builds per-value variants for both dimensions"
+    )
+    for dead in ("case.limit2_order_type", "case.side"):
+        assert dead not in body_src, (
+            f"the property body reads {dead} again; a forced dimension must not depend on "
+            f"what the generator happened to draw"
+        )
+
+    # 4. the generator's draws are pins: assigned, never read
+    generator_fn = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "confluent_intent_sets"
+    )
+    assigned = {
+        target.id
+        for node in ast.walk(generator_fn)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    loaded = {
+        node.id
+        for node in ast.walk(generator_fn)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    for pin in ("_pinned_side", "_pinned_limit2_order_type"):
+        assert pin in assigned, (
+            f"the pinning draw {pin} is gone from confluent_intent_sets. It is NOT dead code: "
+            f"deleting a draw shortens the choice sequence and was measured to breach side's "
+            f"floor (side_buy occurred 16 time(s), floor 20). See "
+            f"staging/PHASE10_P23C_SIDE_COVERAGE_REPORT.md and "
+            f"staging/PHASE10_P23B_DETERMINISTIC_COVERAGE_REPORT.md"
+        )
+        assert pin not in loaded, (
+            f"the pinned draw {pin} is being READ again, so a generated value can decide a "
+            f"forced dimension and the forcing is no longer exhaustive"
+        )
 
 
 def test_the_written_down_retry_bound_is_the_modules_own() -> None:

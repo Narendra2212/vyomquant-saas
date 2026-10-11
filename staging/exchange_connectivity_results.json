@@ -1,0 +1,4622 @@
+{
+  "summary": {
+    "ccxt_version": "4.3.92",
+    "generated_at": "2026-10-10T01:22:39.826862+00:00",
+    "wall_clock_seconds": 201.4,
+    "eligible_candidates": 103,
+    "attempted": 31,
+    "public_connectivity_verified": 72,
+    "market_data_verified": 69,
+    "failed": 31,
+    "failures_by_class": {
+      "AUTH_REQUIRED": [
+        "alpaca"
+      ],
+      "EGRESS_FILTERED": [
+        "ascendex",
+        "bitmex",
+        "bitrue",
+        "cex",
+        "coinlist",
+        "idex",
+        "kuna",
+        "lykke",
+        "novadax",
+        "oceanex",
+        "poloniexfutures",
+        "whitebit"
+      ],
+      "LIBRARY_DEFECT": [
+        "coinmetro",
+        "gemini",
+        "hyperliquid",
+        "okx",
+        "timex"
+      ],
+      "UNKNOWN": [
+        "onetrading"
+      ],
+      "VENUE_UNAVAILABLE": [
+        "ace",
+        "bitmart",
+        "btcalpha",
+        "coinmate",
+        "currencycom",
+        "mercado",
+        "okcoin",
+        "oxfun",
+        "probit",
+        "tradeogre",
+        "vertex",
+        "zonda"
+      ]
+    },
+    "target_low": 100,
+    "target_high": 110,
+    "remaining_to_target_low": 28,
+    "target_met": false,
+    "egress_filtered": 12,
+    "genuine_failures": 19,
+    "egress_profile": {
+      "nxdomain": [
+        "api-matic.idex.io",
+        "api.kuna.io",
+        "api.novadax.com",
+        "api.oceanex.pro",
+        "api.xreserve.fund",
+        "futures-api.poloniex.com",
+        "hft-apiv2.lykke.com",
+        "trade-api.coinlist.co"
+      ],
+      "suspicious_collapsed_groups": {
+        "139.5.241.93": [
+          "ascendex.com",
+          "cex.io",
+          "whitebit.com",
+          "www.bitmex.com",
+          "www.bitrue.com"
+        ]
+      },
+      "tls_probe": {
+        "ascendex.com": null,
+        "cex.io": null,
+        "whitebit.com": null,
+        "www.bitmex.com": null,
+        "www.bitrue.com": true
+      },
+      "tls_interception_proven": [
+        "www.bitrue.com"
+      ],
+      "sinkhole_addresses": [
+        "139.5.241.93"
+      ],
+      "controls_resolve_independently": true,
+      "filtered_hosts": [
+        "api-matic.idex.io",
+        "api.kuna.io",
+        "api.novadax.com",
+        "api.oceanex.pro",
+        "api.xreserve.fund",
+        "ascendex.com",
+        "cex.io",
+        "futures-api.poloniex.com",
+        "hft-apiv2.lykke.com",
+        "trade-api.coinlist.co",
+        "whitebit.com",
+        "www.bitmex.com",
+        "www.bitrue.com"
+      ]
+    },
+    "authenticated_access_verified": 0,
+    "sandbox_verified": 0,
+    "trading_certified": 0,
+    "live_trading_authorized": 0
+  },
+  "per_exchange": {
+    "alpaca": {
+      "exchange_id": "alpaca",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:19:18.487490+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x1",
+          "detail": "AuthenticationError: alpaca requires \"apiKey\" credential",
+          "failure_class": "AUTH_REQUIRED",
+          "checked_at": "2026-10-10T01:19:19.571410+00:00",
+          "duration_ms": 1094.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": []
+    },
+    "binance": {
+      "exchange_id": "binance",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:12:40.275292+00:00",
+          "duration_ms": 63.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 4678 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:12:47.201634+00:00",
+          "duration_ms": 6922.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:12:47.886019+00:00",
+          "duration_ms": 687.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 4678,
+      "egress_hostnames": [
+        "api.binance.com",
+        "dapi.binance.com",
+        "eapi.binance.com",
+        "fapi.binance.com",
+        "papi.binance.com"
+      ]
+    },
+    "bigone": {
+      "exchange_id": "bigone",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:03.985592+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 1021 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:20.176804+00:00",
+          "duration_ms": 16187.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:33.268307+00:00",
+          "duration_ms": 13094.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 1021,
+      "egress_hostnames": []
+    },
+    "bequant": {
+      "exchange_id": "bequant",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:03.983548+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 151 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:32.491290+00:00",
+          "duration_ms": 28500.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:35.024719+00:00",
+          "duration_ms": 2547.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 151,
+      "egress_hostnames": [
+        "api.bequant.io"
+      ]
+    },
+    "binancecoinm": {
+      "exchange_id": "binancecoinm",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:18.177570+00:00",
+          "duration_ms": 62.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x2",
+          "detail": "venue answered with 30 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:37.890996+00:00",
+          "duration_ms": 19719.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USD:BTC",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:39.057192+00:00",
+          "duration_ms": 1172.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USD:BTC",
+      "market_count": 30,
+      "egress_hostnames": [
+        "api.binance.com",
+        "dapi.binance.com",
+        "eapi.binance.com",
+        "fapi.binance.com",
+        "papi.binance.com"
+      ]
+    },
+    "binanceusdm": {
+      "exchange_id": "binanceusdm",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:35.076268+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 924 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:37.707662+00:00",
+          "duration_ms": 2625.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT:USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:39.140880+00:00",
+          "duration_ms": 1437.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT:USDT",
+      "market_count": 924,
+      "egress_hostnames": [
+        "api.binance.com",
+        "dapi.binance.com",
+        "eapi.binance.com",
+        "fapi.binance.com",
+        "papi.binance.com"
+      ]
+    },
+    "binanceus": {
+      "exchange_id": "binanceus",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:33.569460+00:00",
+          "duration_ms": 141.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 629 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:39.041114+00:00",
+          "duration_ms": 5484.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:43.289480+00:00",
+          "duration_ms": 4235.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 629,
+      "egress_hostnames": [
+        "api.binance.com",
+        "api.binance.us",
+        "dapi.binance.com",
+        "eapi.binance.com",
+        "fapi.binance.com",
+        "papi.binance.com",
+        "www.binance.us"
+      ]
+    },
+    "bingx": {
+      "exchange_id": "bingx",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:39.342617+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 3551 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:47.306178+00:00",
+          "duration_ms": 7969.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:48.072837+00:00",
+          "duration_ms": 766.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 3551,
+      "egress_hostnames": []
+    },
+    "bit2c": {
+      "exchange_id": "bit2c",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:39.342617+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 4 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:39.357568+00:00",
+          "duration_ms": 16.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/NIS",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:49.222586+00:00",
+          "duration_ms": 9859.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/NIS",
+      "market_count": 4,
+      "egress_hostnames": [
+        "bit2c.co.il"
+      ]
+    },
+    "ace": {
+      "exchange_id": "ace",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:19:18.471603+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: ace GET https://ace.io/polarisex/oapi/v2/list/marketPair",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:19:27.474791+00:00",
+          "duration_ms": 9000.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "ace.io"
+      ]
+    },
+    "bitbns": {
+      "exchange_id": "bitbns",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:48.122092+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 224 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:51.821730+00:00",
+          "duration_ms": 3703.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:53.988419+00:00",
+          "duration_ms": 2156.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 224,
+      "egress_hostnames": []
+    },
+    "bitfinex2": {
+      "exchange_id": "bitfinex2",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:49.288725+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 288 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:56.437359+00:00",
+          "duration_ms": 7156.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:58.590818+00:00",
+          "duration_ms": 2156.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 288,
+      "egress_hostnames": [
+        "api-pub.bitfinex.com",
+        "api.bitfinex.com"
+      ]
+    },
+    "bitflyer": {
+      "exchange_id": "bitflyer",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:54.006742+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 13 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:58.253966+00:00",
+          "duration_ms": 4250.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USD",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:00.737281+00:00",
+          "duration_ms": 2484.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USD",
+      "market_count": 13,
+      "egress_hostnames": []
+    },
+    "bitbank": {
+      "exchange_id": "bitbank",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:43.323294+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 62 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:47.339467+00:00",
+          "duration_ms": 4015.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/JPY",
+          "detail": "passed=[] unsupported=[] failed=[('public_ticker', 'VENUE_UNAVAILABLE'), ('public_order_book', 'VENUE_UNAVAILABLE'), ('public_ohlcv', 'VENUE_UNAVAILABLE')]",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:04:02.469926+00:00",
+          "duration_ms": 15125.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": false,
+        "public_order_book": false,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchTicker failed: VENUE_UNAVAILABLE \u2014 ExchangeNotAvailable",
+        "fetchOrderBook failed: VENUE_UNAVAILABLE \u2014 ExchangeNotAvailable",
+        "fetchOHLCV failed: VENUE_UNAVAILABLE \u2014 ExchangeNotAvailable"
+      ],
+      "probe_symbol": "BTC/JPY",
+      "market_count": 62,
+      "egress_hostnames": []
+    },
+    "bitget": {
+      "exchange_id": "bitget",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:58.620720+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 4260 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:07.803023+00:00",
+          "duration_ms": 9171.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:08.552366+00:00",
+          "duration_ms": 750.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 4260,
+      "egress_hostnames": []
+    },
+    "bithumb": {
+      "exchange_id": "bithumb",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:00.753721+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 500 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:05.255915+00:00",
+          "duration_ms": 4500.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/KRW",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:10.769049+00:00",
+          "duration_ms": 5515.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/KRW",
+      "market_count": 500,
+      "egress_hostnames": []
+    },
+    "ascendex": {
+      "exchange_id": "ascendex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:19:19.588100+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: ascendex GET https://ascendex.com/api/pro/v1/assets",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:19:58.467663+00:00",
+          "duration_ms": 38875.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "ascendex.com"
+      ]
+    },
+    "bitopro": {
+      "exchange_id": "bitopro",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:10.785044+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 35 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:13.151904+00:00",
+          "duration_ms": 2375.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:15.384422+00:00",
+          "duration_ms": 2234.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 35,
+      "egress_hostnames": [
+        "api.bitopro.com"
+      ]
+    },
+    "bitmart": {
+      "exchange_id": "bitmart",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:19:27.502684+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: bitmart GET https://api-cloud.bitmart.com/spot/v1/currencies",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:19:34.135933+00:00",
+          "duration_ms": 6640.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": []
+    },
+    "bitfinex": {
+      "exchange_id": "bitfinex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:03:49.272646+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 288 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:04.852665+00:00",
+          "duration_ms": 15594.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'VENUE_UNAVAILABLE')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:23.333453+00:00",
+          "duration_ms": 18469.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV failed: VENUE_UNAVAILABLE \u2014 ExchangeNotAvailable"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 288,
+      "egress_hostnames": [
+        "api-pub.bitfinex.com",
+        "api.bitfinex.com"
+      ]
+    },
+    "bitstamp": {
+      "exchange_id": "bitstamp",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:18.400075+00:00",
+          "duration_ms": 47.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 251 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:21.453478+00:00",
+          "duration_ms": 3047.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'VENUE_UNAVAILABLE')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:24.783091+00:00",
+          "duration_ms": 3328.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV failed: VENUE_UNAVAILABLE \u2014 ExchangeNotAvailable"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 251,
+      "egress_hostnames": [
+        "www.bitstamp.net"
+      ]
+    },
+    "bitso": {
+      "exchange_id": "bitso",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:15.401070+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 54 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:17.317621+00:00",
+          "duration_ms": 1906.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:27.632738+00:00",
+          "duration_ms": 10313.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 54,
+      "egress_hostnames": [
+        "bitso.com"
+      ]
+    },
+    "bitvavo": {
+      "exchange_id": "bitvavo",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:24.799510+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 438 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:27.533145+00:00",
+          "duration_ms": 2735.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDC",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:30.140899+00:00",
+          "duration_ms": 2609.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDC",
+      "market_count": 438,
+      "egress_hostnames": [
+        "api.bitvavo.com"
+      ]
+    },
+    "bl3p": {
+      "exchange_id": "bl3p",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:27.649777+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 1 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:27.649777+00:00",
+          "duration_ms": 0.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/EUR",
+          "detail": "passed=[] unsupported=['public_ohlcv'] failed=[('public_ticker', 'VENUE_UNAVAILABLE'), ('public_order_book', 'VENUE_UNAVAILABLE')]",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:04:31.815147+00:00",
+          "duration_ms": 4156.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": false,
+        "public_order_book": false,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchTicker failed: VENUE_UNAVAILABLE \u2014 ExchangeNotAvailable",
+        "fetchOrderBook failed: VENUE_UNAVAILABLE \u2014 ExchangeNotAvailable",
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/EUR",
+      "market_count": 1,
+      "egress_hostnames": [
+        "api.bl3p.eu"
+      ]
+    },
+    "bitteam": {
+      "exchange_id": "bitteam",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:23.348593+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 41 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:29.165629+00:00",
+          "duration_ms": 5828.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'VENUE_UNAVAILABLE')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:33.314610+00:00",
+          "duration_ms": 4141.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV failed: VENUE_UNAVAILABLE \u2014 ExchangeNotAvailable"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 41,
+      "egress_hostnames": [
+        "bit.team",
+        "history.bit.team"
+      ]
+    },
+    "blockchaincom": {
+      "exchange_id": "blockchaincom",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:30.148958+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 194 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:33.314610+00:00",
+          "duration_ms": 3172.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:35.898108+00:00",
+          "duration_ms": 2578.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 194,
+      "egress_hostnames": [
+        "api.blockchain.com"
+      ]
+    },
+    "blofin": {
+      "exchange_id": "blofin",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:31.831962+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 520 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:35.582019+00:00",
+          "duration_ms": 3750.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT:USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:37.866452+00:00",
+          "duration_ms": 2281.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT:USDT",
+      "market_count": 520,
+      "egress_hostnames": [
+        "openapi.blofin.com"
+      ]
+    },
+    "bitmex": {
+      "exchange_id": "bitmex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:19:34.168929+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: bitmex GET https://www.bitmex.com/api/v1/wallet/assets",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:20:04.813312+00:00",
+          "duration_ms": 30641.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "www.bitmex.com"
+      ]
+    },
+    "btcbox": {
+      "exchange_id": "btcbox",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:35.915442+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 7 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:39.599012+00:00",
+          "duration_ms": 3672.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/JPY",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:42.030750+00:00",
+          "duration_ms": 2438.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/JPY",
+      "market_count": 7,
+      "egress_hostnames": [
+        "www.btcbox.co.jp"
+      ]
+    },
+    "btcmarkets": {
+      "exchange_id": "btcmarkets",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:37.883927+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 51 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:40.731080+00:00",
+          "duration_ms": 2844.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:47.628012+00:00",
+          "duration_ms": 6891.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 51,
+      "egress_hostnames": [
+        "api.btcmarkets.net"
+      ]
+    },
+    "btcalpha": {
+      "exchange_id": "btcalpha",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:04.829932+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: btcalpha GET https://btc-alpha.com/api/v1/pairs/ 404 Not Found Not Found",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:20:14.195553+00:00",
+          "duration_ms": 9359.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "btc-alpha.com"
+      ]
+    },
+    "bitrue": {
+      "exchange_id": "bitrue",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:19:58.493883+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: bitrue GET https://www.bitrue.com/api/v1/exchangeInfo",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:20:28.176729+00:00",
+          "duration_ms": 29671.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "fapi.bitrue.com",
+        "www.bitrue.com"
+      ]
+    },
+    "bybit": {
+      "exchange_id": "bybit",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:43.439154+00:00",
+          "duration_ms": 47.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 2815 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:47.511444+00:00",
+          "duration_ms": 4078.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:52.097138+00:00",
+          "duration_ms": 4578.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 2815,
+      "egress_hostnames": []
+    },
+    "btcturk": {
+      "exchange_id": "btcturk",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:42.030750+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 383 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:45.686846+00:00",
+          "duration_ms": 3656.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'VENUE_ERROR')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:53.729761+00:00",
+          "duration_ms": 8047.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV failed: VENUE_ERROR \u2014 ExchangeError"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 383,
+      "egress_hostnames": [
+        "api.btcturk.com",
+        "graph-api.btcturk.com"
+      ]
+    },
+    "coinbaseexchange": {
+      "exchange_id": "coinbaseexchange",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:50.047022+00:00",
+          "duration_ms": 46.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 842 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:52.097138+00:00",
+          "duration_ms": 2047.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:55.336973+00:00",
+          "duration_ms": 3250.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 842,
+      "egress_hostnames": []
+    },
+    "coinbaseinternational": {
+      "exchange_id": "coinbaseinternational",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:52.169186+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 310 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:57.544280+00:00",
+          "duration_ms": 5375.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDC",
+          "detail": "passed=['public_ticker'] unsupported=['public_order_book'] failed=[('public_ohlcv', 'VENUE_ERROR')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:57.794685+00:00",
+          "duration_ms": 250.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": false,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOrderBook not offered by this venue",
+        "fetchOHLCV failed: VENUE_ERROR \u2014 ArgumentsRequired"
+      ],
+      "probe_symbol": "BTC/USDC",
+      "market_count": 310,
+      "egress_hostnames": [
+        "api.international.coinbase.com"
+      ]
+    },
+    "coincheck": {
+      "exchange_id": "coincheck",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:53.760288+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 5 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:53.760288+00:00",
+          "duration_ms": 0.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/JPY",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:59.527445+00:00",
+          "duration_ms": 5766.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/JPY",
+      "market_count": 5,
+      "egress_hostnames": [
+        "coincheck.com"
+      ]
+    },
+    "coinex": {
+      "exchange_id": "coinex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:55.361603+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 1069 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:02.574638+00:00",
+          "duration_ms": 7219.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_order_book'] unsupported=[] failed=[('public_ticker', 'VENUE_ERROR'), ('public_ohlcv', 'VENUE_ERROR')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:04.518564+00:00",
+          "duration_ms": 1937.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": false,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchTicker failed: VENUE_ERROR \u2014 ExchangeError"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 1069,
+      "egress_hostnames": [
+        "api.coinex.com"
+      ]
+    },
+    "coinbase": {
+      "exchange_id": "coinbase",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:04:47.696058+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 1156 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:03.327717+00:00",
+          "duration_ms": 15641.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:05.843158+00:00",
+          "duration_ms": 2515.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 1156,
+      "egress_hostnames": [
+        "api.coinbase.com"
+      ]
+    },
+    "coinlist": {
+      "exchange_id": "coinlist",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:28.209895+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: coinlist GET https://trade-api.coinlist.co/v1/assets",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:20:36.476352+00:00",
+          "duration_ms": 8265.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "trade-api.coinlist.co"
+      ]
+    },
+    "coinmetro": {
+      "exchange_id": "coinmetro",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:42.183563+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x1",
+          "detail": "TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'",
+          "failure_class": "LIBRARY_DEFECT",
+          "checked_at": "2026-10-10T01:20:45.337633+00:00",
+          "duration_ms": 3156.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api.coinmetro.com"
+      ]
+    },
+    "coinmate": {
+      "exchange_id": "coinmate",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:36.502352+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: coinmate GET https://coinmate.io/api/tradingPairs 403 Forbidden <!DOCTYPE html><html lang=\"en-US\"><head><title>Just a moment...</title><meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\"><meta name=\"robots\" content=\"noindex,nofollow\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta htt",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:20:42.160556+00:00",
+          "duration_ms": 5656.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "coinmate.io"
+      ]
+    },
+    "coinsph": {
+      "exchange_id": "coinsph",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:05.933087+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 184 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:09.875981+00:00",
+          "duration_ms": 3938.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:14.125362+00:00",
+          "duration_ms": 4250.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 184,
+      "egress_hostnames": [
+        "api.pro.coins.ph"
+      ]
+    },
+    "coinspot": {
+      "exchange_id": "coinspot",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:09.955025+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 14 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:09.955025+00:00",
+          "duration_ms": 0.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/AUD",
+          "detail": "passed=['public_ticker'] unsupported=['public_ohlcv'] failed=[('public_order_book', 'AUTH_REQUIRED')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:15.441793+00:00",
+          "duration_ms": 5484.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": false,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOrderBook failed: AUTH_REQUIRED \u2014 AuthenticationError",
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/AUD",
+      "market_count": 14,
+      "egress_hostnames": [
+        "www.coinspot.com.au"
+      ]
+    },
+    "coinone": {
+      "exchange_id": "coinone",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:05.931040+00:00",
+          "duration_ms": 31.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 361 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:13.258763+00:00",
+          "duration_ms": 7313.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/KRW",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:16.574716+00:00",
+          "duration_ms": 3297.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/KRW",
+      "market_count": 361,
+      "egress_hostnames": [
+        "api.coinone.co.kr"
+      ]
+    },
+    "cryptocom": {
+      "exchange_id": "cryptocom",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:11.442351+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 988 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:14.108294+00:00",
+          "duration_ms": 2672.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:17.907987+00:00",
+          "duration_ms": 3797.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 988,
+      "egress_hostnames": [
+        "api.crypto.com",
+        "deriv-api.crypto.com"
+      ]
+    },
+    "deribit": {
+      "exchange_id": "deribit",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:16.610099+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 6198 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:24.056605+00:00",
+          "duration_ms": 7453.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:25.440274+00:00",
+          "duration_ms": 1359.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 6198,
+      "egress_hostnames": [
+        "www.deribit.com"
+      ]
+    },
+    "currencycom": {
+      "exchange_id": "currencycom",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:45.356851+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: currencycom GET https://api-adapter.backend.currency.com/api/v2/exchangeInfo",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:20:52.603865+00:00",
+          "duration_ms": 7250.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": []
+    },
+    "delta": {
+      "exchange_id": "delta",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:15.475054+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 315 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:24.821901+00:00",
+          "duration_ms": 9360.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on SOL/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'VENUE_ERROR')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:28.040213+00:00",
+          "duration_ms": 3218.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [],
+      "probe_symbol": "SOL/USDT",
+      "market_count": 315,
+      "egress_hostnames": [
+        "api.delta.exchange"
+      ]
+    },
+    "digifinex": {
+      "exchange_id": "digifinex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:17.939697+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 300 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:24.973606+00:00",
+          "duration_ms": 7031.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on ETH/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:30.381594+00:00",
+          "duration_ms": 5391.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "ETH/USDT",
+      "market_count": 300,
+      "egress_hostnames": [
+        "openapi.digifinex.com"
+      ]
+    },
+    "fmfwio": {
+      "exchange_id": "fmfwio",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:26.756298+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 642 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:30.142845+00:00",
+          "duration_ms": 3390.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:32.738735+00:00",
+          "duration_ms": 2594.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 642,
+      "egress_hostnames": [
+        "api.fmfw.io"
+      ]
+    },
+    "exmo": {
+      "exchange_id": "exmo",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:25.506276+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 24 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:31.488710+00:00",
+          "duration_ms": 5984.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDC",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'VENUE_ERROR')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:34.721868+00:00",
+          "duration_ms": 3234.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDC",
+      "market_count": 24,
+      "egress_hostnames": [
+        "api.exmo.com",
+        "exmo.me"
+      ]
+    },
+    "gemini": {
+      "exchange_id": "gemini",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:47.506662+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x1",
+          "detail": "TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'",
+          "failure_class": "LIBRARY_DEFECT",
+          "checked_at": "2026-10-10T01:20:54.088571+00:00",
+          "duration_ms": 6593.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api.gemini.com",
+        "docs.gemini.com",
+        "exchange.gemini.com"
+      ]
+    },
+    "cex": {
+      "exchange_id": "cex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:14.240819+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: cex GET https://cex.io/api/currency_profile",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:20:47.423379+00:00",
+          "duration_ms": 33187.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "cex.io"
+      ]
+    },
+    "hitbtc": {
+      "exchange_id": "hitbtc",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:34.738132+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 1220 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:43.340725+00:00",
+          "duration_ms": 8609.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:44.708399+00:00",
+          "duration_ms": 1360.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 1220,
+      "egress_hostnames": [
+        "api.hitbtc.com"
+      ]
+    },
+    "hashkey": {
+      "exchange_id": "hashkey",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:32.772300+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 33 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:41.740999+00:00",
+          "duration_ms": 8969.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:46.219927+00:00",
+          "duration_ms": 4484.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 33,
+      "egress_hostnames": [
+        "api-glb.hashkey.com"
+      ]
+    },
+    "hollaex": {
+      "exchange_id": "hollaex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:37.697221+00:00",
+          "duration_ms": 32.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 41 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:44.068897+00:00",
+          "duration_ms": 6359.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:48.510947+00:00",
+          "duration_ms": 4453.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 41,
+      "egress_hostnames": [
+        "api.hollaex.com"
+      ]
+    },
+    "htx": {
+      "exchange_id": "htx",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:39.882737+00:00",
+          "duration_ms": 47.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 2571 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:51.611635+00:00",
+          "duration_ms": 11734.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:52.564134+00:00",
+          "duration_ms": 953.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 2571,
+      "egress_hostnames": []
+    },
+    "huobijp": {
+      "exchange_id": "huobijp",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:44.741650+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 95 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:51.910681+00:00",
+          "duration_ms": 7172.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/JPY",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:54.060726+00:00",
+          "duration_ms": 2156.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/JPY",
+      "market_count": 95,
+      "egress_hostnames": []
+    },
+    "hyperliquid": {
+      "exchange_id": "hyperliquid",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:52.621846+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x1",
+          "detail": "TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'",
+          "failure_class": "LIBRARY_DEFECT",
+          "checked_at": "2026-10-10T01:20:56.939208+00:00",
+          "duration_ms": 4312.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": []
+    },
+    "gate": {
+      "exchange_id": "gate",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:28.072722+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 6789 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:00.970331+00:00",
+          "duration_ms": 32890.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:02.050872+00:00",
+          "duration_ms": 1062.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 6789,
+      "egress_hostnames": [
+        "api.gateio.ws"
+      ]
+    },
+    "idex": {
+      "exchange_id": "idex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:54.155134+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: idex GET https://api-matic.idex.io/v1/assets",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:21:01.761054+00:00",
+          "duration_ms": 7609.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api-matic.idex.io"
+      ]
+    },
+    "indodax": {
+      "exchange_id": "indodax",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:54.266263+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 476 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:02.517255+00:00",
+          "duration_ms": 8250.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:06.899651+00:00",
+          "duration_ms": 4391.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 476,
+      "egress_hostnames": [
+        "indodax.com"
+      ]
+    },
+    "kraken": {
+      "exchange_id": "kraken",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:55.702101+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 1460 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:04.700442+00:00",
+          "duration_ms": 9000.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:11.967100+00:00",
+          "duration_ms": 7265.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 1460,
+      "egress_hostnames": [
+        "api.kraken.com",
+        "kraken.zendesk.com"
+      ]
+    },
+    "krakenfutures": {
+      "exchange_id": "krakenfutures",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:02.219272+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 226 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:06.883092+00:00",
+          "duration_ms": 4657.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USD:BTC",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:13.236658+00:00",
+          "duration_ms": 6359.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USD:BTC",
+      "market_count": 226,
+      "egress_hostnames": [
+        "futures.kraken.com"
+      ]
+    },
+    "independentreserve": {
+      "exchange_id": "independentreserve",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:05:52.647638+00:00",
+          "duration_ms": 31.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 180 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:06.351821+00:00",
+          "duration_ms": 13703.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USD",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:13.264991+00:00",
+          "duration_ms": 6922.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USD",
+      "market_count": 180,
+      "egress_hostnames": [
+        "api.independentreserve.com"
+      ]
+    },
+    "kucoin": {
+      "exchange_id": "kucoin",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:04.733036+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 969 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:11.015515+00:00",
+          "duration_ms": 6281.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:16.264928+00:00",
+          "duration_ms": 5250.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 969,
+      "egress_hostnames": [
+        "api-broker.kucoin.com",
+        "api-futures.kucoin.com",
+        "api.kucoin.com",
+        "kucoin.com"
+      ]
+    },
+    "kucoinfutures": {
+      "exchange_id": "kucoinfutures",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:07.049318+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 692 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:10.049046+00:00",
+          "duration_ms": 3000.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT:USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:16.315457+00:00",
+          "duration_ms": 6266.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT:USDT",
+      "market_count": 692,
+      "egress_hostnames": [
+        "api-broker.kucoin.com",
+        "api-futures.kucoin.com",
+        "api.kucoin.com",
+        "futures.kucoin.com",
+        "openapi-v2.kucoin.com"
+      ]
+    },
+    "kuna": {
+      "exchange_id": "kuna",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:20:56.955695+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: kuna GET https://api.kuna.io/v4/public/currencies",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:21:16.545487+00:00",
+          "duration_ms": 19593.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api.kuna.io",
+        "api.xreserve.fund",
+        "kuna.io"
+      ]
+    },
+    "lbank": {
+      "exchange_id": "lbank",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:13.302383+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 2210 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:20.838084+00:00",
+          "duration_ms": 7547.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:22.370291+00:00",
+          "duration_ms": 1532.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 2210,
+      "egress_hostnames": [
+        "api.lbank.info",
+        "lbkperp.lbank.com"
+      ]
+    },
+    "luno": {
+      "exchange_id": "luno",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:16.312532+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 144 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:25.380106+00:00",
+          "duration_ms": 9063.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'AUTH_REQUIRED')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:26.779400+00:00",
+          "duration_ms": 1406.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV failed: AUTH_REQUIRED \u2014 AuthenticationError"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 144,
+      "egress_hostnames": [
+        "api.luno.com"
+      ]
+    },
+    "mercado": {
+      "exchange_id": "mercado",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:08.670198+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: mercado GET https://www.mercadobitcoin.net/api/coins 403 Forbidden <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang=\"en-US\"> <!--<![endif]",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:21:13.935522+00:00",
+          "duration_ms": 5266.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api.mercadobitcoin.net",
+        "www.mercadobitcoin.com.br",
+        "www.mercadobitcoin.net"
+      ]
+    },
+    "ndax": {
+      "exchange_id": "ndax",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:26.796706+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 87 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:31.262357+00:00",
+          "duration_ms": 4469.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'VENUE_ERROR')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:34.195480+00:00",
+          "duration_ms": 2922.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 87,
+      "egress_hostnames": [
+        "api.ndax.io:8443"
+      ]
+    },
+    "latoken": {
+      "exchange_id": "latoken",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:13.298867+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 1245 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:31.229159+00:00",
+          "duration_ms": 17938.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:35.511511+00:00",
+          "duration_ms": 4281.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 1245,
+      "egress_hostnames": [
+        "api.latoken.com"
+      ]
+    },
+    "mexc": {
+      "exchange_id": "mexc",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:23.862326+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 3093 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:30.645827+00:00",
+          "duration_ms": 6781.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:37.675703+00:00",
+          "duration_ms": 7031.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 3093,
+      "egress_hostnames": [
+        "api.mexc.com",
+        "contract.mexc.com",
+        "www.mexc.com"
+      ]
+    },
+    "okx": {
+      "exchange_id": "okx",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:26.617530+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x1",
+          "detail": "TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'",
+          "failure_class": "LIBRARY_DEFECT",
+          "checked_at": "2026-10-10T01:21:28.436753+00:00",
+          "duration_ms": 1828.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": []
+    },
+    "lykke": {
+      "exchange_id": "lykke",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:01.791727+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: lykke GET https://hft-apiv2.lykke.com/api/assets",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:21:08.637461+00:00",
+          "duration_ms": 6844.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "hft-apiv2.lykke.com"
+      ]
+    },
+    "novadax": {
+      "exchange_id": "novadax",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:13.952078+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: novadax GET https://api.novadax.com/v1/common/symbols",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:21:20.933634+00:00",
+          "duration_ms": 6984.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api.novadax.com"
+      ]
+    },
+    "onetrading": {
+      "exchange_id": "onetrading",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:29.116208+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x1",
+          "detail": "returned no markets",
+          "failure_class": "UNKNOWN",
+          "checked_at": "2026-10-10T01:21:30.981016+00:00",
+          "duration_ms": 1875.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api.onetrading.com"
+      ]
+    },
+    "oceanex": {
+      "exchange_id": "oceanex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:16.585144+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: oceanex GET https://api.oceanex.pro/v1/markets?show_details=true",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:21:26.597345+00:00",
+          "duration_ms": 10015.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api.oceanex.pro"
+      ]
+    },
+    "oxfun": {
+      "exchange_id": "oxfun",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:30.982713+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: oxfun GET https://api.ox.fun/v3/assets 530 <none> <!doctype html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!-->\n<html class=\"no-js\" lang=\"en-US\">\n    <!--<![endif]-->\n    <head",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:21:35.315133+00:00",
+          "duration_ms": 4328.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "api.ox.fun"
+      ]
+    },
+    "p2b": {
+      "exchange_id": "p2b",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:42.494177+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 173 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:48.084244+00:00",
+          "duration_ms": 5578.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:59.491180+00:00",
+          "duration_ms": 11406.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 173,
+      "egress_hostnames": [
+        "api.p2pb2b.com"
+      ]
+    },
+    "okcoin": {
+      "exchange_id": "okcoin",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:20.954446+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: okcoin GET https://www.okcoin.com/api/v5/public/instruments?instType=SPOT 502 Bad Gateway <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:21:38.148337+00:00",
+          "duration_ms": 17187.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": []
+    },
+    "paymium": {
+      "exchange_id": "paymium",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:48.187869+00:00",
+          "duration_ms": 31.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 1 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:48.188874+00:00",
+          "duration_ms": 0.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/EUR",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:01.993321+00:00",
+          "duration_ms": 13813.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/EUR",
+      "market_count": 1,
+      "egress_hostnames": [
+        "paymium.com"
+      ]
+    },
+    "paradex": {
+      "exchange_id": "paradex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:46.406275+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 67 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:58.207988+00:00",
+          "duration_ms": 11797.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USD:USDC",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=[] failed=[('public_ohlcv', 'VENUE_ERROR')]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:03.290798+00:00",
+          "duration_ms": 5093.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USD:USDC",
+      "market_count": 67,
+      "egress_hostnames": []
+    },
+    "poloniex": {
+      "exchange_id": "poloniex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:59.507935+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 863 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:06.540405+00:00",
+          "duration_ms": 7046.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:08.856284+00:00",
+          "duration_ms": 2313.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 863,
+      "egress_hostnames": [
+        "api.poloniex.com"
+      ]
+    },
+    "poloniexfutures": {
+      "exchange_id": "poloniexfutures",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:35.348513+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: poloniexfutures GET https://futures-api.poloniex.com/api/v1/contracts/active",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:21:43.913955+00:00",
+          "duration_ms": 8563.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "futures-api.poloniex.com"
+      ]
+    },
+    "probit": {
+      "exchange_id": "probit",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:38.181499+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: probit GET https://api.probit.com/api/exchange/v1/currency_with_platform 403 Forbidden <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang=\"e",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:21:42.764234+00:00",
+          "duration_ms": 4578.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "accounts.probit.com",
+        "api.probit.com"
+      ]
+    },
+    "timex": {
+      "exchange_id": "timex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:42.805242+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x1",
+          "detail": "TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'",
+          "failure_class": "LIBRARY_DEFECT",
+          "checked_at": "2026-10-10T01:21:50.113194+00:00",
+          "duration_ms": 7313.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "plasma-relay-backend.timex.io"
+      ]
+    },
+    "phemex": {
+      "exchange_id": "phemex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:06:58.258258+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 2068 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:07.722794+00:00",
+          "duration_ms": 9468.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:14.688822+00:00",
+          "duration_ms": 6969.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 2068,
+      "egress_hostnames": []
+    },
+    "tradeogre": {
+      "exchange_id": "tradeogre",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:43.947168+00:00",
+          "duration_ms": 32.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: tradeogre GET https://tradeogre.com/api/v1/markets 403 Forbidden <!DOCTYPE html><html lang=\"en-US\"><head><title>Just a moment...</title><meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\"><meta name=\"robots\" content=\"noindex,nofollow\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta ht",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:21:48.311541+00:00",
+          "duration_ms": 4359.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "tradeogre.com"
+      ]
+    },
+    "upbit": {
+      "exchange_id": "upbit",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:10.239839+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 868 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:15.122549+00:00",
+          "duration_ms": 4891.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:19.937912+00:00",
+          "duration_ms": 4812.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 868,
+      "egress_hostnames": []
+    },
+    "vertex": {
+      "exchange_id": "vertex",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:48.348460+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: vertex GET https://gateway.prod.vertexprotocol.com/v2/assets",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:21:55.488764+00:00",
+          "duration_ms": 7141.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": []
+    },
+    "tokocrypto": {
+      "exchange_id": "tokocrypto",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:08.906332+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 852 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:16.804895+00:00",
+          "duration_ms": 7890.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_order_book', 'public_ohlcv'] unsupported=['public_ticker'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:23.928607+00:00",
+          "duration_ms": 7125.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": false,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [
+        "fetchTicker not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 852,
+      "egress_hostnames": [
+        "api.binance.com",
+        "www.tokocrypto.com"
+      ]
+    },
+    "wazirx": {
+      "exchange_id": "wazirx",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:18.637813+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 407 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:22.215018+00:00",
+          "duration_ms": 3578.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:25.387127+00:00",
+          "duration_ms": 3172.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 407,
+      "egress_hostnames": [
+        "api.wazirx.com"
+      ]
+    },
+    "woo": {
+      "exchange_id": "woo",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:22.537673+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 309 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:26.803347+00:00",
+          "duration_ms": 4265.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_order_book', 'public_ohlcv'] unsupported=['public_ticker'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:27.381900+00:00",
+          "duration_ms": 579.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": false,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [
+        "fetchTicker not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 309,
+      "egress_hostnames": [
+        "api-pub.woo.org"
+      ]
+    },
+    "woofipro": {
+      "exchange_id": "woofipro",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:23.953751+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 136 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:27.369611+00:00",
+          "duration_ms": 3422.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDC:USDC",
+          "detail": "passed=[] unsupported=['public_ticker'] failed=[('public_order_book', 'AUTH_REQUIRED'), ('public_ohlcv', 'AUTH_REQUIRED')]",
+          "failure_class": "AUTH_REQUIRED",
+          "checked_at": "2026-10-10T01:07:28.636885+00:00",
+          "duration_ms": 1265.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": false,
+        "public_order_book": false,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchTicker not offered by this venue",
+        "fetchOrderBook failed: AUTH_REQUIRED \u2014 AuthenticationError",
+        "fetchOHLCV failed: AUTH_REQUIRED \u2014 AuthenticationError"
+      ],
+      "probe_symbol": "BTC/USDC:USDC",
+      "market_count": 136,
+      "egress_hostnames": [
+        "api-evm.orderly.org"
+      ]
+    },
+    "wavesexchange": {
+      "exchange_id": "wavesexchange",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:14.738759+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 33 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:17.638255+00:00",
+          "duration_ms": 2906.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on ROME/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:30.619355+00:00",
+          "duration_ms": 12985.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "ROME/USDT",
+      "market_count": 33,
+      "egress_hostnames": [
+        "api.wavesplatform.com",
+        "api.wx.network",
+        "matcher.wx.network",
+        "nodes.wx.network",
+        "wx.network"
+      ]
+    },
+    "zaif": {
+      "exchange_id": "zaif",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:28.653276+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 56 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:37.485036+00:00",
+          "duration_ms": 8828.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/JPY",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:38.118533+00:00",
+          "duration_ms": 641.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/JPY",
+      "market_count": 56,
+      "egress_hostnames": [
+        "api.zaif.jp"
+      ]
+    },
+    "yobit": {
+      "exchange_id": "yobit",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:27.403735+00:00",
+          "duration_ms": 16.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 9026 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:37.420387+00:00",
+          "duration_ms": 10015.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book'] unsupported=['public_ohlcv'] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:42.034591+00:00",
+          "duration_ms": 4594.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": false
+      },
+      "known_limitations": [
+        "fetchOHLCV not offered by this venue"
+      ],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 9026,
+      "egress_hostnames": [
+        "yobit.net"
+      ]
+    },
+    "xt": {
+      "exchange_id": "xt",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:25.407367+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "load_markets() x1",
+          "detail": "venue answered with 2587 markets",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:41.517687+00:00",
+          "duration_ms": 16109.0
+        },
+        "MARKET_DATA_VERIFIED": {
+          "state": "MARKET_DATA_VERIFIED",
+          "attained": true,
+          "evidence_class": "LIVE_PUBLIC",
+          "method": "fetch_ticker/fetch_order_book/fetch_ohlcv on BTC/USDT",
+          "detail": "passed=['public_ticker', 'public_order_book', 'public_ohlcv'] unsupported=[] failed=[]",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:07:42.117887+00:00",
+          "duration_ms": 594.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": true,
+        "public_ticker": true,
+        "public_order_book": true,
+        "public_ohlcv": true
+      },
+      "known_limitations": [],
+      "probe_symbol": "BTC/USDT",
+      "market_count": 2587,
+      "egress_hostnames": [
+        "api.xt.com",
+        "dapi.xt.com",
+        "fapi.xt.com",
+        "sapi.xt.com"
+      ]
+    },
+    "whitebit": {
+      "exchange_id": "whitebit",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:50.129403+00:00",
+          "duration_ms": 0.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: whitebit GET https://whitebit.com/api/v4/public/assets",
+          "failure_class": "EGRESS_FILTERED",
+          "checked_at": "2026-10-10T01:22:34.605936+00:00",
+          "duration_ms": 44484.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": [
+        "whitebit.com"
+      ]
+    },
+    "zonda": {
+      "exchange_id": "zonda",
+      "evidence": {
+        "CLIENT_INITIALIZED": {
+          "state": "CLIENT_INITIALIZED",
+          "attained": true,
+          "evidence_class": "MEASURED",
+          "method": "cls({}) with empty credentials",
+          "detail": "constructor returned; no network call yet",
+          "failure_class": "NONE",
+          "checked_at": "2026-10-10T01:21:55.517654+00:00",
+          "duration_ms": 15.0
+        },
+        "PUBLIC_CONNECTIVITY_VERIFIED": {
+          "state": "PUBLIC_CONNECTIVITY_VERIFIED",
+          "attained": false,
+          "evidence_class": "NONE",
+          "method": "load_markets() x2",
+          "detail": "ExchangeNotAvailable: zonda GET https://api.zondacrypto.exchange/rest/trading/ticker 522 <none> <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang=\"en-US\"> <!--<!",
+          "failure_class": "VENUE_UNAVAILABLE",
+          "checked_at": "2026-10-10T01:22:39.811239+00:00",
+          "duration_ms": 44297.0
+        }
+      },
+      "measured_capabilities": {
+        "public_markets": false
+      },
+      "known_limitations": [],
+      "probe_symbol": null,
+      "market_count": null,
+      "egress_hostnames": []
+    }
+  }
+}

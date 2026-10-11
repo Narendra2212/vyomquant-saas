@@ -1,0 +1,46 @@
+--- the route under test + its rate limit ---
+  strategy_operations.py:1340: @limiter.limit("50/minute")
+  strategy_operations.py:1572: @limiter.limit("10/minute")
+  strategy_operations.py:1852: @limiter.limit("200/minute")
+  strategy_operations.py:1886: @limiter.limit("200/minute")
+  strategy_operations.py:1916: @limiter.limit("200/minute")
+  strategy_operations.py:1948: @limiter.limit("200/minute")
+  strategy_operations.py:1981: @limiter.limit("100/minute")
+  strategy_operations.py:2038: @limiter.limit("50/minute")
+  strategy_operations.py:2083: @limiter.limit("100/minute")
+  strategy_operations.py:2965: @limiter.limit("50/minute")
+  strategy_operations.py:2990: @limiter.limit("50/minute")
+  strategies.py:2855: @limiter.limit("30/minute")
+--- every limiter.limit value in use (frequency) ---
+  32x  200/minute
+  20x  60/minute
+  17x  50/minute
+  16x  100/minute
+  15x  120/minute
+  14x  10/minute
+  7x  30/minute
+  7x  20/minute
+  6x  60/60second
+  5x  5/minute
+  4x  120/60second
+  2x  30/60second
+  1x  10/60second
+  1x  20/60second
+--- how test_task_6_1 builds its client ---
+  261: from backend_app.core.rate_limit import limiter
+  263: limiter.reset()
+  265: limiter.reset()
+  331: from fastapi.testclient import TestClient
+  335: app.dependency_overrides[get_current_user] = lambda: OWNER
+  336: app.dependency_overrides[get_request_supabase] = lambda: None
+  338: yield TestClient(app, raise_server_exceptions=False)
+  340: app.dependency_overrides.clear()
+  345: from fastapi.testclient import TestClient
+  349: app.dependency_overrides[get_current_user] = lambda: INTRUDER
+  350: app.dependency_overrides[get_request_supabase] = lambda: None
+  352: yield TestClient(app, raise_server_exceptions=False)
+  354: app.dependency_overrides.clear()
+  358: return client.post(path, json={**BODY, **(body or {})})
+  599: response = as_owner.post(
+  662: async def _client(user):
+NONCE_END=P6F2

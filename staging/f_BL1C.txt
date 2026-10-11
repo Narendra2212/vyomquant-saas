@@ -1,0 +1,22 @@
+C:\aerora_quant_backend_updated_final1\.venv\Lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_id" has conflict with protected namespace "model_".
+System.Management.Automation.RemoteException
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+FATAL: Supabase connection failed: Invalid API key
+DEV_MODE: APIKeyVault initialization failed, using mock: Vault database connection failed.
+[AlertEngine] No providers configured! Alerts will be logged only.
+WARNING:RateLimit:[RateLimit] Using PER-PROCESS in-memory rate limiting: explicitly local environment 'testing'; no REDIS_URL. Limits are not shared between replicas.
+INFO:MLModels:ML safety infrastructure loaded successfully
+INFO:BackpressureV2:[BackpressureV2] Initialized
+INFO:Algo22: Production execution router ENABLED (verify safety before production)
+RE-RECORDED BASELINE DELTAS
+==========================================================================
+  live_order_path: recorded contract.parameters.risk_approved = {"annotation": "Optional", "has_default": true}
+  live_order_path: recorded contract.parameters.risk_reason = {"annotation": "str", "has_default": true}
+  live_order_path: wrote _baseline_note_parameters_risk_verdict
+  surface_exchange_connection: delete_connection.user.depends_on get_current_user -> require_aal2
+  surface_exchange_connection: store_keys.user.depends_on get_current_user -> require_aal2
+  surface_exchange_connection: wrote _baseline_note_auth01_require_aal2_on_credential_endpoints
+==========================================================================
+Both files rewritten. The differ must now be re-run: any OTHER difference is still a failure, which is the point of patching surgically.
+NONCE_END=BL1C

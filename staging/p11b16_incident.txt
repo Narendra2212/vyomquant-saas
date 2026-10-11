@@ -1,0 +1,107 @@
+==============================================================================================
+OVERWRITTEN DESTINATION
+==============================================================================================
+  path   : staging\PHASE11B_A14_D5_CONSOLIDATION_REPORT.md
+  size   : 15539 bytes   (this session wrote 19367 bytes at the end of A14)
+  mtime  : 2026-10-10 19:08:14.588349
+  lines  : 258
+
+==============================================================================================
+CURRENT OCCUPANT -- first 40 lines
+==============================================================================================
+  # Phase 11B-A14 — D5′ Consolidation, Production-Path Quota Verification and Safe CI Repair
+  
+  **Outcome: the consolidated candidate is fully prepared and locally verified. It was NOT
+  committed, pushed, or run in CI, because this task grants no explicit authorization for remote
+  mutation** — Phase 1 directs me to "finish the analysis, prepare the proposed patch and stop
+  before remote mutation" in exactly that case.
+  
+  **The canonical PR remains UNDETERMINED and needs your decision.** This task recommends #6; the
+  owner of the webhook keyspace fix targets #7 (see
+  `staging/PHASE11B_A12_WEBHOOK_KEYSPACE_FIX.md`); #7 and #8 are tree-identical duplicates.
+  
+  QUOTA-01 OPEN. Live trading OFF / NOT CERTIFIED. No launch-readiness or gate-register edits.
+  
+  ---
+  
+  ## 1. Phase 0 — Before-state inventory (all re-verified, nothing trusted from history)
+  
+  | Item | Value | vs `PHASE11B_A13_D5_REPAIR_REPORT.md` |
+  |---|---|---|
+  | branch / HEAD | `main` / `074b772a` | unchanged |
+  | `refs/heads/main` = `origin/main` | `074b772a` | unchanged |
+  | D5′ branch local = remote | `d07014d3` | unchanged |
+  | staged entries | 22 | unchanged |
+  | **staged-content fingerprint** (`git ls-files -s`) | `CF474F1B83FD37173F0AD3F2B5417D07CE4B26DC66A5CF4D6697AE9ACB5687
+  
+  ### 1a. The three open D5′ PRs
+  
+  | PR | Branch | Head | Tree | State | Mergeable | Review | Latest `01-pr-check` run |
+  |---|---|---|---|---|---|---|---|
+  | #6 | `ci/d5-real-redis-quota-evidence` | `d07014d3` | `d28b6d1a…` | OPEN | MERGEABLE / **UNSTABLE** | none | `380474
+  | #7 | `ci/d5-prime-real-redis` | `49e70da2` | **`271f13c2…`** | OPEN | MERGEABLE / **UNSTABLE** | none | `38044138718
+  | #8 | `ci/d5-real-redis-switch` | `a624ce89` | **`271f13c2…`** | OPEN | MERGEABLE / **UNSTABLE** | none | `3804662504
+  
+  Tree-identity of #7 and #8 re-verified by `rev-parse ^{tree}`. **All three fail CI.**
+  
+  ### 1b. New evidence this phase — PR #7's run independently reproduces the diagnosis
+  
+  A13 only examined PR #6's run. I extracted PR #7's `Unit & Integration Tests` job
+  (`114190594445`, run `38044138718`). It has **no diagnostic job** and a *different* webhook
+  variant (416 lines, with the `skip`→`fail` strengthening, no keyspace probe), yet the per-test
+
+==============================================================================================
+AUTHORSHIP / TARGET SIGNALS IN THE CURRENT OCCUPANT
+==============================================================================================
+
+  names PR #7 as canonical/target    4 hit(s)
+      L9     owner of the webhook keyspace fix targets #7 (see
+      L62    | `PHASE11B_A12_WEBHOOK_KEYSPACE_FIX.md` | webhook workstream | Owns `tests/test_webhook_duplicate_d
+      L92    | **#7** | Target of the webhook fix's owner; carries the `skip`→`fail` strengthening | No diagnosti
+      L232   1. **Canonical PR.** #6 vs #7; close the #7/#8 duplicate. Needs the webhook owner's agreement
+
+  names PR #6 as canonical/target    3 hit(s)
+      L8     **The canonical PR remains UNDETERMINED and needs your decision.** This task recommends #6; the
+      L105   ### Proposed commit (parent `d07014d3`, if #6 is canonical)
+      L232   1. **Canonical PR.** #6 vs #7; close the #7/#8 duplicate. Needs the webhook owner's agreement
+
+  mentions my content digest         0 hit(s)
+
+  mentions A14's 39/23 split         0 hit(s)
+
+  mentions the A14 baseline run      0 hit(s)
+
+  mentions the webhook keyspace      4 hit(s)
+      L53    are the keyspace split — which #7's `skip`→`fail` change does not address. #8 is tree-identical
+      L207   | `test_the_lock_is_recorded_in_redis_under_the_documented_key` | **FAIL** (keyspace split) | **FAIL
+      L209   | `test_an_in_flight_delivery_blocks_a_concurrent_one` | **FAIL** (keyspace split) | **FAIL** |
+      L254   | Webhook idempotency against real Redis | 4 of 6 proven; 2 fail on the keyspace split; fix prepared
+
+  mentions production quota tests    0 hit(s)
+
+==============================================================================================
+WHAT SURVIVES OF THIS SESSION'S A14 WORK
+==============================================================================================
+  ABSENT    staging/p11b14_phase0.py                             
+  PRESENT   staging/p11b14_baseline.py                           2691 bytes
+  PRESENT   staging/p11b14_baseline.txt                          2812 bytes
+  PRESENT   staging/p11b14_index_delta.py                        1254 bytes
+  PRESENT   staging/p11b14_index_delta.txt                       2278 bytes
+  PRESENT   staging/p11b14_index_content_digest.py               1479 bytes
+  PRESENT   staging/p11b14_index_digest.txt                      499 bytes
+  PRESENT   staging/p11b14_files.py                              3546 bytes
+  PRESENT   staging/p11b14_files.txt                             2518 bytes
+  PRESENT   staging/p11b14_metered_delta.py                      3288 bytes
+  PRESENT   staging/p11b14_metered_delta.txt                     2168 bytes
+  PRESENT   staging/p11b14_blocking_lane.py                      2230 bytes
+  PRESENT   staging/p11b14_blocking_lane.txt                     1409 bytes
+  PRESENT   staging/p11b14_preexisting.py                        3190 bytes
+  PRESENT   staging/p11b14_preexisting.txt                       2626 bytes
+  PRESENT   staging/p11b14_local.txt                             21316 bytes
+  PRESENT   staging/p11b14_pr6_unit.log                          2613475 bytes
+
+  A15 report quotes the A14 conclusions verbatim and is intact:
+    baseline run id          NO
+    baseline tally           NO
+    content digest           NO
+    per-file baseline counts NO

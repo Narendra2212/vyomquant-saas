@@ -1,0 +1,3677 @@
+{
+ "generated": "2026-10-06T10:00:08+00:00",
+ "database": "postgresql://127.0.0.1:58287/postgres",
+ "canonical_type": "uuid",
+ "classification_legend": {
+  "A": "canonical customer identity -- convert to uuid, add FK to profiles(id)",
+  "B": "tenant identity -- convert to uuid, add FK (tenant is 1:1 with customer in this product)",
+  "C": "external provider identifier -- LEAVE ALONE, converting destroys the link to the provider",
+  "D": "arbitrary text or a reference to a non-customer table -- leave alone",
+  "E": "legacy identifier requiring data migration -- values are not UUID-shaped, so conversion is BLOCKED until they are reconciled",
+  "UNCLASSIFIED": "no rule placed it; excluded from conversion. Not a synonym for safe."
+ },
+ "summary": {
+  "columns_examined": 81,
+  "class_A": 72,
+  "class_B": 5,
+  "class_C": 0,
+  "class_D": 4,
+  "class_E": 0,
+  "unclassified": 0,
+  "needs_type_conversion": 12,
+  "needs_foreign_key": 38,
+  "conversion_blocked_by_data": 0,
+  "convertibility_unproven_empty_table": 12
+ },
+ "convertibility_caveat": "A column whose table is EMPTY reports zero non-convertible values, which is vacuously true and establishes nothing about any other database. 12 of the columns needing conversion are in that position here. The migration re-runs the same inventory against whatever database it is applied to and RAISES there, with a count and a sample, rather than trusting this result.",
+ "convertibility_unproven_empty_table": [
+  {
+   "table": "billing_invoices",
+   "column": "user_id"
+  },
+  {
+   "table": "exchange_connections",
+   "column": "user_id"
+  },
+  {
+   "table": "exchange_keys",
+   "column": "user_id"
+  },
+  {
+   "table": "invoices",
+   "column": "user_id"
+  },
+  {
+   "table": "notification_settings",
+   "column": "user_id"
+  },
+  {
+   "table": "payment_methods",
+   "column": "user_id"
+  },
+  {
+   "table": "referral_profiles",
+   "column": "user_id"
+  },
+  {
+   "table": "risk_settings",
+   "column": "user_id"
+  },
+  {
+   "table": "risk_settings_audit",
+   "column": "user_id"
+  },
+  {
+   "table": "security_logs",
+   "column": "user_id"
+  },
+  {
+   "table": "strategy_limits",
+   "column": "user_id"
+  },
+  {
+   "table": "subscriptions",
+   "column": "user_id"
+  }
+ ],
+ "conversion_blocked_by_data": [],
+ "columns": [
+  {
+   "schema": "public",
+   "table": "billing_invoices",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "billing_invoices_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "RESTRICT",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "financial or audit record that should SURVIVE customer deletion for audit and tax purposes. CASCADE would destroy it. The column is NOT NULL, so SET NULL is impossible; RESTRICT forces the deletion path to deal with these rows explicitly rather than silently discarding them."
+  },
+  {
+   "schema": "public",
+   "table": "copilot_sessions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "copilot_sessions_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(user_id = auth.uid())",
+     "with_check": "(user_id = auth.uid())"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "creator_analytics",
+   "column": "creator_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "creator_analytics_creator_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "creator_analytics_owner_access",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (creator_id)::text)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: creator_analytics_creator_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "dag_tasks",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "fk_dag_tasks_tenant_id",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "dag_tasks_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: fk_dag_tasks_tenant_id",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "deployment_permissions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "deployment_permissions_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "deploy_perm_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: deployment_permissions_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "exchange_connections",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "exchange_connections_authenticated_owner",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    },
+    {
+     "policy": "exchange_conn_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "credential-bearing table. An orphaned row here is an encrypted exchange API key with no owner, which must not survive account deletion. CASCADE is the security-correct choice and it is chosen deliberately, not by default."
+  },
+  {
+   "schema": "public",
+   "table": "exchange_keys",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "exchange_keys_authenticated_owner",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "credential-bearing table. An orphaned row here is an encrypted exchange API key with no owner, which must not survive account deletion. CASCADE is the security-correct choice and it is chosen deliberately, not by default."
+  },
+  {
+   "schema": "public",
+   "table": "execution_records",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "fk_execution_records_tenant_id",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "execution_records_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    },
+    {
+     "policy": "execution_records_user_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid() = user_id) OR (auth.uid() = tenant_id))",
+     "with_check": "((auth.uid() = user_id) OR (auth.uid() = tenant_id))"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: fk_execution_records_tenant_id",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "execution_records",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "execution_records_user_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid() = user_id) OR (auth.uid() = tenant_id))",
+     "with_check": "((auth.uid() = user_id) OR (auth.uid() = tenant_id))"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "fills",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "fk_fills_tenant_id",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "fills_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    },
+    {
+     "policy": "fills_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (tenant_id)::text)",
+     "with_check": "((auth.uid())::text = (tenant_id)::text)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: fk_fills_tenant_id",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "idempotency_keys",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "idempotency_keys_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "B",
+   "classification_evidence": "named tenant_id and referenced by a policy comparing it to current_setting('app.current_tenant_id')",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id) -- tenant is 1:1 with customer in this product",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "invoices",
+   "column": "user_id",
+   "current_type": "character varying(36)",
+   "udt_name": "varchar",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "invoices_owner_access",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (user_id)::text)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "RESTRICT",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "financial or audit record that should SURVIVE customer deletion for audit and tax purposes. CASCADE would destroy it. The column is NOT NULL, so SET NULL is impossible; RESTRICT forces the deletion path to deal with these rows explicitly rather than silently discarding them."
+  },
+  {
+   "schema": "public",
+   "table": "library_ratings",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "library_ratings_insert_own",
+     "cmd": "INSERT",
+     "roles": "authenticated",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "library_ratings_update_own",
+     "cmd": "UPDATE",
+     "roles": "authenticated",
+     "using": "(user_id = auth.uid())",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "library_ratings_delete_own",
+     "cmd": "DELETE",
+     "roles": "authenticated",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "library_ratings_select_reviews_public",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((rating IS NOT NULL) OR (user_id = auth.uid()))",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "library_strategies",
+   "column": "author_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Authenticated users can view active and approved strategies",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(((is_active = true) AND (moderation_status = ANY (ARRAY['approved'::text, 'featured'::text]))) OR (author_id = auth.uid()))",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can insert their own strategies",
+     "cmd": "INSERT",
+     "roles": "authenticated",
+     "using": "",
+     "with_check": "(author_id = auth.uid())"
+    },
+    {
+     "policy": "Users can update their own strategies",
+     "cmd": "UPDATE",
+     "roles": "authenticated",
+     "using": "(author_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can delete their own strategies",
+     "cmd": "DELETE",
+     "roles": "authenticated",
+     "using": "(author_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "library_subscription_transitions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "lib_sub_transitions_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "library_subscriptions",
+   "column": "owner_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "customer-identity name; table is empty so no value contradicts it",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "library_subscriptions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "library_subscriptions_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "lib_subs_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: library_subscriptions_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_analytics",
+   "column": "top_creator_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "marketplace_analytics_top_creator_id_fkey",
+   "on_delete": "NO ACTION",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: marketplace_analytics_top_creator_id_fkey",
+   "recommended_on_delete": "NO ACTION",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_backtest_evidence",
+   "column": "owner_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "evidence_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = owner_id)",
+     "with_check": "(auth.uid() = owner_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_listings",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "marketplace_listings_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Users can view their own listings",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can insert their own listings",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "Users can update their own listings",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: marketplace_listings_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_price_evaluations",
+   "column": "owner_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "price_evaluations_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = owner_id)",
+     "with_check": "(auth.uid() = owner_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_settlements",
+   "column": "owner_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "settlements_owner_read",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(auth.uid() = owner_id)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "RESTRICT",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "financial or audit record that should SURVIVE customer deletion for audit and tax purposes. CASCADE would destroy it. The column is NOT NULL, so SET NULL is impossible; RESTRICT forces the deletion path to deal with these rows explicitly rather than silently discarding them."
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_settlements",
+   "column": "purchaser_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "settlements_purchaser_read",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(auth.uid() = purchaser_id)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "RESTRICT",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "financial or audit record that should SURVIVE customer deletion for audit and tax purposes. CASCADE would destroy it. The column is NOT NULL, so SET NULL is impossible; RESTRICT forces the deletion path to deal with these rows explicitly rather than silently discarding them."
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_submission_transitions",
+   "column": "owner_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "submission_transitions_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = owner_id)",
+     "with_check": "(auth.uid() = owner_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_submissions",
+   "column": "owner_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "marketplace_submissions_owner_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "submissions_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = owner_id)",
+     "with_check": "(auth.uid() = owner_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: marketplace_submissions_owner_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "marketplace_submissions",
+   "column": "reviewed_by",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "marketplace_submissions_reviewed_by_fkey",
+   "on_delete": "SET NULL",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: marketplace_submissions_reviewed_by_fkey",
+   "recommended_on_delete": "SET NULL",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "model_versions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "model_versions_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "mv_owner_select",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "mv_owner_insert",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: model_versions_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "notification_settings",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "notif_settings_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "notifications",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "notifications_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "notifications_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    },
+    {
+     "policy": "Users can view own notifications",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(auth.uid() = user_id)",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can insert own notifications",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(auth.uid() = user_id)"
+    },
+    {
+     "policy": "Users can update own notifications",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(auth.uid() = user_id)",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can delete own notifications",
+     "cmd": "DELETE",
+     "roles": "public",
+     "using": "(auth.uid() = user_id)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: notifications_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "order_lifecycle_transitions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "order_lifecycle_transitions_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "olt_owner_select",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "olt_owner_insert",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: order_lifecycle_transitions_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "orders",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "fk_orders_tenant_id",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "orders_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    },
+    {
+     "policy": "orders_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (tenant_id)::text)",
+     "with_check": "((auth.uid())::text = (tenant_id)::text)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: fk_orders_tenant_id",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "paper_accounts",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_accounts_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_balance_events",
+   "column": "account_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "paper_accounts",
+   "referenced_column": "id",
+   "existing_fk": "paper_balance_events_account_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": false,
+   "classification": "D",
+   "classification_evidence": "declared foreign key to paper_accounts, which is not a customer identity table",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "none -- not a customer or tenant identity",
+   "recommended_on_delete": "n/a",
+   "recommended_action": "LEAVE AS IS",
+   "recommendation_reason": "only classes A and B are candidates for canonical conversion"
+  },
+  {
+   "schema": "public",
+   "table": "paper_balance_events",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_balance_events_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_equity_snapshots",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_equity_snapshots_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_events",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_events_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_fills",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_fills_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_market_events",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_market_events_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_metrics",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_metrics_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_orders",
+   "column": "account_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "paper_accounts",
+   "referenced_column": "id",
+   "existing_fk": "paper_orders_account_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": false,
+   "classification": "D",
+   "classification_evidence": "declared foreign key to paper_accounts, which is not a customer identity table",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "none -- not a customer or tenant identity",
+   "recommended_on_delete": "n/a",
+   "recommended_action": "LEAVE AS IS",
+   "recommendation_reason": "only classes A and B are candidates for canonical conversion"
+  },
+  {
+   "schema": "public",
+   "table": "paper_orders",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_orders_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_positions",
+   "column": "account_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "paper_accounts",
+   "referenced_column": "id",
+   "existing_fk": "paper_positions_account_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": false,
+   "classification": "D",
+   "classification_evidence": "declared foreign key to paper_accounts, which is not a customer identity table",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "none -- not a customer or tenant identity",
+   "recommended_on_delete": "n/a",
+   "recommended_action": "LEAVE AS IS",
+   "recommendation_reason": "only classes A and B are candidates for canonical conversion"
+  },
+  {
+   "schema": "public",
+   "table": "paper_positions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_positions_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "paper_sessions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "paper_sessions_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_sessions_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: paper_sessions_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "paper_trades",
+   "column": "account_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "paper_accounts",
+   "referenced_column": "id",
+   "existing_fk": "paper_trades_account_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": false,
+   "classification": "D",
+   "classification_evidence": "declared foreign key to paper_accounts, which is not a customer identity table",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "none -- not a customer or tenant identity",
+   "recommended_on_delete": "n/a",
+   "recommended_action": "LEAVE AS IS",
+   "recommendation_reason": "only classes A and B are candidates for canonical conversion"
+  },
+  {
+   "schema": "public",
+   "table": "paper_trades",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "paper_trades_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "payment_methods",
+   "column": "user_id",
+   "current_type": "character varying(36)",
+   "udt_name": "varchar",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "payment_methods_owner_access",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (user_id)::text)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "RESTRICT",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "financial or audit record that should SURVIVE customer deletion for audit and tax purposes. CASCADE would destroy it. The column is NOT NULL, so SET NULL is impossible; RESTRICT forces the deletion path to deal with these rows explicitly rather than silently discarding them."
+  },
+  {
+   "schema": "public",
+   "table": "plan_usage_ledger",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "plan_usage_ledger_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "pul_owner_select",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: plan_usage_ledger_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "positions",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "fk_positions_tenant_id",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "positions_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    },
+    {
+     "policy": "positions_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (tenant_id)::text)",
+     "with_check": "((auth.uid())::text = (tenant_id)::text)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: fk_positions_tenant_id",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "processed_orders",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "processed_orders_user_id_fkey",
+   "on_delete": "NO ACTION",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Manage own processed orders",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: processed_orders_user_id_fkey",
+   "recommended_on_delete": "NO ACTION",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "profiles",
+   "column": "referred_by_user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "fk_profiles_referred_by",
+   "on_delete": "SET NULL",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: fk_profiles_referred_by",
+   "recommended_on_delete": "SET NULL",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "reconciliation_mismatches",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "reconciliation_mismatches_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "B",
+   "classification_evidence": "named tenant_id and referenced by a policy comparing it to current_setting('app.current_tenant_id')",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id) -- tenant is 1:1 with customer in this product",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "referral_codes",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referral_codes_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "referral_codes_select_own",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "referral_codes_insert_own",
+     "cmd": "INSERT",
+     "roles": "authenticated",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referral_codes_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "referral_commissions",
+   "column": "referred_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referral_commissions_referred_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referral_commissions_referred_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "referral_commissions",
+   "column": "referrer_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referral_commissions_referrer_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "ref_comm_owner_read",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(referrer_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "referral_commissions_select_own",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(referrer_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referral_commissions_referrer_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "referral_payouts",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referral_payouts_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "ref_payouts_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(user_id = auth.uid())",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "referral_payouts_select_own",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referral_payouts_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "referral_profiles",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "referral_profiles_authenticated_owner",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    },
+    {
+     "policy": "ref_profiles_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "referral_relationships",
+   "column": "referred_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referral_relationships_referred_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "referral_rel_owner_access",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((referrer_id = auth.uid()) OR (referred_id = auth.uid()))",
+     "with_check": ""
+    },
+    {
+     "policy": "referral_relationships_select_own",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((referrer_id = auth.uid()) OR (referred_id = auth.uid()))",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referral_relationships_referred_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "referral_relationships",
+   "column": "referrer_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referral_relationships_referrer_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "referral_rel_owner_access",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((referrer_id = auth.uid()) OR (referred_id = auth.uid()))",
+     "with_check": ""
+    },
+    {
+     "policy": "referral_relationships_select_own",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((referrer_id = auth.uid()) OR (referred_id = auth.uid()))",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referral_relationships_referrer_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "referral_wallets",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referral_wallets_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "referral_wallets_select_own",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "ref_wallets_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(user_id = auth.uid())",
+     "with_check": "(user_id = auth.uid())"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referral_wallets_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "referrals",
+   "column": "referred_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referrals_referred_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referrals_referred_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "referrals",
+   "column": "referrer_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "profiles",
+   "referenced_column": "id",
+   "existing_fk": "referrals_referrer_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "referrals_referrer_select",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "(referrer_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to public.profiles(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: referrals_referrer_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "risk_settings",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "risk_settings_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    },
+    {
+     "policy": "risk_settings_authenticated_owner",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "risk_settings_audit",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "risk_audit_owner_read",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": ""
+    },
+    {
+     "policy": "risk_settings_audit_read_own",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "RESTRICT",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "financial or audit record that should SURVIVE customer deletion for audit and tax purposes. CASCADE would destroy it. The column is NOT NULL, so SET NULL is impossible; RESTRICT forces the deletion path to deal with these rows explicitly rather than silently discarding them."
+  },
+  {
+   "schema": "public",
+   "table": "security_logs",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "security_logs_owner_read",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "RESTRICT",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "financial or audit record that should SURVIVE customer deletion for audit and tax purposes. CASCADE would destroy it. The column is NOT NULL, so SET NULL is impossible; RESTRICT forces the deletion path to deal with these rows explicitly rather than silently discarding them."
+  },
+  {
+   "schema": "public",
+   "table": "signal_events",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "signal_events_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Users can view their own signal events",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can insert their own signal events",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: signal_events_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "signals",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "signals_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Users can view their own signals",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can insert their own signals",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "Users can update their own signals",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: signals_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "strategies",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "strategies_user_id_fkey",
+   "on_delete": "NO ACTION",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Manage own strategies",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: strategies_user_id_fkey",
+   "recommended_on_delete": "NO ACTION",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "strategy_backtests",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "strategy_backtests_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Users can view their own backtests",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can insert their own backtests",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "Users can update their own backtests",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "backtests_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (user_id)::text)",
+     "with_check": "((auth.uid())::text = (user_id)::text)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: strategy_backtests_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "strategy_deployments",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "strategy_deployments_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Users can view their own deployments",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can insert their own deployments",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "Users can update their own deployments",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: strategy_deployments_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "strategy_limits",
+   "column": "user_id",
+   "current_type": "text",
+   "udt_name": "text",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "strategy_limits_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    },
+    {
+     "policy": "strategy_limits_authenticated_owner",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = user_id)",
+     "with_check": "((auth.uid())::text = user_id)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "strategy_research_reports",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "strategy_research_reports_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Users can view their own research reports",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can create their own research reports",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "Users can update their own research reports",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can delete their own research reports",
+     "cmd": "DELETE",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "reports_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (user_id)::text)",
+     "with_check": "((auth.uid())::text = (user_id)::text)"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: strategy_research_reports_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "strategy_subscriptions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "strategy_subscriptions_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "Users can update their own subscriptions",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can insert their own subscriptions",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "Users can view their own subscriptions",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: strategy_subscriptions_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "subscriptions",
+   "column": "user_id",
+   "current_type": "character varying(36)",
+   "udt_name": "varchar",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "subscriptions_owner_access",
+     "cmd": "SELECT",
+     "roles": "authenticated",
+     "using": "((auth.uid())::text = (user_id)::text)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "referenced by an RLS policy predicate alongside auth.uid()",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id)",
+   "recommended_on_delete": "RESTRICT",
+   "recommended_action": "CONVERT TYPE AND ADD FK",
+   "recommendation_reason": "financial or audit record that should SURVIVE customer deletion for audit and tax purposes. CASCADE would destroy it. The column is NOT NULL, so SET NULL is impossible; RESTRICT forces the deletion path to deal with these rows explicitly rather than silently discarding them."
+  },
+  {
+   "schema": "public",
+   "table": "support_tickets",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "support_tickets_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "support_tickets_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(auth.uid() = user_id)",
+     "with_check": "(auth.uid() = user_id)"
+    },
+    {
+     "policy": "Users can view own tickets",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(auth.uid() = user_id)",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can create own tickets",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(auth.uid() = user_id)"
+    },
+    {
+     "policy": "Users can update own tickets",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(auth.uid() = user_id)",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can delete own tickets",
+     "cmd": "DELETE",
+     "roles": "public",
+     "using": "(auth.uid() = user_id)",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: support_tickets_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "ticket_comments",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "ticket_comments_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "ticket_comments_owner_access",
+     "cmd": "ALL",
+     "roles": "authenticated",
+     "using": "(EXISTS ( SELECT 1\n   FROM support_tickets\n  WHERE ((support_tickets.id = ticket_comments.ticket_id) AND (support_tickets.user_id = auth.uid()))))",
+     "with_check": "(EXISTS ( SELECT 1\n   FROM support_tickets\n  WHERE ((support_tickets.id = ticket_comments.ticket_id) AND (support_tickets.user_id = auth.uid()))))"
+    },
+    {
+     "policy": "Users can view comments on own tickets",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(EXISTS ( SELECT 1\n   FROM support_tickets\n  WHERE ((support_tickets.id = ticket_comments.ticket_id) AND (support_tickets.user_id = auth.uid()))))",
+     "with_check": ""
+    },
+    {
+     "policy": "Users can create comments on own tickets",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(EXISTS ( SELECT 1\n   FROM support_tickets\n  WHERE ((support_tickets.id = ticket_comments.ticket_id) AND (support_tickets.user_id = auth.uid()))))"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: ticket_comments_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "training_governance_decisions",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "training_governance_decisions_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "tgd_owner_select",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "tgd_owner_insert",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: training_governance_decisions_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "training_jobs",
+   "column": "user_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "NO",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": "users",
+   "referenced_column": "id",
+   "existing_fk": "training_jobs_user_id_fkey",
+   "on_delete": "CASCADE",
+   "on_update": "NO ACTION",
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "tj_owner_select",
+     "cmd": "SELECT",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    },
+    {
+     "policy": "tj_owner_insert",
+     "cmd": "INSERT",
+     "roles": "public",
+     "using": "",
+     "with_check": "(user_id = auth.uid())"
+    },
+    {
+     "policy": "tj_owner_update",
+     "cmd": "UPDATE",
+     "roles": "public",
+     "using": "(user_id = auth.uid())",
+     "with_check": ""
+    }
+   ],
+   "customer_owned": true,
+   "classification": "A",
+   "classification_evidence": "declared foreign key to auth.users(id)",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "already present: training_jobs_user_id_fkey",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "NO CHANGE NEEDED",
+   "recommendation_reason": "foreign key already declared; only the type may need aligning"
+  },
+  {
+   "schema": "public",
+   "table": "transaction_checkpoints",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "transaction_checkpoints_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "B",
+   "classification_evidence": "named tenant_id and referenced by a policy comparing it to current_setting('app.current_tenant_id')",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id) -- tenant is 1:1 with customer in this product",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "transaction_records",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [
+    {
+     "policy": "transaction_records_tenant_isolation_policy",
+     "cmd": "ALL",
+     "roles": "public",
+     "using": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))",
+     "with_check": "((tenant_id)::text = current_setting('app.current_tenant_id'::text, true))"
+    }
+   ],
+   "customer_owned": true,
+   "classification": "B",
+   "classification_evidence": "named tenant_id and referenced by a policy comparing it to current_setting('app.current_tenant_id')",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id) -- tenant is 1:1 with customer in this product",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  },
+  {
+   "schema": "public",
+   "table": "transaction_rollbacks",
+   "column": "tenant_id",
+   "current_type": "uuid",
+   "udt_name": "uuid",
+   "nullable": "YES",
+   "default": null,
+   "is_identity": "NO",
+   "identity_generation": null,
+   "is_generated": "NEVER",
+   "referenced_table": null,
+   "referenced_column": null,
+   "existing_fk": null,
+   "on_delete": null,
+   "on_update": null,
+   "rls_enabled": true,
+   "rls_forced": false,
+   "policies_referencing_column": [],
+   "customer_owned": true,
+   "classification": "B",
+   "classification_evidence": "named tenant_id",
+   "value_inventory": {
+    "total": 0,
+    "non_uuid": 0,
+    "non_uuid_sample": []
+   },
+   "recommended_type": "uuid",
+   "recommended_fk": "public.profiles(id) -- tenant is 1:1 with customer in this product",
+   "recommended_on_delete": "CASCADE",
+   "recommended_action": "ADD FK",
+   "recommendation_reason": "operational per-customer data with no independent retention requirement; it should go when the customer does"
+  }
+ ]
+}

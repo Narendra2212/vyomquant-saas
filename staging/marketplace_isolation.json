@@ -1,0 +1,103 @@
+{
+ "database": "postgresql://127.0.0.1:62674/postgres",
+ "leftover_identities_after_rollback": 0,
+ "probes": [
+  {
+   "leaks": [],
+   "owner_column": "user_id",
+   "results": {
+    "anon_delete": "NO ROWS",
+    "anon_select": "NO ROWS",
+    "anon_update": "NO ROWS",
+    "b_delete": "NO ROWS",
+    "b_forged_insert": "REFUSED(42501)",
+    "b_select": "NO ROWS",
+    "b_update": "NO ROWS",
+    "owner_select": "ALLOWED"
+   },
+   "rows_before": 0,
+   "seed_error": "",
+   "seeded": true,
+   "table": "library_ratings",
+   "verdict": "ISOLATED"
+  },
+  {
+   "leaks": [],
+   "owner_column": "user_id",
+   "results": {
+    "anon_delete": "NO ROWS",
+    "anon_select": "NO ROWS",
+    "anon_update": "NO ROWS",
+    "b_delete": "NO ROWS",
+    "b_forged_insert": "REFUSED(42501)",
+    "b_select": "NO ROWS",
+    "b_update": "NO ROWS",
+    "owner_select": "ALLOWED"
+   },
+   "rows_before": 0,
+   "seed_error": "",
+   "seeded": true,
+   "table": "deployment_permissions",
+   "verdict": "ISOLATED"
+  },
+  {
+   "leaks": [],
+   "owner_column": "author_id",
+   "results": {
+    "anon_delete": "NO ROWS",
+    "anon_select": "NO ROWS",
+    "anon_update": "NO ROWS",
+    "b_delete": "NO ROWS",
+    "b_forged_insert": "REFUSED(42501)",
+    "b_select": "NO ROWS",
+    "b_update": "NO ROWS",
+    "owner_select": "ALLOWED"
+   },
+   "rows_before": 1,
+   "seed_error": "",
+   "seeded": true,
+   "table": "library_strategies",
+   "verdict": "ISOLATED"
+  },
+  {
+   "leaks": [],
+   "owner_column": "user_id",
+   "results": {
+    "anon_delete": "NO ROWS",
+    "anon_select": "NO ROWS",
+    "anon_update": "NO ROWS",
+    "b_delete": "NO ROWS",
+    "b_forged_insert": "REFUSED(42501)",
+    "b_select": "NO ROWS",
+    "b_update": "NO ROWS",
+    "owner_select": "ALLOWED"
+   },
+   "rows_before": 0,
+   "seed_error": "",
+   "seeded": true,
+   "table": "library_subscriptions",
+   "verdict": "ISOLATED"
+  },
+  {
+   "leaks": [],
+   "owner_column": "owner_id",
+   "results": {
+    "anon_delete": "REFUSED(42501)",
+    "anon_select": "REFUSED(42501)",
+    "anon_update": "REFUSED(42501)",
+    "b_delete": "REFUSED(42501)",
+    "b_forged_insert": "REFUSED(42501)",
+    "b_select": "NO ROWS",
+    "b_update": "REFUSED(42501)",
+    "owner_select": "ALLOWED"
+   },
+   "rows_before": 0,
+   "seed_error": "",
+   "seeded": true,
+   "table": "marketplace_settlements",
+   "verdict": "ISOLATED"
+  }
+ ],
+ "rolled_back": true,
+ "timestamp": "2026-10-06T17:20:25+00:00"
+}

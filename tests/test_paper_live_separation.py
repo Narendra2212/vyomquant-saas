@@ -212,16 +212,39 @@ def test_the_double_also_traps_the_module_level_factory_function(
     """``get_exchange_executor`` - what ``master_executor``'s LIVE branch actually calls - is
     caught by the same seam, not bypassed by its own cache.
 
-    ``get_exchange_executor`` memoizes by ``f"{exchange_id}:{sandbox}"`` in a module-level
-    dict; a stale entry from an earlier (unrelated) test importing this module could hide a
-    fresh construction behind a cache hit. A key that cannot already be cached is used, and the
-    registry is confirmed empty of it beforehand, so a pass here is about THIS call.
+    ``get_exchange_executor`` memoizes in a module-level dict; a stale entry from an earlier
+    (unrelated) test importing this module could hide a fresh construction behind a cache hit.
+    A key that cannot already be cached is used, and the registry is confirmed empty of it
+    beforehand, so a pass here is about THIS call.
+
+    PRE-LAUNCH AUDIT UPDATE: the cache key used to be ``f"{exchange_id}:{sandbox}"``, which
+    named the venue and the mode but NOT the account — so a worker that had already built an
+    executor for one trader handed the next trader the first trader's API credentials, and
+    their orders would have executed against the first trader's balance. ``user_id`` is now a
+    required keyword-only argument and the key is a digest over the account plus the
+    credentials. This test therefore derives the key through ``_executor_cache_key`` rather
+    than spelling it, so it keeps asserting "nothing was cached" against whatever the current
+    derivation is instead of against a format literal.
+    Regression for the leak itself: tests/test_exchange_executor_cache_is_per_tenant.py
     """
-    key = "kraken:False"
+    identity = dict(
+        user_id="separation-test-user",
+        exchange_id="kraken",
+        sandbox=False,
+        api_key="k",
+        api_secret="s",
+        password=None,
+    )
+    key = exchange_executor._executor_cache_key(**identity)
+
     assert key not in exchange_executor._executors
     with pytest.raises(LiveVenueAdapterConstructed):
         exchange_executor.get_exchange_executor(
-            exchange_id="kraken", api_key="k", api_secret="s", sandbox=False
+            exchange_id="kraken",
+            api_key="k",
+            api_secret="s",
+            sandbox=False,
+            user_id="separation-test-user",
         )
     assert key not in exchange_executor._executors, (
         "a construction that raised must not leave a half-built executor cached"

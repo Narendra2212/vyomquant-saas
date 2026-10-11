@@ -1,0 +1,5 @@
+[PAPER FILL] attempt 1 of 3 for order 60e7e2b6-1c7d-45ed-b5f4-721f6457baa1 lost the version guard; retrying in 0.05s. Nothing from this attempt moved the balance.
+[PAPER FILL] resuming fill 5dca9df7-fe6d-430e-b7e6-0b53da41e6c2 on order 60e7e2b6-1c7d-45ed-b5f4-721f6457baa1 at attempt 2: the fill row exists but no ledger row carries it, so the money has not moved.
+[PAPER FILL] attempt 2 of 3 for order 60e7e2b6-1c7d-45ed-b5f4-721f6457baa1 lost the version guard; retrying in 0.1s. Nothing from this attempt moved the balance.
+[PAPER FILL] resuming fill 5dca9df7-fe6d-430e-b7e6-0b53da41e6c2 on order 60e7e2b6-1c7d-45ed-b5f4-721f6457baa1 at attempt 3: the fill row exists but no ledger row carries it, so the money has not moved.
+A paper write lost its optimistic guard during FILL: the paper account update matched no row at version 0; another writer moved it while this change was in flight, so nothing was written

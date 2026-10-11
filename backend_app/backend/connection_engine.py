@@ -36,6 +36,56 @@ logger = logging.getLogger("ConnectionEngine")
 _exchange_pool: dict[str, ccxt.Exchange] = {}
 _pool_lock = asyncio.Lock()
 
+#: The CREDENTIAL IDENTITY of each pooled client, by pool key (CONN-01).
+#:
+#: The pool key is deliberately ``sha256([user_id, exchange_id])`` and omits the credential —
+#: re-keying on the credential would be wrong, because it would let one (user, venue) pair hold
+#: several simultaneous authenticated sockets and would defeat FIX CE-4's whole purpose. So the
+#: credential is tracked ALONGSIDE the entry instead, and a mismatch rebuilds in place. See
+#: :func:`_credential_identity` for what is stored and why it is not the credential itself.
+_pool_credential_id: dict[str, Optional[str]] = {}
+
+
+def _pool_key(user_id: str, exchange_id: str) -> str:
+    """The pool key for one (user, venue) pair.
+
+    🔴 STEP 2 / FIX H1: SHA-256 rather than Python's ``hash()``, which is not cryptographically
+    secure and carries collision risk — a collision here would hand one user's authenticated
+    client to another, so this is the function that makes per-user isolation true.
+
+    Extracted so that the create and release paths cannot drift apart: they previously inlined
+    the same expression twice, and a one-sided edit would have made eviction silently miss.
+    """
+    return hashlib.sha256(
+        json.dumps([user_id, exchange_id], sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _credential_identity(
+    api_key: Optional[str],
+    secret_key: Optional[str],
+    password: Optional[str],
+) -> Optional[str]:
+    """A non-reversible fingerprint of a credential triple, or ``None`` when there is none.
+
+    WHY A FINGERPRINT AND NOT THE CREDENTIAL. The only question asked of this value is "is it
+    the same credential as last time", which equality on a digest answers. Holding the digest
+    rather than the key means the pool's own bookkeeping is not a second copy of the secret.
+    It is no weaker than what is already in memory either way — the pooled ``ccxt`` client holds
+    ``apiKey``/``secret`` in plaintext for the life of the entry — but it keeps the secret out of
+    the one structure that gets iterated, counted and logged. This value is NEVER logged.
+
+    ``None`` means "no credential was supplied", which is a distinct case from "a credential
+    whose digest happens to be X" and is treated differently in
+    :func:`get_or_create_exchange`. A client built with no credential can make public calls
+    only, so it is not interchangeable with an authenticated one.
+    """
+    if not api_key and not secret_key:
+        return None
+    return hashlib.sha256(
+        json.dumps([api_key or "", secret_key or "", password or ""]).encode()
+    ).hexdigest()
+
 
 async def get_or_create_exchange(
     user_id: str,
@@ -50,32 +100,101 @@ async def get_or_create_exchange(
     Returns a live exchange instance from the pool, creating one if needed.
     FIX CE-4: Multiple bots for the same user+exchange share one connection.
     FIX H1: Use SHA-256 hash to prevent key collision and API key mixing.
+
+    CONN-01: A POOLED CLIENT IS ONLY REUSED FOR THE CREDENTIAL IT WAS BUILT WITH
+    ---------------------------------------------------------------------------
+    The pool key is the (user, venue) pair and does not include the credential, which is
+    correct — one authenticated socket per pair is the point. What was NOT correct is that a
+    later call for an already-pooled pair was served the existing client and its ``api_key``
+    argument was silently discarded. Two real consequences, both measured in
+    ``staging/p10c_probe_before.txt``:
+
+    1. **A rotation was ineffective in-process.** New keys stored through
+       ``POST /api/exchange/keys`` did not reach the venue until the connection was deleted or
+       the process restarted. That is the finding as originally written. ``store_keys`` now
+       evicts explicitly, and this function no longer depends on it having done so.
+
+    2. **A credential-less caller decided the client for everyone.**
+       ``core/consistency_checker.py`` and ``backend/exchange_websocket_listener.py`` call this
+       function with NO credentials. Whichever caller arrived first populated the key, so if one
+       of those won the race an UNAUTHENTICATED client was pooled and then handed to
+       ``routers/orders.py`` and ``routers/market.py``, whose private calls
+       (``fetch_open_orders``, ``fetch_balance``) cannot work on it. A restart was the only cure.
+
+    The rule now applied, which is monotone in authentication and therefore cannot thrash:
+
+    * **No credential supplied** → reuse whatever is pooled. Such a caller is asking for "a
+      client for this venue" and must not downgrade an authenticated one it did not build.
+    * **A credential matching the pooled client** → reuse. The ordinary multi-bot case; still
+      one socket, still one handshake.
+    * **A credential DIFFERING from the pooled client's, including the case where the pooled
+      client has none** → close the stale client and rebuild. This is a rotation or an upgrade
+      from unauthenticated, and in both the caller's credential is the correct one.
+
+    Because the credential-less branch never rebuilds, alternating callers settle on the
+    authenticated client rather than tearing it down in turn.
+
+    WHAT THIS IS NOT. It is not a tenant-isolation control. Isolation is :func:`_pool_key`'s
+    job and was never broken: one user's client has never been reachable by another's key. This
+    is credential CURRENCY within one user's own pair.
     """
-    # 🔴 STEP 2: Use SHA-256 hash to prevent collision (CRITICAL SAFETY FIX)
-    # Python's hash() is not cryptographically secure and has collision risk
-    pool_key = hashlib.sha256(
-        json.dumps([user_id, exchange_id], sort_keys=True).encode()
-    ).hexdigest()
+    pool_key = _pool_key(user_id, exchange_id)
+    wanted = _credential_identity(api_key, secret_key, password)
+
     async with _pool_lock:
-        if pool_key not in _exchange_pool:
-            engine = ConnectionEngine(
-                exchange_id, api_key, secret_key, password, testnet, proxies
+        pooled = _exchange_pool.get(pool_key)
+        if pooled is not None:
+            held = _pool_credential_id.get(pool_key)
+            if wanted is None or wanted == held:
+                return pooled
+
+            # A different credential. Drop the stale client before building its replacement, so
+            # the pool never holds two clients for one pair and the superseded socket is closed
+            # rather than leaked. Closed while holding `_pool_lock`, which is deliberate: the
+            # lock is already held across `connect()`'s venue handshake below, and a local
+            # socket close is strictly cheaper than that. Releasing it here instead would open a
+            # window for a concurrent caller to pool a third client.
+            _exchange_pool.pop(pool_key, None)
+            _pool_credential_id.pop(pool_key, None)
+            try:
+                await pooled.close()
+            except Exception as e:
+                logger.warning(
+                    f"Exchange pool: close error on the superseded client for user {user_id} "
+                    f"on {exchange_id}: {e}"
+                )
+            logger.info(
+                f"Exchange pool: rebuilding for user {user_id} on {exchange_id} — the "
+                f"credential supplied is not the one the pooled client was built with."
             )
-            exchange = await engine.connect()
-            _exchange_pool[pool_key] = exchange
-            # Log user/exchange for debugging (not the hashed key)
-            logger.info(f"Exchange pool: created for user {user_id} on {exchange_id}")
-        return _exchange_pool[pool_key]
+
+        engine = ConnectionEngine(
+            exchange_id, api_key, secret_key, password, testnet, proxies
+        )
+        # A connect() that raises propagates with NOTHING written to either dict, so a refused
+        # handshake leaves no entry to be served to the next caller. connect() closes the
+        # client it built (FIX CE-3), so nothing leaks either.
+        exchange = await engine.connect()
+        _exchange_pool[pool_key] = exchange
+        _pool_credential_id[pool_key] = wanted
+        # Log user/exchange for debugging (not the hashed key, and never the credential
+        # fingerprint).
+        logger.info(f"Exchange pool: created for user {user_id} on {exchange_id}")
+        return exchange
 
 
 async def release_exchange(user_id: str, exchange_id: str):
-    """Remove and close an exchange from the pool (called when all bots for this user stop)."""
-    # 🔴 STEP 2: Use same SHA-256 hash function for consistency
-    pool_key = hashlib.sha256(
-        json.dumps([user_id, exchange_id], sort_keys=True).encode()
-    ).hexdigest()
+    """Remove and close an exchange from the pool (called when all bots for this user stop).
+
+    A no-op when nothing is pooled for the pair, which is what makes it safe to call
+    unconditionally from the create-or-rotate path in ``routers/exchange.py::store_keys``.
+    """
+    pool_key = _pool_key(user_id, exchange_id)
     async with _pool_lock:
         exchange = _exchange_pool.pop(pool_key, None)
+        # Dropped in the same critical section as the client itself: a credential identity left
+        # behind for an evicted entry would make the next caller's comparison meaningless.
+        _pool_credential_id.pop(pool_key, None)
     if exchange:
         try:
             await exchange.close()
@@ -83,6 +202,57 @@ async def release_exchange(user_id: str, exchange_id: str):
             logger.info(f"Exchange pool: closed for user {user_id} on {exchange_id}")
         except Exception as e:
             logger.warning(f"Exchange pool: close error for user {user_id} on {exchange_id}: {e}")
+
+
+def exchange_pool_size() -> int:
+    """How many venue clients the pool currently holds.
+
+    Read without the lock on purpose: this is an observability figure for shutdown logging and
+    tests, and ``len()`` on a dict is atomic under the GIL. Taking ``_pool_lock`` here would let
+    a diagnostic read block behind a 30-second venue handshake.
+
+    The pool is bounded by the number of DISTINCT (user, venue) pairs in flight, not by the
+    number of callers: credential rotations replace an entry rather than adding one, and a
+    refused handshake adds nothing. There is no eviction by age or idleness — see
+    ``staging/PHASE10_WSC_QUOTA_CONNECTION_SAFETY.md`` for why that is recorded as a residual risk
+    rather than given an invented ceiling here.
+    """
+    return len(_exchange_pool)
+
+
+async def close_all_exchanges() -> int:
+    """Close and drop every pooled venue client. Returns how many were closed.
+
+    CONN-01: nothing used to do this. ``main.py``'s lifespan shutdown stopped every background
+    service that had OPENED a connection but never closed the connections themselves, so every
+    pooled ``ccxt`` client — each holding an open ``aiohttp`` session and a plaintext credential
+    — survived until the process died. That is the "Unclosed client session" class of noise this
+    module's CE-3 comment describes, arriving at shutdown instead of on a failed connect.
+
+    Every client is attempted even if an earlier one raises: one venue refusing to close must
+    not strand the rest. The pool is emptied under the lock FIRST, so a caller arriving mid
+    shutdown builds a fresh client rather than being handed one that is in the middle of being
+    closed.
+    """
+    async with _pool_lock:
+        draining = list(_exchange_pool.items())
+        _exchange_pool.clear()
+        _pool_credential_id.clear()
+
+    closed = 0
+    for pool_key, exchange in draining:
+        try:
+            await exchange.close()
+            closed += 1
+        except Exception as e:
+            # The pool key is a digest of (user, venue) and names neither, which is why it is
+            # the only identifier available here; it is safe to log for exactly that reason.
+            logger.warning(f"Exchange pool: close error during drain for {pool_key[:12]}…: {e}")
+    if draining:
+        logger.info(
+            f"Exchange pool: drained {closed} of {len(draining)} pooled client(s) at shutdown."
+        )
+    return closed
 
 
 # ══════════════════════════════════════════════════════════════════════════

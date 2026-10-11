@@ -79,10 +79,17 @@
  * `aws s3 sync dist/ --delete` removes that prefix on every deploy. The cards render `ds/Panel`'s
  * `unavailable` state carrying the reason declared in `design/pageFields`.
  *
- * The redesign proposed deleting this section and that was DECLINED: VyomQuant is genuinely built
- * for Windows, macOS and Linux — `src-tauri/` is a real Tauri 2 project — and the desktop
- * terminals are releasing shortly. So the section's FRAMING is now forward-looking while each
- * artifact still reports its true state, and the four panels are untouched.
+ * The redesign proposed deleting this section and that was DECLINED: `src-tauri/` is a real
+ * Tauri 2 project and desktop is a real roadmap item. So the section's FRAMING is
+ * forward-looking while each artifact still reports its true state, and the four panels are
+ * untouched.
+ *
+ * CORRECTED: "releasing shortly" / "in final testing" was not true of two of the three
+ * platforms. Only Windows has a build — `releases/windows/VyomQuant-Setup-0.1.0.exe` is
+ * 112,117,309 bytes, while the macOS DMG is 69 bytes and the two Linux files are 64 and 67,
+ * all three being one-line text placeholders rather than binaries. The copy and this file's
+ * assertions now say "in development", which is what the tree supports. See the second `it`
+ * in the `DownloadSection` block for the measurements.
  * `tests/unit/pages/downloadSurface.test.jsx` owns the per-artifact guarantees in depth; the
  * block below asserts only that this section still renders all four markers and still offers the
  * one destination that works, so that a future edit to the heading cannot quietly take the panels
@@ -516,7 +523,7 @@ describe('Landing_Surface — each rendered section carries its own content', ()
       expect(
         screen.getByRole('heading', {
           level: 2,
-          name: 'Trade in the browser today, on your desktop shortly',
+          name: 'Trade in the browser today',
         }),
       ).toBeTruthy();
 
@@ -538,14 +545,42 @@ describe('Landing_Surface — each rendered section carries its own content', ()
       });
     });
 
-    it('announces desktop as a real platform without promising a file', () => {
-      // The section that was proposed for deletion and kept. Both halves have to be true at
-      // once: desktop is coming, and no installer is served today.
+    it('announces desktop as in development, without claiming a build that does not exist', () => {
+      /*
+       * UPDATED, AND THE OLD ASSERTIONS WERE PINNING A FALSE CLAIM.
+       *
+       * This test previously required the words `In final testing` and
+       * `Native terminals for Windows, macOS and Linux`. Both were measured against
+       * `algo22-terminal/releases/` and only one of the three platforms has a build at all:
+       *
+       *     windows/VyomQuant-Setup-0.1.0.exe       112,117,309 bytes   a real installer
+       *     mac/VyomQuant-0.1.0-universal.dmg                69 bytes   one line of text
+       *     linux/VyomQuant-0.1.0.AppImage                   64 bytes   one line of text
+       *     linux/vyomquant_0.1.0_amd64.deb                  67 bytes   one line of text
+       *
+       * The three small files are plain text reading "VyomQuant Production Desktop Installer
+       * v0.1.0 - …". They are placeholders, not binaries, and `design/pageFields.js` already
+       * says so on the panels this same `describe` asserts — "No macOS build has been
+       * produced for this release". So the heading and badge were contradicting the four
+       * cards underneath them, and this test was holding the contradiction in place.
+       *
+       * "In final testing" is a claim about a build that is being tested. There is no macOS
+       * or Linux build to test, so the badge now reads "In development" and the copy names no
+       * per-OS set. The `src-tauri/` project is real and desktop is a real roadmap item —
+       * that part was never in doubt and the section still says it.
+       *
+       * Both halves still have to be true at once, which is why this test is kept rather
+       * than deleted: desktop is coming, and no installer is served today.
+       */
       mountRouted(<DownloadSection />);
 
-      expect(screen.getByText('In final testing')).toBeTruthy();
-      expect(screen.getByText(/Native terminals for Windows, macOS and Linux/)).toBeTruthy();
+      expect(screen.getByText('In development')).toBeTruthy();
+      expect(screen.getByText(/Native desktop terminals are in development on Tauri/)).toBeTruthy();
       expect(screen.getByText('Available now · free tier included')).toBeTruthy();
+
+      // And the retired claims are genuinely gone from the section, not merely unasserted.
+      expect(screen.queryByText('In final testing')).toBeNull();
+      expect(screen.queryByText(/Native terminals for Windows, macOS and Linux/)).toBeNull();
     });
   });
 

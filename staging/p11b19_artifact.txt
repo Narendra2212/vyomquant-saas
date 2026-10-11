@@ -1,0 +1,135 @@
+artifact download: rc=0  26282 bytes
+contents:
+  gate_state.txt                101 B
+  metered.xml                  4886 B
+  metered.log                  6385 B
+  slot_lock.log               49941 B
+  slot_lock.xml               42342 B
+  webhook.log                 26412 B
+  webhook.xml                 21561 B
+
+====================================================================================================
+GATE STATE RECORDED BEFORE ANY TEST RAN
+====================================================================================================
+  real-Redis gate: state=run (AERORA_TEST_REDIS_URL=set, remote_allowed=False)
+  state=run
+  reason=(none)
+
+====================================================================================================
+PER-FILE JUNIT RESULTS
+====================================================================================================
+
+  metered.xml
+    tests=9 failures=1 errors=0 skipped=0 time=1.222
+       PASSED   test_concurrent_reservations_admit_exactly_the_limit_and_no_more
+       PASSED   test_a_sequential_run_to_the_limit_then_one_more_refuses
+       PASSED   test_a_zero_allowance_reserves_nothing_and_accumulates_nothing
+       PASSED   test_an_unlimited_plan_always_admits
+       PASSED   test_reservations_are_isolated_per_user
+       PASSED   test_the_full_enforce_quota_path_refuses_at_the_limit
+       PASSED   test_concurrent_reservations_are_atomic_against_real_redis
+    >> FAILURE  test_production_reserve_quota_admits_exactly_the_limit_against_real_redis
+              AssertionError: a refusal reported usage 36, outside [0, 10] -- the revert either did not happen or overshot assert 36 <= 10
+       PASSED   test_production_zero_allowance_writes_no_meter_against_real_redis
+
+  slot_lock.xml
+    tests=22 failures=21 errors=0 skipped=0 time=3.156
+    >> FAILURE  test_two_concurrent_stores_of_different_venues_cannot_both_take_one_free_slot
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_eight_concurrent_stores_admit_exactly_the_limit
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_concurrent_requests_for_the_same_venue_are_a_rotation_not_two_slots
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_different_accounts_do_not_contend_with_each_other
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_one_tenant_cannot_consume_or_alter_another_tenants_quota
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+       PASSED   test_retrying_a_refused_request_does_not_eventually_succeed
+    >> FAILURE  test_the_lock_is_released_when_the_guarded_write_raises
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_a_failed_write_consumes_no_capacity
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_the_lock_is_released_on_the_guards_own_refusal
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_an_unreachable_lock_store_refuses_rather_than_admits
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_a_lock_store_that_raises_also_refuses
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_a_contended_lock_is_409_and_not_503
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_the_lock_carries_a_ttl_so_a_killed_worker_cannot_wedge_an_account
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_a_guard_that_does_not_lock_fails_this_suite
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_a_guard_that_does_not_recheck_fails_this_suite
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute 'exchange_connection_slot_guard'
+    >> FAILURE  test_store_keys_uses_the_guard_around_its_vault_write
+              AssertionError: store_keys does not use exchange_connection_slot_guard; the connection limit is back to a read-then-write race (QUOTA-01) assert 'exch
+    >> FAILURE  test_the_slot_lock_is_mutually_exclusive_against_real_redis
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute '_slot_lock_key'
+    >> FAILURE  test_the_guard_admits_exactly_the_limit_against_real_redis
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute '_slot_lock_key'
+    >> FAILURE  test_the_guard_does_not_delete_a_successors_lock_when_its_own_expired
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute '_slot_lock_key'
+    >> FAILURE  test_a_normal_exit_releases_the_lock
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute '_slot_lock_key'
+    >> FAILURE  test_release_reports_each_ownership_outcome
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute '_slot_lock_key'
+    >> FAILURE  test_a_bare_delete_on_release_fails_this_suite
+              AttributeError: module 'backend_app.core.subscription_dependencies' has no attribute '_slot_lock_key'
+
+  webhook.xml
+    tests=6 failures=0 errors=4 skipped=0 time=1.497
+       PASSED   test_the_credential_gate_refuses_test_keys
+       PASSED   test_a_redelivered_webhook_is_ignored
+    >> ERROR    test_the_lock_is_recorded_in_redis_under_the_documented_key
+              failed on setup with "Failed: the application cache manager REFUSED a write it was handed a real cache for (`set` returned False). Its proxies return 
+    >> ERROR    test_a_different_event_id_is_not_deduplicated
+              failed on setup with "Failed: the application cache manager REFUSED a write it was handed a real cache for (`set` returned False). Its proxies return 
+    >> ERROR    test_an_in_flight_delivery_blocks_a_concurrent_one
+              failed on setup with "Failed: the application cache manager REFUSED a write it was handed a real cache for (`set` returned False). Its proxies return 
+    >> ERROR    test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind
+              failed on setup with "Failed: the application cache manager REFUSED a write it was handed a real cache for (`set` returned False). Its proxies return 
+
+====================================================================================================
+REAL-REDIS PROVISIONING / REACHABILITY EVIDENCE IN THE LOGS
+====================================================================================================
+
+  metered.log  (101 lines)
+    TOTALS: =================== 1 failed, 8 passed, 2 warnings in 1.22s ====================
+
+  slot_lock.log  (678 lines)
+    TOTALS: assert 'exchange_connection_slot_guard' in '@router.post("/keys")\nasync def store_keys(\n    body: ExchangeKeysReques
+    TOTALS: =================== 21 failed, 1 passed, 9 warnings in 3.16s ===================
+
+  webhook.log  (392 lines)
+    cache fault                  4 hit(s)
+        WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:ap
+        WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:ap
+        WARNING  backend_app.core.cache.redis_manager:redis_manager.py:660 Cache SET failed for 'aerora:test:keyspace-probe:ap
+    mock resolved                4 hit(s)
+        `MockRedisClient` and not `None`.
+        `MockRedisClient` and not `None`.
+        `MockRedisClient` and not `None`.
+    TOTALS: =================== 2 passed, 9 warnings, 4 errors in 1.50s ====================
+
+====================================================================================================
+THE REQUIRED REAL-REDIS CASES, INDIVIDUALLY
+====================================================================================================
+
+  webhook.xml
+    test_the_credential_gate_refuses_test_keys                                   PASSED
+    test_a_redelivered_webhook_is_ignored                                        PASSED
+    test_the_lock_is_recorded_in_redis_under_the_documented_key                  ERROR
+    test_a_different_event_id_is_not_deduplicated                                ERROR
+    test_an_in_flight_delivery_blocks_a_concurrent_one                           ERROR
+    test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind              ERROR
+
+  metered.xml
+    test_concurrent_reservations_are_atomic_against_real_redis                   PASSED
+    test_production_reserve_quota_admits_exactly_the_limit_against_real_redis    FAILURE
+    test_production_zero_allowance_writes_no_meter_against_real_redis            PASSED
+
+  slot_lock.xml
+    test_the_slot_lock_is_mutually_exclusive_against_real_redis                  FAILURE
+    test_the_guard_admits_exactly_the_limit_against_real_redis                   FAILURE

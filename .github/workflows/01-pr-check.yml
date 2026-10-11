@@ -183,10 +183,69 @@ jobs:
       # `algo22-terminal/**`, which is the only way a secret can reach the bundle: a
       # backend-only diff cannot alter it. The other five tests in that file read the workflow
       # YAML, `.env.example` and curated name lists, need no bundle, and still run here.
+      # D5': `AERORA_TEST_REDIS_URL` IS WHAT SWITCHES THE REAL-REDIS TESTS ON.
+      #
+      # `REDIS_URL` below does NOT, and that was the defect. `tests/conftest.py` runs
+      #     os.environ["REDIS_URL"] = ""
+      # unconditionally at import, before any test module loads, so that the 11,000+ tests in
+      # this lane cannot be re-pointed at a live cache by whatever happens to be exported.
+      # That blanking is correct and is deliberately left alone. Its consequence was that the
+      # `redis:7-alpine` service above -- healthy, mapped, health-checked -- could never reach
+      # the tests that exist to exercise it: they read `REDIS_URL`, found `''`, and SKIPPED on
+      # every PR. Three files were affected, and one of them had been dormant since it was
+      # written. Measured in `staging/p10k_gate_predicate.txt`.
+      #
+      # `AERORA_TEST_REDIS_URL` is the second, deliberate name -- the same pattern
+      # `AERORA_TEST_DATABASE_URL` already uses for PostgreSQL in the `database-tests` job, and
+      # the name `tests/test_webhook_duplicate_delivery_real_redis.py` already read. conftest
+      # does not touch it, so it survives to the gate in `tests/real_redis_gate.py`.
+      #
+      # `/0` IS NOT A FREE CHOICE, AND `/15` WAS MEASURABLY WRONG (Phase 11B-A11/A12).
+      #
+      # This line said `/15` and the comment claimed it "pins a dedicated database index …
+      # belt-and-braces rather than load-bearing". That was false in both halves, and it is
+      # the direct cause of two real-Redis webhook failures in run 38047483583.
+      #
+      # The application cannot be pointed at database 15. `backend_app/backend/redis_manager.py`
+      # partitions by purpose -- `REDIS_DB_CACHE = 0`, `REDIS_DB_QUEUE = 1`, `REDIS_DB_EVENTS = 2`
+      # -- and `get_redis_url(db)` OVERRIDES whatever database the URL names by appending a
+      # `db=` query parameter. For `redis://localhost:6379/15` it produces
+      # `redis://localhost:6379/15?db=0`, and redis-py resolves the QUERY over the path:
+      #     ConnectionPool.from_url('redis://localhost:6379/15?db=0').connection_kwargs['db'] == 0
+      # So the handler under test wrote its idempotency key to database 0 while the test's own
+      # client -- which honours the path -- read database 15. The key was never missing; the
+      # test was looking in a database the application never uses.
+      #
+      # That mismatch did not merely fail two tests, it made a third pass for the wrong reason:
+      # `test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind` asserts a key is
+      # ABSENT, which is trivially true in a database nothing writes to. A keyspace mismatch is
+      # therefore not a tidy-up detail; it manufactures false assurance.
+      #
+      # WHAT THIS LINE IS AND IS NOT RESPONSIBLE FOR, now that the keyspace split is fixed
+      # properly in the test. `tests/test_webhook_duplicate_delivery_real_redis.py` no longer
+      # builds its client from this variable: it derives the URL from the application's own
+      # `get_redis_url(REDIS_DB_CACHE)` and then PROVES both ends see one keyspace with a
+      # bidirectional sentinel, failing with "KEYSPACE SPLIT" if they do not. That is the
+      # robust fix -- a hard-coded database here would agree today and drift the moment
+      # `REDIS_DB_CACHE` or the override changes.
+      #
+      # This variable's remaining job is the GATE's: it is the endpoint
+      # `tests/real_redis_gate.py` PINGs to decide skip / fail / run. `/0` is named so that
+      # the database the gate proves reachable is the database the application actually uses,
+      # instead of proving database 15 is alive and running the suite against database 0.
+      # The isolation the old comment wanted comes from the service container being ephemeral
+      # and exclusive to this job, which it already was; no test issues FLUSHDB, and each test
+      # namespaces its own keys.
+      #
+      # `REDIS_URL` is RETAINED unchanged. Several tests assert on how the application behaves
+      # when it is present (`test_api03_rate_limit_storage_is_fail_closed.py`,
+      # `test_api04_store_failure_after_startup.py`), and conftest blanks it for everyone
+      # regardless, so removing it here would change an unrelated lane for no benefit.
       - name: Run Unit Tests
         run: pytest tests/ -v --tb=short -k "not chaos and not load" -m "not frontend_bundle"
         env:
           REDIS_URL: redis://localhost:6379
+          AERORA_TEST_REDIS_URL: redis://localhost:6379/0
           ENV: test
           AERORA_MODE: safe
           PYTHONPATH: .
@@ -464,6 +523,149 @@ jobs:
                  tests/test_strategy_lifecycle_concurrency_postgres.py \
                  -v --tb=short \
                  --deselect tests/test_atomic_order_cancellation_fix.py::test_transaction_isolation_for_cancellation
+
+  # ───────────────────────────────────────────────────────────────────────────────
+  # WHY THIS JOB EXISTS, AND WHY IT IS SEPARATE FROM `database-tests`
+  #
+  # `database-tests` above runs `alembic upgrade d97ffff9c3bb` -- the branchpoint, not
+  # head -- against a bare `postgres:17-alpine`, and the long comment above it explains
+  # why a from-scratch provision was out of scope at the time: 020's SECTION 0 preflight
+  # RAISE EXCEPTIONs on a database with no `authenticated`/`service_role` roles and no
+  # `auth.uid()`, which vanilla PostgreSQL has none of. That obstacle is now gone.
+  # `scripts/provision_database.py --create-substrate` creates exactly that shim, and the
+  # full order it uses is documented in DATABASE_PROVISIONING_RUNBOOK.md.
+  #
+  # It is a separate job rather than extra steps in `database-tests` so that a failure
+  # here cannot be confused with a failure of the four database-backed test files, which
+  # are a different claim about a different thing.
+  #
+  # WHAT IT GATES. Three things that were verified by hand and by nothing automatic:
+  #   1. the migration set still applies to an EMPTY database, in one command;
+  #   2. the three `RAISE EXCEPTION` backstops in
+  #      `migrations/hardening/999_privilege_hardening.sql` -- which abort on a
+  #      per-customer table readable by `anon`, on a browser role holding TRUNCATE, and
+  #      on a policy predicate that is the constant TRUE;
+  #   3. the resulting schema matches `staging/provisioning_snapshot.json`, the committed
+  #      baseline. Drift means either a missing migration or a stale baseline, and those
+  #      have opposite fixes -- which is why a human should see it before merge.
+  # Then every behavioural probe, including the two cross-tenant read sweeps that seed a
+  # row owned by one customer and try to read it as another.
+  #
+  # WHAT HAS AND HAS NOT BEEN VERIFIED, stated because the comment above this one
+  # rightly objects to unverified structural claims about jobs that have never run.
+  # VERIFIED locally, repeatedly: the whole sequence against a vanilla PostgreSQL with
+  # no Supabase substrate, which is the same starting condition as this container --
+  # `staging/reprovision.py` passes `--create-substrate` and that is the only path used.
+  # NOT VERIFIED: the PostgreSQL major version. Local runs are 16.2, from the `pgserver`
+  # wheel; this container is 17 to match production's reported `server_version 17.6`.
+  # The first run of this job on a pull request is what closes that gap. It is wired in
+  # this state deliberately -- a provisioner verified by hand that nothing ever runs is
+  # documentation, not a control.
+  # ───────────────────────────────────────────────────────────────────────────────
+  provisioning-and-isolation:
+    name: Provisioning, Privilege Hardening & Tenant Isolation
+    runs-on: ubuntu-latest
+    needs: static-audit
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # `DATABASE_URL` is read by `backend_app/alembic/env.py`; `AERORA_TEST_DATABASE_URL`
+      # is what `tests/conftest.py` requires before it will let a DATABASE_URL survive
+      # into the test process. Both are needed, for the reasons spelled out in the
+      # `database-tests` env block above.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      AERORA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      PROVISION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      ENV: test
+      VYOMQUANT_MODE: safe
+      PYTHONPATH: .
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements-cpu.txt
+            requirements-base.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+          pip install -r requirements-dev.txt
+          pip install pytest pytest-asyncio psycopg2-binary
+
+      # `--dry-run` is the provisioner's default, so `--apply` is required. The DSN is
+      # localhost, so the non-localhost refusal does not trigger and
+      # `--i-understand-this-is-remote` is deliberately NOT passed: if this URL ever
+      # stops being loopback, this step must fail rather than proceed.
+      - name: Provision the full schema from repository source
+        run: |
+          python scripts/provision_database.py \
+            --dsn "$PROVISION_DATABASE_URL" --apply --create-substrate
+
+      # Re-running must be safe AND must not re-grant anything. This is the regression
+      # guard for the defect where a `GRANT ALL ON ALL TABLES` in the substrate re-granted
+      # 787 privilege rows on the second run while the migrations' own REVOKEs were
+      # correctly skipped -- leaving run 2 less secure than run 1, silently.
+      - name: Provision again -- idempotency, including the privilege direction
+        run: |
+          python scripts/provision_database.py \
+            --dsn "$PROVISION_DATABASE_URL" --apply --create-substrate
+
+      - name: Fail on schema drift from the committed baseline
+        run: python scripts/verify_schema_drift.py --dsn "$PROVISION_DATABASE_URL"
+
+      - name: Run every database security and integrity probe
+        run: python staging/run_all_probes.py
+
+      - name: Run the PostgreSQL-only test lane
+        run: |
+          pytest tests/test_tenant_isolation_rls_postgres.py \
+                 tests/test_cross_tenant_read_sweep_postgres.py \
+                 tests/test_billing_data_isolation_postgres.py \
+                 tests/test_tenant_referential_integrity_postgres.py \
+                 tests/test_pgcrypto_preflight_postgres.py \
+                 tests/test_signup_integration_postgres.py \
+                 tests/test_position_lifecycle_postgres.py \
+                 tests/test_referral_money_lifecycle_postgres.py \
+                 tests/test_orm_models_match_provisioned_schema.py \
+                 tests/test_bug049_identity_types_postgres.py \
+                 tests/test_schema_drift_checker_is_read_only_postgres.py \
+                 tests/test_production_security_probe_rolls_back_postgres.py \
+                 -v --tb=short
+
+      # The two gates that must pass before either production verifier is pointed at a
+      # live database. They need no server of their own -- they parse the scripts -- so
+      # they run here as well as in the lane above, where a missing PostgreSQL would
+      # skip them and the structural guarantees would go unchecked.
+      - name: Prove the production verifiers are safe to run against production
+        run: |
+          pytest tests/test_bug049_sql_and_alembic_agree.py \
+                 tests/test_production_security_probe_rolls_back_postgres.py \
+                 -v --tb=short \
+                 -k "source or autocommit or finally or pooler or agree or decision or cascade or convention or backstop or explicit_step or missing"
 
   docker-check:
     name: Docker Build Validation

@@ -1,0 +1,10 @@
+E         File "<unknown>", line 1
+E           async def start_bot(
+E       IndentationError: unexpected indent
+E         File "<unknown>", line 1
+E           async def start_bot(
+E       IndentationError: unexpected indent
+FAILED tests/test_work03_bot_ownership_claims_postgres.py::test_start_bot_is_wired_to_claim_bot
+FAILED tests/test_work03_bot_ownership_claims_postgres.py::test_every_exit_path_releases_the_claim
+2 failed, 25 passed, 1 warning in 54.18s
+NONCE_END=W3G7

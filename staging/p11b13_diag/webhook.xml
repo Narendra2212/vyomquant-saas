@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="6" time="1.600" timestamp="2026-10-10T11:16:24.155594+00:00" hostname="runnervmmprz5"><testcase classname="tests.test_webhook_duplicate_delivery_real_redis" name="test_the_credential_gate_refuses_test_keys" time="1.227" /><testcase classname="tests.test_webhook_duplicate_delivery_real_redis" name="test_a_redelivered_webhook_is_ignored" time="0.011" /><testcase classname="tests.test_webhook_duplicate_delivery_real_redis" name="test_the_lock_is_recorded_in_redis_under_the_documented_key" time="0.006"><failure message="AssertionError: no idempotency key at webhook:razorpay:evt_90948c27af79 after a delivery&#10;assert None is not None">handler = &lt;function razorpay_webhook at 0x7feb3a984a40&gt;
+redis_client = (&lt;redis.client.Redis(&lt;redis.connection.ConnectionPool(&lt;redis.connection.Connection(host=localhost,port=6379,db=15)&gt;)&gt;)&gt;, ['webhook:razorpay:evt_90948c27af79'])
+
+    async def test_the_lock_is_recorded_in_redis_under_the_documented_key(handler, redis_client):
+        """The key is the one the code's comments name, and it carries a TTL.
+    
+        A lock with no expiry that is never cleared would dedup for ever, including after a
+        legitimate later event reuses an id; a lock with no key at all would dedup nothing.
+        """
+        client, created = redis_client
+        event_id = f"evt_{uuid.uuid4().hex[:12]}"
+        key = f"webhook:razorpay:{event_id}"
+        created.append(key)
+    
+        await _deliver(handler, _event(event_id))
+    
+        value = client.get(key)
+&gt;       assert value is not None, f"no idempotency key at {key} after a delivery"
+E       AssertionError: no idempotency key at webhook:razorpay:evt_90948c27af79 after a delivery
+E       assert None is not None
+
+tests/test_webhook_duplicate_delivery_real_redis.py:311: AssertionError</failure></testcase><testcase classname="tests.test_webhook_duplicate_delivery_real_redis" name="test_a_different_event_id_is_not_deduplicated" time="0.006" /><testcase classname="tests.test_webhook_duplicate_delivery_real_redis" name="test_an_in_flight_delivery_blocks_a_concurrent_one" time="0.006"><failure message="AssertionError: a delivery arriving while evt_6571563fb645 was still in flight was processed anyway: {'status': 'success'}&#10;assert 'success' == 'duplicate'&#10;  &#10;  - duplicate&#10;  + success">handler = &lt;function razorpay_webhook at 0x7feb3a984a40&gt;
+redis_client = (&lt;redis.client.Redis(&lt;redis.connection.ConnectionPool(&lt;redis.connection.Connection(host=localhost,port=6379,db=15)&gt;)&gt;)&gt;, ['webhook:razorpay:evt_6571563fb645'])
+
+    async def test_an_in_flight_delivery_blocks_a_concurrent_one(handler, redis_client):
+        """The `processing` half of the two-phase lock.
+    
+        A redelivery that arrives while the first is still being processed -- which is the
+        realistic race, since providers retry on timeout -- must be refused on the strength
+        of the `processing` marker alone, before any `completed` value exists. Simulated by
+        installing the marker the way the handler does and then delivering.
+        """
+        client, created = redis_client
+        event_id = f"evt_{uuid.uuid4().hex[:12]}"
+        key = f"webhook:razorpay:{event_id}"
+        created.append(key)
+    
+        client.set(key, "processing", nx=True, ex=60)
+        result = await _deliver(handler, _event(event_id))
+    
+&gt;       assert result.get("status") == "duplicate", (
+            f"a delivery arriving while {event_id} was still in flight was processed "
+            f"anyway: {result}"
+        )
+E       AssertionError: a delivery arriving while evt_6571563fb645 was still in flight was processed anyway: {'status': 'success'}
+E       assert 'success' == 'duplicate'
+E         
+E         - duplicate
+E         + success
+
+tests/test_webhook_duplicate_delivery_real_redis.py:357: AssertionError</failure></testcase><testcase classname="tests.test_webhook_duplicate_delivery_real_redis" name="test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind" time="0.003" /></testsuite></testsuites>

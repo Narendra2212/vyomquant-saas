@@ -1,0 +1,6 @@
+START=2026-10-09T01:07:20.6947470+05:30
+DSN=postgresql://postgres:@127.0.0.1:58620/postgres
+ARGS=tests\test_validation_sweep.py -k clone_strategy
+......                                                                   [100%]
+6 passed, 387 deselected in 25.34s
+EXITCODE=0

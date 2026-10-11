@@ -1,0 +1,16 @@
+START=2026-10-09T00:02:03.7390420+05:30
+FILES=tests\property\test_order_idempotence_under_retry.py
+F..                                                                      [100%]
+================================== FAILURES ===================================
+_____ test_order_idempotence_under_generated_retry_and_restart_sequences ______
+tests\property\test_order_idempotence_under_retry.py:535: in test_order_idempotence_under_generated_retry_and_restart_sequences
+    recorder.assert_not_vacuous()
+tests\property\paper_census.py:92: in assert_not_vacuous
+    assert not shortfalls, (
+           ^^^^^^^^^^^^^^
+E   AssertionError: task-12.1 would be vacuous: flavour_limit occurred 18 time(s), floor 20 -- full census {'examples': 100, 'flavour_limit': 18, 'flavour_market': 82, 'step_retry': 320, 'step_restart': 312, 'sequence_length_2': 7, 'sequence_length_at_or_above_5': 91, 'sequence_length_10': 30, 'final_state_ACCEPTED': 18, 'final_state_FILLED': 82}. Fix a shortfall by FORCING the case in the generator, never by lowering the floor.
+=========================== short test summary info ===========================
+FAILED tests/property/test_order_idempotence_under_retry.py::test_order_idempotence_under_generated_retry_and_restart_sequences
+1 failed, 2 passed in 6.40s
+EXITCODE=1
+END=2026-10-09T00:02:12.8947935+05:30

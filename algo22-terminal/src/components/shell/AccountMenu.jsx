@@ -453,6 +453,36 @@ export default function AccountMenu({ className = '' }) {
    * placement is in the DOM before the browser paints — with a plain effect the panel's first
    * frame would be the unmeasured fallback and the trader would see it jump. No `scroll`
    * listener: the shell grid does not scroll, only the content column inside it does.
+   *
+   * `rail` IS A DEPENDENCY, AND IT IS DEFENSIVE RATHER THAN LOAD-BEARING. Stated precisely,
+   * because an earlier revision of this comment claimed it fixed a live defect and that
+   * claim was wrong.
+   *
+   * It was added when the sidebar became collapsible (`store/useSidebarStore`), on the
+   * reasoning that the track this trigger sits in goes from 216px to 56px without a window
+   * `resize`, so the listener below would not fire. Measured in a real browser
+   * (`tests/e2e/accountMenuAnchoring.spec.ts`, "collapsing the sidebar changes its width but
+   * not the trigger anchor point"), the premise does not hold: the sidebar is grid column 1,
+   * so its LEFT EDGE IS THE VIEWPORT'S at every width, and the footer is pinned to the
+   * bottom of a full-height column. Collapsing changes the trigger's `width`. It changes
+   * neither `rect.left` nor `rect.top`, and those are the only rect fields `popoverPosition`
+   * reads — so the collapse cannot move this popover.
+   *
+   * Separately, that state is not reachable: the portal layer below is `inset: 0` at
+   * `--z-dropdown`, so a pointer press aimed at the collapse toggle lands on the scrim and
+   * dismisses the panel, and the focus trap keeps Tab from reaching the toggle. Both facts
+   * are pinned by that same spec file.
+   *
+   * KEPT ANYWAY, deliberately: re-measuring on the mode costs one `getBoundingClientRect`
+   * per collapse, and it is the correct dependency the moment a layout change gives this
+   * trigger a left edge that is not the viewport's — a sidebar gutter, a floating rail, an
+   * inset shell. Removing it would be trading a free guard for nothing.
+   *
+   * THE LISTENER BELOW IS THE LOAD-BEARING HALF, and what it protects is `maxHeight`, not
+   * position: `bottom` works out to a constant 62 at every viewport height (see the spec's
+   * "keeps the trigger gap and the left gutter invariant" case), while
+   * `maxHeight = viewportHeight - 70` varies. A stale clamp lets the panel render past its
+   * allowance and off the top of the window — reproduced at -86px by deleting this listener.
    */
   useLayoutEffect(() => {
     if (!active) {
@@ -463,7 +493,7 @@ export default function AccountMenu({ className = '' }) {
     sync();
     window.addEventListener('resize', sync);
     return () => window.removeEventListener('resize', sync);
-  }, [active]);
+  }, [active, rail]);
 
   useFocusTrap({
     active,

@@ -1,0 +1,26 @@
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "C:\aerora_quant_backe
+nd_updated_final1\backend_app
+\core\rate_limit.py", line
+154, in
+resolve_rate_limit_config
+raise _refuse("REDIS_URL
+is missing or empty.")
+RuntimeError: FATAL: rate
+limiting has no shared
+store. REDIS_URL is missing
+or empty. (ENV=<unset>,
+REDIS_URL=empty). In-memory
+rate limiting is
+per-process: with more than
+one replica the effective
+limit becomes the configured
+limit times the replica
+count, so it is refused
+outside an explicitly local
+environment. Set REDIS_URL
+to a reachable Redis, or
+declare the environment with
+DEV_MODE=true /
+ENV=development.
+NONCE_END=SC7B

@@ -1,0 +1,25 @@
+job 114200293902  log lines=14550  bytes=2613475
+TOTALS: 2026-10-10T11:25:55.6100201Z = 62 failed, 12029 passed, 51 skipped, 322 deselected, 4 xfailed, 3 xpassed, 315 warnings in 587.71s (0:09:47) =
+
+distinct FAILED node ids parsed: 60
+
+count  file                                                     D5'?
+21     tests/test_quota01_exchange_slot_is_atomic.py            D5'
+13     tests/test_no_credential_in_api_response_body.py         unrelated
+9      tests/test_validation_sweep.py                           unrelated
+7      tests/test_task_6_1_backtest_execute.py                  unrelated
+4      tests/test_strategy_status_publish.py                    unrelated
+2      tests/test_webhook_duplicate_delivery_real_redis.py      D5'
+1      tests/test_task_33_2_rate_limit_keys.py                  unrelated
+1      tests/property/test_tenant_isolation_matrix.py           unrelated
+1      tests/test_task_8_4_runtime_readiness_gate.py            unrelated
+1      tests/test_ml_deployment_guards.py                       unrelated
+
+  D5'-attributable failures : 23
+  UNRELATED failures        : 37
+
+  => Removing the slot-lock file and fixing the webhook cannot by itself make
+     the blocking lane green: 37 unrelated failures would remain.
+
+  2026-10-10T11:13:44.8101035Z redis service is healthy.
+  2026-10-10T11:16:05.7562449Z   AERORA_TEST_REDIS_URL: redis://localhost:6379/15

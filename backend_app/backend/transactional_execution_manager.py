@@ -1014,7 +1014,33 @@ class TransactionalExecutionManager:
             raise
     
     async def _cancel_on_exchange(self, order_id: str) -> Dict[str, Any]:
-        """Cancel order on real exchange."""
+        """Cancel order on real exchange.
+
+        TRADE-03, the cancel half. Gated for the same reason as
+        :meth:`_execute_on_exchange` -- see that docstring.
+
+        A cancel is the risk-REDUCING direction, so gating it is the more debatable of the
+        two. It is gated anyway, because the argument for leaving it open ("cancelling is
+        always safe") is the argument that leaves an un-authenticated venue-write method
+        in the codebase, and a caller who can cancel arbitrary orders by id on an account
+        they do not own is a cross-tenant action, not a safety measure. The canonical
+        cancel path (`exchange_executor.cancel_order`, reached from the two gated cancel
+        endpoints) is unaffected.
+        """
+        from backend_app.core.live_execution_gate import require_live_authorization
+
+        _authorization = getattr(self, "_current_live_authorization", None)
+        self._current_live_authorization = None
+        require_live_authorization(
+            _authorization,
+            symbol=getattr(self, "_current_cancel_symbol", ""),
+            side="cancel",
+            size=0,
+            exchange_id=getattr(
+                getattr(self, "exchange_adapter", None), "exchange_id", ""
+            ),
+        )
+
         if not getattr(self, "exchange_adapter", None):
             raise ValueError("Live exchange adapter not configured. Mock execution paths have been eradicated.")
             
@@ -1056,7 +1082,46 @@ class TransactionalExecutionManager:
         logger.debug(f"[TransactionalExecutionManager] Order validated for tenant {self.tenant_id}")
     
     async def _execute_on_exchange(self, order_params: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute order on real exchange."""
+        """Execute order on real exchange.
+
+        TRADE-03: THIS IS THE SECOND VENUE-WRITE PATH, AND IT IS NOW GATED.
+        ------------------------------------------------------------------
+        `exchange_executor.place_order` is the canonical boundary and carries the
+        TRADE-04 live-execution gate. This method does NOT go through it -- it calls
+        `exchange.create_order` directly -- so the gate did not cover it.
+
+        It is currently unreachable: `execute_order` (its only caller) has no callers,
+        its one construction site (`exchange_websocket_listener.py:343`) is in a module
+        nothing starts, and `exchange_adapter` is never supplied. But "unreachable" is a
+        property of today's call graph, not of the code. One
+        `get_transactional_execution_manager(db, tenant, adapter)` call from a route or a
+        worker would arm an un-guarded live order path: no risk evaluation, no kill
+        switch, no strategy-ownership check, no notional ceiling, no clientOrderId, no
+        venue minimums.
+
+        So rather than leave a disarmed landmine, the same artefact the canonical boundary
+        demands is demanded here. With no gateway on this path to mint one, this refuses
+        unconditionally today -- which is the correct behaviour for a path nobody should
+        be using. If it is ever legitimately reinstated, it must be routed through
+        `ExecutionEngine.execute_with_idempotency` so that an authorisation exists, and it
+        will then work without further change to this method.
+
+        Regression: tests/test_trade03_second_write_path_is_gated.py
+        """
+        from backend_app.core.live_execution_gate import require_live_authorization
+
+        _authorization = getattr(self, "_current_live_authorization", None)
+        self._current_live_authorization = None
+        require_live_authorization(
+            _authorization,
+            symbol=order_params.get("symbol"),
+            side=order_params.get("side"),
+            size=order_params.get("quantity"),
+            exchange_id=getattr(
+                getattr(self, "exchange_adapter", None), "exchange_id", ""
+            ),
+        )
+
         if not getattr(self, "exchange_adapter", None):
             raise ValueError("Live exchange adapter not configured. Mock execution paths have been eradicated.")
             

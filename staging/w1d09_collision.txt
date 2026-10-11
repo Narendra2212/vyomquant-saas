@@ -1,0 +1,129 @@
+﻿=== Q1. SCHEMA SCOPING PER DIMENSION ===
+  A key like `relname` is unique only WITHIN a namespace. If a query is not
+  schema-scoped, its declared key can collide across schemas.
+
+  tables                         SCOPED
+        nspname = literal=public
+  columns                        SCOPED
+        table_schema = literal=public
+  primary_keys                   SCOPED
+        nspname = literal=public
+  foreign_keys                   SCOPED
+        nspname = literal=public
+  unique_and_check_constraints   SCOPED
+        nspname = literal=public
+  indexes                        SCOPED
+        schemaname = literal=public
+  row_level_security             SCOPED
+        nspname = literal=public
+  policies                       SCOPED
+        schemaname = literal=public
+  privileges                     SCOPED
+        table_schema = literal=public
+  extensions                     *** NOT SCHEMA-SCOPED ***
+  functions                      SCOPED
+        nspname = literal=public
+  triggers                       SCOPED
+        nspname = literal=public
+  sequences                      *** NOT SCHEMA-SCOPED ***
+  enum_types                     SCOPED
+        nspname = literal=public
+  alembic_version                *** NOT SCHEMA-SCOPED ***
+  recorded_migrations            *** NOT SCHEMA-SCOPED ***
+
+  dimensions with no detectable schema predicate: 4
+      extensions
+      sequences
+      alembic_version
+      recorded_migrations
+
+=== Q2. recorded_migrations: is `filename` really unique? ===
+  FULL QUERY:
+      SELECT filename, sha256, step FROM public.schema_migrations
+              ORDER BY filename, step
+
+  ORDER BY wider than declared key (1)? -> ORDER BY (filename, step) = 2 terms: True
+  Reading: an ORDER BY that adds `step` after `filename` is only necessary if
+  more than one row can share a filename. If each file contributes one row per
+  applied STEP, then (filename) is NOT unique and key width 1 is ambiguous.
+
+=== Q2b. WHAT WRITES schema_migrations? (provisioner source) ===
+         24: Step 0   020_declare_pre_existing_tables.sql        (first, despite its number)
+         25: Step 1   backend_app/migrations/001..019, then migrations/*
+         26: Step 2   alembic upgrade d97ffff9c3bb               (the branchpoint, NOT head)
+         27: Step 3   020 again, so strategies_source_library_id_fkey can land
+         31: Step 0   020_declare_pre_existing_tables.sql
+         32: Step 0c  alembic upgrade head                       (BEFORE the SQL set, and head)
+         33: Step 0b  archived_migrations/root_migrations/*.sql   (less the two alembic owns)
+         34: Step 1   backend_app/migrations/001..019, then migrations/*
+         35: Step 3   020 again
+         37: 1. Alembic moves ahead of the SQL set. The document's step 2 placement is circular:
+         44: apply here, because step 0 declares it first. The real cause was a
+         67: * Records every applied file in ``public.schema_migrations`` with a SHA-256 of its
+         82: 0   completed (dry run, or apply with every step succeeding)
+         84: 4   a step failed while applying
+        108: #: ``profiles`` -- but step 0 below applies ``020_declare_pre_existing_tables.sql``,
+        135: #: aborts if any per-customer table is still readable by ``anon``. See STEP 4 for why
+        139: #: Applied as STEP 3b, between the numbered SQL set and the privilege hardening.
+        143: #: this path alembic runs at STEP 0c, BEFORE the numbered SQL set, and 9 of its 12 target
+        153: CREATE TABLE IF NOT EXISTS public.schema_migrations (
+        154: filename     text        PRIMARY KEY,
+        157: step         text        NOT NULL
+        159: COMMENT ON TABLE public.schema_migrations IS
+        177: -- `migrations/referral_system_redesign.sql` defines generate_unique_referral_code()
+        244: id         uuid PRIMARY KEY,
+        345: """Step 0b ΓÇö the marketplace/library tables the numbered set depends on.
+        352: THIS STEP IS MISSING FROM PROVISIONING_ORDER.md, and its absence makes that
+        353: document's order circular. The document places ``library_strategies`` in step 2
+        354: (Alembic ``e88f9911b5a2``), but step 1's
+        364: So step 1 cannot finish before step 2, and step 2 is documented as following step 1.
+        370: filename so the order is deterministic.
+        375: ``execution_records`` (PROVISIONING_ORDER.md's step-2 table), and applying the SQL
+        376: versions first creates ``TYPE task_status`` and then step 2 aborts on
+        379: Measured, not assumed: including them took provisioning all the way to step 2 and
+        388: #: Owned by `d97ffff9c3bb_execution_schema_rebuild`, applied in step 2.
+        404: """Step 1's files, in the order PROVISIONING_ORDER.md prescribes.
+        407: ``migrations/``. ``020`` is excluded because it is step 0 and step 3.
+        452: "WHERE table_schema='public' AND table_name='schema_migrations'"
+        456: cur.execute("SELECT filename, sha256 FROM public.schema_migrations")
+        460: def _apply_sql(conn, path: pathlib.Path, step: str, dry_run: bool, already: dict) -> str:
+        480: "INSERT INTO public.schema_migrations (filename, sha256, step) "
+        481: "VALUES (%s, %s, %s) ON CONFLICT (filename) DO NOTHING",
+        482: (name, digest, step),
+        544: # ΓöÇΓöÇ Step 0 ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        545: print("STEP 0 ΓÇö 020_declare_pre_existing_tables.sql (first, despite its number)")
+        549: # ΓöÇΓöÇ Step 0c ΓÇö ALEMBIC, BEFORE the SQL set, not after ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        551: # PROVISIONING_ORDER.md places Alembic in step 2, AFTER the numbered SQL set.
+        554: #   * with the archived execution-schema files included in step 0b, step 2 aborted
+        557: #   * with them excluded, step 1 aborted on
+        579: print(f"STEP 0c ΓÇö alembic upgrade {ALEMBIC_TARGET}")
+        581: print("           PROVISIONING_ORDER.md's step-2 placement is circular)")
+        602: # ΓöÇΓöÇ Step 0b ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        604: print(f"STEP 0b ΓÇö archived_migrations/root_migrations ({len(archived)} files)")
+        612: # ΓöÇΓöÇ Step 1 ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        614: print(f"STEP 1 ΓÇö the numbered SQL set ({len(files)} files)")
+        620: # ΓöÇΓöÇ Step 3 ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        621: print("STEP 3 ΓÇö re-run 020 so strategies_source_library_id_fkey can land")
+        636: # ΓöÇΓöÇ Step 4 ΓÇö privilege hardening, LAST ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        638: # WHY LAST, AND WHY A STEP RATHER THAN A FILE IN THE NUMBERED SET.
+        653: # Ordering it by filename would have been fragile too: within `migrations/` the files
+        655: # last. An explicit step cannot be displaced by someone adding `zz_*.sql`.
+        660: # ΓöÇΓöÇ Step 3b ΓÇö BUG-049 identity types, after the SQL set, before hardening ΓöÇ
+        662: # Separate from STEP 4 because it is a different kind of thing: a type conversion
+        670: print("STEP 3b ΓÇö BUG-049 identity column types and foreign keys")
+        679: print("STEP 4 ΓÇö privilege hardening (runs last; see the comment in provision_database.py)")
+
+=== Q3. OTHER KEYS WHOSE ORDER BY IS WIDER THAN THE DECLARED KEY ===
+  Same signature, same question: a wider ORDER BY hints at non-unique keys.
+  tables                         key=1  order_by_terms=1
+  columns                        key=2  order_by_terms=2
+  primary_keys                   key=2  order_by_terms=2
+  foreign_keys                   key=2  order_by_terms=2
+  unique_and_check_constraints   key=2  order_by_terms=2
+  indexes                        key=2  order_by_terms=2
+  row_level_security             key=1  order_by_terms=1
+  policies                       key=2  order_by_terms=2
+  functions                      key=2  order_by_terms=2
+  triggers                       key=2  order_by_terms=2
+  enum_types                     key=1  order_by_terms=1
+  recorded_migrations            key=1  order_by_terms=2 <-- ORDER BY WIDER THAN KEY

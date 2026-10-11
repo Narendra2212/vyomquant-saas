@@ -3,7 +3,7 @@ import os
 import random
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_EVEN
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 from uuid import UUID
@@ -20,7 +20,8 @@ _ENVIRONMENT_UNSTATED = object()
 from backend_app.core.database import SessionLocal
 from backend_app.core.metrics import execution_metrics
 from backend_app.core.models.execution_record import (
-    ExecutionRecordRepository, ExecutionSide, ExecutionStatus)
+    AMBIGUOUS_SUBMISSION_ACTION, ExecutionRecordRepository, ExecutionSide,
+    ExecutionStatus)
 from backend_app.core.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ class ExecutionEngine:
     - Commission simulation
     """
     
-    def __init__(self, fee_rate: float = 0.001, slippage: float = 0.0005, risk_manager: Optional[RiskManager] = None, portfolio_state: Optional[Dict] = None, exchange_executor: Optional[Any] = None, *, execution_environment: Any = _ENVIRONMENT_UNSTATED):
+    def __init__(self, fee_rate: float = 0.001, slippage: float = 0.0005, risk_manager: Optional[RiskManager] = None, portfolio_state: Optional[Dict] = None, exchange_executor: Optional[Any] = None, *, execution_environment: Any = _ENVIRONMENT_UNSTATED, paper_ledger: Optional[Any] = None):
         """
         Initialize ExecutionEngine with fee, slippage, and risk management.
         
@@ -295,6 +296,46 @@ class ExecutionEngine:
         self.initial_capital: Decimal = total_equity
         self.current_equity: Decimal = total_equity
         self.peak_equity: Decimal = total_equity
+
+        # ═══════════════════════════════════════════════════════════════════
+        # CASH IS SEPARATE FROM EQUITY  (BUG-016)
+        # ═══════════════════════════════════════════════════════════════════
+        # `current_equity` used to be the only balance this engine had, and it served as
+        # both the cash available to spend and the total value of the account. Opening a
+        # position moved only the FEE out of it, so:
+        #
+        #   * `cash + position value != equity` -- the identity simply did not hold.
+        #   * `get_drawdown()` measured drawdown on a figure that never moved while a
+        #     position was open, so a position 40% underwater reported ZERO drawdown and
+        #     the max-drawdown kill switch could not fire on open risk.
+        #   * the "Insufficient capital" check compared a position's cost against EQUITY,
+        #     which had not been reduced by the previous position -- so N positions could
+        #     each be worth up to the whole account. The only accidental brake was
+        #     `max_open_trades = 5`, capping exposure at ~500% of equity by coincidence.
+        #
+        # THE MODEL, taken from `backend/paper/paper_accounting` rather than invented
+        # here, because that module is the already-correct reference and has an exact
+        # zero-tolerance invariant test:
+        #
+        #     cash_delta = -(new_position_value - old_position_value) - fee
+        #     equity     = cash + position_market_value
+        #
+        # Cash is DERIVED from the change in position value rather than debited case by
+        # case, which is what makes the identity hold for all five position cases
+        # (open, increase, partial close, full close, reverse) without any of them
+        # needing their own arithmetic. The change in equity across any fill is then
+        # exactly `-fee`, by construction.
+        #
+        # A round trip ends on the same equity as the old code -- verified algebraically
+        # and pinned by a regression test -- so this does not change realised results.
+        # What changes is equity DURING an open position, which is the whole point.
+        # Regression: tests/test_execution_engine_accounting_identity.py
+        self.cash: Decimal = total_equity
+
+        #: Last price seen per symbol, used to mark open positions to market. A position
+        #: only exists as the result of a fill, and every fill carries a price, so an
+        #: open position always has a mark.
+        self._marks: Dict[str, Decimal] = {}
         
         # 🛡️ Risk Manager for global guardrails - use REAL capital
         self.risk_manager = risk_manager or RiskManager(initial_equity=float(total_equity))
@@ -303,6 +344,312 @@ class ExecutionEngine:
         # Store portfolio state reference for safety checks
         self._portfolio_state = portfolio_state
         self.exchange_executor = exchange_executor
+
+        # ═══════════════════════════════════════════════════════════════════
+        # PAPER-01: THE CANONICAL PAPER LEDGER SEAM
+        # ═══════════════════════════════════════════════════════════════════
+        # When installed, the PAPER branch records its fill on the canonical paper
+        # ledger (`paper_accounts` / `paper_orders` / `paper_fills` /
+        # `paper_positions` / ...) through `PaperTradingService`, and this engine's
+        # in-process cash and positions become a COPY of what was persisted rather
+        # than a second, independent model of it.
+        #
+        # OPTIONAL, for the same reason `execution_environment` is optional: there
+        # are 71 construction sites and making this mandatory would be a far wider
+        # contract change than the defect it closes. An engine with no ledger
+        # behaves exactly as it did -- it simulates in process and persists
+        # nothing -- so each site that wires one gains the persistence and no site
+        # loses anything by not having been updated. `BotRunner`'s paper branch
+        # wires it; `tests/test_paper01_botrunner_fills_reach_the_ledger_postgres.py`
+        # holds that it does.
+        #
+        # It is NOT a second accounting implementation. This engine computes no
+        # money on the canonical path: it hands the order to the service and reads
+        # the stored figures back.
+        self.paper_ledger = paper_ledger
+
+        # TRADE-04 / TRADE-05. Per-order facts the live gate needs, set by
+        # `execute_with_idempotency` immediately before `_execute_trade_internal` and
+        # never read on the paper branch. `None` is the safe default for the risk verdict:
+        # an order nobody evaluated is refused, not waved through.
+        self._live_risk_approved: Optional[bool] = None
+        self._live_risk_reason: str = ""
+        self._live_tenant_id: Optional[str] = None
+        self._live_strategy_id: Optional[str] = None
+
+    # ----------------------------------
+    # ACCOUNTING  (BUG-016)
+    # ----------------------------------
+    @staticmethod
+    def position_value(position: "Position", price: Decimal) -> Decimal:
+        """One position's market value at *price*.
+
+        ``LONG``  -> ``size * price``
+        ``SHORT`` -> ``size * (2 * entry_price - price)``
+
+        The SHORT convention is `paper_accounting.position_value`'s, retained rather than
+        re-derived. Read as ``size*entry + size*(entry - price)``, it is the cash the
+        short consumed plus the profit it has made -- which is what keeps the equity
+        identity holding for a short without introducing a negative position value.
+
+        A closed position (``size == 0``) is worth exactly zero under both branches, so
+        it needs no special case and no tolerance.
+        """
+        p = price if isinstance(price, Decimal) else Decimal(str(price))
+        if position.side == "long":
+            return position.size * p
+        return position.size * (Decimal("2") * position.entry_price - p)
+
+    def position_market_value(self) -> Decimal:
+        """Total value of the open positions at their last marks."""
+        total = Decimal("0")
+        for symbol, position in self.positions.items():
+            mark = self._marks.get(symbol, position.entry_price)
+            total += self.position_value(position, mark)
+        return total
+
+    def _sync_equity(self) -> None:
+        """Recompute ``current_equity`` from cash and position value, and track the peak.
+
+        ``current_equity`` is never incremented or decremented anywhere; it is only ever
+        recomputed from the two things that actually move. That is what makes the
+        identity impossible to drift -- the same rule `paper_accounting` follows, where
+        ``total_equity`` is always the computed sum and never a maintained counter.
+        """
+        self.current_equity = self.cash + self.position_market_value()
+        if self.current_equity > self.peak_equity:
+            self.peak_equity = self.current_equity
+
+    def _capacity_bounds_for(
+        self, *, size: Any, price: Any
+    ) -> tuple[Decimal, Optional[Decimal], str]:
+        """The notional and the fundable ceiling for one order, for TRADE-01.
+
+        DERIVED THE SAME WAY AS THE PER-ORDER CHECK, ON PURPOSE. The ceiling computed
+        here must be the same number `_execute_trade_internal` computes at its
+        `_notional > _ceiling` gate, or the cross-order bound and the per-order bound
+        would disagree about what the account can fund and one of them would be wrong.
+        Both read `self.current_equity` and `self.max_leverage` and multiply; this is the
+        one place that logic is written twice, and it is written identically.
+
+        Returns `(notional, ceiling, explanation)`. `ceiling` is None when equity cannot
+        be established, which the caller treats as a refusal — an order that cannot be
+        shown to be fundable is not sent.
+        """
+        # `getattr`, not `self.current_equity`. The attribute is set by `_sync_equity`
+        # and is NOT present on every engine: several construction paths in this
+        # repository never reach it, and an `AttributeError` here would escape the
+        # `(InvalidOperation, TypeError, ValueError)` handler and crash the order path
+        # instead of refusing it. The per-order check's own log line already reads it this
+        # way, which is how the inconsistency was noticed.
+        raw_equity = getattr(self, "current_equity", None)
+        try:
+            equity = Decimal(str(raw_equity))
+        except (InvalidOperation, TypeError, ValueError):
+            equity = None
+
+        if equity is None or equity <= 0:
+            return (Decimal("0"), None, f"the engine's equity is {raw_equity!r}")
+
+        max_leverage = Decimal(str(getattr(self, "max_leverage", 1) or 1))
+
+        # ═══════════════════════════════════════════════════════════════════
+        # TRADE-11: A PRICE THAT IS NOT A USABLE NUMBER REFUSES. IT DOES NOT
+        #           BECOME ZERO.
+        # ═══════════════════════════════════════════════════════════════════
+        # This line used to read
+        #
+        #     notional = abs(Decimal(str(size))) * abs(Decimal(str(price or 0)))
+        #
+        # and `price or 0` is the whole finding. `None`, `""`, `0`, `0.0` and
+        # `Decimal("0")` are all falsey, so every one of them produced `notional = 0` --
+        # a reservation that consumes no capacity and therefore ALWAYS fits, whatever
+        # else is in flight. The refusal below only ever fired for a price that was
+        # non-numeric AND non-falsey, i.e. a string like "abc"; the cases that actually
+        # occur went through silently.
+        #
+        # A MARKET ORDER IS REFUSED HERE, AND THAT IS THE POINT.
+        # On the live path a market order arrives as `price = 0`
+        # (`_execute_trade_internal` computes `market if price <= 0 else limit`). So "a
+        # zero price" and "a market order" are the same input, and valuing it requires a
+        # mark price.
+        #
+        # Measured: NO price oracle, ticker or mark-price service is consulted by ANY
+        # capacity or notional check in this repository, and no risk policy document
+        # specifying pre-trade market-order valuation exists. `data_seeking_engine`
+        # can fetch a ticker, but nothing defines which price, how stale is too stale, or
+        # what to do when market data is unavailable. Inventing those three answers inside
+        # a capital check would be an unreviewed risk rule governing real money.
+        #
+        # So the honest options are "refuse" or "admit unbounded exposure", and the
+        # previous behaviour was the second one wearing the first one's clothes: the
+        # comment at the per-order gate said a market order "is not waved through"
+        # because "the venue's own balance check is the backstop" -- but a venue-side
+        # rejection arrives AFTER the idempotency claim has been consumed and the
+        # execution record says an attempt was made.
+        #
+        # Paper and backtest engines never reach this method: the caller branches on
+        # `_is_declared_simulator` first, so simulated market orders are unaffected.
+        # Regression: tests/test_trade11_capacity_fails_closed_postgres.py
+        if price is None or (isinstance(price, str) and not price.strip()):
+            return (
+                Decimal("0"),
+                None,
+                f"order price is {price!r}, so this order has no computable notional. A "
+                f"live order cannot be shown to fit the account's capacity without a "
+                f"price, and this platform has no policy for valuing one from market "
+                f"data",
+            )
+
+        try:
+            price_decimal = Decimal(str(price))
+            size_decimal = Decimal(str(size))
+        except (InvalidOperation, TypeError, ValueError):
+            # An unparseable size or price cannot be bounded either. Refuse rather than
+            # treat it as zero notional, which would consume no capacity and pass.
+            return (
+                Decimal("0"),
+                None,
+                f"order size {size!r} or price {price!r} is not a usable number",
+            )
+
+        if not price_decimal.is_finite() or not size_decimal.is_finite():
+            # NaN and Infinity are parseable by `Decimal` and are not numbers a notional
+            # can be computed from. `Decimal("NaN") > x` is False for every x, so an
+            # unchecked NaN price would pass the ceiling comparison below rather than
+            # failing it -- the comparison silently inverts.
+            return (
+                Decimal("0"),
+                None,
+                f"order size {size!r} or price {price!r} is not finite",
+            )
+
+        if price_decimal <= 0:
+            return (
+                Decimal("0"),
+                None,
+                f"order price {price!r} is not positive, so this order has no computable "
+                f"notional (a market order arrives here as price <= 0). This platform "
+                f"has no risk policy for valuing a market order pre-trade, so it is "
+                f"refused rather than valued by a guess",
+            )
+
+        if size_decimal == 0:
+            return (
+                Decimal("0"),
+                None,
+                f"order size {size!r} is zero, so there is nothing to fund",
+            )
+
+        notional = abs(size_decimal) * abs(price_decimal)
+        return (notional, equity * max_leverage, "")
+
+    def mark_to_market(self, symbol: str, price: Decimal) -> Decimal:
+        """Record the latest price for *symbol* and restate equity. Returns new equity.
+
+        This is what lets ``get_drawdown`` see an open position's loss. Without a mark,
+        drawdown is measured on realised results only, and the max-drawdown kill switch
+        cannot fire until the position is closed -- by which time the loss has already
+        been taken.
+        """
+        self._marks[symbol] = price if isinstance(price, Decimal) else Decimal(str(price))
+        self._sync_equity()
+        return self.current_equity
+
+    def _apply_cash_delta(
+        self, symbol: str, old_value: Decimal, new_value: Decimal, fee: Decimal
+    ) -> Decimal:
+        """Move cash by the residual of the position-value change, less the fee.
+
+        The single arithmetic path for every fill. Returns the cash delta applied.
+        """
+        cash_delta = -(new_value - old_value) - fee
+        self.cash += cash_delta
+        self._sync_equity()
+        return cash_delta
+
+    def _reconcile_from_paper_ledger(self, recorded: Any) -> None:
+        """Replace this engine's in-process figures with the ones the ledger persisted.
+
+        PAPER-01. Without this the engine would hold a second, independent answer to
+        "what is my cash and what do I hold", and the two would diverge on the first
+        fill -- which is the defect restated one layer in. After this call every figure
+        on the engine is a copy of a stored one:
+
+        * ``self.cash`` is ``available_balance + locked_balance`` from ``paper_accounts``.
+        * ``self.positions`` is rebuilt from the open ``paper_positions`` rows.
+        * ``self._marks`` is each position's stored ``current_price``, so
+          :meth:`_sync_equity` reproduces the stored ``total_equity`` rather than
+          valuing the same position at a different price.
+
+        The engine's own ``position_value`` is the same SHORT convention
+        (``size * (2*entry - price)``) ``paper_accounting.position_value`` uses, so the
+        recomputation agrees by construction rather than by coincidence. A disagreement
+        is therefore evidence of a real divergence and is logged at CRITICAL -- not
+        raised, because the ledger has already asserted its own invariant with zero
+        tolerance and IT is the source of truth; this process's copy being wrong is a
+        reporting fault, not a reason to unwind a recorded fill.
+        """
+        self.cash = recorded.cash
+
+        rebuilt: Dict[str, Position] = {}
+        marks: Dict[str, Decimal] = {}
+        for ledger_symbol, row in (recorded.positions or {}).items():
+            try:
+                size = Decimal(str(row.get("size") or "0"))
+                entry = Decimal(str(row.get("entry_price") or "0"))
+            except (InvalidOperation, TypeError, ValueError):
+                logger.error(
+                    "Paper ledger position for %s carries an unreadable size/entry "
+                    "(%r/%r); it is skipped rather than guessed at.",
+                    ledger_symbol, row.get("size"), row.get("entry_price"),
+                )
+                continue
+            if size <= 0:
+                # A closed position persists at size 0 with closed_at set. It is worth
+                # exactly zero and holds no exposure, so it is not an open position here.
+                continue
+            # `paper_positions.side` is 'LONG'/'SHORT'; this engine's is 'long'/'short'.
+            rebuilt[ledger_symbol] = Position(
+                symbol=ledger_symbol,
+                entry_price=entry,
+                size=size,
+                side=str(row.get("side") or "LONG").strip().lower(),
+            )
+            current = row.get("current_price")
+            marks[ledger_symbol] = (
+                entry if current is None else Decimal(str(current))
+            )
+
+        self.positions = rebuilt
+        self._marks = marks
+        self._sync_equity()
+
+        if self.current_equity != recorded.total_equity:
+            logger.critical(
+                "PAPER-01 reconciliation disagreement: the ledger persisted "
+                "total_equity=%s and this process recomputed %s from the same rows. "
+                "The LEDGER is authoritative. cash=%s position_market_value=%s",
+                recorded.total_equity, self.current_equity, self.cash,
+                self.position_market_value(),
+            )
+
+    def available_cash(self) -> Decimal:
+        """Cash not already committed to an open position."""
+        return self.cash
+
+    def total_exposure(self) -> Decimal:
+        """Aggregate absolute notional of the open positions, at their last marks.
+
+        Exposure is notional, not value: a short's exposure is what it could move
+        against the account, so it is measured on ``size * price`` rather than on the
+        ``2*entry - price`` valuation used for equity.
+        """
+        total = Decimal("0")
+        for symbol, position in self.positions.items():
+            mark = self._marks.get(symbol, position.entry_price)
+            total += abs(position.size * mark)
+        return total
     
     # ----------------------------------
     # IDEMPOTENT EXECUTION WRAPPER
@@ -319,6 +666,8 @@ class ExecutionEngine:
         execution_interval_minutes: int = 5,
         source: str = "unknown",
         execution_environment: Any = ExecutionEnvironment.LIVE,
+        risk_approved: Optional[bool] = None,
+        risk_reason: str = "",
     ) -> Dict[str, Any]:
         """
         Execute trade with idempotency check - PREVENTS DUPLICATE EXECUTIONS.
@@ -571,20 +920,141 @@ class ExecutionEngine:
                     'result': existing_result,
                     'message': 'Previous execution failed, retry disabled'
                 }
+
+            # ═══════════════════════════════════════════════════════════════════
+            # DUP-02: AMBIGUOUS SUBMISSION — REFUSED, NOT RESUBMITTED
+            # ═══════════════════════════════════════════════════════════════════
+            # `check_idempotent_execution` established that this execution may already be
+            # live at the venue (`submitted_at` committed before `create_order`, or a
+            # status of UNKNOWN which means the watchdog could not determine the
+            # outcome). Returning here keeps it away from STEP 3's claim.
+            #
+            # Resubmitting would double a position; marking it successful would invent a
+            # fill. The row is left exactly as it is for `OrderWatchdog` — the single
+            # owner of adjudication — and the refusal is surfaced to the caller so a tick
+            # is skipped rather than silently retried.
+            elif action == AMBIGUOUS_SUBMISSION_ACTION:
+                return {
+                    'status': 'skipped_ambiguous_submission',
+                    'execution_id': execution_id,
+                    'result': existing_result,
+                    'message': (
+                        'A previous attempt for this execution may already have reached '
+                        'the venue. It was NOT resubmitted. Reconcile against the venue '
+                        'before retrying.'
+                    )
+                }
+
+            # DUP-02. `allow_retry` is now handled EXPLICITLY.
+            #
+            # It previously had no branch and reached STEP 3 by fall-through, which is
+            # structurally how an ambiguous row became a second submission. Naming it
+            # here makes the intent legible and means a future action added to
+            # `check_idempotent_execution` without a branch is caught by
+            # `test_dup02_…::test_every_action_the_check_can_return_is_handled_explicitly`
+            # rather than silently inheriting "proceed to submit".
+            #
+            # Reaching this point is safe: the ambiguity guard above has already refused
+            # anything that may be live at the venue, so an `allow_retry` here is a
+            # retry of an execution that provably never reached `create_order`.
+            elif action == 'allow_retry':
+                logger.info(
+                    "DUP-02: execution %s is being retried; no prior venue submission "
+                    "was recorded for it.", execution_id,
+                )
             
             # STEP 3: Acquire execution lock (only ONE worker proceeds)
-            claimed, record = repo.claim_execution(execution_id, tenant_id)
-            
+            #
+            # TRADE-01. THE CLAIM IS NOW ALSO A CAPACITY RESERVATION, FOR LIVE ORDERS.
+            # ----------------------------------------------------------------------
+            # `claim_execution` guarantees that only one worker executes a GIVEN
+            # execution. It says nothing about two DIFFERENT executions, and the capital
+            # bound further down (`_notional > _ceiling` in `_execute_trade_internal`) is
+            # a read-then-compare against `self.current_equity` in process memory with
+            # nothing reserved. Because `generate_execution_id` folds size and price into
+            # the canonical string, two orders that differ in either get different
+            # execution ids and different Redis locks, clear the identical ceiling
+            # independently, and both proceed — two orders at 60% of the ceiling commit
+            # 120% of it.
+            #
+            # `claim_execution_within_capacity` makes the claim and the capacity decision
+            # one transaction, serialised per tenant by a PostgreSQL advisory lock, with
+            # in-flight notional summed from `execution_records` rather than from memory.
+            # The reservation IS the `executing` row, so there is no separate reservation
+            # state that can leak if this process dies between the two.
+            #
+            # SCOPE: live-bound orders only. `_is_declared_simulator` was computed above
+            # from the engine's own environment and the presence of an executor; a paper
+            # or backtest engine keeps the original claim, because there is no real
+            # account whose capacity could be oversubscribed and the paper path has its
+            # own ledger. The per-order ceiling below is unchanged and still runs — this
+            # adds a bound across concurrent orders, it does not replace the one on each.
+            if _is_declared_simulator:
+                claimed, record = repo.claim_execution(execution_id, tenant_id)
+                capacity_refusal = None
+            else:
+                _cap_notional, _cap_ceiling, _cap_why = self._capacity_bounds_for(
+                    size=size, price=price
+                )
+                if _cap_ceiling is None:
+                    # Equity unreadable. Same policy as the per-order check: an order that
+                    # cannot be shown to be fundable is refused, not sent.
+                    logger.critical(
+                        "Refusing execution %s: capacity could not be bounded (%s).",
+                        execution_id, _cap_why,
+                    )
+                    return {
+                        'status': 'blocked',
+                        'execution_id': execution_id,
+                        'result': None,
+                        'message': (
+                            f"Risk gateway: concurrent capacity could not be established "
+                            f"for this account ({_cap_why}). Refused before any exchange "
+                            f"call."
+                        ),
+                    }
+                claimed, record, capacity_refusal = repo.claim_execution_within_capacity(
+                    execution_id,
+                    tenant_id,
+                    notional=_cap_notional,
+                    ceiling=_cap_ceiling,
+                )
+
             if not claimed:
-                # Another worker claimed between check and claim
+                # Two different outcomes share this branch, and they are reported
+                # differently so an operator can tell "someone else got there first" from
+                # "the account has no room".
+                if capacity_refusal and "Capacity reservation refused" in capacity_refusal:
+                    return {
+                        'status': 'blocked',
+                        'execution_id': execution_id,
+                        'result': None,
+                        'message': capacity_refusal,
+                    }
                 return {
                     'status': 'skipped_contention',
                     'execution_id': execution_id,
                     'result': None,
-                    'message': 'Another worker acquired execution lock first'
+                    'message': capacity_refusal
+                               or 'Another worker acquired execution lock first'
                 }
             
             # STEP 4: Execute trade (ONLY if lock acquired)
+            #
+            # TRADE-04 / TRADE-05. The per-order facts the live gate needs are handed to
+            # `_execute_trade_internal` as instance state rather than as parameters,
+            # matching how `_current_validation_token` is already passed to the executor.
+            # They are set HERE, after every guard above has run, so the authorisation
+            # minted on the live branch cannot claim a check that did not happen.
+            #
+            # `risk_approved` defaults to None, so a caller that does not evaluate risk
+            # refuses on the live branch. That is the point: `execute_trade` does not
+            # forward it, so the two doors the audit flagged as inheriting bot_runner
+            # authorisation without the risk check now cannot place a live order.
+            self._live_risk_approved = risk_approved
+            self._live_risk_reason = risk_reason
+            self._live_tenant_id = str(tenant_id)
+            self._live_strategy_id = str(strategy_id)
             try:
                 success, trade_result = await self._execute_trade_internal(
                     symbol=symbol,
@@ -611,11 +1081,26 @@ class ExecutionEngine:
                     # UPDATE execution_records
                     # SET status = 'completed', order_id = ?, result = ?, updated_at = now()
                     # WHERE execution_id = ?
+                    # TRADE-12: the venue's id goes in `venue_order_id`, NOT `order_id`.
+                    #
+                    # `trade_result['order_id']` is `result.exchange_order_id`, i.e.
+                    # `str(create_order_response["id"])` -- the EXCHANGE's identifier.
+                    # `execution_records.order_id` carries
+                    # `FOREIGN KEY (order_id) REFERENCES orders(id)`, and `public.orders`
+                    # holds THIS platform's orders, so that write was refused with 23503.
+                    # Since `update_status` commits, the failure aborted this session's
+                    # transaction, the `except` handler's own FAILED write then failed
+                    # too, and the exception left this method -- stranding the row as
+                    # EXECUTING with `order_id IS NULL` immediately after a real fill,
+                    # where `OrderWatchdog` could never see it.
+                    #
+                    # Measured in
+                    # staging/probe_phase9_order_id_fk_blocks_completion.py.
                     repo.update_status(
                         execution_id=execution_id,
                         tenant_id=tenant_id,
                         status=ExecutionStatus.COMPLETED,
-                        order_id=trade_result.get('order_id'),
+                        venue_order_id=trade_result.get('order_id'),
                         result=final_result
                     )
                     
@@ -768,11 +1253,213 @@ class ExecutionEngine:
 
         # LIVE EXECUTION PATH
         if _has_executor:
+            # ═══════════════════════════════════════════════════════════════
+            # NOTIONAL CEILING — THE ONE RISK BOUND THE GATEWAY ITSELF OWNS
+            # ═══════════════════════════════════════════════════════════════
+            # `execute_with_idempotency` contains NO risk evaluation. Its checks are
+            # environment, source, kill switch, strategy existence, idempotency and claim
+            # — verified by execution during the pre-launch audit, which searched this
+            # method and `_execute_trade_internal` for any reference to `ExecutionGuard`,
+            # `RiskEngine`, `validate_trade` or `validate_trade_request` and found none.
+            #
+            # Risk is enforced one level up, in `BotRunner._inner_loop`, which calls
+            # `risk_manager.validate_trade_request` and `continue`s on a non-APPROVED
+            # verdict. That is the only production caller, so there is no live bypass
+            # today. But it means the property "a live order has passed risk" is a
+            # property of ONE CALLER rather than of the gateway, and `execute_trade`
+            # hardcodes `source="bot_runner"` — so any future caller inherits the
+            # bot_runner authorisation without inheriting the risk check that is supposed
+            # to accompany it. `backend/execution_guard.py` describes itself as "the FINAL
+            # CONTROL LAYER that validates EVERY trade before execution" and is called
+            # only from the two CANCEL endpoints, never from this path.
+            #
+            # WHAT THIS CHECK IS, AND WHAT IT DELIBERATELY IS NOT.
+            # It is the one bound that no legitimate order can breach: an order may not
+            # commit more notional than the account has equity to fund it with (times
+            # `max_leverage`, which defaults to 1). It therefore cannot produce a false
+            # refusal for a correctly sized order, which is why it is safe to add
+            # directly to the live path.
+            #
+            # It is NOT a substitute for the risk engine. It will not catch an order that
+            # is merely too large for the strategy's configured risk-per-trade, breaches
+            # the daily loss limit, or exceeds the open-position count. Those remain the
+            # caller's responsibility, and wiring `ExecutionGuard` into this funnel is
+            # recorded as an outstanding item rather than attempted here.
+            #
+            # What it does catch is the category that loses the account in one order: a
+            # sizing bug (the audit found `RiskEngine.calculate_position_size` returning
+            # 125x equity on a low-ATR asset), a decimal-shift error, a corrupted or
+            # replayed signal, or a unit mix-up between base and quote quantities.
+            #
+            # FAILS CLOSED on an unreadable equity: if the engine cannot establish what
+            # the account is worth, it cannot establish that the order is fundable, and
+            # the safe answer to that is refusal.
+            # Regression: tests/test_live_orders_are_bounded_by_account_equity.py
+            try:
+                _equity = Decimal(str(self.current_equity))
+            except (InvalidOperation, TypeError, ValueError):
+                _equity = None
+
+            if _equity is None or _equity <= 0:
+                logger.critical(
+                    "Refusing execution %s: live order cannot be bounded because the "
+                    "engine's equity is %r.",
+                    execution_id,
+                    getattr(self, "current_equity", None),
+                )
+                return False, (
+                    "Risk gateway: the account equity backing this engine could not be "
+                    "established, so the order could not be shown to be fundable. "
+                    "Refused rather than sent to a live exchange unbounded."
+                )
+
+            # ═══════════════════════════════════════════════════════════════
+            # TRADE-11: DERIVED FROM THE SAME HELPER, SO THE TWO GATES CANNOT
+            #           DISAGREE ABOUT WHAT IS FUNDABLE
+            # ═══════════════════════════════════════════════════════════════
+            # This block used to recompute the notional inline:
+            #
+            #     _notional = abs(Decimal(str(size))) * abs(Decimal(str(price or 0)))
+            #
+            # which is the TRADE-11 expression, and it carried a comment saying a market
+            # order "is not waved through" because "the venue's own balance check is the
+            # backstop". Measured, that was not true in the way it reads: `price or 0`
+            # made the notional zero, zero is never greater than the ceiling, and a
+            # venue-side rejection arrives only AFTER the idempotency claim has been
+            # consumed and the execution record says an attempt was made. The quantity
+            # bound the comment refers to is the venue's own minimum, which bounds the
+            # order from BELOW, not above.
+            #
+            # `_capacity_bounds_for` now performs the full validation -- non-finite,
+            # non-positive, unparseable, empty -- and returns `ceiling is None` to mean
+            # refuse. Calling it here instead of recomputing means the cross-order
+            # reservation and this per-order gate share one definition of "fundable",
+            # which `test_the_engine_derives_the_same_ceiling_as_the_per_order_check`
+            # already required of the ceiling and now also holds for the notional.
+            _notional, _ceiling, _why = self._capacity_bounds_for(size=size, price=price)
+            # Retained only for the refusal messages below, which name the two factors so
+            # a trader is told WHY the ceiling is what it is.
+            _max_leverage = Decimal(str(getattr(self, "max_leverage", 1) or 1))
+
+            if _ceiling is None:
+                logger.critical(
+                    "Refusing execution %s: live order notional could not be computed "
+                    "(%s) for %s %s %s.",
+                    execution_id, _why, side, size, symbol,
+                )
+                return False, (
+                    f"Risk gateway: this live order has no computable notional ({_why}), "
+                    f"so it could not be shown to be fundable. Refused before any "
+                    f"exchange call rather than sent with its exposure unmodelled."
+                )
+
+            if _notional > _ceiling:
+                logger.critical(
+                    "Refusing execution %s: notional %s exceeds the %s ceiling "
+                    "(equity %s x max_leverage %s) for %s %s %s.",
+                    execution_id, _notional, _ceiling, _equity, _max_leverage,
+                    side, size, symbol,
+                )
+                return False, (
+                    f"Risk gateway: order notional {_notional} exceeds the maximum "
+                    f"fundable notional {_ceiling} for this account "
+                    f"(equity {_equity} x max_leverage {_max_leverage}). Refused before "
+                    f"any exchange call."
+                )
+
+            # ═══════════════════════════════════════════════════════════════
+            # TRADE-05: RISK IS NOW A PROPERTY OF THIS GATEWAY, NOT OF A CALLER
+            # ═══════════════════════════════════════════════════════════════
+            # The comment above records the defect: this funnel contained no risk
+            # evaluation, `BotRunner._inner_loop` performed it before calling, and
+            # `execute_trade` hardcodes `source="bot_runner"` -- so any future caller
+            # inherited the authorisation to place live orders WITHOUT inheriting the risk
+            # check. Two such callers already existed
+            # (`distributed_execution/execution_worker.py`,
+            # `idempotent_exchange_submission.py`), both neutered by accident rather than
+            # by design.
+            #
+            # A live order now REQUIRES evidence that risk was evaluated and approved. The
+            # evidence is a parameter, so a caller that does not evaluate risk cannot
+            # supply it and cannot execute. That is what makes the invariant structural
+            # rather than a convention the caller is trusted to follow.
+            #
+            # Paper orders are untouched: they do not reach this branch.
+            # Regression: tests/test_trade04_live_order_gate_at_venue_boundary.py
+            if self._live_risk_approved is not True:
+                logger.critical(
+                    "Refusing execution %s: a live order reached the venue path without "
+                    "an approved risk evaluation (risk_approved=%r, reason=%r).",
+                    execution_id,
+                    self._live_risk_approved,
+                    self._live_risk_reason,
+                )
+                return False, (
+                    "Risk gateway: this live order carries no approved risk evaluation. "
+                    "The caller must evaluate risk and pass the verdict to the gateway; "
+                    "reaching the gateway does not confer permission to skip it. "
+                    f"(risk_approved={self._live_risk_approved!r}"
+                    + (f", reason={self._live_risk_reason!r}" if self._live_risk_reason else "")
+                    + "). Refused before any exchange call."
+                )
+
             try:
                 from backend_app.core.global_safety import generate_validation_token
+                from backend_app.core.live_execution_gate import (
+                    LiveExecutionRefused, authorize_live_order)
                 from backend_app.core.models.pydantic_models import OrderSide
                 from backend_app.core.models.pydantic_models import \
                     OrderType as CoreOrderType
+
+                # ═══════════════════════════════════════════════════════════
+                # TRADE-04: MINT THE LIVE-EXECUTION AUTHORISATION
+                # ═══════════════════════════════════════════════════════════
+                # Every name below corresponds to a check that has ALREADY run on the way
+                # here, and `authorize_live_order` refuses unless the complete
+                # `REQUIRED_CHECKS` set is present -- so a future branch that reaches this
+                # point having skipped one produces a refusal rather than an unguarded
+                # order. The authorisation is bound to this exact order and venue and is
+                # consumed by `place_order`.
+                try:
+                    _live_auth = authorize_live_order(
+                        execution_id=execution_id,
+                        tenant_id=self._live_tenant_id,
+                        strategy_id=self._live_strategy_id,
+                        symbol=symbol.replace('-', '/'),
+                        side=side,
+                        size=size,
+                        exchange_id=getattr(
+                            self.exchange_executor, "exchange_id", ""
+                        ),
+                        checks=(
+                            # Established by `execute_with_idempotency` before this call:
+                            "authenticated_actor",        # tenant_id is a parsed UUID
+                            "authorized_tenant_resource", # _validate_strategy_exists(tenant, strategy)
+                            "strategy_authorized",        # same check, named for the invariant
+                            "kill_switch",                # get_global_kill_switch().is_active()
+                            "execution_environment",      # assert_live_environment
+                            "explicit_live_mode",         # engine states LIVE and holds an executor
+                            "idempotency",                # check_idempotent_execution + claim_execution
+                            "safety_config",              # branch-point agreement assertion
+                            # Established in this method, above:
+                            "capital",                    # notional <= equity * max_leverage
+                            "risk",                       # self._live_risk_approved is True
+                            # Established by the executor itself, below this call:
+                            "precision",                  # normalize_size / venue minimums
+                            # Established by the caller that resolved the deployment:
+                            "live_trading_entitlement",
+                            "exchange_binding",
+                        ),
+                    )
+                except LiveExecutionRefused as refusal:
+                    logger.critical(
+                        "Refusing execution %s at the live gate: %s",
+                        execution_id, refusal,
+                    )
+                    return False, f"Live execution refused: {refusal}"
+
+                if hasattr(self.exchange_executor, '_current_live_authorization'):
+                    self.exchange_executor._current_live_authorization = _live_auth
 
                 # Generate and attach anti-bypass validation token
                 token = generate_validation_token(execution_id, symbol, size)
@@ -780,6 +1467,64 @@ class ExecutionEngine:
                     self.exchange_executor._current_execution_id = execution_id
                 if hasattr(self.exchange_executor, '_current_validation_token'):
                     self.exchange_executor._current_validation_token = token
+
+                # ═══════════════════════════════════════════════════════════
+                # TRADE-07: RECORD THE SUBMISSION BEFORE MAKING IT
+                # ═══════════════════════════════════════════════════════════
+                # `submitted_at` exists on this table and in the migration, and NOTHING in
+                # the application ever wrote it. That is the whole of TRADE-07: a process
+                # that died inside `place_order` left `order_id`, `submitted_at`,
+                # `exchange_id` and `result` all NULL, so nothing could tell "crashed
+                # before the venue call" from "crashed after it" -- and the two demand
+                # opposite actions. Failing the first is correct; failing the second can
+                # orphan a real resting order and let the next signal duplicate it.
+                #
+                # ITS OWN SESSION AND ITS OWN TRANSACTION, COMMITTED BEFORE THE CALL. The
+                # outer session belongs to `execute_with_idempotency` and may yet roll
+                # back; if this write shared it, a rollback would erase the record of a
+                # submission that really happened. A separate short-lived session is what
+                # makes the evidence survive the thing it exists to detect.
+                #
+                # FAILS CLOSED. If the evidence cannot be written the order is NOT sent.
+                # Sending it would create precisely the unrecoverable row this block
+                # exists to prevent -- a venue order with no local trace that it was ever
+                # attempted. Refusing costs one missed signal; proceeding costs an
+                # untracked position.
+                # Regression: tests/test_trade07_stale_execution_recovery_postgres.py
+                #
+                # `SessionLocal` and `ExecutionRecordRepository` are the MODULE-LEVEL names
+                # imported at the top of this file, deliberately NOT re-imported locally.
+                # The live-order tests patch `execution_engine.SessionLocal` and
+                # `execution_engine.ExecutionRecordRepository` to inject their doubles; a
+                # fresh `from ... import` here would bind the real objects and bypass those
+                # patches, which is exactly the seam `execute_with_idempotency` already
+                # relies on for its own claim.
+                _evidence_session = SessionLocal()
+                try:
+                    _evidence_ok = ExecutionRecordRepository(
+                        _evidence_session
+                    ).mark_submitted(
+                        execution_id,
+                        UUID(str(self._live_tenant_id)),
+                        exchange_id=getattr(
+                            self.exchange_executor, "exchange_id", None
+                        ),
+                    )
+                finally:
+                    _evidence_session.close()
+
+                if not _evidence_ok:
+                    logger.critical(
+                        "Refusing execution %s: submission evidence could not be "
+                        "recorded, so a crash during submission would leave an "
+                        "unrecoverable row.", execution_id,
+                    )
+                    return False, (
+                        "Risk gateway: this order's submission could not be recorded "
+                        "before sending it. Proceeding would create an execution record "
+                        "that cannot later be distinguished from one that never reached "
+                        "the venue. Refused before any exchange call."
+                    )
 
                 # Map inputs to CCXT requirements
                 c_order_type = CoreOrderType.market if price <= Decimal("0") else CoreOrderType.limit
@@ -830,6 +1575,83 @@ class ExecutionEngine:
                     return False, f"Exchange execution failed: {result.error_message}"
             except Exception as e:
                 return False, f"Exchange executor exception: {str(e)}"
+
+        # ═══════════════════════════════════════════════════════════════════
+        # PAPER-01: THE CANONICAL PAPER LEDGER PATH
+        # ═══════════════════════════════════════════════════════════════════
+        # When a ledger is installed this is the paper path, and the in-process
+        # simulation below is not used at all. Taken BEFORE that simulation rather
+        # than beside it, because running both would be the two-accounting-systems
+        # problem PAPER-01 is: two answers to "what is my cash", differing by the
+        # slippage draw alone.
+        #
+        # Three things improve by construction on this path, beyond the persistence:
+        #
+        #   * The fill price and fee are the canonical ones. `apply_slippage` below
+        #     uses `random.uniform`, so the in-process path cannot be replayed; the
+        #     canonical model is `price * (1 +/- slippage_rate)` by side, which can.
+        #   * The equity identity is asserted with ZERO tolerance inside
+        #     `paper_trading_service._execute_fill`, before its first statement.
+        #   * A retried tick is one order, arbitrated by
+        #     `uq_paper_order_idem_default` on the execution_id-derived key.
+        #
+        # A ledger refusal REFUSES THE EXECUTION. Reporting a fill that was not
+        # recorded is the defect; see `bot_paper_ledger`'s module docstring.
+        if self.paper_ledger is not None:
+            from backend_app.backend.paper.bot_paper_ledger import (
+                BotPaperLedgerError, BotPaperLedgerUnavailable,
+                BotPaperSellExceedsPosition)
+
+            try:
+                recorded = await self.paper_ledger.record_fill(
+                    symbol=symbol,
+                    side=side,
+                    size=size,
+                    price=price,
+                    execution_id=execution_id,
+                )
+            except BotPaperSellExceedsPosition as exc:
+                # An ordinary strategy outcome, not an incident: the pre-fix paper branch
+                # answered `(False, "No position found for {symbol}")` for exactly this,
+                # and `_inner_loop` treats a falsey result as a skipped tick. Logged at
+                # INFO so a long-only bot selling into no position does not fill the
+                # operator's log with criticals.
+                logger.info(
+                    "Paper execution %s not placed: %s", execution_id, exc,
+                )
+                return False, str(exc)
+            except (BotPaperLedgerUnavailable, BotPaperLedgerError) as exc:
+                logger.critical(
+                    "Refusing paper execution %s: the canonical paper ledger did not "
+                    "record the fill (%s). Nothing is reported as filled, because a "
+                    "fill the paper account does not show is the PAPER-01 defect.",
+                    execution_id, exc,
+                )
+                return False, (
+                    f"Paper execution refused: the canonical paper ledger did not record "
+                    f"the fill ({exc}). No fill is reported."
+                )
+
+            self._reconcile_from_paper_ledger(recorded)
+            return True, {
+                'order_id': str(recorded.order_id),
+                'executed_price': str(recorded.executed_price),
+                'size': str(recorded.size),
+                'fee': str(recorded.fee),
+                'fee_currency': None,
+                'total_cost': str(
+                    (recorded.size * recorded.executed_price) + recorded.fee
+                ),
+                'slippage_applied': recorded.executed_price != Decimal(str(price)),
+                # The evidence that this fill is persisted, carried on the result so a
+                # caller (and a test) can tell a recorded fill from an in-process one
+                # without inspecting the database.
+                'paper_ledger': 'canonical',
+                'paper_account_id': recorded.account_id,
+                'total_equity': str(recorded.total_equity),
+                'available_balance': str(recorded.available_balance),
+                'realized_pnl': str(recorded.realized_pnl),
+            }
 
         # PAPER EXECUTION PATH
         # Execute based on side - open_position and close_position handle single slippage internally
@@ -933,7 +1755,12 @@ class ExecutionEngine:
             Tuple of (success, message)
         """
         # 🛡️ GLOBAL RISK GUARDRAILS - Check BEFORE execution
-        # Sync risk manager with current engine state
+        # Sync risk manager with current engine state.
+        #
+        # `current_equity` is now MARKED TO MARKET (BUG-016), so the guardrails below are
+        # measured against what the account is actually worth including open positions,
+        # rather than against a figure that only moved on a realised close.
+        self._sync_equity()
         self.risk_manager.current_equity = float(self.current_equity)
         self.risk_manager.update_open_trades_count(len(self.positions))
 
@@ -990,15 +1817,27 @@ class ExecutionEngine:
         print(f"[Executed price]: {execution_price}")
         print(f"[Fee]: {fee}")
 
-        # Check if enough capital
-        if total_cost > self.current_equity:
-            return False, "Insufficient capital"
+        # ═══════════════════════════════════════════════════════════════════
+        # AFFORDABILITY IS CHECKED AGAINST CASH, NOT EQUITY  (BUG-016)
+        # ═══════════════════════════════════════════════════════════════════
+        # This compared `total_cost > self.current_equity`. Because opening a position
+        # debited only the fee, equity barely moved -- so the SAME check passed again for
+        # the next symbol, and the next. N positions could each be worth up to the whole
+        # account while every one of them reported sufficient capital.
+        #
+        # Cash is what a position is actually funded from, and it is now reduced by the
+        # full notional below. Aggregate exposure is therefore bounded by the balance
+        # rather than by `max_open_trades` happening to be 5.
+        if total_cost > self.cash:
+            return False, (
+                f"Insufficient capital: {symbol} {side} {size} @ {execution_price} "
+                f"costs {total_cost} (including {fee} fee) but only {self.cash} cash is "
+                f"available. Equity is {self.current_equity}, of which "
+                f"{self.position_market_value()} is already committed to open positions."
+            )
 
         # ✅ All guardrails passed - Execute trade
         self.risk_manager.record_trade_open()
-
-        # Deduct fee from equity
-        self.current_equity -= fee
 
         # Store entry fee for later PnL calculation
         entry_fee = fee
@@ -1010,6 +1849,13 @@ class ExecutionEngine:
             size=size,
             side=side
         )
+
+        # Mark at the fill price, then move cash by the residual of the position-value
+        # change less the fee. At entry the position is worth exactly its notional, so
+        # equity falls by exactly the fee -- while CASH falls by notional + fee.
+        self._marks[symbol] = execution_price
+        new_value = self.position_value(self.positions[symbol], execution_price)
+        self._apply_cash_delta(symbol, Decimal("0"), new_value, fee)
 
         # Store additional data separately
         self._position_meta = getattr(self, '_position_meta', {})
@@ -1071,20 +1917,37 @@ class ExecutionEngine:
 
         # 🛡️ Update risk manager with PnL and record trade close
         self.risk_manager.update_equity(float(net_pnl))
+
+        # ═══════════════════════════════════════════════════════════════════
+        # CASH AS THE RESIDUAL OF THE POSITION-VALUE CHANGE  (BUG-016)
+        # ═══════════════════════════════════════════════════════════════════
+        # This used to be `self.current_equity += net_pnl + entry_fee`, which reversed
+        # the open's fee-only debit and arrived at the right FINAL equity by a route that
+        # never represented the position's value at all.
+        #
+        # Now: mark at the exit price, value the position before and after the size
+        # reduction, and move cash by the difference less the exit fee. Closing a long
+        # therefore credits cash with the exit proceeds, which is what actually happens.
+        #
+        # The final equity after a full round trip is IDENTICAL to the old code's --
+        # pinned by `test_a_round_trip_ends_on_the_same_equity_as_before_the_fix` -- so
+        # realised results do not move. Only equity while the position is open changes.
+        self._marks[symbol] = execution_price
+        old_value = self.position_value(pos, execution_price)
+
         if is_full_close:
             self.risk_manager.record_trade_close()
-            self.positions.pop(symbol)
+            closed = self.positions.pop(symbol)
             self._position_meta.pop(symbol, None)
+            new_value = Decimal("0")
+            self._marks.pop(symbol, None)
+            pos = closed  # keep the pre-close snapshot for the trade record below
         else:
             pos.size = (pos.size - close_size).quantize(Decimal("0.00000001"))
             self.positions[symbol] = pos
+            new_value = self.position_value(pos, execution_price)
 
-        # Update equity (entry_fee was already deducted on open, so we add net_pnl + entry_fee)
-        self.current_equity += net_pnl + entry_fee
-
-        # Update peak equity
-        if self.current_equity > self.peak_equity:
-            self.peak_equity = self.current_equity
+        self._apply_cash_delta(symbol, old_value, new_value, exit_fee)
 
         # Calculate PnL percentage
         invested = pos.entry_price * close_size
@@ -1140,6 +2003,25 @@ class ExecutionEngine:
         remaining_size = (total_order_size - filled_size).quantize(Decimal("0.00000001"))
         is_complete = remaining_size <= Decimal("0.0001")  # Allow tiny tolerance
 
+        # ═══════════════════════════════════════════════════════════════════
+        # EVERY BRANCH BELOW MOVES CASH BY THE SAME RESIDUAL  (BUG-016)
+        # ═══════════════════════════════════════════════════════════════════
+        # Each of the five cases used to adjust `current_equity` directly and by a
+        # different rule -- `-= fee` on an open or an add, `+= net_pnl` on a close,
+        # `+= closed_pnl` on a reduce, and nothing at all on the flip leg. So the engine
+        # held four definitions of what a fill does to the account, and the flip leg
+        # opened a position for free.
+        #
+        # Now each branch decides only WHAT THE NEW POSITION IS. The position is valued
+        # before and after at this fill's price, and cash moves by the difference less
+        # the fee -- one rule, applied once at the end.
+        old_value = (
+            self.position_value(self.positions[symbol], fill_price)
+            if symbol in self.positions
+            else Decimal("0")
+        )
+        self._marks[symbol] = fill_price
+
         side_lower = side.lower()
         if symbol not in self.positions:
             # Opening new position (long on buy, short on sell)
@@ -1150,7 +2032,6 @@ class ExecutionEngine:
                 size=filled_size,
                 side=pos_side
             )
-            self.current_equity -= fee
         else:
             existing = self.positions[symbol]
             # If side matches position side (buy for long, sell for short) -> Add to position
@@ -1165,7 +2046,6 @@ class ExecutionEngine:
 
                 existing.entry_price = new_avg_price
                 existing.size = new_total_size
-                self.current_equity -= fee
             else:
                 # Closing or reducing position (sell for long, buy for short)
                 if filled_size >= existing.size:
@@ -1177,7 +2057,6 @@ class ExecutionEngine:
                         gross_pnl = (existing.entry_price - fill_price) * closing_size
                     
                     net_pnl = gross_pnl - fee
-                    self.current_equity += net_pnl
                     old_side = existing.side
                     self.positions.pop(symbol, None)
 
@@ -1214,11 +2093,20 @@ class ExecutionEngine:
                     else:  # short
                         closed_pnl = (existing.entry_price - fill_price) * filled_size - fee
                     
-                    self.current_equity += closed_pnl
                     existing.size = existing.size - filled_size
 
                     # Log partial close
                     print(f"[PARTIAL CLOSE] Partial close {existing.side}: {filled_size} {symbol} @ {fill_price} (PnL: {closed_pnl})")
+
+        # The one cash movement for this fill, whichever branch above ran.
+        new_value = (
+            self.position_value(self.positions[symbol], fill_price)
+            if symbol in self.positions
+            else Decimal("0")
+        )
+        if symbol not in self.positions:
+            self._marks.pop(symbol, None)
+        self._apply_cash_delta(symbol, old_value, new_value, fee)
 
         result = {
             'symbol': symbol,
@@ -1227,7 +2115,9 @@ class ExecutionEngine:
             'remaining_size': float(max(Decimal("0"), remaining_size)),
             'is_complete': is_complete,
             'current_position_size': float(self.positions.get(symbol, Position(symbol, Decimal("0"), Decimal("0"), 'long')).size),
-            'fee': float(fee)
+            'fee': float(fee),
+            'cash': float(self.cash),
+            'equity': float(self.current_equity),
         }
 
         print(f"[STEP 5] Partial fill handled - {filled_size}/{total_order_size} {symbol} @ {fill_price}")
@@ -1445,11 +2335,34 @@ class ExecutionEngine:
             Dictionary with performance metrics
         """
         if not self.trade_log:
+            # SAME SHAPE AS THE POPULATED BRANCH.
+            #
+            # This used to return only four keys, so `get_stats()` had a different
+            # dictionary shape depending on whether any trade had CLOSED yet. A consumer
+            # reading `stats["current_equity"]` got a KeyError on a run that was holding
+            # an open position and had closed nothing - which is exactly the state a
+            # backtest is in partway through, and the state BUG-016 made meaningful by
+            # marking open positions to market.
+            #
+            # Found by `tests/test_bug016_backtest_impact.py` asking for `cash` on a run
+            # with one open position and no closed trades.
             return {
                 "total_trades": 0,
+                "winning_trades": 0,
+                "losing_trades": 0,
                 "win_rate": 0.0,
                 "total_pnl": float(Decimal("0")),
-                "avg_pnl": float(Decimal("0"))
+                "avg_pnl": float(Decimal("0")),
+                "fee_rate": float(self.fee_rate),
+                "slippage": self.slippage,
+                "total_commission": 0.0,
+                "current_equity": float(self.current_equity),
+                "peak_equity": float(self.peak_equity),
+                "drawdown_pct": float(self.get_drawdown()),
+                "cash": float(self.cash),
+                "position_market_value": float(self.position_market_value()),
+                "total_exposure": float(self.total_exposure()),
+                "open_positions": len(self.positions),
             }
 
         total_trades = len(self.trade_log)
@@ -1468,7 +2381,14 @@ class ExecutionEngine:
             "total_commission": float(sum(t.commission for t in self.trade_log)),
             "current_equity": float(self.current_equity),
             "peak_equity": float(self.peak_equity),
-            "drawdown_pct": float(self.get_drawdown())
+            "drawdown_pct": float(self.get_drawdown()),
+            # BUG-016: cash, committed value and exposure are now distinct from equity
+            # and are reported separately, so a consumer can see the identity rather
+            # than having to infer it from one number.
+            "cash": float(self.cash),
+            "position_market_value": float(self.position_market_value()),
+            "total_exposure": float(self.total_exposure()),
+            "open_positions": len(self.positions),
         }
     
     # ----------------------------------
@@ -1513,6 +2433,12 @@ class ExecutionEngine:
         self.current_equity = self.initial_capital
         self.peak_equity = self.initial_capital
         self._blocked_trades = []
+        # BUG-016: cash and marks are part of the account state and must reset with it.
+        # Leaving cash behind would start the next run funded by the previous one's
+        # closing balance while reporting the initial equity.
+        self.cash = self.initial_capital
+        self._marks = {}
+        self._position_meta = {}
 
         # Reset risk manager (convert Decimal to float)
         if self.risk_manager:

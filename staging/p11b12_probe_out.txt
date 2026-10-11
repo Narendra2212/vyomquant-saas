@@ -1,0 +1,32 @@
+OK  1. same keyspace -> probe accepts
+      outcome=passed (expected passed)
+      sentinels left behind: none
+
+OK  2. split keyspace (the CI defect) -> probe FAILS, direction 1
+      outcome=failed (expected failed)
+      message contains 'KEYSPACE SPLIT': True
+      sentinels left behind: none
+      first line: KEYSPACE SPLIT: the application cache manager wrote a sentinel and this file's client cannot see it (read None, expected the sentinel). Both clients a
+
+OK  3. reverse-only split -> probe FAILS, direction 2
+      outcome=failed (expected failed)
+      message contains 'reverse direction': True
+      sentinels left behind: none
+      first line: KEYSPACE SPLIT (reverse direction): this file wrote a sentinel and the application cache manager cannot see it (read None). Its `get` returns None bot
+
+OK  4. manager refuses the write -> reported as a refusal, not a mismatch
+      outcome=failed (expected failed)
+      message contains 'REFUSED a write': True
+      sentinels left behind: none
+      first line: the application cache manager REFUSED a write it was handed a real cache for (`set` returned False). Its proxies return False on any exception and log
+
+OK  5. sync client cannot reach the app endpoint -> fails closed
+      outcome=failed (expected failed)
+      message contains "could not use the application's effective cache URL": True
+      sentinels left behind: none
+      first line: the shared gate reached the endpoint named by its own opt-in variable, but this file's client could not use the application's effective cache URL (dat
+
+==============================================================================
+5/5 scenarios behaved as specified
+
+--- STDERR ---

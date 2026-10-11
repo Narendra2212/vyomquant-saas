@@ -1,0 +1,119 @@
+========================================================================================================
+1. BASELINE
+========================================================================================================
+  branch : main
+  HEAD   : 074b772ab16cece62cbfca0f2b78497be2ae56d5
+  origin/main: 074b772ab16cece62cbfca0f2b78497be2ae56d5
+  index content digest: 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME as A23
+  staged / unstaged / untracked : 22 / 102 / 139
+  unmerged : 0
+
+  destination staging/PHASE11B_A24_LAUNCH_CRITICAL_PATH_COORDINATION.md : ABSENT -- safe
+
+  concurrently modified source (unstaged, top 25 by churn):
+      1243  backend_app/backend/exchange_executor.py
+       984  backend_app/core/execution_engine.py
+       845  backend_app/core/models/execution_record.py
+       740  backend_app/routers/billing.py
+       723  backend_app/core/global_safety.py
+       674  backend_app/backend/paper_trading_service.py
+       490  backend_app/workers/command_worker.py
+       479  tests/test_bandit_sast_gate_is_green.py
+       459  migrations/referral_system_redesign.sql
+       446  backend_app/backend/order_watchdog.py
+       434  backend_app/core/config.py
+       376  tests/test_exchange_safety_fix.py
+       374  tests/property/test_paper_confluence.py
+       325  backend_app/main.py
+       308  backend_app/backend/fee_engine.py
+       295  backend_app/routers/library.py
+       269  backend_app/backend/distributed_execution/idempotent_exchange_submission.py
+       268  backend_app/backend/exchange_websocket_listener.py
+       264  tests/property/test_order_idempotence_under_retry.py
+       253  backend_app/core/subscription_dependencies.py
+       240  backend_app/alembic/versions/add_foreign_keys_20260817.py
+       225  tests/test_redis_debounce.py
+       222  tests/test_no_hs256_fallback_in_production.py
+       207  backend_app/core/rate_limit.py
+       206  backend_app/backend/connection_engine.py
+
+========================================================================================================
+2. BLOCKER-RELEVANT REPORTS PRESENT
+========================================================================================================
+  242 markdown reports in staging/ and repo root
+
+  REDIS  (20)
+    PHASE11B_A23R_REDIS_LIFECYCLE_READINESS.md                       24181 B  10-11 12:37
+    PHASE11B_A23C_REDIS_RECOVERY_CONSOLIDATION.md                    27726 B  10-10 22:19
+    PHASE11B_A23B_REDIS_RECOVERY_COVERAGE.md                         23519 B  10-10 22:16
+    PHASE11B_A23_REDIS_LIFECYCLE_IMPLEMENTATION_REPORT.md            17789 B  10-10 22:12
+    PHASE11B_A23_REDIS_LOOP_IDENTITY_REPORT.md                       19047 B  10-10 22:08
+    PHASE11B_A23_REDIS_POOL_LIFECYCLE_READINESS.md                   17848 B  10-10 22:02
+    PHASE11B_A21_REDIS_LOOP_LIFECYCLE_REPORT.md                      17694 B  10-10 21:54
+    PHASE11B_A22V_REDIS_R6_VERIFICATION_AND_DESIGN.md                21296 B  10-10 21:49
+    PHASE11B_A22_REDIS_R6_CHARACTERIZATION_REPORT.md                 26508 B  10-10 21:39
+    PHASE11B_A20Q_QUOTA_REFUSAL_AND_LOOP_LIFECYCLE.md                17582 B  10-10 21:32
+    PHASE11B_A20_DEFECT_REMEDIATION_READINESS.md                     30461 B  10-10 21:20
+    PHASE11B_A13_REAL_REDIS_VERIFICATION.md                          32686 B  10-10 18:39
+    PHASE11B_A11_REDIS_CI_DIAGNOSTICS.md                             12092 B  10-10 17:10
+    PHASE11B_W1B_REDIS_READINESS.md                                  13656 B  10-10 16:31
+
+  TENANT-01  (8)
+    PHASE11B_TENANT01_U4_U6_INVESTIGATION_REPORT.md                  26577 B  10-10 20:09
+    PHASE11B_TENANT01_FAST_COORDINATION_REPORT.md                    31307 B  10-10 19:44
+    PHASE11B_TENANT01_REMEDIATION_READINESS_REPORT.md                30126 B  10-10 19:15
+    PHASE11B_TENANT01_AUDIT_REPORT.md                                33242 B  10-10 19:03
+    TENANT_ISOLATION_MAP.md                                          31665 B  10-10 04:58
+    AUTH_RLS_AUDIT.md                                                65512 B  10-10 04:58
+    RLS_TENANT_ISOLATION_VERIFICATION.md                             35633 B  10-06 21:12
+    TENANT_ISOLATION_AUDIT_REPORT.md                                 13509 B  08-02 08:11
+
+  QUOTA-01  (5)
+    PHASE11B_A20Q_QUOTA_REFUSAL_AND_LOOP_LIFECYCLE.md                17582 B  10-10 21:32
+    PHASE11B_A_REAL_REDIS_QUOTA_REPORT.md                            11433 B  10-10 14:16
+    PHASE10_WSK_QUOTA_REAL_REDIS_REVIEW.md                           29515 B  10-10 13:26
+    PHASE10_WSC_QUOTA_CONNECTION_SAFETY.md                           32229 B  10-10 12:20
+    QUOTA_ENFORCEMENT_MAP.md                                          9469 B  10-07 23:21
+
+  CD-8 / settlement  (2)
+    PHASE11B_U9_CD8_AUTHORIZATION_GATE_AND_SCHEMA_FINDINGS.md        19341 B  10-10 21:58
+    PHASE11B_U7_CD8_CRASH_RECOVERY_READINESS.md                      50243 B  10-10 20:48
+
+  W1C-02 / schema drift  (8)
+    PHASE11B_U9_CD8_AUTHORIZATION_GATE_AND_SCHEMA_FINDINGS.md        19341 B  10-10 21:58
+    PHASE11B_W1D08_STATIC_DRIFT_GUARDS_REPORT.md                     19337 B  10-10 21:53
+    PHASE11B_W1D07_W1C02_REMEDIATION_REPORT.md                       18792 B  10-10 21:30
+    PHASE11B_W1D06_W1C02_REMEDIATION_READINESS.md                    26071 B  10-10 20:54
+    PHASE11B_W1D_LEDGER_AND_DRIFT_READINESS.md                       56397 B  10-10 19:44
+    PHASE11B_W1C_RECOVERY_REPORT.md                                  38781 B  10-10 19:01
+    SCHEMA_AS_CODE_COMPLETENESS_AUDIT_REPORT.md                      10979 B  08-02 08:28
+    DATABASE_SCHEMA_MIGRATION.md                                      9591 B  08-01 08:33
+
+  watchdog  (1)
+    PHASE11B_D5_WATCHDOG_REPAIR_REPORT.md                            29672 B  10-10 21:41
+
+  launch gate / readiness  (40)
+    PHASE11B_A23R_REDIS_LIFECYCLE_READINESS.md                       24181 B  10-11 12:37
+    PHASE11B_W1D10_CLASSIFIER_IMPLEMENTATION_READINESS.md            27784 B  10-11 12:32
+    PHASE11B_A23_REDIS_POOL_LIFECYCLE_READINESS.md                   17848 B  10-10 22:02
+    PHASE11B_U9_CD8_AUTHORIZATION_GATE_AND_SCHEMA_FINDINGS.md        19341 B  10-10 21:58
+    PHASE11B_A20_DEFECT_REMEDIATION_READINESS.md                     30461 B  10-10 21:20
+    PHASE11B_D4_DUP02_RECOVERY_READINESS.md                          47756 B  10-10 20:55
+    PHASE11B_W1D06_W1C02_REMEDIATION_READINESS.md                    26071 B  10-10 20:54
+    PHASE11B_U7_CD8_CRASH_RECOVERY_READINESS.md                      50243 B  10-10 20:48
+    PHASE11B_A17_D5_READINESS__kiro_session.md                       13234 B  10-10 19:57
+    PHASE11B_A10_D5_APPROVAL_READINESS.md                            27680 B  10-10 19:44
+    PHASE11B_W1D_LEDGER_AND_DRIFT_READINESS.md                       56397 B  10-10 19:44
+    PHASE11B_TENANT01_REMEDIATION_READINESS_REPORT.md                30126 B  10-10 19:15
+    PHASE11B_A9_POSTGRES_AUTHORIZATION_READINESS.md                  41127 B  10-10 18:40
+    PHASE11B_W1B_REDIS_READINESS.md                                  13656 B  10-10 16:31
+
+  deploy / rollback / monitor  (8)
+    PHASE11A_SANDBOX_CERTIFICATION_REPORT.md                          9449 B  10-10 13:52
+    PAPER_TRADING_CERTIFICATION.md                                   42361 B  10-10 13:14
+    DATABASE_PROVISIONING_RUNBOOK.md                                 30604 B  10-10 13:07
+    EXCHANGE_SANDBOX_CERTIFICATION.md                                30563 B  10-10 04:59
+    deployment_go_no_go.md                                            5694 B  10-08 22:02
+    ML_TRAINING_DEPLOYMENT_GAP_AUDIT_REPORT.md                       12642 B  08-02 08:21
+    deployment_report.md                                               463 B  07-29 09:17
+    DEPLOYMENT.md                                                     6557 B  07-29 09:03

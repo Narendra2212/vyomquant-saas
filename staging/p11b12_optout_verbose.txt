@@ -1,0 +1,136 @@
+============================= test session starts =============================
+collecting ... collected 35 items
+
+tests/test_webhook_duplicate_delivery_real_redis.py::test_the_credential_gate_refuses_test_keys SKIPPEDdefault suite runs on the in-process
+substrate, and the logic tests beside these cover it. Set
+AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to
+enable it. A skip here is NOT a pass.)                                   [  2%]
+tests/test_webhook_duplicate_delivery_real_redis.py::test_a_redelivered_webhook_is_ignored SKIPPEDefault suite runs on the in-process substrate,
+and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to
+a DEDICATED test instance or database index to enable it. A skip here is
+NOT a pass.)                                                             [  5%]
+tests/test_webhook_duplicate_delivery_real_redis.py::test_the_lock_is_recorded_in_redis_under_the_documented_key SKIPPEDefault suite runs on the
+in-process substrate, and the logic tests beside these cover it. Set
+AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to
+enable it. A skip here is NOT a pass.)                                   [  8%]
+tests/test_webhook_duplicate_delivery_real_redis.py::test_a_different_event_id_is_not_deduplicated SKIPPEDefault suite runs on the in-process
+substrate, and the logic tests beside these cover it. Set
+AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to
+enable it. A skip here is NOT a pass.)                                   [ 11%]
+tests/test_webhook_duplicate_delivery_real_redis.py::test_an_in_flight_delivery_blocks_a_concurrent_one SKIPPEDefault suite runs on the in-
+process substrate, and the logic tests beside these cover it. Set
+AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to
+enable it. A skip here is NOT a pass.)                                   [ 14%]
+tests/test_webhook_duplicate_delivery_real_redis.py::test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind SKIPPEDe logic tests
+beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test
+instance or database index to enable it. A skip here is NOT a pass.)     [ 17%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_two_concurrent_stores_of_different_venues_cannot_both_take_one_free_slot PASSED [ 20%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_eight_concurrent_stores_admit_exactly_the_limit PASSED [ 22%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_concurrent_requests_for_the_same_venue_are_a_rotation_not_two_slots PASSED [ 25%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_different_accounts_do_not_contend_with_each_other PASSED [ 28%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_one_tenant_cannot_consume_or_alter_another_tenants_quota PASSED [ 31%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_retrying_a_refused_request_does_not_eventually_succeed PASSED [ 34%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_the_lock_is_released_when_the_guarded_write_raises PASSED [ 37%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_a_failed_write_consumes_no_capacity PASSED [ 40%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_the_lock_is_released_on_the_guards_own_refusal PASSED [ 42%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_an_unreachable_lock_store_refuses_rather_than_admits PASSED [ 45%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_a_lock_store_that_raises_also_refuses PASSED [ 48%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_a_contended_lock_is_409_and_not_503 PASSED [ 51%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_the_lock_carries_a_ttl_so_a_killed_worker_cannot_wedge_an_account PASSED [ 54%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_a_guard_that_does_not_lock_fails_this_suite PASSED [ 57%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_a_guard_that_does_not_recheck_fails_this_suite PASSED [ 60%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write PASSED [ 62%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_the_slot_lock_is_mutually_exclusive_against_real_redis SKIPPEDefault suite runs on the in-
+process substrate, and the logic tests beside these cover it. Set
+AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to
+enable it. A skip here is NOT a pass.)                                   [ 65%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_the_guard_admits_exactly_the_limit_against_real_redis SKIPPEDefault suite runs on the in-
+process substrate, and the logic tests beside these cover it. Set
+AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to
+enable it. A skip here is NOT a pass.)                                   [ 68%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_the_guard_does_not_delete_a_successors_lock_when_its_own_expired PASSED [ 71%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_a_normal_exit_releases_the_lock PASSED [ 74%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_release_reports_each_ownership_outcome PASSED [ 77%]
+tests/test_quota01_exchange_slot_is_atomic.py::test_a_bare_delete_on_release_fails_this_suite PASSED [ 80%]
+tests/test_quota01_metered_reservation_is_hard.py::test_concurrent_reservations_admit_exactly_the_limit_and_no_more PASSED [ 82%]
+tests/test_quota01_metered_reservation_is_hard.py::test_a_sequential_run_to_the_limit_then_one_more_refuses PASSED [ 85%]
+tests/test_quota01_metered_reservation_is_hard.py::test_a_zero_allowance_reserves_nothing_and_accumulates_nothing PASSED [ 88%]
+tests/test_quota01_metered_reservation_is_hard.py::test_an_unlimited_plan_always_admits PASSED [ 91%]
+tests/test_quota01_metered_reservation_is_hard.py::test_reservations_are_isolated_per_user PASSED [ 94%]
+tests/test_quota01_metered_reservation_is_hard.py::test_the_full_enforce_quota_path_refuses_at_the_limit PASSED [ 97%]
+tests/test_quota01_metered_reservation_is_hard.py::test_concurrent_reservations_are_atomic_against_real_redis SKIPPEDefault suite runs on the
+in-process substrate, and the logic tests beside these cover it. Set
+AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to
+enable it. A skip here is NOT a pass.)                                   [100%]
+
+============================== warnings summary ===============================
+..\Users\aa\AppData\Local\Programs\Python\Python312\Lib\site-packages\supabase\_async\auth_client.py:3
+  C:\Users\aa\AppData\Local\Programs\Python\Python312\Lib\site-packages\supabase\_async\auth_client.py:3: DeprecationWarning: The `gotrue` package is deprecated, is not going to receive updates in the future. Please, use `supabase_auth` instead.
+    from gotrue import (
+
+tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write
+  C:\Users\aa\AppData\Local\Programs\Python\Python312\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.7.0) or chardet (7.6.0)/charset_normalizer (3.4.7) doesn't match a supported version!
+    warnings.warn(
+
+tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\execution_record.py:177: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator('symbol')
+
+tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\execution_record.py:183: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator('strategy_id')
+
+tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\execution_record.py:189: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator('side')
+
+tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\pydantic_models.py:350: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator('trade_size_pct', 'stop_loss_pct', 'take_profit_pct')
+
+tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\pydantic_models.py:413: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator("reason", pre=True, always=True)
+
+tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write
+  C:\aerora_quant_backend_updated_final1\backend_app\core\models\pydantic_models.py:552: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator("reason", pre=True, always=True)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_two_concurrent_stores_of_different_venues_cannot_both_take_one_free_slot
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_eight_concurrent_stores_admit_exactly_the_limit
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_concurrent_requests_for_the_same_venue_are_a_rotation_not_two_slots
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_different_accounts_do_not_contend_with_each_other
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_one_tenant_cannot_consume_or_alter_another_tenants_quota
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_retrying_a_refused_request_does_not_eventually_succeed
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_the_lock_is_released_when_the_guarded_write_raises
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_a_failed_write_consumes_no_capacity
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_the_lock_is_released_on_the_guards_own_refusal
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_an_unreachable_lock_store_refuses_rather_than_admits
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_a_lock_store_that_raises_also_refuses
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_a_contended_lock_is_409_and_not_503
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_the_lock_carries_a_ttl_so_a_killed_worker_cannot_wedge_an_account
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_a_guard_that_does_not_lock_fails_this_suite
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_a_guard_that_does_not_recheck_fails_this_suite
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_store_keys_uses_the_guard_around_its_vault_write
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_the_guard_does_not_delete_a_successors_lock_when_its_own_expired
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_a_normal_exit_releases_the_lock
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_release_reports_each_ownership_outcome
+PASSED tests/test_quota01_exchange_slot_is_atomic.py::test_a_bare_delete_on_release_fails_this_suite
+PASSED tests/test_quota01_metered_reservation_is_hard.py::test_concurrent_reservations_admit_exactly_the_limit_and_no_more
+PASSED tests/test_quota01_metered_reservation_is_hard.py::test_a_sequential_run_to_the_limit_then_one_more_refuses
+PASSED tests/test_quota01_metered_reservation_is_hard.py::test_a_zero_allowance_reserves_nothing_and_accumulates_nothing
+PASSED tests/test_quota01_metered_reservation_is_hard.py::test_an_unlimited_plan_always_admits
+PASSED tests/test_quota01_metered_reservation_is_hard.py::test_reservations_are_isolated_per_user
+PASSED tests/test_quota01_metered_reservation_is_hard.py::test_the_full_enforce_quota_path_refuses_at_the_limit
+SKIPPED [1] tests\test_webhook_duplicate_delivery_real_redis.py:464: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+SKIPPED [1] tests\test_webhook_duplicate_delivery_real_redis.py:540: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+SKIPPED [1] tests\test_webhook_duplicate_delivery_real_redis.py:560: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+SKIPPED [1] tests\test_webhook_duplicate_delivery_real_redis.py:583: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+SKIPPED [1] tests\test_webhook_duplicate_delivery_real_redis.py:604: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+SKIPPED [1] tests\test_webhook_duplicate_delivery_real_redis.py:626: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+SKIPPED [1] tests\test_quota01_exchange_slot_is_atomic.py:641: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+SKIPPED [1] tests\test_quota01_exchange_slot_is_atomic.py:700: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+SKIPPED [1] tests\test_quota01_metered_reservation_is_hard.py:228: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and the logic tests beside these cover it. Set AERORA_TEST_REDIS_URL to a DEDICATED test instance or database index to enable it. A skip here is NOT a pass.
+================= 26 passed, 9 skipped, 8 warnings in 39.66s ==================

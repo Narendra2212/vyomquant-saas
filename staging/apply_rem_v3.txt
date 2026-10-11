@@ -1,0 +1,18 @@
+[dsn] staging/pg_dsn.txt -> postgresql://127.0.0.1:62674/postgres
+[dsn] staging/pg_dsn.txt -> postgresql://127.0.0.1:62674/postgres
+==============================================================================
+APPLYING backend_app/migrations/023_remediate_privilege_escalation.sql
+------------------------------------------------------------------------------
+  NOTICE:  023: library_strategies ? authenticated may now write 39 of 52 columns; the 13 moderation/derived columns are platform-only
+  NOTICE:  023: increment_ml_addon(target_user_id uuid) EXECUTE revoked from PUBLIC/anon/authenticated, granted to service_role
+  NOTICE:  023: postflight passed ? BUG-057, RLS-01 and RLS-03 enforced at the database layer, and creator content editing still works.
+  RESULT: APPLIED OK
+==============================================================================
+APPLYING backend_app/migrations/024_remediate_referral_double_commission.sql
+------------------------------------------------------------------------------
+  NOTICE:  024 preflight: no existing duplicate commissions; safe to add the index
+  NOTICE:  relation "uq_referral_commission_payment" already exists, skipping
+  NOTICE:  024: postflight passed ? one commission per payment is now a database invariant, exactly one function overload exists, it matches the application's call, and the wallet moves only when a commission row was created.
+  RESULT: APPLIED OK
+==============================================================================
+SUMMARY: 2/2 applied, 0 failed

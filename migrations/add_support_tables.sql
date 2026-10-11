@@ -90,8 +90,20 @@ WITH CHECK (
 -- Grant necessary permissions
 GRANT SELECT, INSERT, UPDATE, DELETE ON support_tickets TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ticket_comments TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE support_tickets_id_seq TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE ticket_comments_id_seq TO authenticated;
+-- REMOVED: the two sequence grants that stood here --
+--     GRANT USAGE, SELECT ON SEQUENCE support_tickets_id_seq TO authenticated;
+--     GRANT USAGE, SELECT ON SEQUENCE ticket_comments_id_seq TO authenticated;
+--
+-- Neither sequence exists. Both tables declare `id UUID PRIMARY KEY DEFAULT
+-- gen_random_uuid()` (lines 12 and 28), so no `*_id_seq` is created -- those names
+-- would only exist for a `SERIAL` column. PostgreSQL refuses with
+-- `42P01 UndefinedTable: relation "support_tickets_id_seq" does not exist`, so this
+-- file has never been applied as written.
+--
+-- Same defect as `migrations/add_notifications_table.sql` line 59, found in the same
+-- way: provisioning staging from source. A repository-wide search for `ON SEQUENCE`
+-- found exactly these three grants and no others, so the pattern is now fully
+-- accounted for.
 
 -- Add helpful comments
 COMMENT ON TABLE support_tickets IS 'User support tickets for institutional help desk system';

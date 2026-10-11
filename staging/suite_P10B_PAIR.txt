@@ -1,0 +1,6 @@
+START=2026-10-10T04:49:03.2534628+05:30
+FILES=tests/property/test_order_idempotence_under_retry.py tests/property/test_paper_confluence.py
+...........                                                              [100%]
+11 passed in 86.96s (0:01:26)
+EXITCODE=0
+END=2026-10-10T04:50:44.5377278+05:30

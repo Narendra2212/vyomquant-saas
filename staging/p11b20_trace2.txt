@@ -1,0 +1,255 @@
+====================================================================================================
+SharedRedisManager PROXIES USED BY reserve_quota  (NOT MockRedisClient's)
+====================================================================================================
+  class SharedRedisManager begins at L463
+
+  SharedRedisManager.incrby  (L927)
+     927      async def incrby(self, key: str, amount: int) -> int:
+     928          """Proxy to cache incrby method."""
+     929          client = await self._get_active_cache()
+     930          if client:
+     931              try:
+     932                  return await client.incrby(key, amount)
+     933              except Exception as e:
+     934                  logger.warning(f"INCRBY failed for '{key}': {e}")
+     935          return 0
+     936  
+     937      async def decrby(self, key: str, amount: int) -> int:
+     938          """Proxy to cache decrby method."""
+     939          client = await self._get_active_cache()
+     940          if client:
+
+  SharedRedisManager.decrby  (L937)
+     937      async def decrby(self, key: str, amount: int) -> int:
+     938          """Proxy to cache decrby method."""
+     939          client = await self._get_active_cache()
+     940          if client:
+     941              try:
+     942                  return await client.decrby(key, amount)
+     943              except Exception as e:
+     944                  logger.warning(f"DECRBY failed for '{key}': {e}")
+     945          return 0
+     946  
+     947      async def lrange(self, key: str, start: int, end: int) -> list:
+     948          """Proxy to lrange method."""
+     949          client = await self._get_active_cache()
+     950          if client:
+
+  SharedRedisManager.expire  (L987)
+     987      async def expire(self, key: str, seconds: int) -> bool:
+     988          """Proxy to expire method."""
+     989          if DEV_MODE:
+     990              return await self._mock_client.expire(key, seconds)
+     991  
+     992          await self._ensure_manager()
+     993          if self._redis_manager and self._redis_manager.cache:
+     994              try:
+     995                  return await self._redis_manager.cache.expire(key, seconds)
+     996              except Exception as e:
+     997                  import logging
+     998                  logging.getLogger(__name__).warning(f"EXPIRE failed for '{key}': {e}")
+     999                  return False
+    1000          return False
+
+  SharedRedisManager.expire  (L1194)
+    1194      async def expire(self, key: str, time: int, *args, **kwargs) -> bool:
+    1195          """Proxy to cache expire method."""
+    1196          client = await self._get_active_cache()
+    1197          if client:
+    1198              try:
+    1199                  return await client.expire(key, time, *args, **kwargs)
+    1200              except Exception as e:
+    1201                  logger.warning(f"EXPIRE failed for '{key}': {e}")
+    1202          return False
+    1203  
+    1204      async def incr(self, key: str, amount: int = 1) -> int:
+    1205          """Proxy to cache incr method."""
+    1206          client = await self._get_active_cache()
+    1207          if client:
+
+====================================================================================================
+DOES ANY ERROR PATH INVALIDATE `_connected` ?
+====================================================================================================
+  occurrences of `_connected` in backend_app/backend/redis_manager.py:
+     122          self._connected: bool = False
+     171              self._connected = True
+     180              self._connected = False
+     192          if self._connected:
+     202              return self._connected
+     206              if self._connected:
+     548      if _redis_manager is not None and _redis_manager._connected:
+     561          if _redis_manager is not None and _redis_manager._connected:
+
+  occurrences of `_connected` in backend_app/core/cache/redis_manager.py:
+    NONE -- the core proxies never touch the connected flag
+
+  get_redis_manager() reconnection gate:
+
+  get_redis_manager  (L536)
+     536  async def get_redis_manager() -> Optional[RedisManager]:
+     537      """
+     538      Get or create the global RedisManager instance.
+     539  
+     540      Debounce-safe: if initialization previously failed, concurrent callers
+     541      share a single retry attempt instead of each spawning their own.
+     542      Returns None (and logs a warning) if Redis is unavailable, so callers
+     543      can fail-soft without exceptions propagating.
+     544      """
+     545      global _redis_manager, _get_manager_last_failed
+     546  
+     547      # Fast path — already initialised and connected
+     548      if _redis_manager is not None and _redis_manager._connected:
+     549          return _redis_manager
+     550  
+     551      now = time.monotonic()
+     552      if now - _get_manager_last_failed < _RECONNECT_COOLDOWN:
+     553          return _redis_manager  # Still in cooldown; return whatever we have (may be None)
+     554  
+     555      lock = _ensure_get_manager_lock()
+     556      if lock.locked():
+     557          return _redis_manager  # Another coroutine is already attempting — skip
+     558  
+     559      async with lock:
+     560          # Double-check after acquiring
+     561          if _redis_manager is not None and _redis_manager._connected:
+     562              return _redis_manager
+     563  
+     564          now = time.monotonic()
+     565          if now - _get_manager_last_failed < _RECONNECT_COOLDOWN:
+     566              return _redis_manager
+     567  
+     568          if _redis_manager is None:
+     569              _redis_manager = RedisManager()
+     570  
+     571          success = await _redis_manager.initialize()
+     572          if not success:
+     573              _get_manager_last_failed = time.monotonic()
+     574              logger.warning("[RedisManager] Initialization failed; will retry after cooldown")
+     575  
+     576      return _redis_manager
+     577  
+     578  
+     579  class RedisManagerCompatProxy:
+
+  try_reconnect:
+
+  try_reconnect  (L184)
+     184      async def try_reconnect(self) -> bool:
+     185          """
+     186          Debounced reconnection. At most one reconnection attempt runs at a time;
+     187          other concurrent callers skip the attempt if already in-flight or
+     188          if within the cooldown window following the most recent failure.
+     189  
+     190          Returns True if the manager is now connected, False otherwise.
+     191          """
+     192          if self._connected:
+     193              return True
+     194  
+     195          now = time.monotonic()
+     196          if now - self._last_failed_at < _RECONNECT_COOLDOWN:
+     197              return False  # Still in cooldown — skip attempt
+     198  
+     199          lock = self._get_reconnect_lock()
+     200          if lock.locked():
+     201              # Another coroutine is already in a reconnection attempt — skip
+     202              return self._connected
+     203  
+     204          async with lock:
+     205              # Double-check inside lock in case a prior winner already succeeded
+     206              if self._connected:
+     207                  return True
+     208  
+     209              now = time.monotonic()
+     210              if now - self._last_failed_at < _RECONNECT_COOLDOWN:
+     211                  return False
+     212  
+     213              return await self.initialize()
+     214  
+     215      async def close(self):
+     216          """Close all Redis connections."""
+     217          if self._cache:
+
+====================================================================================================
+DOES ANY CALLER SURFACE THE REFUSAL USAGE VALUE TO AN API RESPONSE?
+====================================================================================================
+
+  backend_app/routers/strategies.py around L2077:
+    2075      # SECURITY & CONCURRENCY: Atomically reserve bot quota to eliminate TOCTOU races
+    2076      plan_key = await get_user_plan(user["id"], sb)
+    2077      allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Resource.BOTS.v
+    2078      if not allowed:
+    2079          raise HTTPException(
+    2080              status_code=403,
+    2081              detail=f"Quota exceeded for {Resource.BOTS.value}: {current_usage}/{limit}. Upgrade your plan to con
+    2082          )
+    2083  
+    2084      use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
+    2085  
+    2086      try:
+    2087          if use_tee:
+    2088              logger.info(f"[STRATEGIES] Delegating deployment of {strategy_id} to TEE")
+    2089              # The mode travels WITH the command. Both consumers
+    2090              # (`workers/command_worker.py`, `tee/main.py`) now refuse a start_bot command
+    2091              # that does not state it, so omitting it would start nothing rather than start
+    2092              # something in an unestablished mode.
+    2093              #
+    2094              # `True`, for the same reason as the local branch below: this endpoint resolves
+    2095              # no Deployment_Binding and travels no Requirement 13 gate, so nothing here
+    2096              # establishes that live trading was authorised.
+    2097              # Regression: tests/test_live_deployment_mode_propagation.py
+    2098              await publish_command(
+    2099                  "start_bot",
+
+  backend_app/backend/strategy_service.py around L1852:
+    1850                  raise ValueError("Live trading requires a paid subscription plan.")
+    1851  
+    1852          allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Resource.BO
+    1853          if not allowed:
+    1854              raise ValueError(f"Quota exceeded for bots: {current_usage}/{limit}. Upgrade your plan to continue."
+    1855  
+    1856          # Create deployment
+    1857          deployment_id = str(uuid4())
+    1858          deployment_data = {
+    1859              "id": deployment_id,
+    1860              "strategy_id": strategy_id,
+    1861              "user_id": user["id"],
+    1862              "version_id": version_data["id"],
+    1863              "version": version,
+    1864              "environment": environment,
+    1865              # The venue this deployment runs on, resolved by the binding gates from the
+    1866              # named exchange account - never from `strategies.exchange`, which SB-06
+    1867              # leaves empty (the pre-existing code assigned it from there, and *after* the
+    1868              # INSERT, so it was never persisted at all).
+    1869              #
+    1870              # WHY THIS COLUMN AND NOT NONE
+    1871              #   `001_strategy_architecture.sql` declared `exchange_id` as a UUID FK into an
+    1872              #   `exchanges` table, and this line used to write a literal `None` on the
+    1873              #   grounds that migration 003 records that table as absent in production. It
+    1874              #   does - and in the same statement it REDEFINES this column as
+
+  backend_app/core/usage_ledger.py around L494:
+     492      await _reconcile_meter(resource, user_id, supabase, active_period)
+     493  
+     494      allowed, current, effective = await SubscriptionEngine.reserve_quota(
+     495          user_id,
+     496          plan_key,
+     497          resource,
+     498          amount=amount,
+     499          limit=limit,
+     500          period=active_period,
+     501      )
+     502  
+     503      if allowed:
+     504          await _append_ledger(
+     505              resource,
+     506              user_id,
+     507              supabase,
+     508              active_period,
+     509              amount,
+     510              idempotency_key or f"{resource}:{user_id}:{uuid.uuid4().hex}",
+     511              context,
+     512          )
+     513      return allowed, current, effective
+     514  
+     515  
+     516  async def release(

@@ -1,0 +1,11 @@
+anchor 'invoice.payment_succeeded' first occurs at offset 112308
+'Subscription Renewed' occurrences in the whole file: 1 at [115409]
+  offset 115409 -> distance from anchor = 3101
+
+window is source[112308:115308]
+occurrences INSIDE the window: 0
+
+'subscription_renewed' first occurrence at/after anchor: offset 115246 (distance 2938)
+
+VERDICT: present in the file but 3101 chars from the anchor, i.e. 101 chars beyond the window.
+NONCE_END=BW1A

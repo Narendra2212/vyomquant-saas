@@ -1,0 +1,248 @@
+{
+  "lanes": {
+    "ci": {
+      "lane": "CI lane (AUTHORITATIVE, Phase 10)",
+      "description": "No DATABASE_URL and no AERORA_TEST_DATABASE_URL. Reproduces 01-pr-check.yml's 'Run Unit Tests' job, comparable to the Phase 5-9 baselines. Every PostgreSQL-only suite SKIPS here. Run on the fully-remediated Phase 10 tree: the referral_obligations sweep-coverage fix, the TEST-05 deterministic @example boundaries, the CONN-01 store_keys eviction, the QUOTA-01 metered-reservation tests, the TENANT-01 credential-vault isolation tests, the referral payout payout_method fix, the fee_pct nullable model change + migration 031, and the reconciliation startup assessment.",
+      "status": "COMPLETED",
+      "collected": 14292,
+      "collected_source": "junit testsuite@tests (pytest -q printed no collected line)",
+      "passed": 13618,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 666,
+      "xfailed": 5,
+      "xpassed": 3,
+      "duration_seconds": 4245.16,
+      "command": "pytest tests -q -p no:cacheprovider -o addopts= --timeout=1800 --timeout-method=thread --tb=line -rfE",
+      "artifact": "staging/fullreg_raw_FULLREG_P10.txt; junit staging/fullreg_FULLREG_P10.xml",
+      "summary_line": "13618 passed, 666 skipped, 5 xfailed, 3 xpassed, 1978 warnings in 4245.16s (1:10:45)",
+      "arithmetic_check": "0 + 13618 + 666 + 5 + 3 = 14292 == collected 14292",
+      "junit": {
+        "header_attributes": {
+          "tests": 14292,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 671
+        },
+        "counted_elements": {
+          "passed": 13621,
+          "skipped": 666,
+          "xfailed": 5
+        },
+        "total_testcases": 14292,
+        "top_skip_reasons": [
+          [
+            "PostgreSQL unavailable: connection to server at \"127.0.0.1\", port 62674 failed: Connection refused (0x0000274D",
+            104
+          ],
+          [
+            "needs a real PostgreSQL instance: SQLite has no uuid type, no referential ON DELETE actions worth testing here",
+            76
+          ],
+          [
+            "AERORA_TEST_DATABASE_URL is unset or not PostgreSQL.",
+            47
+          ],
+          [
+            "TRADE-01 is a concurrency defect. The reservation is a PostgreSQL advisory lock and the proof is a genuine mul",
+            44
+          ],
+          [
+            "needs a real PostgreSQL instance: this defect and its fix live in column privileges, RLS policies and role swi",
+            40
+          ],
+          [
+            "AERORA_TEST_DATABASE_URL is unset or not PostgreSQL. Row level security is a PostgreSQL mechanism; there is no",
+            29
+          ],
+          [
+            "needs a real PostgreSQL instance (AERORA_TEST_DATABASE_URL).",
+            28
+          ],
+          [
+            "exchange sandbox certification is opt-in: set AERORA_EXCHANGE_SANDBOX_CERT=1. This directory contains (a) repr",
+            27
+          ],
+          [
+            "AERORA_TEST_DATABASE_URL is unset or not PostgreSQL. Row level security and table privileges are PostgreSQL me",
+            27
+          ],
+          [
+            "requires PostgreSQL: set AERORA_TEST_DATABASE_URL to a postgres DSN. A SKIP here is NOT a pass -- the obligati",
+            27
+          ],
+          [
+            "the configured PostgreSQL is not reachable, so this measurement could not be taken: OperationalError: connecti",
+            26
+          ],
+          [
+            "the invariant is a NOT NULL column with a CHECK constraint and the proof needs real transactions and two real ",
+            24
+          ]
+        ]
+      },
+      "junit_cross_check": {
+        "junit.tests == collected": true,
+        "junit.failures == failed": true,
+        "junit.errors == errors": true,
+        "junit.skipped == skipped + xfailed": true,
+        "counted elements total == collected": true,
+        "counted passed == passed + xpassed": true,
+        "counted failed == failed": false
+      },
+      "junit_reconciliation": "junit's `skipped` header attribute folds xfailed in, and its element-level pass count counts xpassed as a pass. So junit.skipped should equal skipped + xfailed, and the counted passed elements should equal passed + xpassed. The two sources disagree BY DESIGN; the reconciliation is the check, not the agreement.",
+      "failed_ids": []
+    },
+    "postgresql": {
+      "lane": "PostgreSQL lane (AUTHORITATIVE, Phase 10)",
+      "description": "AERORA_TEST_DATABASE_URL set from staging/pg_dsn.txt against a LOCAL PostgreSQL 16.2 with migrations through 031 applied, so the PostgreSQL-only suites execute. LOCAL-substrate evidence; no production database was connected to.",
+      "status": "COMPLETED",
+      "collected": 14316,
+      "collected_source": "junit testsuite@tests (pytest -q printed no collected line)",
+      "passed": 14211,
+      "failed": 1,
+      "errors": 0,
+      "skipped": 94,
+      "xfailed": 7,
+      "xpassed": 3,
+      "duration_seconds": 5378.52,
+      "command": "pytest tests -q -p no:cacheprovider -o addopts= --timeout=1800 --timeout-method=thread --tb=line -rfE",
+      "artifact": "staging/fullreg_raw_FULLREG_P10PG.txt; junit staging/fullreg_FULLREG_P10PG.xml",
+      "summary_line": "1 failed, 14211 passed, 94 skipped, 7 xfailed, 3 xpassed, 2050 warnings in 5378.52s (1:29:38)",
+      "arithmetic_check": "1 + 14211 + 94 + 7 + 3 = 14316 == collected 14316",
+      "junit": {
+        "header_attributes": {
+          "tests": 14316,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 101
+        },
+        "counted_elements": {
+          "passed": 14214,
+          "skipped": 94,
+          "xfailed": 7,
+          "failed": 1
+        },
+        "total_testcases": 14316,
+        "top_skip_reasons": [
+          [
+            "exchange sandbox certification is opt-in: set AERORA_EXCHANGE_SANDBOX_CERT=1. This directory contains (a) repr",
+            27
+          ],
+          [
+            "needs a real PostgreSQL through DATABASE_URL; provided by the database-tests job in .github/workflows/01-pr-ch",
+            14
+          ],
+          [
+            "Requires running backend server",
+            13
+          ],
+          [
+            "DATABASE_URL does not name a PostgreSQL server (or psycopg2 is absent). The database-level half of clause 1.16",
+            7
+          ],
+          [
+            "AERORA_TEST_REDIS_URL is unset or unreachable. The two-phase idempotency lock is a Redis mechanism and there i",
+            6
+          ],
+          [
+            "No server is answering at http://127.0.0.1:8000 (ConnectionError), so this smoke test has nothing to read. Sta",
+            4
+          ],
+          [
+            "needs a real Redis at AERORA_TEST_REDIS_URL/REDIS_URL. The repository default sets REDIS_URL='' so the suite r",
+            3
+          ],
+          [
+            "Frontend module not found at expected location",
+            2
+          ],
+          [
+            "needs a real PostgreSQL through DATABASE_URL for SELECT ... FOR UPDATE; provided by the database-tests job in ",
+            2
+          ],
+          [
+            "`authenticated` holds no SELECT on payment_methods; its policy cannot be exercised from this role. Not a pass ",
+            1
+          ],
+          [
+            "this interpreter already canonicalises +00:00 to timezone.utc",
+            1
+          ],
+          [
+            "this platform/user cannot create symlinks",
+            1
+          ]
+        ]
+      },
+      "junit_cross_check": {
+        "junit.tests == collected": true,
+        "junit.failures == failed": true,
+        "junit.errors == errors": true,
+        "junit.skipped == skipped + xfailed": true,
+        "counted elements total == collected": true,
+        "counted passed == passed + xpassed": true,
+        "counted failed == failed": true
+      },
+      "junit_reconciliation": "junit's `skipped` header attribute folds xfailed in, and its element-level pass count counts xpassed as a pass. So junit.skipped should equal skipped + xfailed, and the counted passed elements should equal passed + xpassed. The two sources disagree BY DESIGN; the reconciliation is the check, not the agreement.",
+      "failed_ids": [
+        "tests/test_rate_limiter_concurrency.py::test_different_endpoints_run_concurrently"
+      ]
+    }
+  },
+  "accounting_convention": "XFAILED AND XPASSED, AND WHY THE TWO SOURCES DISAGREE BY DESIGN. pytest's terminal summary counts xfailed and xpassed as their own categories, so the arithmetic that reconciles against `collected` is failed + passed + skipped + xfailed + xpassed. The JUnit XML does not have those categories: its `testsuite@skipped` attribute FOLDS xfailed into skipped, and its per-element count FOLDS xpassed into passed. In Phase 7 that showed as 472 = 466 + 6 on the header and 13389 = 13386 + 3 on the elements. So a direct attribute-to-summary comparison is expected to differ by exactly the xfail and xpass counts, and the cross-check accounts for that rather than treating it as a discrepancy. `pytest -q` prints no 'collected N items' line, so `collected` is taken from the junit `tests` attribute; that source is recorded on every lane so a reader can see the cross-check is not comparing a figure with itself.",
+  "why_two_lanes": "Reporting only the CI lane would report a pass on tests that never ran, because that lane skips every PostgreSQL-only suite by design. Reporting only the PostgreSQL lane would not be comparable to the earlier baselines. The difference between the two IS the infrastructure-gated surface; both are kept.",
+  "baseline_phase_9": {
+    "ci": {
+      "collected": 14158,
+      "passed": 13564,
+      "failed": 1,
+      "errors": 0,
+      "skipped": 584,
+      "xfailed": 6,
+      "xpassed": 3,
+      "nonce": "FULLREG_P9FINAL"
+    },
+    "postgresql": {
+      "collected": 14158,
+      "passed": 14084,
+      "failed": 1,
+      "errors": 0,
+      "skipped": 64,
+      "xfailed": 6,
+      "xpassed": 3,
+      "nonce": "FULLREG_P9PGFINAL"
+    }
+  },
+  "substrate": "LOCAL PostgreSQL 16.2 via pgserver. No production database was connected to in any phase. Live trading remained OFF and NOT CERTIFIED; no venue sandbox was reachable, so TRADING PAPER stays NOT CLASSIFIED.",
+  "delta_vs_phase_9_ci_lane": {
+    "collected": 134,
+    "passed": 54,
+    "failed": -1,
+    "skipped": 82,
+    "xfailed": -1,
+    "xpassed": 0
+  },
+  "delta_vs_phase_9_postgresql_lane": {
+    "collected": 158,
+    "passed": 127,
+    "failed": 0,
+    "skipped": 30,
+    "xfailed": 1,
+    "xpassed": 0
+  },
+  "infrastructure_gated_surface": {
+    "skipped_in_ci_lane": 666,
+    "skipped_in_postgresql_lane": 94,
+    "skips_converted_to_runs": 572
+  },
+  "lanes_with_outstanding_failures": {
+    "postgresql": {
+      "failed": 1,
+      "failed_ids": [
+        "tests/test_rate_limiter_concurrency.py::test_different_endpoints_run_concurrently"
+      ]
+    }
+  },
+  "fully_green": false
+}

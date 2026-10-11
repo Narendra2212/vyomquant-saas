@@ -200,6 +200,30 @@ class BotRunner:
             self.exchange = self.ccxt_bridge.exchange
             self.data_engine = DataEngine(self.exchange)
 
+            # ── PAPER-01: THE CANONICAL PAPER LEDGER ──────────────────────
+            # This module used to have NO import edge to `backend_app/backend/paper/`
+            # at all, so a bot's paper fills were simulated inside `ExecutionEngine`
+            # against the synthetic balance below and written to no `paper_*` table.
+            # A trader who deployed in paper mode got real simulated executions that
+            # `GET /api/paper/account`, `/positions`, `/orders`, `/trades` and
+            # `/summary` -- and therefore `PaperTrading.jsx` -- did not show, and that
+            # did not survive a restart.
+            #
+            # The ledger routes each fill through `PaperTradingService.place_order`,
+            # which is the same canonical path `POST /api/paper/orders` uses: the
+            # arithmetic is `paper/paper_accounting`, the writes are
+            # `paper/paper_repository`, and the DEFAULT account needs no `session_id`
+            # -- which is what makes it usable here, since a BotRunner bot has no
+            # Paper_Session. Migration 013 relaxed `session_id` on the seven child
+            # tables for exactly this case.
+            #
+            # The engine's in-process cash and positions become a COPY of the stored
+            # rows (`ExecutionEngine._reconcile_from_paper_ledger`), so there is one
+            # answer to "what is my cash" rather than two.
+            from backend_app.backend.paper.bot_paper_ledger import BotPaperLedger
+
+            paper_ledger = BotPaperLedger(self.user_id)
+
             # Use synthetic paper balance
             portfolio_state = {"total_equity": 10000.0}
             self.execution_engine = ExecutionEngine(
@@ -208,6 +232,10 @@ class BotRunner:
                 risk_manager=self.risk_manager,
                 portfolio_state=portfolio_state,
                 exchange_executor=None,
+                # PAPER-01. Present only on the paper branch: a LIVE engine must never
+                # hold one, and `tests/test_paper01_botrunner_fills_reach_the_ledger_postgres.py`
+                # asserts the live construction below passes none.
+                paper_ledger=paper_ledger,
                 # PAPER, stated rather than implied by the `exchange_executor=None`
                 # above. That null used to be the only thing keeping this engine's
                 # orders off a real exchange; the engine now refuses the live branch
@@ -255,13 +283,23 @@ class BotRunner:
         portfolio_state = {"total_equity": float(quote_balance)}
 
         # LIVE: Initialize real ExchangeExecutor
+        #
+        # `user_id` IS THE POINT OF THIS CALL, NOT DECORATION. `get_exchange_executor`
+        # memoises executors in a process-global dict, and its key used to be
+        # `f"{exchange_id}:{sandbox}"` — which does not mention the account. The keys
+        # three lines below were just decrypted out of the vault for THIS user, so in a
+        # worker that had already started a binance bot for somebody else, this call
+        # returned THAT trader's executor and every order this strategy produced would
+        # have been signed with their credentials and filled against their balance.
+        # Regression: tests/test_exchange_executor_cache_is_per_tenant.py
         from backend_app.backend.exchange_executor import get_exchange_executor
         exchange_exec = get_exchange_executor(
             exchange_id=self.exchange_id,
             api_key=keys["api_key"],
             api_secret=keys["secret_key"],
             sandbox=self.blueprint.get("testnet", False),
-            password=keys.get("password")
+            password=keys.get("password"),
+            user_id=self.user_id,
         )
 
         # ═══════════════════════════════════════════════════════════════════
@@ -569,24 +607,44 @@ class BotRunner:
                     # argument precisely so this is always established, and it was not
                     # being passed on. It is now.
                     #
-                    # WHAT THIS MEANS FOR A PAPER BOT, STATED PLAINLY: the order is
-                    # REFUSED here, and that is Requirement 13.9 working as written -
-                    # "IF the live order path receives an order whose originating
-                    # Execution_Environment is `PAPER`, THEN THE live order path SHALL
-                    # reject the order before issuing any exchange call ... and SHALL
-                    # record the rejection in the Audit_Log." `assert_live_environment`
-                    # audits before it raises, so the record is kept.
+                    # WHAT THIS MEANS FOR A PAPER BOT. This comment used to say the order
+                    # is REFUSED here, and that is NO LONGER TRUE -- it described an
+                    # interim state that has since been fixed, and leaving it would tell
+                    # the next reader that paper trading is broken when it is not.
                     #
-                    # A paper bot therefore stops producing simulated executions through
-                    # this funnel. Per Requirement 13.3 it should never have been doing
-                    # so: "WHEN a Paper_Session emits an order intent, THE Paper_Session
-                    # SHALL route that order intent to the Paper_Simulator, AND SHALL NOT
-                    # enqueue, forward or copy that order intent onto the live order
-                    # path." The Paper_Simulator is `backend/paper/paper_simulator.py`
-                    # and is reached by the Paper_Session runtime, not from here. Routing
-                    # this loop's paper mode there is the remaining work; refusing is the
-                    # correct interim state because the alternative is a mislabelled
-                    # order on the live funnel.
+                    # `execute_with_idempotency` now chooses its guard by what the engine
+                    # IS rather than applying the live-path guard to everything
+                    # (`core/execution_engine.py`, first statement of the method). This
+                    # engine states PAPER and holds no `exchange_executor`, so it is a
+                    # DECLARED SIMULATOR and is guarded by
+                    # `assert_simulation_environment_matches`, which admits exactly one
+                    # value -- its own. PAPER on PAPER passes; a LIVE order on this engine
+                    # is still refused, which the live-path guard could not do for it.
+                    # The order then reaches the paper simulation branch and produces a
+                    # `paper_`-prefixed fill.
+                    # Verified by execution: tests/test_simulated_orders_reach_the_simulator.py
+                    # (129 tests across that file and its two companions).
+                    #
+                    # WHAT IS STILL OUTSTANDING, AND IT IS NOT A REFUSAL. The fill is
+                    # simulated INSIDE `ExecutionEngine`, against the synthetic
+                    # `{"total_equity": 10000.0}` set in `_recover_live_state`. This
+                    # module has NO import edge to `backend_app/backend/paper/` at all --
+                    # no `paper_simulator`, no `paper_repository` -- so the fill is never
+                    # written to `paper_accounts` / `paper_orders` / `paper_fills` /
+                    # `paper_positions`, which is where `PaperTrading.jsx` and the paper
+                    # dashboard read from.
+                    #
+                    # So the platform has two paper engines sharing one word: the
+                    # Paper_Session path (`POST /api/paper/sessions` ->
+                    # `paper_session_service` -> `paper_simulator`, fully persisted) and
+                    # this one (deploy-in-paper -> BotRunner, persisted only to
+                    # execution/telemetry records). A trader who deploys a strategy in
+                    # paper mode gets real simulated executions that their paper account
+                    # does not show. Requirement 13.3 wants this loop's intents routed to
+                    # the Paper_Simulator; the seam is this single call site plus the
+                    # engine construction in `_recover_live_state`, and the missing piece
+                    # is a `session_id`, which a BotRunner bot does not have.
+                    # Recorded as an open item rather than attempted here.
                     # Regression: tests/test_execution_environment_is_stated_not_defaulted.py
                     result = await self.execution_engine.execute_with_idempotency(
                         tenant_id=uuid.UUID(self.user_id),
@@ -601,6 +659,16 @@ class BotRunner:
                             if self.paper_trading
                             else ExecutionEnvironment.LIVE
                         ),
+                        # TRADE-05. The risk verdict this loop just obtained, carried to
+                        # the gateway as evidence. The gateway refuses a LIVE order whose
+                        # `risk_approved` is not True, so risk is now enforced AT the
+                        # gateway instead of being a convention this caller happens to
+                        # follow. We only reach this line when `verdict` is APPROVED --
+                        # the non-approved branch `continue`s above -- so passing the
+                        # comparison rather than a literal `True` keeps the evidence tied
+                        # to the actual evaluation.
+                        risk_approved=(verdict == RiskVerdict.APPROVED),
+                        risk_reason=str(reason or "risk approved"),
                     )
 
                     # ── Record execution result ─────────────────────────────

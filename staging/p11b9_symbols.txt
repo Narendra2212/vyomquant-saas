@@ -1,0 +1,12 @@
+=== symbols in subscription_dependencies.py AS SHIPPED IN CI (main) ===
+  exchange_connection_slot_guard: ABSENT
+  _slot_lock_key: ABSENT
+  check_exchange_connection_slot: PRESENT
+  reserve_metered_usage: ABSENT
+  _reservation_key: ABSENT
+=== same file IN WORKING TREE (uncommitted) ===
+  exchange_connection_slot_guard: PRESENT
+  _slot_lock_key: PRESENT
+  check_exchange_connection_slot: PRESENT
+  reserve_metered_usage: ABSENT
+  _reservation_key: ABSENT

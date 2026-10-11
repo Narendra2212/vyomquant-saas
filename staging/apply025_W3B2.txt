@@ -1,0 +1,36 @@
+NONCE=W3B2
+applying 025_work03_bot_ownership_claims.sql (8839 bytes)
+APPLIED OK
+   NOTICE:  WORK-03 postflight OK: claim table, primary key and grants verified
+
+=== verification ===
+   user_id        uuid
+   symbol         text
+   owner_token    uuid
+   worker_name    text
+   state          text
+   claimed_at     timestamp with time zone
+   heartbeat_at   timestamp with time zone
+   released_at    timestamp with time zone
+
+   chk_bot_claim_state: CHECK ((state = ANY (ARRAY['STARTING'::text, 'ACTIVE'::text, 'STOPPING'::text])))
+   chk_bot_claim_symbol_nonempty: CHECK ((length(btrim(symbol)) > 0))
+   pk_bot_ownership_claims: PRIMARY KEY (user_id, symbol)
+
+   grant authenticated    SELECT
+   grant postgres         DELETE
+   grant postgres         INSERT
+   grant postgres         REFERENCES
+   grant postgres         SELECT
+   grant postgres         TRIGGER
+   grant postgres         TRUNCATE
+   grant postgres         UPDATE
+   grant service_role     DELETE
+   grant service_role     INSERT
+   grant service_role     REFERENCES
+   grant service_role     SELECT
+   grant service_role     TRIGGER
+   grant service_role     TRUNCATE
+   grant service_role     UPDATE
+
+NONCE_END=W3B2

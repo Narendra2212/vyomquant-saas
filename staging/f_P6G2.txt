@@ -1,0 +1,5 @@
+=== REPRO: the three polluter files, then the target (the full-suite order) ===
+  8 failed, 83 passed in 56.03s
+=== CONTROL: the target alone ===
+  33 passed in 31.96s
+NONCE_END=P6G2

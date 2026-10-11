@@ -1,0 +1,50 @@
+tests/test_task_6_1_backtest_execute.py::TestTheVersionsOwnArtifactIsWhatRuns::test_the_current_version_row_is_handed_to_the_runtime PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheVersionsOwnArtifactIsWhatRuns::test_the_persisted_plan_travels_on_that_row PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheVersionsOwnArtifactIsWhatRuns::test_a_named_version_is_loaded_and_scoped_to_this_strategy PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheVersionsOwnArtifactIsWhatRuns::test_another_strategys_version_id_is_not_backtestable_here PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheVersionsOwnArtifactIsWhatRuns::test_a_strategy_with_no_saved_version_is_refused_naming_the_version PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheVersionsOwnArtifactIsWhatRuns::test_run_backtest_is_never_the_entry_point PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheCallerNoLongerReconstructsTheGraph::test_execution_graph_is_no_longer_required PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheCallerNoLongerReconstructsTheGraph::test_a_supplied_execution_graph_changes_nothing_and_is_named_as_ignored PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheCallerNoLongerReconstructsTheGraph::test_nothing_is_reported_as_ignored_when_nothing_was PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheCallerNoLongerReconstructsTheGraph::test_a_market_or_venue_field_is_refused_rather_than_silently_dropped PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestSubmittedConfigurationReachesTheEngines::test_the_runtime_the_factory_builds_carries_every_submitted_value PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestSubmittedConfigurationReachesTheEngines::test_it_is_not_the_shared_singleton_running_on_the_class_defaults PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestSubmittedConfigurationReachesTheEngines::test_two_different_configurations_produce_two_differently_configured_runtimes PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestSubmittedConfigurationReachesTheEngines::test_the_response_states_the_configuration_that_was_applied PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestArchivedStrategiesAreRefused::test_it_answers_409_naming_the_operation_and_the_timestamp FAILED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestArchivedStrategiesAreRefused::test_nothing_runs_and_no_feed_is_opened PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestArchivedStrategiesAreRefused::test_backtest_is_one_of_the_operations_the_archive_gate_refuses PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestArchivedStrategiesAreRefused::test_a_row_with_no_archival_column_is_treated_as_active FAILED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestOwnership::test_another_tenant_gets_404_and_nothing_runs FAILED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestOwnership::test_an_unknown_strategy_answers_identically PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestOneSynchronousResponse::test_it_returns_the_persisted_result_directly FAILED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestOneSynchronousResponse::test_it_carries_no_job_id_to_poll FAILED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestOneSynchronousResponse::test_create_backtest_records_the_version_that_ran PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheVenueIsResolvedNotHardcoded::test_the_handler_names_no_exchange PASSED [ 80%]
+tests/test_task_6_1_backtest_execute.py::TestTheVenueIsResolvedNotHardcoded::test_the_feed_seam_refuses_when_the_server_names_no_venue PASSED [ 81%]
+tests/test_task_6_1_backtest_execute.py::TestTheVenueIsResolvedNotHardcoded::test_the_feed_seam_reads_the_servers_setting PASSED [ 81%]
+tests/test_task_6_1_backtest_execute.py::TestRefusalsFromTheRuntime::test_a_version_that_no_longer_compiles_names_the_version FAILED [ 81%]
+tests/test_task_6_1_backtest_execute.py::TestRefusalsFromTheRuntime::test_a_version_declaring_no_market_is_refused_not_substituted FAILED [ 81%]
+tests/test_task_6_1_backtest_execute.py::TestRefusalsFromTheRuntime::test_an_unexpected_failure_is_still_a_500_with_its_code FAILED [ 81%]
+tests/test_task_6_1_backtest_execute.py::TestNothingElseMoved::test_the_endpoint_is_reachable_at_the_canonical_path PASSED [ 81%]
+tests/test_task_6_1_backtest_execute.py::TestNothingElseMoved::test_the_pre_existing_path_still_resolves_to_the_same_handler PASSED [ 81%]
+tests/test_task_6_1_backtest_execute.py::TestNothingElseMoved::test_the_legacy_job_queue_endpoints_are_untouched PASSED [ 81%]
+tests/test_task_6_1_backtest_execute.py::TestNothingElseMoved::test_the_two_step_save_endpoints_are_still_there PASSED [ 81%]
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:549: assert 429 == 409
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:577: assert 429 == 200
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:591: assert 429 == 404
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:616: KeyError: 'backtest_id'
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:627: KeyError: 'status'
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:765: assert 429 == 422
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:781: assert 429 == 422
+--- tb=line entries mentioning task_6_1 ---
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:549: assert 429 == 409
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:577: assert 429 == 200
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:591: assert 429 == 404
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:616: KeyError: 'backtest_id'
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:627: KeyError: 'status'
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:765: assert 429 == 422
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:781: assert 429 == 422
+C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:793: assert 429 == 500
+NONCE_END=P6F1

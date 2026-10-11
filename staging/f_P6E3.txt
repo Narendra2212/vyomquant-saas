@@ -1,0 +1,21 @@
+--- exchange_keys.json: structure only, values redacted ---
+  bytes=458 lines=11
+  looks_like_json=no
+  struct: # REDACTED: exchange_keys.json
+  (value line, 60 chars, redacted)
+  (value line, 63 chars, redacted)
+  struct: #
+  (value line, 64 chars, redacted)
+  struct: #   POST /api/v1/exchange/keys
+  (value line, 68 chars, redacted)
+  struct: #
+  (value line, 72 chars, redacted)
+  (value line, 56 chars, redacted)
+  struct: {}
+--- .env keys present (names + SET/EMPTY only) ---
+  SUPABASE_URL = SET(len=18)
+  SUPABASE_KEY = SET(len=11)
+  DATABASE_URL = SET(len=21)
+  REDIS_URL = SET(len=26)
+  ENV = SET(len=11)
+NONCE_END=P6E3

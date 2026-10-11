@@ -64,12 +64,26 @@ JWT_SECRET=<jwt-secret>
 REDIS_URL=redis://default:<password>@<host>:<port>
 MASTER_ENCRYPTION_KEYS=<fernet-key>
 AERORA_MODE=paper
-PRODUCTION_ROUTER_ENABLED=True
+PRODUCTION_ROUTER_ENABLED=False
 CORS_ORIGINS=https://<vercel-domain>.vercel.app,https://app.algo22.io
 ```
 
 > **Critical:** `SUPABASE_KEY` and `SUPABASE_SERVICE_ROLE_KEY` must both be set to the same value.  
 > `startup.sh` checks `SUPABASE_KEY`. `core/config.py` reads `SUPABASE_SERVICE_ROLE_KEY`.
+
+> **Corrected 2026-10-08 (ENV-04).** This block previously said
+> `PRODUCTION_ROUTER_ENABLED=True`, contradicting `.env.example`, all four shipped task
+> definitions (`ecs-task-definition-full.json`, `new_task_def.json`, `td15.json`,
+> `infra/rollback/taskdef-vyomquant-api-145-pre-domain.json`) and the `core/feature_flags.py`
+> docstring, which all say `False`. The flag now defaults to **off** and requires an explicit
+> `PRODUCTION_ROUTER_ENABLED=true` to mount `execution_router` at `/api/execution`; its
+> omission can no longer mount an execution surface. Single authoritative definition:
+> `core/safety_config.production_router_enabled()`.
+>
+> **Placeholders in this block are placeholders.** `<service-role-key>`, `<jwt-secret>` and
+> `<fernet-key>` are rejected by `Settings.assert_credentials_are_production_grade()`
+> (ENV-03) — a deployment that copies them verbatim will refuse to boot rather than serve
+> traffic with a template value.
 
 ---
 

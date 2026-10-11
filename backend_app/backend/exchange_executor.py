@@ -25,6 +25,8 @@ STEP 6.10: Security - NEVER log API keys
 STEP 6.11: UNKNOWN state reconciliation
 """
 import asyncio
+import hashlib
+import json
 import logging
 import threading
 import time
@@ -35,7 +37,7 @@ from datetime import datetime
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
 from collections import defaultdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from backend_app.backend.state_service import OrderStatus
 
@@ -401,6 +403,16 @@ class OrderStatusResult:
     remaining_size: str
     avg_price: Optional[str]
     error_message: Optional[str] = None
+    #: The venue's own identifier for the order, when the caller did not already know it.
+    #:
+    #: TRADE-07. `get_order_status` is CALLED with the venue order id, so it had no reason
+    #: to return one. `find_order_by_client_order_id` is the opposite: it is called with
+    #: the id WE assigned and its entire purpose is to discover the venue's. Recovery is
+    #: forbidden from recording a fill without it, so it has to travel in the result.
+    #:
+    #: Additive with a default, so every existing construction of this dataclass is
+    #: unaffected.
+    venue_order_id: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -426,6 +438,89 @@ class ExchangeNormalizer:
         """Load market data for precision."""
         if self._markets is None:
             self._markets = await exchange.load_markets()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PRECISION
+    # ─────────────────────────────────────────────────────────────────────────
+    #
+    # CCXT reports `market["precision"]["price"|"amount"]` under TWO conventions, and
+    # which one applies is a property of the venue, not of this code:
+    #
+    #   DECIMAL_PLACES  -> an integer count, e.g. 2 meaning "two decimal places"
+    #   TICK_SIZE       -> the step itself, e.g. 0.01 or 1e-05
+    #
+    # Binance, Kraken, Coinbase and Bitfinex are TICK_SIZE venues. The previous
+    # implementation assumed DECIMAL_PLACES unconditionally and built its quantizer as
+    # `"0." + "0" * precision`, so a TICK_SIZE value raised
+    # `TypeError: can't multiply sequence by non-int of type 'float'` — reproduced by
+    # execution during the pre-launch audit — on the LIVE order path, inside
+    # `place_order`, after the idempotency claim had already been taken.
+    #
+    # The resolution rules are taken from `backend/paper/paper_simulator._decimal_places`,
+    # which already solved this for the paper path, including its refusal to guess at the
+    # ambiguous value 1 (one place under DECIMAL_PLACES, none under TICK_SIZE).
+
+    @staticmethod
+    def _decimal_places(value: Any) -> Optional[int]:
+        """A CCXT precision figure as a count of decimal places, or ``None`` if unreadable.
+
+        * ``0``                    -> 0 places, under either convention.
+        * ``0 < v < 1``            -> a tick size; the count is its decimal exponent, so
+                                      ``0.01`` is 2 and ``1e-08`` is 8.
+        * ``v > 1`` and integral   -> already a count of places.
+        * ``v == 1``               -> ambiguous, so ``None``. See the block comment: one
+                                      convention means one place and the other means none,
+                                      and the two differ in which orders the venue accepts.
+        * anything else            -> ``None``.
+
+        A ``float`` is read through ``Decimal(repr(value))``, not ``Decimal(value)``: CCXT
+        delivers these as JSON numbers, and ``repr`` is the shortest text that round-trips,
+        which makes ``0.01`` exactly one hundredth rather than the binary value beside it.
+        """
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            dec = Decimal(repr(value)) if isinstance(value, float) else Decimal(str(value))
+        except Exception:
+            return None
+
+        if not dec.is_finite() or dec < 0:
+            return None
+        if dec == 0:
+            return 0
+        if dec == 1:
+            return None  # ambiguous — refuse rather than guess
+        if dec < 1:
+            return -dec.normalize().as_tuple().exponent
+        if dec == dec.to_integral_value():
+            return int(dec)
+        return None
+
+    def _market_for(self, symbol: str) -> Optional[Dict]:
+        """The venue's market record for *symbol*, tolerating either spelling.
+
+        ``self._markets`` is keyed by CCXT's unified symbol (``"BTC/USDT"``), but
+        ``place_order`` passes the RAW symbol it was given (``"BTCUSDT"``). The lookup
+        therefore missed on every single order and both normalizers fell through to their
+        8-decimal-place default — silently, so the orders were accepted by this code and
+        then rejected or re-rounded by the venue. Verified by execution during the
+        pre-launch audit: the raw spelling produced ``0.12345678`` where the unified
+        spelling produced the venue's real ``0.123``.
+        """
+        if not self._markets:
+            return None
+        if symbol in self._markets:
+            return self._markets[symbol]
+        unified = self.format_symbol_for_ccxt(symbol)
+        return self._markets.get(unified)
+
+    def _precision_places(self, symbol: str, field: str) -> Optional[int]:
+        """Decimal places for ``price``/``amount`` on *symbol*, or ``None`` if unstated."""
+        market = self._market_for(symbol)
+        if not market:
+            return None
+        precision = (market.get("precision") or {}).get(field)
+        return self._decimal_places(precision)
     
     def normalize_symbol(self, symbol: str) -> str:
         """
@@ -476,29 +571,75 @@ class ExchangeNormalizer:
         
         return f"{base}/{quote}"
     
+    def _quantize_down(self, value: Decimal, places: Optional[int]) -> Decimal:
+        """Truncate *value* to *places* decimals, defaulting to 8 when unstated.
+
+        ``ROUND_DOWN`` throughout, and that direction is deliberate: truncating a size can
+        only ever make an order smaller than intended, whereas rounding up can exceed the
+        available balance and can breach the position limit that was checked against the
+        pre-rounding figure.
+        """
+        effective = 8 if places is None else places
+        if effective <= 0:
+            return value.quantize(Decimal("1"), rounding=ROUND_DOWN)
+        return value.quantize(Decimal("0." + "0" * effective), rounding=ROUND_DOWN)
+
     def normalize_price(self, symbol: str, price: Decimal) -> str:
-        """Normalize price to exchange precision."""
-        if self._markets and symbol in self._markets:
-            market = self._markets[symbol]
-            precision = market.get("precision", {}).get("price", 8)
-        else:
-            precision = 8
-        
-        quantize_str = "0." + "0" * precision
-        normalized = price.quantize(Decimal(quantize_str), rounding=ROUND_DOWN)
-        return str(normalized)
-    
+        """Normalize price to the venue's stated price precision, truncating."""
+        return str(self._quantize_down(price, self._precision_places(symbol, "price")))
+
     def normalize_size(self, symbol: str, size: Decimal) -> str:
-        """Normalize size to exchange precision."""
-        if self._markets and symbol in self._markets:
-            market = self._markets[symbol]
-            precision = market.get("precision", {}).get("amount", 8)
-        else:
-            precision = 8
-        
-        quantize_str = "0." + "0" * precision
-        normalized = size.quantize(Decimal(quantize_str), rounding=ROUND_DOWN)
+        """Normalize size to the venue's stated amount precision, truncating.
+
+        Where the venue publishes an amount STEP (``precision.amount`` under the
+        TICK_SIZE convention) the result is also snapped down to a whole multiple of that
+        step. Truncating to N decimals is not the same as snapping to a step: with a step
+        of ``0.003``, ``0.004`` truncates to ``0.004`` and is then rejected by the venue.
+        """
+        places = self._precision_places(symbol, "amount")
+        normalized = self._quantize_down(size, places)
+
+        step = self.amount_step(symbol)
+        if step and step > 0:
+            steps = (normalized / step).to_integral_value(rounding=ROUND_DOWN)
+            normalized = (steps * step).quantize(normalized)
+
         return str(normalized)
+
+    def amount_step(self, symbol: str) -> Optional[Decimal]:
+        """The venue's amount step for *symbol*, when it publishes one as a tick size."""
+        market = self._market_for(symbol)
+        if not market:
+            return None
+        raw = (market.get("precision") or {}).get("amount")
+        if raw is None or isinstance(raw, bool):
+            return None
+        try:
+            dec = Decimal(repr(raw)) if isinstance(raw, float) else Decimal(str(raw))
+        except Exception:
+            return None
+        # Only a sub-unit figure is a step; an integer is a count of decimal places.
+        return dec if dec.is_finite() and 0 < dec < 1 else None
+
+    def market_minimums(self, symbol: str) -> Dict[str, Optional[Decimal]]:
+        """The venue's ``limits.amount.min`` and ``limits.cost.min`` for *symbol*.
+
+        Returned as ``None`` where the venue does not state a figure, so a caller can tell
+        "no minimum published" from "a minimum of zero" and does not substitute one.
+        """
+        market = self._market_for(symbol) or {}
+        limits = market.get("limits") or {}
+
+        def _read(section: str) -> Optional[Decimal]:
+            raw = (limits.get(section) or {}).get("min")
+            if raw is None or isinstance(raw, bool):
+                return None
+            try:
+                return Decimal(repr(raw)) if isinstance(raw, float) else Decimal(str(raw))
+            except Exception:
+                return None
+
+        return {"min_amount": _read("amount"), "min_cost": _read("cost")}
     
     def map_order_type(self, order_type: OrderType) -> str:
         """Map our order type to CCXT order type."""
@@ -515,6 +656,392 @@ class ExchangeNormalizer:
     def map_order_side(self, side: OrderSide) -> str:
         """Map our side to CCXT side."""
         return side.value
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SAFETY BLOCK — VENUES WITHHELD FROM ORDER ROUTING BY AN EXPLICIT DECISION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# WHY THIS LIVES HERE AND NOT IN THE CAPABILITY REGISTRY.
+#
+# `core/exchange_capability_registry.py` already carried a `SAFETY_BLOCKED` dict and
+# filtered bitget out of `order_routing_allowlisted()`. That made the registry's REPORT
+# correct and changed nothing about what could actually be executed: the registry reads
+# `SUPPORTED_EXCHANGES` from this module, and nothing in this module ever read the
+# registry. So the block was advisory. Three paths still built a bitget executor:
+#
+#   1. `ExchangeExecutorFactory.create("bitget", ...)` — bitget was in SUPPORTED_EXCHANGES
+#   2. `get_exchange_executor(..., exchange_id="bitget")` — delegates to the factory
+#   3. `CCXTExchangeExecutor(exchange_id="bitget", ...)` — direct construction, no check
+#
+# A safety block enforced only at the layer that reports it is not a safety block. The
+# authoritative list therefore lives beside the code that constructs executors, and the
+# registry imports it from here — which also matches the dependency direction that
+# already existed (registry -> executor), so no import cycle is created.
+#
+# WHY BITGET.
+#
+# `ccxt.bitget.set_sandbox_mode` overrides the base implementation and does NOT call
+# `super()`:
+#
+#     def set_sandbox_mode(self, enabled):
+#         self.options['sandboxMode'] = enabled
+#
+# and bitget publishes no `urls['test']`. So arming sandbox mode changes neither the base
+# URL nor any header, while `CCXTExchangeExecutor.connect` logs "Connecting to bitget in
+# SANDBOX mode" and `place_order` logs `sandbox=True` on every order. The log says
+# sandbox; the socket says production. A trader who ticked "Testnet / Sandbox Mode" would
+# have placed real orders against a real balance.
+#
+# Measured, not inferred: staging/p10e_sandbox_probe.txt reports
+# `url_changed=False, headers_added=[], options['sandboxMode']=True` for bitget, against
+# binance/bybit (base URL swapped to `urls['test']`) and okx (header
+# `x-simulated-trading`). Reproduction: tests/exchange_sandbox/
+# test_sandbox_routing_contract.py::test_bitget_sandbox_flag_is_inert_and_orders_reach_production
+#
+# This is distinct from coinbase/kraken/kucoin, which have no sandbox and REFUSE loudly —
+# a refusal cannot lose anyone's money. Bitget succeeded silently.
+#
+# Regression: tests/test_exch01_bitget_routing_is_blocked.py
+SAFETY_BLOCKED_EXCHANGES: Dict[str, str] = {
+    "bitget": (
+        "EXCH-01: arming sandbox mode on bitget changes neither the base URL nor any "
+        "header (ccxt.bitget.set_sandbox_mode does not call super(), and bitget "
+        "publishes no urls['test']), so an order placed in 'sandbox mode' reaches the "
+        "PRODUCTION bitget API with real credentials and a real balance while the "
+        "executor logs 'SANDBOX mode'. Withheld from order routing until fail-closed "
+        "routing verification is in place."
+    ),
+}
+
+
+class ExchangeRoutingBlocked(ValueError):
+    """An order was routed to a venue withheld by an explicit safety decision.
+
+    Subclasses ``ValueError`` deliberately. ``ExchangeExecutorFactory.create`` already
+    raised ``ValueError`` for an unsupported venue, so every existing caller's error
+    handling continues to fail closed on this without modification — while new code can
+    still tell "deliberately blocked for a money-safety defect" from "never supported",
+    which are different facts that warrant different responses.
+    """
+
+    def __init__(self, exchange_id: str, reason: str) -> None:
+        self.exchange_id = exchange_id
+        self.reason = reason
+        self.code = "EXCHANGE_ROUTING_BLOCKED"
+        super().__init__(
+            f"Exchange '{exchange_id}' is blocked from order routing. {reason}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EXCH-01 — SANDBOX ENDPOINT VERIFICATION, FAIL CLOSED
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# THE DEFECT THIS REPLACES.
+#
+# `connect()` established "sandbox" by SETTING A FLAG and then LOGGING IT:
+#
+#     if self.sandbox:
+#         config["sandbox"] = True
+#         config["options"] = {"sandbox": True}
+#         logger.info(f"Connecting to {self.exchange_id} in SANDBOX mode")
+#
+# Nothing checked where the resulting client would actually send. `place_order` then
+# logged `sandbox=True` on every order. For bitget that log was false: ccxt's bitget
+# `set_sandbox_mode` sets only `options['sandboxMode']` and bitget publishes no
+# `urls['test']`, so the client stayed on the production API. Measured:
+# `staging/p10exch01_endpoints.txt` reports, for bitget, `urls['apiBackup'] set: False`,
+# `headers added: []`, and an UNCHANGED base URL — while `options['sandboxMode']: True`.
+#
+# Critically, bitget would also pass the obvious "fix": checking that
+# `set_sandbox_mode()` did not raise. It does not raise. **Absence of an exception is not
+# evidence of routing.** This verifier therefore requires POSITIVE endpoint evidence.
+#
+# WHY NO NETWORK CALL IS NEEDED.
+#
+# ccxt's `Exchange.set_sandbox_mode` leaves the proof on the client:
+#
+#     if enabled:
+#         if 'test' in self.urls:
+#             self.urls['apiBackup'] = self.urls['api']   # the production endpoint
+#             self.urls['api'] = self.urls['test']        # the sandbox endpoint
+#         else:
+#             raise NotSupported(...)
+#
+# So a client that genuinely swapped carries `apiBackup` (where it came FROM) alongside
+# `api` and `test` (where it is going). Comparing those three proves both that the swap
+# happened and that it landed on the venue's OWN DECLARED sandbox endpoint — strictly
+# stronger than "the URL changed to something", and decidable entirely offline.
+#
+# VENUE-AWARE, BECAUSE THE VENUES GENUINELY DIFFER.
+#
+# Measured on ccxt 4.3.92 across the six approved venues plus bitget:
+#
+#     binance, bybit    URL_SWAP     apiBackup set, api == test
+#     okx               HEADER       url UNCHANGED, header `x-simulated-trading` added
+#     coinbase, kraken,
+#     kucoin            UNSUPPORTED  constructor raises NotSupported; no sandbox exists
+#     bitget            NONE         armed, changed nothing -> the EXCH-01 condition
+#
+# OKX is why a URL-only rule would be wrong: demo trading shares the production host and
+# is selected by a header, so "URL unchanged" is the CORRECT outcome there. A generic
+# "something must have changed" rule would be wrong in the other direction — it would
+# accept any future venue that happens to mutate an unrelated attribute.
+#
+# So the mechanism is DECLARED per venue and verified against that declaration. A venue
+# absent from the table is `UNKNOWN` and is REFUSED: a new venue must be measured and
+# added deliberately, never sandbox-certified by a generic rule.
+#
+# Regression: tests/test_exch01_sandbox_endpoint_verification.py
+
+
+class SandboxMechanism(str, Enum):
+    """How a venue selects its sandbox. Declared per venue, never inferred."""
+
+    #: `urls['api']` is replaced by `urls['test']`; `urls['apiBackup']` holds production.
+    URL_SWAP = "url_swap"
+    #: The host is unchanged and a named header selects demo trading (OKX).
+    HEADER = "header"
+    #: The venue has no sandbox on this ccxt. Requesting one must refuse, not proceed.
+    UNSUPPORTED = "unsupported"
+
+
+#: Per-venue sandbox mechanism and, for `HEADER`, the header that must be present.
+#:
+#: Derived by measurement (`staging/probe_exch01_sandbox_endpoints.py` ->
+#: `staging/exch01_sandbox_endpoint_evidence.json`), not from ccxt's `has` map and not
+#: from any capability registry — two of those registries were wrong about exactly this
+#: (EXCH-04: coinbase and kucoin were declared `sandbox=True` and both raise).
+#:
+#: Deliberately scoped to the approved routing venues. Anything else is `UNKNOWN` and
+#: refused, so widening this table is a conscious act with a measurement behind it.
+SANDBOX_MECHANISMS: Dict[str, Tuple[SandboxMechanism, Optional[str]]] = {
+    "binance": (SandboxMechanism.URL_SWAP, None),
+    "bybit": (SandboxMechanism.URL_SWAP, None),
+    "okx": (SandboxMechanism.HEADER, "x-simulated-trading"),
+    "coinbase": (SandboxMechanism.UNSUPPORTED, None),
+    "kraken": (SandboxMechanism.UNSUPPORTED, None),
+    "kucoin": (SandboxMechanism.UNSUPPORTED, None),
+}
+
+
+class SandboxVerificationFailed(ExchangeError):
+    """A sandbox connection could not be PROVEN to have left production.
+
+    Raised, never returned. A returned verdict can be dropped by a caller, and dropping
+    this one leaves a client that reports itself as sandbox while addressing the
+    production API — which is the defect this class exists to prevent.
+
+    Subclasses :class:`ExchangeError` so existing `except ExchangeError` handling on the
+    connect path treats it as a terminal, non-retryable connection failure. It is not
+    retryable: nothing about trying again changes which endpoint the venue publishes.
+    """
+
+    def __init__(self, exchange_id: str, reason: str) -> None:
+        self.exchange_id = exchange_id
+        self.reason = reason
+        super().__init__(
+            f"Sandbox routing for '{exchange_id}' could not be verified: {reason} "
+            f"No connection was established.",
+            error_code="SANDBOX_UNVERIFIED",
+            retryable=False,
+        )
+
+
+@dataclass(frozen=True)
+class SandboxVerification:
+    """The outcome of verifying one client's endpoint configuration.
+
+    ``verified`` is only ever ``True`` when positive endpoint evidence was found. There
+    is no third "assumed" state: a connection is sandbox-verified or it is not.
+    """
+
+    exchange_id: str
+    verified: bool
+    mechanism: Optional[str]
+    detail: str
+    endpoint: Optional[str] = None
+    production_endpoint: Optional[str] = None
+
+
+def _endpoint_fingerprint(value: Any) -> str:
+    """A stable, comparable rendering of a ccxt URL entry.
+
+    `urls['api']` is a `str` for some venues and a nested `dict` of per-section hosts for
+    others (binance has a dozen). Sorted JSON makes the comparison order-independent and
+    total, so "did this change" cannot be answered differently by two dict orderings.
+    """
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def verify_sandbox_endpoint(client: Any, exchange_id: str) -> SandboxVerification:
+    """Prove that *client* addresses a sandbox endpoint, or raise. Offline.
+
+    Reads only locally available client metadata — `urls` and `headers`. Makes no
+    network call, so it cannot be defeated by a venue being temporarily reachable, and
+    it costs nothing on the connect path.
+
+    Raises:
+        SandboxVerificationFailed: when the mechanism is unknown, unsupported, or the
+            expected endpoint evidence is absent. Every failure path refuses; there is
+            no branch that proceeds on incomplete evidence.
+    """
+    normalized = str(exchange_id or "").strip().lower()
+    declared = SANDBOX_MECHANISMS.get(normalized)
+
+    # UNKNOWN. A venue nobody measured must not be sandbox-certified by a generic rule.
+    if declared is None:
+        raise SandboxVerificationFailed(
+            normalized,
+            "no sandbox mechanism has been measured for this venue, so there is no "
+            "declaration to verify the client against. Measure it with "
+            "staging/probe_exch01_sandbox_endpoints.py and add it to "
+            "SANDBOX_MECHANISMS before enabling sandbox mode.",
+        )
+
+    mechanism, header_name = declared
+
+    # UNSUPPORTED. Refused explicitly rather than letting ccxt's raw NotSupported escape
+    # from the constructor, which is both unclassified and reported as a connection fault.
+    if mechanism is SandboxMechanism.UNSUPPORTED:
+        raise SandboxVerificationFailed(
+            normalized,
+            "this venue publishes no sandbox endpoint on the installed ccxt, so a "
+            "sandbox connection cannot exist. Requesting one is a configuration error, "
+            "not a transient failure.",
+        )
+
+    urls = getattr(client, "urls", None) or {}
+    api_fp = _endpoint_fingerprint(urls.get("api"))
+    test_fp = _endpoint_fingerprint(urls.get("test")) if urls.get("test") is not None else None
+    backup_fp = (
+        _endpoint_fingerprint(urls.get("apiBackup")) if "apiBackup" in urls else None
+    )
+
+    if mechanism is SandboxMechanism.URL_SWAP:
+        # Three conditions, all required. `apiBackup` present proves set_sandbox_mode ran
+        # the swap branch; `api == test` proves it landed on the DECLARED sandbox
+        # endpoint rather than merely somewhere else; `api != apiBackup` proves it
+        # actually moved.
+        if backup_fp is None:
+            raise SandboxVerificationFailed(
+                normalized,
+                "urls['apiBackup'] is absent, so ccxt never performed the sandbox URL "
+                "swap — the client is still addressing the production API.",
+            )
+        if test_fp is None:
+            raise SandboxVerificationFailed(
+                normalized,
+                "the venue declares no urls['test'], so there is no sandbox endpoint to "
+                "verify against.",
+            )
+        if api_fp != test_fp:
+            raise SandboxVerificationFailed(
+                normalized,
+                "the active endpoint does not match the venue's declared sandbox "
+                "endpoint, so where this client would send is ambiguous.",
+            )
+        if api_fp == backup_fp:
+            raise SandboxVerificationFailed(
+                normalized,
+                "the active endpoint is identical to the production endpoint it was "
+                "supposed to be swapped away from.",
+            )
+        return SandboxVerification(
+            exchange_id=normalized,
+            verified=True,
+            mechanism=mechanism.value,
+            detail=(
+                "base URL replaced by the venue's declared urls['test']; production "
+                "endpoint retained in urls['apiBackup']"
+            ),
+            endpoint=api_fp,
+            production_endpoint=backup_fp,
+        )
+
+    if mechanism is SandboxMechanism.HEADER:
+        headers = getattr(client, "headers", None) or {}
+        value = headers.get(header_name)
+        if value is None:
+            raise SandboxVerificationFailed(
+                normalized,
+                f"the {header_name!r} header selects this venue's demo environment and "
+                f"it is not set, so the client is addressing live trading.",
+            )
+        # The header's VALUE matters, not merely its presence: OKX treats '1' as demo
+        # and anything else as live, so a header set to '0' is a live connection wearing
+        # a sandbox label.
+        if str(value).strip() not in ("1", "true", "True"):
+            raise SandboxVerificationFailed(
+                normalized,
+                f"the {header_name!r} header is present but set to {value!r}, which "
+                f"does not select the demo environment.",
+            )
+        return SandboxVerification(
+            exchange_id=normalized,
+            verified=True,
+            mechanism=mechanism.value,
+            detail=(
+                f"demo trading selected by the {header_name!r} header (this venue shares "
+                f"its production host, so an unchanged base URL is expected)"
+            ),
+            endpoint=api_fp,
+            production_endpoint=api_fp,
+        )
+
+    # Unreachable while SandboxMechanism has three members, and it still refuses rather
+    # than falling through to a success return if a fourth is ever added.
+    raise SandboxVerificationFailed(
+        normalized,
+        f"sandbox mechanism {mechanism!r} has no verification rule.",
+    )
+
+
+def assert_sandbox_supported(exchange_id: str) -> None:
+    """Refuse a sandbox request a venue cannot satisfy, BEFORE a client is built.
+
+    Checked ahead of construction for two reasons. It converts ccxt's raw `NotSupported`
+    — which is raised from the constructor, outside `connect()`'s `try`, and so reaches
+    callers unclassified — into this platform's own terminal error. And it avoids
+    allocating a client, and an aiohttp session, that is about to be thrown away.
+    """
+    normalized = str(exchange_id or "").strip().lower()
+    declared = SANDBOX_MECHANISMS.get(normalized)
+    if declared is None:
+        raise SandboxVerificationFailed(
+            normalized,
+            "no sandbox mechanism has been measured for this venue; sandbox mode is "
+            "refused until one is added to SANDBOX_MECHANISMS.",
+        )
+    if declared[0] is SandboxMechanism.UNSUPPORTED:
+        raise SandboxVerificationFailed(
+            normalized,
+            "this venue publishes no sandbox endpoint on the installed ccxt.",
+        )
+
+
+def assert_exchange_routable(exchange_id: str) -> None:
+    """Refuse a venue withheld from order routing. Raises, never returns a verdict.
+
+    Called from both :meth:`ExchangeExecutorFactory.create` and
+    :meth:`BaseExchangeExecutor.__init__`, so the block holds whether an executor is
+    built through the factory or constructed directly. The constructor is the one that
+    closes the bypass: a factory-only check is one ``CCXTExchangeExecutor(...)`` call
+    away from being irrelevant.
+
+    It raises rather than returning a boolean for the same reason
+    ``require_live_authorization`` and ``enforce_kill_switch`` do: a returned verdict can
+    be dropped by a caller, and dropping this one places a real order on a venue that was
+    withheld because its sandbox silently routes to production.
+    """
+    normalized = str(exchange_id or "").strip().lower()
+    reason = SAFETY_BLOCKED_EXCHANGES.get(normalized)
+    if reason is not None:
+        logger.critical(
+            "EXCH-01: refused to construct an executor for blocked venue %r", normalized
+        )
+        raise ExchangeRoutingBlocked(normalized, reason)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -536,6 +1063,18 @@ class BaseExchangeExecutor(ABC):
         sandbox: bool = False,
         password: Optional[str] = None  # For some exchanges like Coinbase
     ):
+        # EXCH-01. The bypass-closing check, BEFORE any credential is stored.
+        #
+        # Placed in the base constructor rather than only in the factory because direct
+        # construction was a real path, not a hypothetical one: `ExchangeExecutorFactory`
+        # is a convenience, and `CCXTExchangeExecutor(exchange_id=..., ...)` is a public
+        # class that the reconciliation and recovery code paths also instantiate. A check
+        # that lives only in the factory is one direct call away from being irrelevant.
+        #
+        # First statement in the body, so a blocked venue cannot reach the lines that
+        # retain the decrypted api key and secret on the instance.
+        assert_exchange_routable(exchange_id)
+
         self.exchange_id = exchange_id
         self.sandbox = sandbox
         
@@ -556,6 +1095,37 @@ class BaseExchangeExecutor(ABC):
         self._connected = False
         self._current_execution_id = None
         self._current_validation_token = None
+        #: TRADE-04. The signed `LiveOrderAuthorization` for the order currently being
+        #: placed. `place_order` refuses to reach a venue without one and clears it
+        #: immediately, so a single authorisation cannot cover two orders. `None` is the
+        #: safe default: an executor that nobody authorised cannot trade.
+        self._current_live_authorization = None
+        #: The execution id of the order currently being placed, set by
+        #: `verify_and_consume_token` and forwarded to the venue as `clientOrderId`.
+        self._consumed_execution_id = None
+        #: EXCH-01. The outcome of `verify_sandbox_endpoint`, set by `connect()`.
+        #:
+        #: `None` until a connection is established, and that default is the safe one:
+        #: `sandbox_verified` reads it and reports False, so an executor that has not
+        #: connected can never be represented as sandbox-certified. `self.sandbox` is a
+        #: REQUEST; this is the EVIDENCE, and conflating the two was the defect.
+        self._sandbox_verification: Optional["SandboxVerification"] = None
+
+    @property
+    def sandbox_verified(self) -> bool:
+        """True only when this client was PROVEN to address a sandbox endpoint.
+
+        Deliberately not derived from `self.sandbox`, which records what the caller asked
+        for. Anything reporting sandbox certification must read this, so an unverified or
+        not-yet-connected client cannot be presented as sandbox-certified.
+        """
+        v = self._sandbox_verification
+        return bool(v and v.verified)
+
+    @property
+    def sandbox_evidence(self) -> Optional["SandboxVerification"]:
+        """The verification record, for reporting. `None` before `connect()`."""
+        return self._sandbox_verification
 
     def _redact_credentials(self, text: str) -> str:
         """Strip this instance's own key/secret/password values out of *text*.
@@ -573,7 +1143,15 @@ class BaseExchangeExecutor(ABC):
         return text
 
     def verify_and_consume_token(self, symbol: str, size: Decimal):
-        """Verify the validation token to prevent direct bypass of UnifiedExecutionEngine."""
+        """Verify the validation token to prevent direct bypass of UnifiedExecutionEngine.
+
+        The verified execution id is retained on ``self._consumed_execution_id`` for the
+        duration of this one order so that ``place_order`` can forward it to the venue as
+        a ``clientOrderId``. The TOKEN is still consumed and cannot be reused; only the
+        id — which is not a secret, is deterministic, and is already written to
+        ``execution_records`` — survives, and only because the venue needs it to reject a
+        duplicate of this order.
+        """
         from backend_app.core.global_safety import verify_validation_token
         
         token = self._current_validation_token
@@ -582,12 +1160,15 @@ class BaseExchangeExecutor(ABC):
         # Consume immediately to prevent reuse
         self._current_validation_token = None
         self._current_execution_id = None
+        self._consumed_execution_id = None
         
         if not token or not exec_id:
             raise ValueError("Bypass attempt detected: All executions must route through UnifiedExecutionEngine.")
             
         if not verify_validation_token(exec_id, symbol, size, token):
             raise ValueError("Bypass attempt detected: Invalid execution validation token.")
+
+        self._consumed_execution_id = exec_id
     
     @abstractmethod
     async def connect(self):
@@ -703,14 +1284,73 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             config["password"] = self._password
         
         # STEP 6.8: Sandbox mode
+        #
+        # EXCH-01. `config["sandbox"]` alone is INERT: ccxt 4.3.92's constructor reads the
+        # flag out of `self.options` (`safe_bool_2(self.options, 'sandbox', 'testnet')`),
+        # so the `options` entry below is the one that arms anything. Both are kept —
+        # removing the "redundant" options line would silently route every sandbox order
+        # to production, and the top-level key is harmless.
+        #
+        # The log line that used to sit here announced SANDBOX mode before anything had
+        # established it. It now runs only after `verify_sandbox_endpoint` has proven it.
         if self.sandbox:
+            assert_sandbox_supported(self.exchange_id)
             config["sandbox"] = True
             config["options"] = {"sandbox": True}
-            logger.info(f"Connecting to {self.exchange_id} in SANDBOX mode")
         
         # Create CCXT exchange instance
         exchange_class = getattr(ccxt, self.exchange_id)
-        self._exchange = exchange_class(config)
+        if self.sandbox:
+            # ccxt calls `set_sandbox_mode` from inside the constructor, so a venue with
+            # no sandbox raises HERE — before the `try` below. Classified rather than
+            # allowed to escape as a bare ccxt type.
+            try:
+                self._exchange = exchange_class(config)
+            except SandboxVerificationFailed:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise SandboxVerificationFailed(
+                    self.exchange_id,
+                    f"the client could not be constructed in sandbox mode "
+                    f"({type(exc).__name__}: {exc}).",
+                ) from exc
+        else:
+            self._exchange = exchange_class(config)
+
+        # ═══════════════════════════════════════════════════════════════════
+        # EXCH-01: PROVE THE SANDBOX, DO NOT ANNOUNCE IT
+        # ═══════════════════════════════════════════════════════════════════
+        # Positive endpoint evidence, read locally, before this client is used for
+        # anything. Offline, so it adds no latency and cannot be defeated by a venue
+        # being momentarily reachable.
+        #
+        # On failure the client is CLOSED before the raise. A client that is constructed
+        # and then abandoned leaks its aiohttp session and keeps a decrypted credential
+        # alive in the process — the same `Unclosed client session` leak that
+        # `connection_engine`'s CE-3 note documents, and the reason that fix nulls its
+        # reference too.
+        if self.sandbox:
+            try:
+                verification = verify_sandbox_endpoint(self._exchange, self.exchange_id)
+            except SandboxVerificationFailed:
+                await self._close_unverified_client()
+                logger.critical(
+                    "EXCH-01: refused a sandbox connection to %s that could not be "
+                    "proven to have left production.", self.exchange_id,
+                )
+                raise
+            self._sandbox_verification = verification
+            logger.info(
+                "Connecting to %s in VERIFIED SANDBOX mode via %s — %s",
+                self.exchange_id, verification.mechanism, verification.detail,
+            )
+        else:
+            self._sandbox_verification = SandboxVerification(
+                exchange_id=str(self.exchange_id).lower(),
+                verified=False,
+                mechanism=None,
+                detail="live mode was requested; no sandbox verification was performed",
+            )
         
         # Load markets for precision
         await self.normalizer.load_markets(self._exchange)
@@ -728,6 +1368,28 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             logger.error(f"Failed to connect to {self.exchange_id}: {classified.message}")
             raise classified
     
+    async def _close_unverified_client(self) -> None:
+        """Tear down a client that failed sandbox verification.
+
+        Separate from `disconnect()` because that method is for a client that WAS
+        connected: it flips `_connected` and logs a disconnect, neither of which is true
+        here. This one closes the socket, drops the reference so the decrypted credential
+        it holds is not reachable, and never raises — a failure to clean up must not
+        replace the refusal that is propagating.
+        """
+        client = self._exchange
+        self._exchange = None
+        self._connected = False
+        if client is None:
+            return
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001 - cleanup must not mask the refusal
+            logger.warning(
+                "EXCH-01: failed to close the unverified %s client", self.exchange_id,
+                exc_info=True,
+            )
+
     async def disconnect(self):
         """Disconnect from exchange."""
         if self._exchange:
@@ -759,6 +1421,90 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         # Bypass prevention check
         self.verify_and_consume_token(symbol, size)
 
+        # ═══════════════════════════════════════════════════════════════════
+        # TRADE-04: THE LIVE-EXECUTION GATE, ON THE PATH THAT REACHES A VENUE
+        # ═══════════════════════════════════════════════════════════════════
+        # The token above answers "did this come through the gateway?". It cannot answer
+        # "did the gateway establish that this account is permitted to trade real money?",
+        # because it is computed from (execution_id, symbol, size) alone.
+        #
+        # Until this block existed, nothing on this path answered the second question. The
+        # pre-launch audit believed `ExecutionFlags.LIVE_TRADING_ENABLED` did, and an AST
+        # trace of `_inner_loop` -> `execute_with_idempotency` -> `_execute_trade_internal`
+        # -> `place_order` found no reference to it in any of them. Live trading was held
+        # off by configuration, a paid-tier entitlement and the absence of a connected
+        # exchange account -- defence in depth with nothing behind it.
+        #
+        # `require_live_authorization` refuses unless the gateway presents a signed
+        # authorisation covering the COMPLETE `REQUIRED_CHECKS` set for THIS order on THIS
+        # venue. It raises rather than returning: a returned verdict can be dropped, and
+        # dropping this one places a real order with customer money.
+        #
+        # Consumed here, like the token, so one authorisation cannot cover two orders.
+        # Regression: tests/test_trade04_live_order_gate_at_venue_boundary.py
+        from backend_app.core.live_execution_gate import require_live_authorization
+
+        _authorization = getattr(self, "_current_live_authorization", None)
+        self._current_live_authorization = None
+        require_live_authorization(
+            _authorization,
+            symbol=symbol,
+            side=getattr(side, "value", side),
+            size=size,
+            exchange_id=self.exchange_id,
+        )
+
+        # ═══════════════════════════════════════════════════════════════════
+        # KILL-03 / KILL-04: RE-READ THE HALT STATE, HERE, AT THE BOUNDARY
+        # ═══════════════════════════════════════════════════════════════════
+        # KILL-04. The authorisation verified immediately above carries the check name
+        # `"kill_switch"` in its signed set (minted at `execution_engine.py:1270`). That is
+        # a signed assertion that the gateway DID consult the switch -- and it is true --
+        # but it is an assertion about a check that ran EARLIER. The only genuine
+        # `is_active()` read on this path is at `execution_engine.py:770`, and between
+        # that line and `create_order` below the code takes an idempotency claim, runs the
+        # advisory-lock capacity transaction, commits to the database and awaits the rate
+        # limiter. A halt engaged anywhere in that window was not noticed, and the order
+        # went to the venue.
+        #
+        # KILL-03. `enforce_kill_switch()` had ZERO call sites across 401 `backend_app`
+        # source files -- measured, not estimated. It raised correctly and guarded nothing.
+        # This is its call site, and it is deliberately the narrowest one: the last
+        # statement before the irreversible write.
+        #
+        # WHY THIS SPECIFIC PLACE. `place_order` is the canonical venue boundary (the
+        # four-boundary inventory pinned by `tests/test_paper01_paper_live_isolation.py`
+        # names it), and this is the final await before `create_order`. Checking any
+        # earlier reopens the window; there is nowhere later.
+        #
+        # IT RAISES, AND THAT IS THE POINT. `ExecutionBlocked` propagates out of
+        # `place_order`; it is NOT converted into an `OrderResult(success=False)` by the
+        # `try` below, because it is raised before that block is entered. A returned
+        # verdict can be dropped by a caller, and dropping this one places a real order
+        # during a platform halt -- the same reasoning `require_live_authorization` and
+        # `assert_live_environment` already apply.
+        #
+        # FAIL-CLOSED COMES FOR FREE AND IS NOT INCIDENTAL. `is_active()` engages its
+        # local latch and returns True on `RedisUnavailable` or any unexpected error
+        # (KILL-01's fix), so an unreadable halt state refuses the order rather than
+        # permitting it.
+        #
+        # SCOPE, STATED EXPLICITLY. This blocks NEW ORDERS ONLY -- which is this
+        # platform's documented emergency policy, pinned by
+        # `tests/test_trade02_kill_switch_fails_closed.py::
+        # test_activation_refuses_new_orders_and_does_not_flatten`. `cancel_order` is a
+        # different method and is NOT gated here, so an operator can still cancel resting
+        # orders while the platform is halted. A position-reducing order, however, IS
+        # blocked, because it is a new order. That is a consequence of the existing
+        # policy, not of this change; changing it would be a product decision about what
+        # a halt means, and it is recorded in staging/TRADING_SAFETY_AUDIT.md rather than
+        # quietly carved out here.
+        #
+        # Regression: tests/test_kill03_authoritative_global_halt.py
+        from backend_app.core.global_safety import enforce_kill_switch
+
+        await enforce_kill_switch()
+
         try:
             if isinstance(order_type, str):
                 order_type = OrderType(order_type.lower())
@@ -779,24 +1525,111 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             ccxt_type = self.normalizer.map_order_type(order_type)
             
             normalized_size = self.normalizer.normalize_size(symbol, size)
-            
-            # Build order parameters
+
+            # ═══════════════════════════════════════════════════════════════
+            # VENUE MINIMUMS, CHECKED BEFORE THE ORDER IS SENT
+            # ═══════════════════════════════════════════════════════════════
+            # `limits.amount.min` and `limits.cost.min` were read from CCXT and carried
+            # as far as `asset_universe`, and then compared against nothing. An order
+            # below a venue minimum is rejected by the venue, but by then the idempotency
+            # claim has been taken and the execution record says an attempt was made — so
+            # the strategy's intent is consumed and the position never opens, silently.
+            #
+            # Truncation makes this reachable rather than theoretical: `normalize_size`
+            # rounds DOWN, so a size just above the minimum can land just below it.
+            #
+            # Refused locally, with the figures named, so the trader is told which
+            # minimum and by how much instead of receiving the venue's opaque rejection.
+            size_for_checks = Decimal(normalized_size)
+            minimums = self.normalizer.market_minimums(symbol)
+
+            if size_for_checks <= 0:
+                return OrderResult(
+                    success=False,
+                    exchange_order_id=None,
+                    status="rejected",
+                    filled_size=None,
+                    remaining_size=None,
+                    avg_price=None,
+                    error_message=(
+                        f"Order size {size} truncated to {normalized_size} at this "
+                        f"venue's amount precision, which is not a tradable quantity."
+                    ),
+                    error_code="BELOW_PRECISION",
+                )
+
+            min_amount = minimums.get("min_amount")
+            if min_amount is not None and size_for_checks < min_amount:
+                return OrderResult(
+                    success=False,
+                    exchange_order_id=None,
+                    status="rejected",
+                    filled_size=None,
+                    remaining_size=None,
+                    avg_price=None,
+                    error_message=(
+                        f"Order size {size_for_checks} is below the {self.exchange_id} "
+                        f"minimum order quantity of {min_amount} for {symbol}."
+                    ),
+                    error_code="BELOW_MIN_QUANTITY",
+                )
+
+            min_cost = minimums.get("min_cost")
+            if min_cost is not None and price and price > 0:
+                notional = size_for_checks * Decimal(str(price))
+                if notional < min_cost:
+                    return OrderResult(
+                        success=False,
+                        exchange_order_id=None,
+                        status="rejected",
+                        filled_size=None,
+                        remaining_size=None,
+                        avg_price=None,
+                        error_message=(
+                            f"Order notional {notional} is below the {self.exchange_id} "
+                            f"minimum of {min_cost} for {symbol}."
+                        ),
+                        error_code="BELOW_MIN_NOTIONAL",
+                    )
+
+            # Build order parameters.
+            #
+            # POSITIONAL, NOT **kwargs. CCXT's signature is
+            # `create_order(symbol, type, side, amount, price=None, params={})` — it has
+            # no `stopPrice` parameter, so the previous `create_order(**params)` with a
+            # `stopPrice` key raised TypeError for every stop and take-profit order.
+            # Trigger prices belong in `params`, which is where every venue's unified
+            # implementation reads them from.
+            ccxt_price = None
+            if price and order_type in (
+                OrderType.LIMIT, OrderType.STOP_LIMIT, OrderType.TAKE_PROFIT_LIMIT
+            ):
+                ccxt_price = float(self.normalizer.normalize_price(symbol, price))
+
+            extra_params: Dict[str, Any] = {}
+            if stop_price:
+                extra_params["stopPrice"] = float(
+                    self.normalizer.normalize_price(symbol, stop_price)
+                )
+
+            # VENUE-SIDE IDEMPOTENCY.
+            #
+            # Without a client order id the venue cannot recognise a repeat, so a ccxt
+            # internal retry, or a lost response followed by any retry, becomes a second
+            # REAL order. The execution_id is already the deterministic idempotency key
+            # this platform computes for the trade, so forwarding it makes the venue
+            # enforce the same uniqueness the database does.
+            if self._consumed_execution_id:
+                extra_params["clientOrderId"] = self._consumed_execution_id
+
             params = {
                 "symbol": ccxt_symbol,
                 "type": ccxt_type,
                 "side": ccxt_side,
                 "amount": float(normalized_size),
+                "price": ccxt_price,
+                "params": extra_params,
             }
-            
-            # Add price for limit orders
-            if price and order_type in (OrderType.LIMIT, OrderType.STOP_LIMIT, OrderType.TAKE_PROFIT_LIMIT):
-                normalized_price = self.normalizer.normalize_price(symbol, price)
-                params["price"] = float(normalized_price)
-            
-            # Add stop price for stop orders
-            if stop_price:
-                normalized_stop = self.normalizer.normalize_price(symbol, stop_price)
-                params["stopPrice"] = float(normalized_stop)
             
             # STEP 6.10: Security - log without sensitive data
             logger.info(
@@ -807,8 +1640,16 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
                 f"sandbox={self.sandbox}"
             )
             
-            # Execute via CCXT
-            response = await self._exchange.create_order(**params)
+            # Execute via CCXT — positional, matching
+            # create_order(symbol, type, side, amount, price, params)
+            response = await self._exchange.create_order(
+                params["symbol"],
+                params["type"],
+                params["side"],
+                params["amount"],
+                params["price"],
+                params["params"],
+            )
             
             # Build result
             # STEP 6.4: Status is 'pending' - we wait for events for FILLED
@@ -923,7 +1764,157 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
                 avg_price=None,
                 error_message=error.message
             )
-    
+
+    async def find_order_by_client_order_id(
+        self, client_order_id: str, symbol: str
+    ) -> OrderStatusResult:
+        """Ask the venue about an order by the id WE assigned it.
+
+        TRADE-07. THE RECOVERY HANDLE THAT EXISTED AND WAS NEVER USED.
+        -------------------------------------------------------------
+        `place_order` already forwards `execution_id` to the venue as `clientOrderId`
+        (see the VENUE-SIDE IDEMPOTENCY block above), and `execution_id` is
+        deterministic -- `generate_execution_id` derives it from
+        (tenant, strategy, symbol, time bucket, side, qty, price). So for every order this
+        platform has ever sent there is a locally reconstructable identifier the venue
+        also knows.
+
+        Measured: nothing in the repository looked an order up by it. `get_order_status`
+        can only `fetch_order(exchange_order_id, ...)` -- the venue's own id, which is
+        exactly the thing an interrupted submission never received. That is why a row
+        stuck in EXECUTING with `order_id IS NULL` was unrecoverable: the one identifier
+        that could resolve it was being sent and then forgotten.
+
+        THREE STRATEGIES, IN ORDER OF DIRECTNESS, because CCXT unifies this poorly:
+
+        1. ``fetch_order(clientOrderId, symbol, {"clientOrderId": ...})``. Several venues
+           accept it; the id positional is passed too because some implementations read
+           it from there instead of from params.
+        2. Scan ``fetch_open_orders(symbol)``. Catches a RESTING unfilled order, which is
+           the most dangerous case to get wrong -- live exposure the platform does not
+           know it has.
+        3. Scan ``fetch_closed_orders(symbol)``. Catches an order that filled or was
+           cancelled while the response was lost.
+
+        A clean "not found" from all three is NOT an error: it returns
+        ``success=True, status="not_found"``, because "the venue has no such order" is a
+        definite and highly useful answer -- it converts an ambiguous row into a safely
+        failable one. Only an inability to ASK is an error, and the caller must then keep
+        the row unresolved rather than assume anything.
+
+        The venue's own order id is returned in ``venue_order_id``, which was added to
+        ``OrderStatusResult`` for this method: ``get_order_status`` is *called* with that
+        id and so never needed to return one, whereas this method's entire purpose is to
+        discover it. The caller needs it because recovery is forbidden from recording a
+        fill without the venue's own identifier for it.
+        """
+        try:
+            await self.rate_limiter.acquire("get_order")
+            ccxt_symbol = self.normalizer.format_symbol_for_ccxt(symbol)
+        except Exception as exc:  # noqa: BLE001
+            return OrderStatusResult(
+                success=False, status="error", filled_size="0", remaining_size="0",
+                avg_price=None,
+                error_message=f"could not prepare a venue lookup: {exc}",
+            )
+
+        def _as_status(order: dict) -> OrderStatusResult:
+            filled_val = order.get("filled") if order.get("filled") is not None else 0
+            remaining_val = (
+                order.get("remaining") if order.get("remaining") is not None else 0
+            )
+            avg = order.get("average")
+            raw_status = order.get("status")
+            return OrderStatusResult(
+                success=True,
+                status=str(raw_status).lower() if raw_status is not None else "unknown",
+                filled_size=str(filled_val),
+                remaining_size=str(remaining_val),
+                avg_price=str(avg) if avg is not None else None,
+                error_message=None,
+                # The venue's OWN id -- the thing the interrupted submission never
+                # received, and the thing recovery must have before it is allowed to
+                # record a fill at all.
+                venue_order_id=(
+                    str(order.get("id")) if order.get("id") is not None else None
+                ),
+            )
+
+        def _matches(order: Any) -> bool:
+            if not isinstance(order, dict):
+                return False
+            info = order.get("info") if isinstance(order.get("info"), dict) else {}
+            candidates = {
+                order.get("clientOrderId"),
+                info.get("clientOrderId"),
+                info.get("client_order_id"),
+            }
+            return str(client_order_id) in {
+                str(c) for c in candidates if c is not None
+            }
+
+        reachable = False
+
+        # 1. Direct lookup.
+        try:
+            order = await self._exchange.fetch_order(
+                client_order_id, ccxt_symbol, {"clientOrderId": client_order_id}
+            )
+            reachable = True
+            if isinstance(order, dict) and (_matches(order) or order.get("id")):
+                return _as_status(order)
+        except Exception as exc:  # noqa: BLE001
+            # A venue that does not support the lookup and a venue that genuinely has no
+            # such order both raise here, and they are indistinguishable at this layer.
+            # So fall through to the scans rather than concluding anything.
+            logger.info(
+                "TRADE-07: direct clientOrderId lookup for %s was not conclusive (%s); "
+                "falling back to order scans.",
+                client_order_id, self._redact_credentials(str(exc)),
+            )
+
+        # 2/3. Resting and recently-closed orders.
+        for fetcher, label in (
+            (getattr(self._exchange, "fetch_open_orders", None), "open"),
+            (getattr(self._exchange, "fetch_closed_orders", None), "closed"),
+        ):
+            if fetcher is None:
+                continue
+            try:
+                orders = await fetcher(ccxt_symbol)
+                reachable = True
+                for candidate in orders or []:
+                    if _matches(candidate):
+                        logger.warning(
+                            "TRADE-07: found %s order at the venue for clientOrderId %s "
+                            "-- this execution DID reach the exchange.",
+                            label, client_order_id,
+                        )
+                        return _as_status(candidate)
+            except Exception as exc:  # noqa: BLE001
+                logger.info(
+                    "TRADE-07: %s-order scan for %s failed (%s).",
+                    label, client_order_id, self._redact_credentials(str(exc)),
+                )
+
+        if reachable:
+            # A DEFINITE negative: the venue answered and does not know this order, so
+            # the submission did not take effect and the row is safe to fail.
+            return OrderStatusResult(
+                success=True, status="not_found", filled_size="0", remaining_size="0",
+                avg_price=None,
+            )
+
+        # We could not ask at all. Say so; the caller keeps the row unresolved.
+        return OrderStatusResult(
+            success=False, status="error", filled_size="0", remaining_size="0",
+            avg_price=None,
+            error_message=(
+                f"the venue could not be queried about clientOrderId {client_order_id}; "
+                f"no lookup method succeeded, so the order's existence is unknown"
+            ),
+        )
+
     async def get_balance(self) -> Dict[str, Any]:
         """Get account balance."""
         try:
@@ -1265,7 +2256,16 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
 class ExchangeExecutorFactory:
     """Factory for creating exchange executors."""
     
-    SUPPORTED_EXCHANGES = ["binance", "bybit", "coinbase", "kraken", "okx", "bitget", "kucoin"]
+    #: Venues this platform will route an order to.
+    #:
+    #: `bitget` was REMOVED here (EXCH-01) — see `SAFETY_BLOCKED_EXCHANGES` above for the
+    #: measurement. It is withheld in two independent places rather than one: absent from
+    #: this list, and refused by `assert_exchange_routable`. The list alone would be a
+    #: silent "unsupported exchange" that loses the reason; the refusal alone would leave
+    #: bitget advertised as routable by every consumer of this attribute — and there are
+    #: several, including `asset_universe._universe_exchanges`, which decides which
+    #: venues' markets a strategy author can even select.
+    SUPPORTED_EXCHANGES = ["binance", "bybit", "coinbase", "kraken", "okx", "kucoin"]
     
     @staticmethod
     def create(
@@ -1281,7 +2281,13 @@ class ExchangeExecutorFactory:
         STEP 6.2: Supports Binance, Bybit, Coinbase via CCXT.
         """
         exchange_id = exchange_id.lower()
-        
+
+        # EXCH-01. Checked BEFORE the allowlist test so a deliberately blocked venue
+        # reports why it was blocked, instead of the generic "Unsupported exchange" that
+        # removal from the list alone would produce. "Withheld for a money-safety defect"
+        # and "never supported" warrant different responses from an operator.
+        assert_exchange_routable(exchange_id)
+
         if exchange_id not in ExchangeExecutorFactory.SUPPORTED_EXCHANGES:
             raise ValueError(f"Unsupported exchange: {exchange_id}")
         
@@ -1295,8 +2301,63 @@ class ExchangeExecutorFactory:
         )
 
 
-# Global registry
+# Global registry.
+#
+# ⚠️ THE KEY OF THIS DICT DECIDES WHOSE MONEY AN ORDER SPENDS.
+#
+# It used to be `f"{exchange_id}:{sandbox}"`, which contains nothing identifying the
+# ACCOUNT whose decrypted credentials were passed in. `BotRunner._recover_live_state`
+# calls this function with the keys it has just decrypted out of the vault for one
+# specific user, so in a worker process that had already served one trader on binance,
+# the next trader's call matched the existing key and was handed back the FIRST
+# trader's executor — holding the first trader's api key and secret. Every order the
+# second trader's strategy produced would have been signed with the first trader's
+# credentials and executed against the first trader's exchange account and balance.
+#
+# Reproduced by execution in tests/test_exchange_executor_cache_is_per_tenant.py:
+# two calls differing only in credentials returned the SAME object, and the second
+# caller's executor reported the first caller's api key.
+#
+# `connection_engine.get_or_create_exchange` had this right all along — it keys on
+# `sha256(json.dumps([user_id, exchange_id]))`. This is the same fix for the other pool.
 _executors: Dict[str, BaseExchangeExecutor] = {}
+
+
+def _executor_cache_key(
+    user_id: str,
+    exchange_id: str,
+    sandbox: bool,
+    api_key: str,
+    api_secret: str,
+    password: Optional[str],
+) -> str:
+    """The cache identity of an executor: WHOSE keys, for WHICH venue, in WHICH mode.
+
+    The credential material is included as a salted digest, not stored, for two reasons:
+
+    * **Key rotation.** A trader who rotates a compromised api key gets a FRESH executor
+      rather than a cached one still holding the revoked secret. Without the credential
+      component, the old executor would be served until the process restarted, so every
+      order would keep being rejected by the venue with no way for the trader to fix it.
+    * **Defence in depth.** If this derivation is ever changed and gets `user_id` wrong
+      again, differing credentials still land on different keys, so the cache cannot
+      serve one account's secret to another.
+
+    The digest is over a length-prefixed encoding so that no combination of field values
+    can be rearranged into another ((``"a"``, ``"bc"``) and (``"ab"``, ``"c"``) must not
+    collide), and the credentials are hashed rather than concatenated into a readable key
+    because cache keys reach logs and metrics labels.
+    """
+    parts = [
+        str(user_id),
+        str(exchange_id).lower(),
+        "sandbox" if sandbox else "live",
+        api_key or "",
+        api_secret or "",
+        password or "",
+    ]
+    canonical = "\x1f".join(f"{len(p)}:{p}" for p in parts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def get_exchange_executor(
@@ -1304,21 +2365,93 @@ def get_exchange_executor(
     api_key: str,
     api_secret: str,
     sandbox: bool = False,
-    password: Optional[str] = None
+    password: Optional[str] = None,
+    *,
+    user_id: str,
 ) -> BaseExchangeExecutor:
-    """Get or create exchange executor."""
-    key = f"{exchange_id}:{sandbox}"
-    
-    if key not in _executors:
-        _executors[key] = ExchangeExecutorFactory.create(
-            exchange_id=exchange_id,
-            api_key=api_key,
-            api_secret=api_secret,
-            sandbox=sandbox,
-            password=password
+    """Get or create the executor for ONE account's credentials on one venue.
+
+    Args:
+        exchange_id: The venue id, as accepted by :class:`ExchangeExecutorFactory`.
+        api_key: The calling account's decrypted api key.
+        api_secret: The calling account's decrypted secret.
+        sandbox: Whether to trade the venue's testnet.
+        password: The passphrase, for venues that require one (OKX, KuCoin, Coinbase).
+        user_id: **Required, keyword-only.** The account the credentials belong to. It is
+            keyword-only so it cannot be supplied positionally into one of the credential
+            slots by mistake, and required with no default because a default would
+            silently recreate the shared-cache defect for any caller that forgot it.
+
+    Raises:
+        ValueError: If ``user_id`` is empty. Failing closed is correct here: the
+            alternative is an executor cached under an identity that does not
+            distinguish accounts, which is the defect this parameter exists to prevent.
+    """
+    if not user_id or not str(user_id).strip():
+        raise ValueError(
+            "user_id is required to cache an exchange executor. Without it the cache "
+            "cannot distinguish accounts and would serve one trader's API credentials "
+            "to another."
         )
-    
-    return _executors[key]
+
+    key = _executor_cache_key(
+        user_id=str(user_id).strip(),
+        exchange_id=exchange_id,
+        sandbox=sandbox,
+        api_key=api_key,
+        api_secret=api_secret,
+        password=password,
+    )
+
+    cached = _executors.get(key)
+    if cached is not None:
+        # Belt and braces. The key already covers the credentials, so this can only fire
+        # on a hash collision or a future regression in the derivation above — and the
+        # consequence of being wrong is placing an order on somebody else's account, so
+        # it is worth one string comparison per order to refuse rather than proceed.
+        if cached._api_key == api_key and cached._api_secret == api_secret:
+            return cached
+        logger.critical(
+            "Executor cache identity mismatch for exchange=%s user=%s. Refusing the "
+            "cached instance and building a fresh one.",
+            exchange_id,
+            user_id,
+        )
+
+    executor = ExchangeExecutorFactory.create(
+        exchange_id=exchange_id,
+        api_key=api_key,
+        api_secret=api_secret,
+        sandbox=sandbox,
+        password=password,
+    )
+    _executors[key] = executor
+    return executor
+
+
+def release_exchange_executor(
+    user_id: str,
+    exchange_id: str,
+    sandbox: bool = False,
+    api_key: str = "",
+    api_secret: str = "",
+    password: Optional[str] = None,
+) -> bool:
+    """Drop one account's cached executor, so a stopped bot does not pin its credentials.
+
+    Returns ``True`` when an entry was removed. Without this, ``_executors`` grows for
+    the lifetime of the worker and keeps decrypted api secrets reachable in memory after
+    the bot that needed them has stopped.
+    """
+    key = _executor_cache_key(
+        user_id=str(user_id).strip(),
+        exchange_id=exchange_id,
+        sandbox=sandbox,
+        api_key=api_key,
+        api_secret=api_secret,
+        password=password,
+    )
+    return _executors.pop(key, None) is not None
 
 
 # Alias for backward compatibility

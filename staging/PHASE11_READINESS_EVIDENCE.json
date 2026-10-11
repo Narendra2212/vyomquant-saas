@@ -1,0 +1,436 @@
+{
+  "schema_version": "phase11.readiness.v1",
+  "generated_at": "2026-10-10",
+  "generated_by": "Phase 11 full-codebase live-trading launch readiness audit",
+  "contains_credentials_or_customer_data": false,
+  "disclaimer": "Read-only audit. Live trading remained OFF / NOT CERTIFIED. No order submitted, no venue contacted, no credential read, no production state modified, no migration applied, no git write operation performed.",
+
+  "baseline": {
+    "branch": "main",
+    "head_commit": "074b772ab16cece62cbfca0f2b78497be2ae56d5",
+    "head_subject": "Give the deploy gate permission to read the answer it refuses without",
+    "working_tree": "dirty",
+    "changed_paths": 249,
+    "staged_files": 22,
+    "staged_diff": "+4361/-69",
+    "unstaged_files": 98,
+    "unstaged_diff": "+13971/-1414",
+    "untracked_paths": 2973,
+    "tracked_python_files": 984,
+    "tracked_python_loc": 509043,
+    "test_files": 477,
+    "tests_collected": 14400,
+    "collection_errors": 1,
+    "postgres_gated_test_files": 32,
+    "postgres_gated_tests": 632,
+    "real_redis_gated_test_files": 3,
+    "real_redis_gated_tests": 9,
+    "test_infrastructure_present": {
+      "AERORA_TEST_DATABASE_URL": "unset",
+      "AERORA_TEST_REDIS_URL": "unset",
+      "consequence": "632 postgres tests and 9 real-redis tests all skipped; a skip is not a pass"
+    }
+  },
+
+  "deployment_baseline": {
+    "verification_source": "repository artifacts only; no AWS API call was made",
+    "cloud": "AWS",
+    "region": "ap-southeast-1",
+    "compute": "ECS Fargate, cluster vyomquant-cluster",
+    "api_service": "vyomquant-api-service-cjema2sl",
+    "hosted_workers": ["backtest", "dag", "command"],
+    "unhosted_workers": ["MarketplaceExpiryWorker", "ReconciliationWorker"],
+    "datastore": "Supabase PostgreSQL via Supavisor pooler :6543 pool_mode=transaction",
+    "db_connection_role": "postgres (table owner - the reason RLS is inert)",
+    "cache": "ElastiCache Redis (rediss://)",
+    "secrets_backend": "AWS Secrets Manager vyomquant/production/*",
+    "secrets_declared": 8,
+    "secret_rotation_resources": 0,
+    "tls": "HTTPS listener, ELBSecurityPolicy-TLS13-1-2-2021-06",
+    "terraform_state_committed": false,
+    "terraform_state_gitignored": true,
+    "terraform_applied_by_ci": false,
+    "alerting_backup_resources_in_terraform": 0,
+    "requires_aws_evidence": [
+      "running task revision",
+      "whether the three worker ECS services are running",
+      "live pg_class relforcerowsecurity state",
+      "physical type of positions.tenant_id",
+      "last-rotated dates on the 8 secrets",
+      "branch protection on main"
+    ]
+  },
+
+  "exchange_inventory": {
+    "library": "ccxt[async]",
+    "pinned_version": "4.3.92",
+    "pin_source": "requirements-base.txt:95",
+    "pin_exact": true,
+    "venues": {
+      "configured_in_ccxt": 103,
+      "order_routing_allowlisted": 6,
+      "order_routing_allowlist": ["binance", "bybit", "coinbase", "kraken", "okx", "kucoin"],
+      "safety_blocked": ["bitget"],
+      "sandbox_mechanism_measured": 6,
+      "sandbox_mechanism_usable": ["binance", "bybit", "okx"],
+      "sandbox_unsupported_on_pinned_ccxt": ["coinbase", "kraken", "kucoin"],
+      "endpoint_verified": 0,
+      "sandbox_tested": 0,
+      "order_lifecycle_tested": 0,
+      "trading_certified": 0,
+      "live_trading_authorized": 0
+    },
+    "sandbox_orders_ever_placed": 0,
+    "sandbox_credentials_available": 0,
+    "recommended_initial_allowlist": ["binance", "bybit"],
+    "excluded_from_initial_launch": {
+      "bitget": "safety-blocked: set_sandbox_mode does not call super() and no urls['test'] exists, so sandbox mode routes to production",
+      "okx": "load_markets documented broken on ccxt 4.3.92",
+      "coinbase": "no sandbox exists on ccxt 4.3.92; lifecycle certification impossible",
+      "kraken": "no sandbox exists on ccxt 4.3.92; lifecycle certification impossible",
+      "kucoin": "no sandbox exists on ccxt 4.3.92; lifecycle certification impossible"
+    }
+  },
+
+  "weights": {
+    "renormalized": false,
+    "renormalization_note": "Nothing was demonstrably outside the initial launch scope. Payments are live, referrals exist in production, and the marketplace expiry gap is a live billing defect, so all categories retain the brief's starting weighting.",
+    "execution_integrity_and_idempotency": 0.20,
+    "risk_controls_and_financial_correctness": 0.20,
+    "exchange_connectivity_and_order_lifecycle": 0.15,
+    "persistence_and_reconciliation": 0.15,
+    "concurrency_quotas_and_dependency_safety": 0.10,
+    "security_and_tenant_isolation": 0.08,
+    "deployment_monitoring_recovery_rollback": 0.07,
+    "release_testing_and_operational_readiness": 0.05
+  },
+
+  "category_scores": [
+    {
+      "id": "execution_integrity_and_idempotency",
+      "weight": 0.20,
+      "implementation_pct": 88,
+      "evidence_backed_pct": 55,
+      "requirements": [
+        {"id": "EXEC-01", "name": "All venue writes behind one authorisation boundary", "status": "verified", "severity": "critical", "impl": 100, "evid": 90, "evidence": "2 of 2 create_order sites gated: exchange_executor.py:1400->1645, transactional_execution_manager.py:1084->1137; 101 tests passed", "launch_impact": "none"},
+        {"id": "EXEC-02", "name": "Signed order-bound consumed LiveOrderAuthorization", "status": "verified", "severity": "critical", "impl": 100, "evid": 85, "evidence": "core/live_execution_gate.py REQUIRED_CHECKS=13, HMAC, mismatch/signature/incomplete-set refusals tested", "launch_impact": "3 of 13 checks are attested not observed: live_trading_entitlement, exchange_binding, precision"},
+        {"id": "EXEC-03", "name": "Manual order endpoints hard-refused", "status": "verified", "severity": "high", "impl": 100, "evid": 100, "evidence": "routers/orders.py:695,725,738,756 - four unconditional 403s", "launch_impact": "none"},
+        {"id": "EXEC-04", "name": "Idempotency key persisted with a uniqueness guarantee", "status": "unverified", "severity": "critical", "impl": 95, "evid": 40, "evidence": "execution_records.execution_id; DDL constraint lives in alembic d97ffff9c3bb_execution_schema_rebuild.py which was NOT read; test is postgres-gated and skipped", "launch_impact": "idempotency correctness partly rests on an unread constraint", "blocker": "P11-U02"},
+        {"id": "EXEC-05", "name": "Venue-side idempotency via clientOrderId", "status": "defect", "severity": "critical", "impl": 70, "evid": 0, "evidence": "exchange_executor.py:1618 forwards execution_id; CCXT does not unify the field (newClientOrderId/orderLinkId/clientOrderId); no verification of mapping or echo-back", "launch_impact": "sole venue-side duplicate-order defence is unproven", "blocker": "P11-B02"},
+        {"id": "EXEC-06", "name": "mark_submitted committed before the venue call, fail-closed", "status": "unverified", "severity": "high", "impl": 100, "evid": 30, "evidence": "execution_engine.py:1432-1480 separate short-lived session; postgres-gated test skipped", "launch_impact": "crash-window decidability unverified"},
+        {"id": "EXEC-07", "name": "Ambiguous submission adjudicated, never resubmitted", "status": "unverified", "severity": "high", "impl": 100, "evid": 40, "evidence": "order_watchdog.py:404-615 traced: failed_before_submission->FAILED, ambiguous->venue lookup, unreachable->UNKNOWN+alert; postgres-gated test skipped", "launch_impact": "recovery path never executed"},
+        {"id": "EXEC-08", "name": "Kill switch re-read at the venue boundary, fail-closed", "status": "verified", "severity": "critical", "impl": 100, "evid": 75, "evidence": "enforce_kill_switch() at exchange_executor.py ~1506, last await before create_order, raises outside the try; 36 passed", "launch_impact": "durable audit trail unverified - 6 postgres-gated tests skipped"},
+        {"id": "EXEC-09", "name": "execution_environment stated rather than defaulted", "status": "partial", "severity": "high", "impl": 40, "evid": 60, "evidence": "execution_engine.py:668 default is LIVE; docstring records 70/71 funnel call sites omit it and 65/71 construction sites state nothing", "launch_impact": "said-nothing is indistinguishable from said-LIVE", "blocker": "P11-H02"},
+        {"id": "EXEC-10", "name": "Cross-process execution lock behaves as a distributed lock", "status": "unverified", "severity": "critical", "impl": 85, "evid": 10, "evidence": "MockRedisClient is a per-process dict; real-Redis gate has never executed; conftest.py:13 blanks REDIS_URL unconditionally", "launch_impact": "N pods consuming one signal could produce N real orders", "blocker": "P11-U04"},
+        {"id": "EXEC-11", "name": "Paper/live isolation", "status": "verified", "severity": "critical", "impl": 95, "evid": 90, "evidence": "three independent mechanisms: assert_live_environment, branch-point assertion at :1180-1209, exchange_executor=None; 172 tests passed", "launch_impact": "two-paper-engine divergence - deploy-in-paper fills never reach paper_* tables", "blocker": "P11-H19"}
+      ]
+    },
+    {
+      "id": "risk_controls_and_financial_correctness",
+      "weight": 0.20,
+      "implementation_pct": 66,
+      "evidence_backed_pct": 42,
+      "requirements": [
+        {"id": "RISK-01", "name": "Risk evidence mandatory at the gateway", "status": "verified", "severity": "critical", "impl": 100, "evid": 95, "evidence": "execution_engine.py:1340-1360, risk_approved defaults None so an unevaluated order refuses", "launch_impact": "none"},
+        {"id": "RISK-02", "name": "Per-order notional ceiling, fail-closed on unreadable equity", "status": "verified", "severity": "critical", "impl": 100, "evid": 95, "evidence": "_capacity_bounds_for refuses on None/empty/unparseable/non-finite/non-positive price, zero size, unreadable equity; TRADE-11 'price or 0' defect closed", "launch_impact": "live market orders are consequently refused - correct, but limits order types"},
+        {"id": "RISK-03", "name": "Cross-order cross-strategy exposure aggregation", "status": "unverified", "severity": "critical", "impl": 100, "evid": 25, "evidence": "execution_record.py:758-1035 claim_execution_within_capacity, pg_advisory_xact_lock per tenant, in-flight notional summed from DB, TRADE-11 unusable-price refusal; postgres-gated test skipped", "launch_impact": "two orders at 60% of the ceiling could commit 120%", "blocker": "P11-U01"},
+        {"id": "RISK-04", "name": "Daily loss limit enforced on the order path", "status": "defect", "severity": "critical", "impl": 50, "evid": 30, "evidence": "RiskEngine.check_daily_loss exists and is not called by the gateway; execution_engine.py:1225-1244 states the gap; limit also measured against initial_capital not current equity", "launch_impact": "an account can keep trading past its configured daily loss limit", "blocker": "P11-B03"},
+        {"id": "RISK-05", "name": "Max drawdown enforced on the order path", "status": "defect", "severity": "critical", "impl": 50, "evid": 30, "evidence": "RiskEngine.check_drawdown not on the order path; returns (True,'OK') when peak_equity==0, which fails open", "launch_impact": "drawdown kill switch cannot stop an order", "blocker": "P11-B03"},
+        {"id": "RISK-06", "name": "Concentration / per-symbol exposure limit", "status": "defect", "severity": "high", "impl": 0, "evid": 0, "evidence": "none found on the order path; position_model.py:746-751 exposure_by_symbol is reporting-only", "launch_impact": "unbounded single-symbol concentration", "blocker": "P11-H04"},
+        {"id": "RISK-07", "name": "Price/position staleness check before authorizing", "status": "defect", "severity": "critical", "impl": 0, "evid": 0, "evidence": "grep for stale|max_age|age_seconds|last_update|data_quality across risk_manager, global_safety, pricing_service, portfolio_engine returned zero; execution_engine.py:477-483 states no oracle is consulted by any capacity check", "launch_impact": "partly mitigated because market orders are refused", "blocker": "P11-H03"},
+        {"id": "RISK-08", "name": "Decimal precision in risk and fee accumulators", "status": "verified", "severity": "high", "impl": 85, "evid": 85, "evidence": "218 tests passed; Decimal throughout risk_engine, fee_engine (PRECISION 1e-8, ROUND_HALF_UP), position_model; Decimal+float TypeError that silenced the daily-loss accumulator is closed", "launch_impact": "floats remain at exchange_reconciliation.py:514-518 fill comparison and referral.py:743,761 balance arithmetic"},
+        {"id": "RISK-09", "name": "Fee denomination never assumed; mixed-currency aggregates absent not summed", "status": "verified", "severity": "high", "impl": 100, "evid": 95, "evidence": "three-branch record_fee; third-asset fee leaves fee_cost_in_quote unset; get_fee_summary returns None for total_fees across >1 asset; zero preserved via 'is not None'", "launch_impact": "none"},
+        {"id": "RISK-10", "name": "Authoritative equity reconciled against venue balance", "status": "defect", "severity": "critical", "impl": 20, "evid": 0, "evidence": "authoritative value is ExecutionEngine.current_equity read via getattr, caller-seeded from portfolio_state; nothing on the authorization path reads an exchange balance", "launch_impact": "orders authorized against a number the venue has never confirmed", "blocker": "P11-B04"},
+        {"id": "RISK-11", "name": "Order/fill reconciliation against venue state", "status": "partial", "severity": "high", "impl": 60, "evid": 20, "evidence": "exchange_reconciliation.py exists with three reconciliation cases; start_reconciliation_loop:587 is never called; grep for kill_switch|halt in that file returned no matches", "launch_impact": "drift is recorded and never acted on", "blocker": "P11-H07"},
+        {"id": "RISK-12", "name": "Deposits/withdrawals excluded from trading P&L", "status": "partial", "severity": "medium", "impl": 20, "evid": 10, "evidence": "no capital-flow ledger; equity recomputed structurally by _sync_equity; FeeType.WITHDRAWAL/DEPOSIT annotated non-trading yet summed alongside trading fees; RiskEngine.update_equity would raise peak_equity on an inflow", "launch_impact": "drawdown limit could be loosened by a deposit", "blocker": "P11-M06"},
+        {"id": "RISK-13", "name": "Referral commission idempotence and payout compensation", "status": "unverified", "severity": "high", "impl": 90, "evid": 30, "evidence": "_compensate_debit at referral.py:810-837 covers both failure modes; CAS guard at :764; postgres-gated tests skipped; Redis lock fails open at :723-727", "launch_impact": "money-path idempotence unexecuted", "blocker": "P11-H18"},
+        {"id": "RISK-14", "name": "Safety-control transition audit trail", "status": "unverified", "severity": "high", "impl": 90, "evid": 35, "evidence": "core/safety_audit.py + migration 028; 6 realaudit-marked tests skipped for want of a postgres DSN", "launch_impact": "a halt or reset may have no durable record of who did it", "blocker": "P11-U05"},
+        {"id": "RISK-15", "name": "Billing amount precision", "status": "verified", "severity": "critical", "impl": 100, "evid": 90, "evidence": "billing.py:564-780 _exact_minor_units returns None for a float rather than truncating; _provider_major_amount with hardcoded per-handler currency; MONEY-02 and MONEY-04 both closed", "launch_impact": "none - prior report listed MONEY-04 as OPEN; that claim is stale"}
+      ]
+    },
+    {
+      "id": "exchange_connectivity_and_order_lifecycle",
+      "weight": 0.15,
+      "implementation_pct": 68,
+      "evidence_backed_pct": 32,
+      "requirements": [
+        {"id": "EXCH-01", "name": "Exchange library exactly pinned", "status": "verified", "severity": "medium", "impl": 100, "evid": 100, "evidence": "requirements-base.txt:95 ccxt[async]==4.3.92", "launch_impact": "SANDBOX_MECHANISMS must be re-measured on any bump"},
+        {"id": "EXCH-02", "name": "Capability registry fail-closed; LIVE_TRADING_AUTHORIZED unsettable in code", "status": "verified", "severity": "critical", "impl": 100, "evid": 90, "evidence": "8-rung ladder, has_state does not walk down, is_tradable requires the top rung, _load_safety_blocked falls back to blocked on ImportError; 132 tests passed; tradable()==[]", "launch_impact": "none"},
+        {"id": "EXCH-03", "name": "Requested sandbox flag distinguished from proven sandbox endpoint", "status": "verified", "severity": "critical", "impl": 95, "evid": 60, "evidence": "verify_sandbox_endpoint requires positive evidence (apiBackup present, api==test, api!=apiBackup) or header VALUE for OKX; refuses and closes the client on failure; sandbox vs sandbox_verified separated", "launch_impact": "unit tests over fake clients - certifies nothing about any venue, as the test file itself states"},
+        {"id": "EXCH-04", "name": "Unsafe venue withheld at every construction path", "status": "verified", "severity": "critical", "impl": 100, "evid": 95, "evidence": "bitget refused at ExchangeExecutorFactory.create and at BaseExchangeExecutor.__init__ before credentials are stored; case and whitespace normalised; removed from SUPPORTED_EXCHANGES as well", "launch_impact": "none"},
+        {"id": "EXCH-05", "name": "Venue sandbox order-lifecycle certification (12 scenarios)", "status": "defect", "severity": "critical", "impl": 0, "evid": 0, "evidence": "staging/EXCHANGE_SANDBOX_CERTIFICATION.md: SANDBOX ORDERS PLACED: 0; 16 tests skipped; 5 of 5 preconditions unmet", "launch_impact": "the order lifecycle has never been observed at any venue", "blocker": "P11-B01"},
+        {"id": "EXCH-06", "name": "Duplicate clientOrderId rejected by the venue", "status": "defect", "severity": "critical", "impl": 70, "evid": 0, "evidence": "named in the certification report as the highest-value unrun test", "launch_impact": "every retry path above the executor could double a position", "blocker": "P11-B02"},
+        {"id": "EXCH-07", "name": "Per-venue rate-limit conformance and Retry-After", "status": "defect", "severity": "high", "impl": 30, "evid": 20, "evidence": "RateLimiter is flat per-endpoint; registry reads rate_limit_ms and never applies it; core/exchange_rate_limiter.py has zero importers; RateLimitError hardcodes retry_after=60", "launch_impact": "429 storms and ban risk", "blocker": "P11-H17"},
+        {"id": "EXCH-08", "name": "Precision, amount-step snapping, venue minimums", "status": "verified", "severity": "high", "impl": 80, "evid": 70, "evidence": "_decimal_places handles both DECIMAL_PLACES and TICK_SIZE conventions and refuses the ambiguous value 1; _market_for tries raw then unified key (the defect that made every lookup miss); ROUND_DOWN; BELOW_PRECISION/BELOW_MIN_QUANTITY/BELOW_MIN_NOTIONAL", "launch_impact": "format_symbol_for_ccxt suffix-matches a hardcoded quote list", "blocker": "P11-M07"},
+        {"id": "EXCH-09", "name": "Error normalization and credential redaction before logging", "status": "verified", "severity": "high", "impl": 85, "evid": 85, "evidence": "_redact_credentials called before classification in _handle_ccxt_error, because library/venue exception text is not under this code's control", "launch_impact": "substring-based classification is brittle", "blocker": "P11-M08"},
+        {"id": "EXCH-10", "name": "Per-tenant executor cache", "status": "verified", "severity": "critical", "impl": 100, "evid": 95, "evidence": "length-prefixed sha256 over (user_id, venue, mode, key, secret, password); user_id keyword-only and required; belt-and-braces credential recheck on cache hit; release_exchange_executor exists. Prior key was exchange_id:sandbox, which served one trader's credentials to another - a funds leak", "launch_impact": "process-global; no cross-process invalidation beyond credentials being in the key"},
+        {"id": "EXCH-11", "name": "WebSocket fill ingestion running; venue fees recorded", "status": "defect", "severity": "high", "impl": 40, "evid": 20, "evidence": "listener never started (AST-scanning tests confirm); _fallback_poll logs NOT IMPLEMENTED and has never run; handle_fill has no fee field and drops fee.cost", "launch_impact": "fills arrive only via OrderWatchdog polling; venue-reported fees are discarded", "blocker": "P11-H06"},
+        {"id": "EXCH-12", "name": "Submission timeout to UNKNOWN plus reconciliation", "status": "unverified", "severity": "high", "impl": 90, "evid": 30, "evidence": "place_order_and_wait_confirmation marks status='unknown' and does not assume filled; find_order_by_client_order_id implements three lookup strategies; code-verified only", "launch_impact": "timeout handling never exercised against a venue"},
+        {"id": "EXCH-13", "name": "All allowlisted venues usable on the pinned ccxt", "status": "defect", "severity": "high", "impl": 80, "evid": 40, "evidence": "OKX load_markets documented broken at connection_engine.py:196-250 while OKX remains in SUPPORTED_EXCHANGES and SANDBOX_MECHANISMS", "launch_impact": "exclude OKX from the initial allowlist", "blocker": "P11-H16"}
+      ]
+    },
+    {
+      "id": "persistence_and_reconciliation",
+      "weight": 0.15,
+      "implementation_pct": 68,
+      "evidence_backed_pct": 33,
+      "requirements": [
+        {"id": "PERS-01", "name": "Venue id separated from platform order id", "status": "verified", "severity": "critical", "impl": 100, "evid": 40, "evidence": "migration 030 adds venue_order_id; execution_engine.py:1056 passes venue_order_id=; update_status:1412 writes it. TRADE-12 (FK 23503 stranding rows EXECUTING after a real fill) is closed", "launch_impact": "DDL unapplied to production", "blocker": "P11-B10"},
+        {"id": "PERS-02", "name": "Position lifecycle persistence", "status": "unverified", "severity": "critical", "impl": 80, "evid": 25, "evidence": "test_position_lifecycle_postgres.py, test_position_delta_race_condition_fix.py:72,114 and test_atomic_order_cancellation_fix.py:113,190,279,302 all skipped for want of a postgres DSN", "launch_impact": "lost or duplicated position state under concurrency is unverified", "blocker": "P11-U07"},
+        {"id": "PERS-03", "name": "State transitions atomic with the venue write", "status": "partial", "severity": "high", "impl": 80, "evid": 40, "evidence": "three separate committed transactions straddle create_order (claim, mark_submitted, update_status); no two-phase anything; the split makes the crash window decidable rather than absent", "launch_impact": "accepted design, compensated by OrderWatchdog, which is itself unverified"},
+        {"id": "PERS-04", "name": "Exposure used for risk sizing is durable", "status": "defect", "severity": "high", "impl": 40, "evid": 20, "evidence": "master_executor.py ~675-690 mutates in-process recovered_exposure_coins after the gateway returns; memory-only; lost on restart; risk sizing consumes it", "launch_impact": "after a restart the next signal sizes as though the account were flat", "blocker": "P11-H08"},
+        {"id": "PERS-05", "name": "Writer of public.orders identified and consistent", "status": "defect", "severity": "medium", "impl": 30, "evid": 20, "evidence": "not identified; migration 030 measured ORDERS_ROWS=24 and EXECUTION_RECORDS_WITH_ORDER_ID=0; the execution path does not write that table", "launch_impact": "an FK target whose population is unexplained", "blocker": "P11-M01"},
+        {"id": "PERS-06", "name": "Restart recovery rediscovers resting venue orders", "status": "defect", "severity": "critical", "impl": 0, "evid": 0, "evidence": "_recover_live_state re-queries balance only; fetch_open_orders is called by nothing on the recovery path (EXCH-07 in the certification report)", "launch_impact": "resting venue orders and their exposure are invisible after a restart", "blocker": "P11-B05"},
+        {"id": "PERS-07", "name": "Schema drift checker is read-only and proven so", "status": "unverified", "severity": "medium", "impl": 95, "evid": 35, "evidence": "default_transaction_read_only set AND read back; port 6543 refused because session settings do not survive transaction pooling; catalogues plus COUNT(*) only; DSN reduced before printing; 12 tests require SQLSTATE 25006 - postgres-gated and skipped", "launch_impact": "tooling is sound and unexecuted"},
+        {"id": "PERS-08", "name": "Production schema verified against the repository", "status": "defect", "severity": "critical", "impl": 0, "evid": 0, "evidence": "DATABASE_PROVISIONING_RUNBOOK.md: 'No verification has been run against production' - status NOT VERIFIED; 11 migrations (022-032) are untracked in the working tree", "launch_impact": "the deployed schema is unknown", "blocker": "P11-B10"},
+        {"id": "PERS-09", "name": "Single authoritative migration ordering", "status": "defect", "severity": "high", "impl": 30, "evid": 20, "evidence": "three systems: backend_app/alembic/versions/, backend_app/migrations/*.sql, migrations/*.sql - no documented ordering. The isolation matrix names this as the likely root cause of several findings, including a phantom exchange_credentials table in verify_rls.py CRITICAL_TABLES", "launch_impact": "schema truth is distributed", "blocker": "P11-M02"},
+        {"id": "PERS-10", "name": "Paper ledger idempotency and concurrency", "status": "unverified", "severity": "medium", "impl": 90, "evid": 45, "evidence": "partial unique index uq_paper_order_idem_default on (account_id, idempotency_key) WHERE session_id IS NULL; optimistic paper_accounts.version returning 409 PAPER_CONCURRENCY_CONFLICT; partly postgres-gated", "launch_impact": "paper-launch relevant"},
+        {"id": "PERS-11", "name": "One paper ledger, not two", "status": "defect", "severity": "medium", "impl": 50, "evid": 60, "evidence": "master_executor.py:625-648 documents it: deploy-in-paper simulates inside ExecutionEngine against a synthetic 10000.0 equity and has no import edge to backend_app/backend/paper/, so fills never reach paper_accounts/paper_orders/paper_fills/paper_positions", "launch_impact": "a paper trader's fills do not appear in their paper dashboard", "blocker": "P11-H19"}
+      ]
+    },
+    {
+      "id": "concurrency_quotas_and_dependency_safety",
+      "weight": 0.10,
+      "implementation_pct": 76,
+      "evidence_backed_pct": 30,
+      "requirements": [
+        {"id": "CONC-01", "name": "Cache fallback does not fake a distributed lock outside dev/test", "status": "verified", "severity": "critical", "impl": 100, "evid": 90, "evidence": "_get_active_cache returns None outside dev/test; the VYOMQUANT_MODE != 'production' comparison that could never be false (trading mode vs deployment env) is documented as removed; test_redis_fallback_does_not_fake_a_distributed_lock.py passed", "launch_impact": "none"},
+        {"id": "CONC-02", "name": "Cache facade fails closed for lock and quota callers", "status": "defect", "severity": "high", "impl": 50, "evid": 60, "evidence": "proxy methods swallow every exception: get->None :757, set->False :767, delete->0 :777, incr->0 :907. This is the documented reason HardQuotaEnforcer was deprecated - its except branches were unreachable", "launch_impact": "an outage reads as a miss, so limits admit", "blocker": "P11-H11"},
+        {"id": "CONC-03", "name": "Lock release is atomic and ownership-scoped", "status": "partial", "severity": "high", "impl": 70, "evid": 60, "evidence": "_release_slot_lock:946-1034 is read->compare->delete across three awaits; every non-owner branch declines to delete; WSK review Sec 4.2 corrects the 'Lua not portable' rationale - getdel + _GETDEL_LUA already exists", "launch_impact": "narrow mis-delete window; filed as D9, not implemented", "blocker": "P11-H12"},
+        {"id": "CONC-04", "name": "Quota enforcement atomic across processes", "status": "unverified", "severity": "high", "impl": 70, "evid": 15, "evidence": "exchange_connection_slot_guard takes SET NX and re-reads inside it - advisory cache state, not a DB constraint; a failover or maxmemory eviction admits two holders; real-Redis verification never executed; WSC Sec 8 records the durable row-count constraint as not written", "launch_impact": "quota overshoot", "blocker": "P11-H13"},
+        {"id": "CONC-05", "name": "Single-bot ownership durable across pods", "status": "unverified", "severity": "critical", "impl": 95, "evid": 25, "evidence": "bot_ownership.py:131-148 single-statement INSERT ON CONFLICT with heartbeat staleness predicate and xmax=0 insert/takeover discrimination; token-scoped release and heartbeat; STORE_UNAVAILABLE fails closed. test_work03_bot_ownership_claims_postgres.py skipped", "launch_impact": "two bots trading the same pair on one account; note claim_bot grants a synthetic local-<uuid> claim when no DSN is configured and local_state_is_acceptable()", "blocker": "P11-U03"},
+        {"id": "CONC-06", "name": "Lua idempotency script correct in production", "status": "unverified", "severity": "high", "impl": 85, "evid": 10, "evidence": "MockRedisClient.eval_lua ignores the script argument and reimplements the predicate in Python - which is how a constant-true string.sub(...,1,7) != 'processing' survived. Only test_idempotency_lua_prefix_agreement.py checks source/marker agreement", "launch_impact": "the production atomic path has never executed", "blocker": "P11-U04"},
+        {"id": "CONC-07", "name": "Worker heartbeat, duplicate-worker prevention, dead-lettering", "status": "verified", "severity": "high", "impl": 90, "evid": 60, "evidence": "103 tests passed in-process; command_worker PEL semantics - FAILED not acked, REFUSED acked, MAX_DELIVERIES to dead-letter; mandatory explicit paper_trading key in the payload", "launch_impact": "cross-process behaviour unverified"},
+        {"id": "CONC-08", "name": "DSN and cluster selection safe; ambiguity fails closed", "status": "verified", "severity": "high", "impl": 95, "evid": 80, "evidence": "explicit --data-dir > PG_DATA_DIR > default; exit 2 on ambiguous selection, exit 3 on refused write; single write site write_dsn_if_safe, AST-asserted; 58 tests per the WS-H and WS-I reports", "launch_impact": "a dormant empty staging/pgdata cluster is retained"},
+        {"id": "CONC-09", "name": "Tenant DB context propagated on request paths", "status": "defect", "severity": "critical", "impl": 20, "evid": 70, "evidence": "tenant_db_context.py:66-76 set_config(..., true) is correct and transaction-scoped and refuses a non-transactional session; its own docstring records that nothing on a request path calls it; get_db and get_db_context set nothing", "launch_impact": "9 RLS policies depend on a GUC nothing sets", "blocker": "P11-B09"},
+        {"id": "CONC-10", "name": "Connection pool bounded", "status": "defect", "severity": "medium", "impl": 40, "evid": 30, "evidence": "connection_engine pool has no TTL or idle eviction; each entry holds a plaintext credential for the process lifetime (WSC residual 4)", "launch_impact": "credential lifetime and memory growth", "blocker": "P11-M04"},
+        {"id": "CONC-11", "name": "Plan downgrade reclaims stored exchange credentials", "status": "product", "severity": "medium", "impl": 30, "evid": 60, "evidence": "WSC Sec 8: a plan downgrade leaves stored credentials alone - it only blocks the next add", "launch_impact": "entitlement drift", "blocker": "P11-M05"}
+      ]
+    },
+    {
+      "id": "security_and_tenant_isolation",
+      "weight": 0.08,
+      "implementation_pct": 62,
+      "evidence_backed_pct": 48,
+      "requirements": [
+        {"id": "SEC-01", "name": "ES256-only JWT; no HS256 fallback in production", "status": "verified", "severity": "critical", "impl": 100, "evid": 95, "evidence": "_test_token_fallback_allowed reads only real ENV/ENVIRONMENT and returns False when unset or blank; settings.ENV deliberately not consulted because its default 'development' made the path live in production; _TEST_TOKEN_ENVS reduced to {testing,test}; AST and behavioural tests passed", "launch_impact": "_build_jwks_url placeholder fallback makes a missing SUPABASE_URL an outage", "related_blocker": "P11-M11"},
+        {"id": "SEC-02", "name": "Step-up auth on money-moving and emergency operations", "status": "defect", "severity": "high", "impl": 30, "evid": 90, "evidence": "require_aal2 is on exactly two handlers: exchange.store_keys and exchange.delete_connection. routers/admin.py:185 POST /kill-all depends on get_operator_user only - the platform-wide halt is password-only", "launch_impact": "a stolen password-only session can halt the platform", "blocker": "P11-H10"},
+        {"id": "SEC-03", "name": "Database-enforced tenant isolation on the execution tables", "status": "defect", "severity": "critical", "impl": 40, "evid": 80, "evidence": "RLS ENABLE without FORCE and the app connects as owner postgres, so all nine execution-table policies are inert. FORCE ROW LEVEL SECURITY grepped across all three migration trees: zero matches. Live instance confirmed relrowsecurity=true relforcerowsecurity=false", "launch_impact": "isolation on the money tables is application WHERE clauses only", "blocker": "P11-B09"},
+        {"id": "SEC-04", "name": "Cross-tenant read/write isolation measured", "status": "unverified", "severity": "critical", "impl": 85, "evid": 55, "evidence": "79 tables, 0 leaked, 0 unmeasured, 29 tests passing - against a locally provisioned PostgreSQL. RLS_TENANT_ISOLATION_VERIFICATION.md states production NOT VERIFIED three times (Sec 1, 8.6, 9.5)", "launch_impact": "production isolation unmeasured", "blocker": "P11-B10"},
+        {"id": "SEC-05", "name": "Exchange credential vault fails closed and rotates", "status": "verified", "severity": "critical", "impl": 85, "evid": 85, "evidence": "backend/api_key_vault.py raises EnvironmentError at construction without MASTER_ENCRYPTION_KEYS rather than generating a key; MultiFernet over the whole list so the first encrypts and all decrypt, which makes the documented zero-downtime rotation executable", "launch_impact": "the key SET is platform-wide, not per-tenant (ADR-0007 target, not built) - rotation bounds the exposure window, not the blast radius"},
+        {"id": "SEC-06", "name": "No orphaned module that would break rotation if wired", "status": "defect", "severity": "medium", "impl": 0, "evid": 70, "evidence": "core/credential_vault.py derives a single Fernet via PBKDF2 from MASTER_ENCRYPTION_KEYS.split(',')[0], discarding every other key. Imported by nothing outside tests and scripts", "launch_impact": "wiring it up would destroy all stored credentials; a reviewer reading it draws the wrong conclusion about the platform", "blocker": "P11-M03"},
+        {"id": "SEC-07", "name": "Placeholder and weak secrets rejected at startup", "status": "verified", "severity": "high", "impl": 100, "evid": 95, "evidence": "classify_secret gives four verdicts MISSING/EMPTY/PLACEHOLDER/USABLE; motivating fact is that bool('YOUR_SUPABASE_SERVICE_ROLE_KEY') is True; JWT strength measured in bytes not characters; enforced for production/staging/prod AND the empty string; describe_verdict refuses to name the matching pattern", "launch_impact": "none"},
+        {"id": "SEC-08", "name": "Rate limiter fails closed in production", "status": "verified", "severity": "high", "impl": 100, "evid": 80, "evidence": "import-time fail-closed branch tested; 34 tests pass in isolation", "launch_impact": "the wiring assertion is order-dependent and can be neutralised by collection order", "blocker": "P11-H15"},
+        {"id": "SEC-09", "name": "fee_records row level security", "status": "unverified", "severity": "high", "impl": 90, "evid": 20, "evidence": "backend_app/migrations/026_fee_records_row_level_security.sql written and UNTRACKED; pre-fix state measured as rls_enabled=False policies=0 with anon and authenticated each holding SELECT/INSERT/UPDATE/DELETE; postgres-gated test skipped", "launch_impact": "one tenant can read, update and delete another's fee rows until applied", "blocker": "P11-U06"},
+        {"id": "SEC-10", "name": "Rotation procedures for all high-value secrets", "status": "defect", "severity": "high", "impl": 20, "evid": 70, "evidence": "docs/KEY_ROTATION_PROCEDURE.md covers MASTER_ENCRYPTION_KEYS only. Nothing for JWT_SECRET/SUPABASE_JWT_SECRET, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL, or the static long-lived CI AWS access keys; 0 aws_secretsmanager_secret_rotation resources against 8 declared secrets", "launch_impact": "a compromised CI key cannot be rotated to a procedure", "blocker": "P11-H14"}
+      ]
+    },
+    {
+      "id": "deployment_monitoring_recovery_rollback",
+      "weight": 0.07,
+      "implementation_pct": 40,
+      "evidence_backed_pct": 22,
+      "requirements": [
+        {"id": "OPS-01", "name": "Tests gate production deploy", "status": "defect", "severity": "critical", "impl": 0, "evid": 90, "evidence": "01-pr-check.yml:4-5 is on: pull_request only and holds every test job; 02-build.yml:19 is on: push [main,master]; 03-deploy.yml:5-9 chains off 02 Build; scripts/pre_deployment_validation.py runs five steps and never invokes pytest", "launch_impact": "a push to main with a red suite deploys to production", "blocker": "P11-B08"},
+        {"id": "OPS-02", "name": "Health check can remove a broken task from rotation", "status": "defect", "severity": "critical", "impl": 20, "evid": 95, "evidence": "terraform/alb.tf health_check path=/health matcher=200; main.py:988 /health returns a dict so HTTP 200 unconditionally and never probes the database; healthcheck.sh targets /health/live which consults no dependency; the 503-returning /health/ready is wired to nothing", "launch_impact": "a dependency-broken task keeps serving traffic", "blocker": "P11-B06"},
+        {"id": "OPS-03", "name": "Readiness reflects real dependency state", "status": "verified", "severity": "critical", "impl": 100, "evid": 90, "evidence": "readiness.py: UNKNOWN blocks, PROBE_TIMEOUT_SECONDS=3.0, real SELECT 1, falsey Redis ping raised, _safe_detail redacts and truncates, http_status returns 503; tests passed including an AST assertion that liveness consults nothing", "launch_impact": "correct code, unused by infrastructure - see OPS-02"},
+        {"id": "OPS-04", "name": "Metrics, alarms and alerting", "status": "defect", "severity": "critical", "impl": 0, "evid": 100, "evidence": "measured: grep across terraform/*.tf for aws_cloudwatch_metric_alarm|aws_sns_topic|aws_cloudwatch_log_metric_filter|aws_config_|aws_backup_|aws_db_snapshot|aws_securityhub returned 0 matches", "launch_impact": "nothing pages anyone for anything", "blocker": "P11-B07"},
+        {"id": "OPS-05", "name": "Backup and restore evidence", "status": "defect", "severity": "critical", "impl": 0, "evid": 90, "evidence": "DATABASE_PROVISIONING_RUNBOOK.md: 'Rollback has not been rehearsed... no restore-from-backup drill has been performed' - status NOT DONE", "launch_impact": "recovery capability is unproven", "blocker": "P11-B07"},
+        {"id": "OPS-06", "name": "Kill switch and incident-response runbook", "status": "defect", "severity": "high", "impl": 20, "evid": 80, "evidence": "only docs/history/INCIDENT_RESPONSE_PLAYBOOK.md, LAUNCH_DAY_RUNBOOK.md, OPERATIONS_RUNBOOK.md - all under history/. No current kill-switch runbook", "launch_impact": "no rehearsed emergency procedure", "blocker": "P11-B07"},
+        {"id": "OPS-07", "name": "Security scan gates deploy", "status": "verified", "severity": "high", "impl": 90, "evid": 90, "evidence": "require_security_scan.py refuses on missing token/repo/SHA, any HTTP error, no run recorded, status not completed, cancelled/skipped, or non-success; 03-deploy.yml:60-63 grants actions: read", "launch_impact": "CRITICAL severity only - HIGH and below do not block"},
+        {"id": "OPS-08", "name": "Immutable-artifact gate", "status": "verified", "severity": "high", "impl": 100, "evid": 90, "evidence": "03-deploy.yml:162-172 refuses to deploy a SHA with no ECR image", "launch_impact": "none"},
+        {"id": "OPS-09", "name": "Deploy serialization", "status": "verified", "severity": "high", "impl": 100, "evid": 90, "evidence": "concurrency group ecs-deploy-vyomquant-api-service-cjema2sl with cancel-in-progress: false, documented against a real incident where two runs 99s apart reset each other's rollout", "launch_impact": "none"},
+        {"id": "OPS-10", "name": "All required workers hosted", "status": "defect", "severity": "high", "impl": 60, "evid": 90, "evidence": "terraform/ecs.tf local.worker_definitions holds exactly backtest, dag, command. test_worker_deployment_coverage.py xfail(strict=True) behaved as expected, confirming MarketplaceExpiryWorker and ReconciliationWorker are unhosted", "launch_impact": "subscriptions past period_expiry are never expired - paid access outlives the paid period", "blocker": "P11-H09"},
+        {"id": "OPS-11", "name": "Recovery service start failure is visible", "status": "defect", "severity": "high", "impl": 30, "evid": 80, "evidence": "main.py:436 swallows an OrderWatchdog start failure into service_status='INACTIVE' plus a warning; the app serves traffic regardless, and with no alarm nothing notices", "launch_impact": "silent loss of stale-order recovery", "blocker": "P11-B07"},
+        {"id": "OPS-12", "name": "Nightly audit gates anything", "status": "defect", "severity": "low", "impl": 20, "evid": 80, "evidence": "04-nightly-audit.yml sets continue-on-error: true on every job except docker_validation.py", "launch_impact": "reports, does not gate", "blocker": "P11-L01"},
+        {"id": "OPS-13", "name": "Infrastructure drift controlled", "status": "defect", "severity": "medium", "impl": 30, "evid": 70, "evidence": "terraform applied by no workflow; state local (gitignored, not committed - confirmed); .disabled copies of alb/cloudfront/ecs/vpc/waf exist beside the live files", "launch_impact": "deployed infrastructure may not match code", "blocker": "P11-M10"},
+        {"id": "OPS-14", "name": "AWS auth hardened", "status": "defect", "severity": "medium", "impl": 30, "evid": 90, "evidence": "02-build.yml and 03-deploy.yml both use secrets.AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY - static long-lived keys, not OIDC. 03-deploy.yml:55-56 states this as the reason no id-token: write is needed", "launch_impact": "highest-value unrotatable credential in the pipeline", "blocker": "P11-H14"},
+        {"id": "OPS-15", "name": "TLS configured", "status": "verified", "severity": "high", "impl": 100, "evid": 85, "evidence": "terraform/alb.tf HTTPS listener with ssl_policy ELBSecurityPolicy-TLS13-1-2-2021-06 and an ACM certificate", "launch_impact": "none"}
+      ]
+    },
+    {
+      "id": "release_testing_and_operational_readiness",
+      "weight": 0.05,
+      "implementation_pct": 62,
+      "evidence_backed_pct": 30,
+      "requirements": [
+        {"id": "TEST-01", "name": "The full suite can be collected and run", "status": "defect", "severity": "high", "impl": 60, "evid": 100, "evidence": "reproduced: 14400 tests collected, 1 error. tests/test_p10i_probe_pg_find_uses_shared_dsn_contract.py raises FileNotFoundError for staging/probe_pg_find.py at module import, interrupting collection. Both the test and staging/ are untracked and staging/ is not gitignored", "launch_impact": "pytest tests/ cannot complete; committing either side of the pair breaks every CI test lane", "blocker": "P11-H15"},
+        {"id": "TEST-02", "name": "The suite is order-independent", "status": "defect", "severity": "medium", "impl": 70, "evid": 100, "evidence": "reproduced: alphabetical order 52 passed; reversed order 1 failed 51 passed. test_api03_rate_limit_storage_is_fail_closed.py:342 fails after test_rate_limiter_fails_closed_in_production.py re-imports the module under a different environment", "launch_impact": "the fail-closed rate-limit wiring assertion can be neutralised by collection order", "blocker": "P11-H15"},
+        {"id": "TEST-03", "name": "Infrastructure-gated lanes have executed", "status": "defect", "severity": "critical", "impl": 95, "evid": 0, "evidence": "632 postgres tests across 32 files and 9 real-redis tests across 3 files - all skipped. Root cause: tests/conftest.py:13 blanks REDIS_URL unconditionally, so CI's healthy redis:7-alpine never switched them on", "launch_impact": "seven load-bearing controls have zero executed evidence", "blocker": "P11-U01..U07"},
+        {"id": "TEST-04", "name": "Venue sandbox lane has executed", "status": "defect", "severity": "critical", "impl": 95, "evid": 0, "evidence": "16 skips, 3 reproductions red by design, 0 orders", "launch_impact": "no venue evidence of any kind", "blocker": "P11-B01"},
+        {"id": "TEST-05", "name": "Production verification scripts have run against production", "status": "defect", "severity": "critical", "impl": 95, "evid": 0, "evidence": "verify_production_schema.py (read-only, proven so by 12 tests) and verify_production_security.py (writes, unconditional ROLLBACK, proven by 9 tests) both exist and are well built; neither has run against production", "launch_impact": "the deployed system is unverified", "blocker": "P11-B10"},
+        {"id": "TEST-06", "name": "Skips are self-explaining and not counted as passes", "status": "verified", "severity": "high", "impl": 100, "evid": 100, "evidence": "every gated skip reason names the env var and states that a skip is not a pass; the real-Redis gate separates unset->SKIP, set-but-unreachable->FAIL, reachable->RUN and never echoes an endpoint; pytest.ini documents every marker", "launch_impact": "none - this is exemplary"},
+        {"id": "TEST-07", "name": "Load and soak evidence for the live order path", "status": "defect", "severity": "medium", "impl": 10, "evid": 0, "evidence": "none found; tests/perf holds a market-data latency harness excluded from the default lane by norecursedirs", "launch_impact": "behaviour under sustained load is unknown"}
+      ]
+    }
+  ],
+
+  "scores": {
+    "implementation_completeness_pct": 70,
+    "evidence_backed_live_launch_readiness_pct": 39,
+    "interpretation": "70 percent says most of the required machinery exists. 39 percent says most of it has never been observed working against anything real. For a system that spends customer money irreversibly, the second number governs.",
+    "calculation": "sum(weight * category_pct) over the eight categories; weights unmodified from the brief; no renormalization applied"
+  },
+
+  "hard_gate_verdict": {
+    "live_trading": "BLOCKED",
+    "restricted_live_pilot": "BLOCKED",
+    "paper_only_launch": "CONDITIONAL",
+    "full_public_live_trading": "BLOCKED",
+    "paper_only_conditions": ["P11-B06", "P11-B07", "P11-B08", "P11-H09", "P11-H15", "P11-H19"],
+    "paper_only_effort_estimate_engineer_days": "5-7",
+    "rationale": "No order this platform has ever produced has reached any exchange, including a sandbox. The sole venue-side duplicate-order defence is unverified. Daily-loss and drawdown limits are not enforced at the order gateway. Authoritative equity is never reconciled against the venue. Restart recovery does not rediscover resting orders. Health checks cannot drain a dependency-broken task. There is no alerting and no proven restore. No test gate stands between a push to main and production.",
+    "note": "A high average must not conceal a critical safety blocker. Execution integrity scores 88 percent implementation, and the single confirmed defect within it (unverified clientOrderId mapping) is sufficient on its own to double a customer position. That is why the hard gate is a separate verdict from the percentages."
+  },
+
+  "unresolved_blockers": {
+    "counts": {"critical": 10, "high": 19, "medium": 11, "low": 2, "unverified_critical_controls": 7},
+    "critical": [
+      {"id": "P11-B01", "name": "No venue has ever received an order", "class": "missing_evidence", "owner": "stream_a_exchange", "effort_days": "5-8 after credentials", "uncertainty_days": 3, "blocks": ["restricted_live_pilot", "full_public_live_trading"], "parallel": true},
+      {"id": "P11-B02", "name": "clientOrderId venue mapping unverified - sole duplicate defence", "class": "defect", "owner": "stream_a_exchange", "effort_days": "1, or 4-6 if a venue ignores the field", "uncertainty_days": 2, "blocks": ["restricted_live_pilot", "full_public_live_trading"], "parallel": false, "depends_on": ["P11-B01"]},
+      {"id": "P11-B03", "name": "Daily-loss and drawdown not enforced at the order gateway", "class": "missing", "owner": "stream_b_risk", "effort_days": "3-4", "uncertainty_days": 1, "blocks": ["restricted_live_pilot", "full_public_live_trading"], "parallel": true},
+      {"id": "P11-B04", "name": "Authoritative equity never reconciled against the venue", "class": "missing", "owner": "stream_b_risk", "effort_days": "4-6", "uncertainty_days": 2, "blocks": ["restricted_live_pilot", "full_public_live_trading"], "parallel": false, "depends_on": ["P11-B01", "P11-B03"]},
+      {"id": "P11-B05", "name": "Restart recovery does not rediscover resting venue orders", "class": "missing", "owner": "stream_c_execution", "effort_days": "3-5", "uncertainty_days": 2, "blocks": ["restricted_live_pilot", "full_public_live_trading"], "parallel": true, "depends_on": ["P11-B01", "P11-B02"]},
+      {"id": "P11-B06", "name": "Health checks cannot drain a dependency-broken task", "class": "defect_configuration", "owner": "stream_e_sre", "effort_days": "0.5", "uncertainty_days": 0.25, "blocks": ["paper_launch", "restricted_live_pilot", "full_public_live_trading"], "parallel": true},
+      {"id": "P11-B07", "name": "No alarms, no alerting, no backup drill", "class": "missing", "owner": "stream_e_sre", "effort_days": "4-6", "uncertainty_days": 2, "blocks": ["paper_launch", "restricted_live_pilot", "full_public_live_trading"], "parallel": true, "depends_on": ["P11-B06"]},
+      {"id": "P11-B08", "name": "No test gate between a push to main and production", "class": "defect_pipeline", "owner": "stream_e_sre", "effort_days": "0.5-1", "uncertainty_days": 0.5, "blocks": ["paper_launch", "restricted_live_pilot", "full_public_live_trading"], "parallel": true, "depends_on": ["P11-H15"]},
+      {"id": "P11-B09", "name": "RLS inert on nine execution tables; no tenant context on request paths", "class": "defect_architecture", "owner": "stream_f_security", "effort_days": "6-9", "uncertainty_days": 3, "blocks": ["full_public_live_trading", "multi_tenant_restricted_pilot"], "parallel": true, "depends_on": ["P11-U01", "P11-U02", "P11-U05", "P11-U06", "P11-U07"]},
+      {"id": "P11-B10", "name": "Production schema never verified against the repository", "class": "unverified", "owner": "stream_d_platform", "effort_days": "1-2, unbounded if drift is found", "uncertainty_days": 1, "blocks": ["restricted_live_pilot", "full_public_live_trading"], "parallel": false, "depends_on": ["P11-B07"]}
+    ],
+    "unverified_critical_controls": [
+      {"id": "P11-U01", "control": "Cross-order capacity reservation under per-tenant advisory lock", "module": "backend_app/core/models/execution_record.py:758-1035", "gate": "AERORA_TEST_DATABASE_URL", "consequence_if_wrong": "two orders at 60 percent of the ceiling commit 120 percent of it"},
+      {"id": "P11-U02", "control": "execution_records idempotency uniqueness constraint", "module": "backend_app/alembic/versions/d97ffff9c3bb_execution_schema_rebuild.py (not read)", "gate": "AERORA_TEST_DATABASE_URL", "consequence_if_wrong": "duplicate executions; the idempotency scheme rests on this constraint"},
+      {"id": "P11-U03", "control": "Single-bot ownership across pods", "module": "backend_app/core/bot_ownership.py:131-148", "gate": "AERORA_TEST_DATABASE_URL", "consequence_if_wrong": "two bots trading the same pair on one account"},
+      {"id": "P11-U04", "control": "Cross-process quota and lock behaviour on real Redis, including the Lua idempotency script", "module": "backend_app/core/subscription_dependencies.py:907-1034, backend_app/core/distributed_idempotency.py:488-542", "gate": "AERORA_TEST_REDIS_URL", "consequence_if_wrong": "quota overshoot; the production atomic path has never executed because MockRedisClient.eval_lua ignores the script"},
+      {"id": "P11-U05", "control": "Durable safety-control audit trail", "module": "backend_app/core/safety_audit.py + migration 028", "gate": "AERORA_TEST_DATABASE_URL", "consequence_if_wrong": "a halt or reset with no durable record of who did it"},
+      {"id": "P11-U06", "control": "fee_records row level security", "module": "backend_app/migrations/026_fee_records_row_level_security.sql (untracked, unapplied)", "gate": "AERORA_TEST_DATABASE_URL", "consequence_if_wrong": "one tenant reads, updates and deletes another's fee rows"},
+      {"id": "P11-U07", "control": "Position lifecycle persistence and FOR UPDATE serialization", "module": "backend_app/core/position_model.py", "gate": "AERORA_TEST_DATABASE_URL", "consequence_if_wrong": "lost or duplicated position state under concurrency"}
+    ],
+    "root_cause_of_unverified_group": "tests/conftest.py:13 executes os.environ['REDIS_URL'] = '' unconditionally at import, and AERORA_TEST_DATABASE_URL is unset. Fixing the lane is approximately 1 engineer-day and unblocks all seven.",
+    "cheapest_risk_reduction_path": {
+      "sequence": ["P11-B06", "P11-H15", "P11-B08", "P11-U01..U07 lane setup", "P11-H09"],
+      "total_engineer_days": 3.5,
+      "closes": "three critical blockers, unblocks seven unverified controls, fixes a live billing defect"
+    }
+  },
+
+  "test_evidence": {
+    "environment": {"python": "3.12.10", "pytest": "9.1.1", "postgres": "absent", "redis": "absent"},
+    "batches": [
+      {"id": 1, "scope": "live gate, risk gate, equity bound, single pipeline, exchange-claiming paths, second write path, sealed submission", "passed": 101, "failed": 0, "skipped": 0, "exit_code": 0, "duration_s": 396.3, "log": "staging/phase11/t1_execution_gate.txt"},
+      {"id": 2, "scope": "risk accumulators, KILL-03, kill-switch fail-closed, fee denomination, billing precision, accounting identity, order normalization, close-all", "passed": 218, "failed": 0, "skipped": 6, "exit_code": 0, "duration_s": 46.5, "log": "staging/phase11/t2_risk_kill.txt", "skip_reason": "postgres-gated durable audit trail"},
+      {"id": 3, "scope": "sandbox endpoint verification, bitget routing, capability registry, executor cache, connection pool, reconciliation fail-safe", "passed": 132, "failed": 0, "skipped": 0, "exit_code": 0, "duration_s": 62.1, "log": "staging/phase11/t3_exchange.txt"},
+      {"id": 4, "scope": "quota x4, Redis fallback, command durability, worker heartbeat, webhook duplicate", "passed": 103, "failed": 0, "skipped": 9, "exit_code": 0, "duration_s": 33.6, "log": "staging/phase11/t4_quota_redis.txt", "skip_reason": "AERORA_TEST_REDIS_URL unset"},
+      {"id": 5, "scope": "HS256, AAL2 x2, JWT strength, placeholder secrets, rate limit x2, readiness, worker deployment, credential redaction, vault isolation, test-token", "passed": 372, "failed": 1, "skipped": 0, "xfailed": 1, "exit_code": 1, "duration_s": 61.7, "log": "staging/phase11/t5_security.txt", "failure": "test_api03_rate_limit_storage_is_fail_closed.py:342 - order-dependent, passes in isolation and alphabetically", "xfail_note": "test_known_unhosted_workers_are_still_unhosted is xfail(strict=True) and behaved as expected, confirming two unhosted workers"},
+      {"id": 6, "scope": "paper/live isolation x2, simulator routing, paper determinism", "passed": 172, "failed": 0, "skipped": 0, "exit_code": 0, "duration_s": 54.6, "log": "staging/phase11/t6_paper.txt"},
+      {"id": 7, "scope": "property idempotence under retry, protected-logic containment, atomic cancellation, position delta race, env precedence", "passed": 67, "failed": 0, "skipped": 6, "exit_code": 0, "duration_s": 161.6, "log": "staging/phase11/t7_property.txt", "skip_reason": "postgres-gated FOR UPDATE and atomic cancellation"},
+      {"id": 8, "scope": "full-suite collection", "collected": 14400, "errors": 1, "duration_s": 125.3, "log": "staging/phase11/t8_collect.txt", "error": "tests/test_p10i_probe_pg_find_uses_shared_dsn_contract.py - FileNotFoundError staging/probe_pg_find.py - collection interrupted"},
+      {"id": 9, "scope": "all 32 postgres-gated files, collect-only", "collected": 632, "note": "every one would skip without AERORA_TEST_DATABASE_URL"},
+      {"id": 10, "scope": "order-dependence reproduction", "alphabetical": "52 passed", "reversed": "1 failed, 51 passed", "duration_s": 3.6}
+    ],
+    "totals_batches_1_to_7": {"passed": 1165, "failed": 1, "skipped": 27, "xfailed": 1},
+    "limitations": [
+      "No PostgreSQL available: AERORA_TEST_DATABASE_URL unset. 632 tests did not run. Provisioning was deliberately not performed - it requires explicit authorization.",
+      "No Redis available: AERORA_TEST_REDIS_URL unset. 9 tests did not run. The real-Redis gate has never executed in any environment.",
+      "No exchange contacted. Every exchange test executed is a unit test over fake clients; test_exch01_sandbox_endpoint_verification.py states in its own header that passing it certifies nothing about any exchange.",
+      "No full-suite run: blocked by the collection error, and running 14400 tests blindly was out of bounds.",
+      "Pass counts quoted from staging/*.md and staging/*.txt (the 4619-pass WS-C regression, the 166-pass EXCH-01 affected run, the 194-pass bitget regression) are committed artifacts of previous executions, not reproduced in this audit.",
+      "Nothing about AWS was verified: no API call was made. Running revision, worker service state, live RLS catalogue, secret rotation dates and branch protection all require read-only AWS or GitHub evidence.",
+      "The Alembic DDL for the execution_records uniqueness constraint was not read; idempotency correctness partly rests on it."
+    ]
+  },
+
+  "stale_prior_claims_corrected": [
+    {"id": "TRADE-01", "prior": "OPEN P1 - capital check is read-then-compare with no reservation", "current": "FIXED in code, verification postgres-gated and skipped", "evidence": "execution_record.py:758-1035 claim_execution_within_capacity with pg_advisory_xact_lock"},
+    {"id": "TRADE-02", "prior": "OPEN P1 - kill switch self-expires after 24h", "current": "FIXED and verified", "evidence": "global_safety.py:557 writes the active key with no TTL; the asymmetric ex=86400 is documented as removed at lines 59-68; 36 tests passed"},
+    {"id": "MONEY-04", "prior": "OPEN P0-class - Razorpay INR credited as USD, approximately 83x overstated", "current": "FIXED and verified", "evidence": "billing.py:564-780 _exact_minor_units / _provider_major_amount with hardcoded per-handler currency and validation rather than substitution"},
+    {"id": "TENANT-02", "prior": "OPEN P1 - fee_records has no RLS and grants anon full DML", "current": "MIGRATION WRITTEN, UNTRACKED, UNAPPLIED, verification postgres-gated and skipped", "evidence": "backend_app/migrations/026_fee_records_row_level_security.sql"},
+    {"id": "TRADING_LIVE", "prior": "OFF / NOT CERTIFIED", "current": "CONFIRMED unchanged", "evidence": "registry.tradable() == [] and summary()['tradable_count'] == 0, asserted by two passing tests"},
+    {"note": "Four of six prior findings were stale. Carrying them forward unexamined would have produced a materially wrong report."}
+  ],
+
+  "initial_launch_scope_recommendation": {
+    "stage": "restricted_live_pilot_after_gates_G0_through_G9",
+    "venues": ["binance", "bybit"],
+    "venue_rationale": "the only two with a URL_SWAP sandbox mechanism measured on ccxt 4.3.92, so the only two whose order path can be certified before going live",
+    "excluded_venues": {"bitget": "sandbox routes to production", "okx": "load_markets broken on the pinned ccxt", "coinbase": "no sandbox on ccxt 4.3.92", "kraken": "no sandbox on ccxt 4.3.92", "kucoin": "no sandbox on ccxt 4.3.92"},
+    "order_types": ["limit"],
+    "order_type_rationale": "market orders arrive as price <= 0 and are already refused by _capacity_bounds_for, correctly, because no mark-price policy exists. Keep the refusal; do not invent a valuation rule inside a capital check.",
+    "strategies": 1,
+    "accounts": "internal or employee, opt-in only",
+    "capital_controls": ["hard per-tenant notional cap well below the equity ceiling", "platform-wide aggregate cap"],
+    "concurrency": "one bot per (tenant, symbol), enforced",
+    "pilot_duration_trading_days_before_customer_exposure": 10,
+    "do_not_widen": ["SUPPORTED_EXCHANGES", "SANDBOX_MECHANISMS", "order types", "AAL2 exemptions"]
+  },
+
+  "fifteen_day_plan": {
+    "feasibility": "CONDITIONAL",
+    "condition": "Binance and Bybit testnet credentials in hand and funded by end of day 2, and scope restricted to the pilot defined above",
+    "not_feasible_if": [
+      "credentials slip past day 2 - G2 (duplicate clientOrderId proven) is a hard gate and five downstream workstreams depend on it",
+      "the 632-test PostgreSQL lane reveals material defects - those tests have never run, so the expected failure count is genuinely unknown",
+      "the first restore drill fails",
+      "forcing RLS empties reads in production due to the varchar(36) vs text comparisons and the positions.tenant_id type divergence"
+    ],
+    "max_useful_parallel_workstreams": 6,
+    "critical_path": ["sandbox credential procurement", "P11-B02 clientOrderId proof", "P11-B04 equity reconciliation", "P11-B05 restart recovery", "chaos matrix", "go/no-go"],
+    "serialization_constraints": [
+      "P11-B03 and P11-B04 both edit _execute_trade_internal - stream B owns core/execution_engine.py exclusively and must serialise them",
+      "streams B and C both touch the execution path - C integrates via order_watchdog.py with a review handoff on day 8",
+      "P11-H13 requires a shared migration and needs a coordinator"
+    ],
+    "gates": [
+      {"id": "G0", "day": 1, "criterion": "testnet credentials in hand"},
+      {"id": "G1", "day": 3, "criterion": "the 632-test PostgreSQL lane and the 9 real-Redis tests run green, or every failure is classified"},
+      {"id": "G2", "day": 5, "criterion": "duplicate clientOrderId rejection proven on both venues - HARD GATE"},
+      {"id": "G3", "day": 7, "criterion": "an order cannot be authorized against an equity figure the venue has not confirmed"},
+      {"id": "G4", "day": 8, "criterion": "restore drill completed with recorded RTO and RPO"},
+      {"id": "G5", "day": 10, "criterion": "a venue-reported fee reaches the ledger"},
+      {"id": "G6", "day": 12, "criterion": "cross-tenant sweep green with RLS forced, and rollback proven"},
+      {"id": "G7", "day": 13, "criterion": "production schema matches the repository"},
+      {"id": "G8", "day": 14, "criterion": "zero duplicates and zero orphans across the chaos matrix over 24h on testnet"},
+      {"id": "G9", "day": 15, "criterion": "formal live-pilot approval"}
+    ],
+    "safely_deferrable": [
+      "per-venue rate-limit conformance and Retry-After",
+      "OKX, Coinbase, Kraken and KuCoin onboarding",
+      "per-tenant encryption keys (ADR-0007)",
+      "unifying the two paper engines",
+      "deleting the orphaned core/credential_vault.py",
+      "consolidating the three migration systems",
+      "connection-pool TTL",
+      "deposit and withdrawal P&L segregation",
+      "the public.orders writer question",
+      "execution_environment call-site cleanup across 70 sites",
+      "format_symbol_for_ccxt quote-list generalisation"
+    ],
+    "recommended_alternative": "Launch paper-only on schedule after closing P11-B06, B07, B08, H09, H15 and H19 (approximately 5-7 engineer-days), and gate live trading on G0 through G9 completing on their own timeline rather than on a date chosen first."
+  },
+
+  "audit_actions": {
+    "files_created": [
+      "staging/PHASE11_LIVE_TRADING_READINESS_AUDIT.md",
+      "staging/PHASE11_LAUNCH_BLOCKER_REGISTER.md",
+      "staging/PHASE11_READINESS_EVIDENCE.json",
+      "staging/phase11/t1_execution_gate.txt",
+      "staging/phase11/t2_risk_kill.txt",
+      "staging/phase11/t3_exchange.txt",
+      "staging/phase11/t4_quota_redis.txt",
+      "staging/phase11/t5_security.txt",
+      "staging/phase11/t6_paper.txt",
+      "staging/phase11/t7_property.txt",
+      "staging/phase11/t8_collect.txt"
+    ],
+    "files_modified": [],
+    "implementation_files_changed": 0,
+    "pre_existing_reports_modified": 0,
+    "git_write_operations": 0,
+    "migrations_applied": 0,
+    "database_or_redis_processes_touched": 0,
+    "orders_submitted": 0,
+    "venues_contacted": 0,
+    "credentials_read_or_printed": 0,
+    "production_state_changes": 0
+  }
+}

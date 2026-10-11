@@ -1,0 +1,126 @@
+﻿=== PROVENANCE ===
+  SNAPSHOT_QUERIES defined in : c:\aerora_quant_backend_updated_final1\scripts\verify_provisioning.py
+  compare() defined in        : c:\aerora_quant_backend_updated_final1\scripts\verify_schema_drift.py
+  identity: drift.SNAPSHOT_QUERIES is prov.SNAPSHOT_QUERIES = True
+  dimensions                  : 16
+  ADVISORY_DIMENSIONS         : ['alembic_version', 'recorded_migrations']
+  import time (poisoned PG)   : 0.229s -> no connection at import
+  _norm                       : (no docstring)
+  _as_tuples                  : JSON turns tuples into lists; normalise both sides before comparing.
+
+=== TEST-LOCAL DECLARATION (NOT production) ===
+  loaded from tests/test_snapshot_dimension_invariants.py
+  WHOLE_ROW sentinel = 'whole-row'
+  COMPARISON_KEY entries = 16
+
+=== PER-DIMENSION FACTS, parsed from the live SQL ===
+  dimension                      cols        key attrs ORDER BY terms  advisory
+  --------------------------------------------------------------------------------------------
+  tables                            2          1     1              1  
+  columns                           9          2     7              2  
+  primary_keys                      3          2     1              2  
+  foreign_keys                      3          2     1              2  
+  unique_and_check_constraints      4          2     2              2  
+  indexes                           3          2     1              2  
+  row_level_security                3          1     2              1  
+  policies                          7          2     5              2  
+  privileges                        3  whole-row     0              3  
+  extensions                        1  whole-row     0              1  
+  functions                         3          2     1              2  
+  triggers                          3          2     1              2  
+  sequences                         1  whole-row     0              1  
+  enum_types                        2          1     1              1  
+  alembic_version                   1  whole-row     0              1  advisory
+  recorded_migrations               3          1     2              2  advisory
+  --------------------------------------------------------------------------------------------
+  dimensions=16  keyed=12  whole-row=4  undeclared=0
+  keyed dimensions with >=1 attribute column (W1C-02 applies): 12
+
+=== COLUMN AND ORDER BY DETAIL (for the evidence matrix) ===
+  --- tables  (key=1, cols=2, attrs=1)
+        [0] KEY  c.relname
+        [1] attr pg_get_userbyid(c.relowner)
+        ORDER BY (1): ['c.relname']
+  --- columns  (key=2, cols=9, attrs=7)
+        [0] KEY  table_name
+        [1] KEY  column_name
+        [2] attr data_type
+        [3] attr coalesce(character_maximum_length::text, '')
+        [4] attr is_nullable
+        [5] attr coalesce(column_default, '')
+        [6] attr is_identity
+        [7] attr coalesce(identity_generation, '')
+        [8] attr is_generated
+        ORDER BY (2): ['table_name', 'column_name']
+  --- primary_keys  (key=2, cols=3, attrs=1)
+        [0] KEY  t.relname
+        [1] KEY  c.conname
+        [2] attr array_to_string(ARRAY(
+                   SELECT a.attname FROM pg_attribute a
+             
+        ORDER BY (2): ['t.relname', 'c.conname']
+  --- foreign_keys  (key=2, cols=3, attrs=1)
+        [0] KEY  t.relname
+        [1] KEY  c.conname
+        [2] attr pg_get_constraintdef(c.oid)
+        ORDER BY (2): ['t.relname', 'c.conname']
+  --- unique_and_check_constraints  (key=2, cols=4, attrs=2)
+        [0] KEY  t.relname
+        [1] KEY  c.conname
+        [2] attr c.contype::text
+        [3] attr pg_get_constraintdef(c.oid)
+        ORDER BY (2): ['t.relname', 'c.conname']
+  --- indexes  (key=2, cols=3, attrs=1)
+        [0] KEY  tablename
+        [1] KEY  indexname
+        [2] attr indexdef
+        ORDER BY (2): ['tablename', 'indexname']
+  --- row_level_security  (key=1, cols=3, attrs=2)
+        [0] KEY  c.relname
+        [1] attr c.relrowsecurity
+        [2] attr c.relforcerowsecurity
+        ORDER BY (1): ['c.relname']
+  --- policies  (key=2, cols=7, attrs=5)
+        [0] KEY  tablename
+        [1] KEY  policyname
+        [2] attr permissive
+        [3] attr array_to_string(roles, ',')
+        [4] attr cmd
+        [5] attr coalesce(qual, '')
+        [6] attr coalesce(with_check, '')
+        ORDER BY (2): ['tablename', 'policyname']
+  --- privileges  (key=whole-row, cols=3, attrs=0)
+        [0] ROW  table_name
+        [1] ROW  grantee
+        [2] ROW  privilege_type
+        ORDER BY (3): ['table_name', 'grantee', 'privilege_type']
+  --- extensions  (key=whole-row, cols=1, attrs=0)
+        [0] ROW  extname
+        ORDER BY (1): ['extname']
+  --- functions  (key=2, cols=3, attrs=1)
+        [0] KEY  p.proname
+        [1] KEY  pg_get_function_identity_arguments(p.oid)
+        [2] attr p.prosecdef
+        ORDER BY (2): ['p.proname', 'pg_get_function_identity_arguments(p.oid']
+  --- triggers  (key=2, cols=3, attrs=1)
+        [0] KEY  c.relname
+        [1] KEY  t.tgname
+        [2] attr p.proname
+        ORDER BY (2): ['c.relname', 't.tgname']
+  --- sequences  (key=whole-row, cols=1, attrs=0)
+        [0] ROW  sequence_name
+        ORDER BY (1): ['sequence_name']
+  --- enum_types  (key=1, cols=2, attrs=1)
+        [0] KEY  t.typname
+        [1] attr array_to_string(ARRAY(
+                   SELECT e.enumlabel FROM pg_enum e
+                
+        ORDER BY (1): ['t.typname']
+  --- alembic_version  (key=whole-row, cols=1, attrs=0, advisory)
+        [0] ROW  version_num
+        ORDER BY (1): ['version_num']
+  --- recorded_migrations  (key=1, cols=3, attrs=2, advisory)
+        [0] KEY  filename
+        [1] attr sha256
+        [2] attr step
+        ORDER BY (2): ['filename', 'step']

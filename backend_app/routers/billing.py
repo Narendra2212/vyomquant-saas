@@ -24,6 +24,7 @@ import logging
 import os
 import traceback
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional, List
 from uuid import UUID
 import ipaddress
@@ -578,6 +579,313 @@ def _exact_minor_units(value: Any) -> Optional[int]:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+def _provider_major_amount(value: Any, currency: str) -> Optional[Decimal]:
+    """A provider's minor-unit amount as an exact major-unit ``Decimal``, or ``None``.
+
+    MONEY-02. The three webhook branches below used to do this instead::
+
+        payment_amount = session.get("amount_total", 0) / 100.0   # cents -> USD
+        renewal_amount = invoice_obj.get("amount_paid", 0) / 100.0
+        payment_amount = payment.get("amount", 0) / 100.0         # paise -> INR
+
+    Binary float division on a money amount, feeding ``billing_invoices.amount_usd`` /
+    ``amount_inr`` and — worse — the referral commission base passed to
+    ``process_referral_commission``. For typical cent amounts IEEE-754 division by
+    ``100.0`` usually lands on the right value, so this was not visibly corrupting most
+    invoices; it was nonetheless the wrong type for money and it was inconsistent with
+    the discipline the rest of this codebase already enforces
+    (``marketplace/money.py`` refuses a ``float`` outright, ``paper_accounting.py``
+    raises on one, ``fee_engine.py`` quantizes with ``ROUND_HALF_EVEN``).
+
+    Composed from the two primitives that already exist rather than a fourth
+    representation of money:
+
+    * :func:`_exact_minor_units` reads the provider's integer exactly and returns
+      ``None`` for a ``float`` rather than truncating it — the refusal this module
+      already applies on the settlement path;
+    * :func:`money.to_major` converts Minor_Units to a ``Decimal`` quantized to the
+      currency's own ISO 4217 exponent, which is the repository's single
+      presentation-boundary converter.
+
+    Returns ``None`` — never a guess and never ``0`` — when the amount is inexact, out
+    of range, or denominated in a currency with no persisted exponent. A ``None`` here
+    means "do not record an amount", which the callers treat as "do not credit", because
+    a wrong number in a money column is worse than an absent one.
+    """
+    minor = _exact_minor_units(value)
+    if minor is None:
+        return None
+    try:
+        return marketplace_money.to_major(minor, currency)
+    except (marketplace_money.InvalidAmount, marketplace_money.UnsupportedCurrency) as exc:
+        logger.error(
+            "[BILLING] MONEY-02: refusing an inexact or unsupported provider amount "
+            "(%r %s): %s",
+            value,
+            currency,
+            exc,
+        )
+        return None
+
+
+#: Every currency this platform can denominate a payment in, as a FACT about the
+#: converter rather than a second list that can drift from it.
+#:
+#: MONEY-07. ``marketplace/money.py``'s ``MINOR_UNIT_EXPONENT`` is the only place a
+#: currency's minor-unit exponent is persisted, and ``to_major`` raises
+#: ``UnsupportedCurrency`` for anything absent from it. Deriving this set from that
+#: mapping means a currency can never be accepted by the validation below and then
+#: refused by the conversion two lines later.
+_SUPPORTED_PROVIDER_CURRENCIES = frozenset(marketplace_money.SUPPORTED_CURRENCIES)
+
+
+class ProviderCurrencyMismatch(Exception):
+    """The provider's own currency field is absent, malformed, or not what this handler
+    denominates in.
+
+    MONEY-07. WHAT WAS MEASURED, AND WHY THIS IS NOT A COSMETIC FIX
+    ---------------------------------------------------------------
+    Three call sites convert a provider amount, and every one of them pairs the amount
+    with a HARDCODED currency literal::
+
+        payment_amount = _provider_major_amount(session.get("amount_total"), "USD")
+        renewal_amount = _provider_major_amount(invoice_obj.get("amount_paid"), "USD")
+        payment_amount = _provider_major_amount(payment.get("amount"), "INR")
+
+    The provider sends the denomination in the same object as the amount. Razorpay's
+    payment entity carries ``currency``; Stripe's session and invoice carry ``currency``.
+    Measured: ``payment.get("currency")`` is read exactly ONCE in the whole module, at
+    ``_razorpay_settlement_metadata``, which early-returns for anything that is not a
+    marketplace item -- so on the plan-purchase path the payload's own currency is
+    available and ignored. The amount is therefore treated as INR *because the code path
+    expects INR*, not because the payment was in INR.
+
+    That is benign only while each provider is single-currency in practice. Razorpay
+    accounts can be enabled for international currencies, and a Stripe account can take
+    any currency its dashboard permits; in either case the amount would be recorded
+    against the wrong unit, and for the Stripe path it would also become the base for a
+    20% referral commission.
+
+    WHY THIS VALIDATES RATHER THAN SUBSTITUTING
+    -------------------------------------------
+    The obvious fix -- ``_provider_major_amount(payment.get("amount"),
+    payment.get("currency"))`` -- is wrong in two ways.
+
+    First, it makes each handler silently accept whatever the payload declares, while
+    ``money.py`` knows only USD and INR: a EUR payment would return ``None`` and become
+    indistinguishable from a malformed amount, so a real payment in an unsupported
+    currency would be filed as "unreadable" rather than as "we cannot denominate this".
+
+    Second, each handler writes a FIXED column (``amount_usd`` or ``amount_inr``) and a
+    fixed ``"currency"`` value into ``billing_invoices``. A variable currency reaching a
+    fixed column is a new defect, not a fix.
+
+    So the denomination each handler accepts stays a visible literal, and the provider's
+    declaration is checked AGAINST it. A mismatch is refused loudly and -- where money is
+    owed -- recorded as an obligation, rather than being converted or assumed.
+    """
+
+    def __init__(self, code: str, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(f"{code}: {detail}")
+
+
+def _require_provider_currency(
+    declared: Any,
+    expected: str,
+    *,
+    provider: str,
+    payment_id: Any,
+) -> str:
+    """The provider's declared currency, normalised, or raise.
+
+    Args:
+        declared: the value read from the provider's own payload field.
+        expected: the single denomination this handler can record.
+
+    Returns:
+        The normalised (upper, stripped) currency code, which always equals ``expected``
+        on success.
+
+    Raises:
+        ProviderCurrencyMismatch: ``CURRENCY_MISSING``, ``CURRENCY_MALFORMED``,
+            ``CURRENCY_UNSUPPORTED`` or ``CURRENCY_MISMATCH``.
+
+    Normalisation is case-insensitive because providers are inconsistent about it --
+    Stripe sends lowercase ISO codes (``"usd"``), Razorpay sends uppercase (``"INR"``) --
+    and ``money.minor_unit_exponent`` is case-SENSITIVE, so an unnormalised Stripe value
+    would be refused as unsupported. Normalising the CASE is not the same as substituting
+    a currency: ``"usd"`` and ``"USD"`` are the same declaration, whereas ``"EUR"`` and
+    ``"USD"`` are not and the mismatch branch below refuses that.
+    """
+    raw = "" if declared is None else str(declared).strip()
+    if not raw:
+        raise ProviderCurrencyMismatch(
+            "CURRENCY_MISSING",
+            f"{provider} payment {payment_id} carries no currency field, so its amount "
+            f"has no declared unit. Refusing to assume {expected}.",
+        )
+
+    normalised = raw.upper()
+    if len(normalised) != 3 or not normalised.isalpha():
+        raise ProviderCurrencyMismatch(
+            "CURRENCY_MALFORMED",
+            f"{provider} payment {payment_id} declares currency {raw!r}, which is not a "
+            f"three-letter ISO code.",
+        )
+
+    if normalised not in _SUPPORTED_PROVIDER_CURRENCIES:
+        raise ProviderCurrencyMismatch(
+            "CURRENCY_UNSUPPORTED",
+            f"{provider} payment {payment_id} is denominated in {normalised}, which this "
+            f"platform has no persisted minor-unit exponent for (supported: "
+            f"{', '.join(sorted(_SUPPORTED_PROVIDER_CURRENCIES))}). Recording an amount "
+            f"whose scale is unknown would be a guess.",
+        )
+
+    if normalised != expected:
+        raise ProviderCurrencyMismatch(
+            "CURRENCY_MISMATCH",
+            f"{provider} payment {payment_id} is denominated in {normalised}, but this "
+            f"handler records {expected} only -- it writes a fixed amount column and a "
+            f"fixed currency value. Converting here would bake an unreviewed FX rule "
+            f"into the ledger.",
+        )
+
+    return normalised
+
+
+def _amount_in_declared_currency(minor: Any, declared: str) -> Optional[Decimal]:
+    """Convert a provider amount using the currency the PROVIDER declared.
+
+    Used only on the mismatch path: the handler could not record the payment because it
+    is denominated in something other than the handler's own currency, but the amount is
+    still owed and must be stated in the unit it was actually charged in.
+
+    WHY THIS IS A SEPARATE FUNCTION AND NOT AN INLINE CALL. The conversion is identical to
+    ``_provider_major_amount``; what differs is that the currency is a VARIABLE. Each
+    webhook handler is single-currency by construction -- it writes a fixed amount column
+    and a fixed ``currency`` value -- and
+    ``tests/test_money02_billing_amount_precision.py::
+    test_each_webhook_converts_amounts_in_its_own_currency`` pins exactly that, reading
+    the literal from the AST of the INNERMOST enclosing function. A variable-currency
+    conversion written inline in ``razorpay_webhook`` would make that handler's
+    conversion set ``{"INR", None}`` and break an invariant that is correct and worth
+    keeping. Putting it here attributes it to this helper instead, which is also the
+    honest description: this is the one place that converts in whatever the provider said.
+    """
+    return _provider_major_amount(minor, declared)
+
+
+async def _record_referral_obligation(
+    *,
+    provider: str,
+    payment_id: Any,
+    user_id: Any,
+    amount: Any,
+    currency: str,
+    subscription_tier: Any,
+    reason_code: str,
+    detail: Optional[dict] = None,
+) -> Optional[str]:
+    """Record that a referral commission is OWED but was not credited. Never raises.
+
+    MONEY-06. Before this, an owed commission that could not be credited left only a log
+    line -- in the Razorpay case a single ``logger.error``, and in two Stripe cases
+    nothing an operator could query at all. The obligation is now a row in
+    ``public.referral_obligations`` with an explicit amount, an explicit currency, the
+    resolved referrer and a machine-readable reason.
+
+    ONE ``.rpc()`` CALL, AND THAT IS STRUCTURAL. Every PostgREST ``.execute()`` is a
+    separate HTTP request that commits in its own server-side transaction before
+    responding, so nothing a handler does can span two of them. Attribution, the
+    commission decision and the insert therefore all live inside
+    ``public.record_referral_obligation``, which is one function body and so one
+    transaction.
+
+    NEVER RAISES, for the same reason the safety-audit writer does not: the entitlement
+    has already been granted by the time this is called, and failing the webhook here
+    would make the provider redeliver an event whose paid-for effect already happened.
+    A failure is logged at CRITICAL with every fact needed to reconstruct the row by
+    hand, so the log line remains a recoverable copy -- which is strictly more than the
+    previous behaviour, where there was no row to lose.
+    """
+    try:
+        sb = _background_sb()
+        resp = sb.rpc("record_referral_obligation", {
+            "p_provider": provider,
+            "p_provider_payment_id": str(payment_id or ""),
+            "p_referred_id": user_id,
+            # A decimal STRING, so the exact value reaches the numeric column. Passing a
+            # Decimal through float at the transport boundary would reintroduce MONEY-02.
+            "p_payment_amount": str(amount),
+            "p_currency": currency,
+            "p_subscription_tier": subscription_tier,
+            "p_reason_code": reason_code,
+            "p_detail": detail or {},
+        }).execute()
+        obligation_id = getattr(resp, "data", None)
+        if obligation_id:
+            logger.warning(
+                "[BILLING] MONEY-06: referral commission NOT credited for %s payment %s "
+                "(%s %s, user %s); recorded as obligation %s with reason %s. This is a "
+                "durable payable, not a dropped commission.",
+                provider, payment_id, amount, currency, user_id, obligation_id,
+                reason_code,
+            )
+        else:
+            # The function returns NULL on replay, which is the idempotent no-op path.
+            logger.info(
+                "[BILLING] MONEY-06: obligation for %s payment %s already recorded; no "
+                "second row created.", provider, payment_id,
+            )
+        return obligation_id
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.critical(
+            "[BILLING] MONEY-06: FAILED to record a referral obligation (%s: %s). The "
+            "commission is still owed and is now recorded NOWHERE but this line. "
+            "Reconstruct from: provider=%s payment_id=%s user=%s amount=%s currency=%s "
+            "tier=%s reason=%s",
+            exc.__class__.__name__, exc,
+            provider, payment_id, user_id, amount, currency, subscription_tier,
+            reason_code,
+        )
+        return None
+
+
+async def _reverse_referral_obligation(
+    *, provider: str, payment_id: Any, reason: str
+) -> None:
+    """Mark a recorded obligation reversed because the payment was refunded.
+
+    Separate from ``reverse_referral_commission``, which operates on
+    ``referral_commissions`` and -- for a Razorpay payment -- finds no row to reverse,
+    the "structurally dead" path the audit recorded. Never raises: a refund that cannot
+    be reflected must not fail the webhook, because the provider would redeliver it.
+    """
+    if not payment_id:
+        return
+    try:
+        sb = _background_sb()
+        resp = sb.rpc("reverse_referral_obligation", {
+            "p_provider": provider,
+            "p_provider_payment_id": str(payment_id),
+            "p_reason": reason,
+        }).execute()
+        if getattr(resp, "data", None):
+            logger.info(
+                "[BILLING] MONEY-06: obligation for %s payment %s marked reversed (%s)",
+                provider, payment_id, reason,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[BILLING] MONEY-06: could not reverse the obligation for %s payment %s "
+            "(%s: %s). It remains outstanding and must be reconciled by hand.",
+            provider, payment_id, exc.__class__.__name__, exc,
+        )
 
 
 def _epoch_instant(value: Any) -> Optional[datetime]:
@@ -2074,8 +2382,75 @@ async def stripe_webhook(
                 
                 # Process referral commission on successful payment
                 payment_id = session.get("payment_intent") or session.get("id")
-                payment_amount = session.get("amount_total", 0) / 100.0  # Convert from cents to USD
-                
+
+                # MONEY-07: check the denomination Stripe declared against the one this
+                # handler records. Stripe sends lowercase ISO codes, which
+                # `_require_provider_currency` normalises -- normalising CASE is not
+                # substituting a currency; a genuine EUR session still refuses below.
+                #
+                # This path matters more than the Razorpay one, because `payment_amount`
+                # here becomes the base the database computes a 20% referral commission
+                # from. A non-USD amount passed as `p_payment_amount_usd` is precisely
+                # the mislabelling MONEY-04 was reported for, in the other direction.
+                _stripe_currency_ok = True
+                try:
+                    _require_provider_currency(
+                        session.get("currency"),
+                        "USD",
+                        provider="stripe",
+                        payment_id=payment_id,
+                    )
+                except ProviderCurrencyMismatch as mismatch:
+                    _stripe_currency_ok = False
+                    # Capture the code into a plain local: Python unbinds the `except`
+                    # name (`mismatch`) the instant the block exits, so referring to it
+                    # after the block is an F821 undefined name -- which flake8's
+                    # E9/F63/F7/F82 gate (01-pr-check.yml) refuses and which
+                    # tests/test_no_undefined_names.py enforces.
+                    _stripe_mismatch_code = mismatch.code
+                    logger.critical(
+                        "[BILLING] MONEY-07: Stripe checkout session %s is not "
+                        "denominated in USD (%s), so no invoice is filed and NO REFERRAL "
+                        "COMMISSION IS CREDITED. The entitlement was already granted and "
+                        "STANDS. %s",
+                        payment_id, mismatch.code, mismatch.detail,
+                    )
+
+                # MONEY-02: exact Minor_Units -> Decimal, never float division.
+                # `None` means the provider amount was inexact or unreadable; the
+                # branches below then decline to record or credit rather than guessing.
+                payment_amount = _provider_major_amount(session.get("amount_total"), "USD")
+
+                if not _stripe_currency_ok:
+                    # The commission is still owed. State it in the unit actually charged,
+                    # when that unit's scale is known -- same reasoning and same limit as
+                    # the Razorpay path.
+                    if _stripe_mismatch_code == "CURRENCY_MISMATCH":
+                        _declared = str(session.get("currency") or "").strip().upper()
+                        _declared_amount = _amount_in_declared_currency(
+                            session.get("amount_total"), _declared
+                        )
+                        if _declared_amount is not None and _declared_amount > 0:
+                            await _record_referral_obligation(
+                                provider="stripe",
+                                payment_id=payment_id,
+                                user_id=user_id,
+                                amount=_declared_amount,
+                                currency=_declared,
+                                subscription_tier=item_key,
+                                reason_code="PROVIDER_CURRENCY_MISMATCH",
+                                detail={
+                                    "handler_currency": "USD",
+                                    "declared_currency": _declared,
+                                    "mismatch_code": _stripe_mismatch_code,
+                                },
+                            )
+                    # Suppress the amount so neither the invoice insert nor the
+                    # commission branch below records a figure under the wrong unit. They
+                    # already treat `None` as "do not record", so this reuses the
+                    # existing refusal rather than adding a second one.
+                    payment_amount = None
+
                 # ── Insert billing_invoices record ──
                 try:
                     sb_inv = _background_sb()
@@ -2083,7 +2458,10 @@ async def stripe_webhook(
                         "user_id": user_id,
                         "provider": "stripe",
                         "provider_payment_id": payment_id or "",
-                        "amount_usd": round(payment_amount, 2),
+                        # Sent as a decimal STRING so the exact value reaches the numeric
+                        # column. Serialising a Decimal through float would reintroduce
+                        # the defect at the transport boundary.
+                        "amount_usd": str(payment_amount) if payment_amount is not None else None,
                         "amount_inr": 0,
                         "currency": "USD",
                         "status": "paid",
@@ -2102,25 +2480,120 @@ async def stripe_webhook(
                         category="billing",
                         severity="info",
                         title="Payment Successful",
-                        message=f"Your payment of ${payment_amount:.2f} USD was successful. Plan: {item_key.upper()}.",
+                        message=(
+                            f"Your payment of ${payment_amount:.2f} USD was successful. "
+                            f"Plan: {item_key.upper()}."
+                            if payment_amount is not None
+                            else f"Your payment was successful. Plan: {item_key.upper()}."
+                        ),
                         metadata={"item_key": item_key, "payment_id": payment_id, "provider": "stripe"},
                     )
                 except Exception as notif_err:
                     logger.debug(f"[BILLING] payment_succeeded notification error: {notif_err}")
 
-                if payment_amount > 0:
+                if payment_amount is not None and payment_amount > 0:
+                    # ══════════════════════════════════════════════════════════
+                    # MONEY-05: AN UNKNOWN TIER MUST NOT COST THE REFERRER THEIR
+                    #           COMMISSION
+                    # ══════════════════════════════════════════════════════════
+                    # `referral_commissions.subscription_tier` is `varchar NOT NULL`, so
+                    # an empty `item_key` made the INSERT inside
+                    # `process_referral_commission` fail with a not-null violation. The
+                    # RPC call is wrapped in `except Exception` below, so the failure was
+                    # logged and the commission silently never existed.
+                    #
+                    # THE POLICY, STATED EXPLICITLY: record the commission with a
+                    # documented sentinel tier. This is the OPPOSITE choice to MONEY-04,
+                    # and the difference is whether the missing fact changes the amount
+                    # owed:
+                    #
+                    #   MONEY-04 (currency unknown) -> REFUSE. The currency determines
+                    #     the amount, so crediting anyway would overstate it ~83x. There
+                    #     is no safe value to substitute.
+                    #
+                    #   MONEY-05 (tier unknown) -> CREDIT, with the tier marked. The
+                    #     function computes a FLAT 20% of the payment amount; the tier is
+                    #     descriptive only and does not enter the arithmetic. So the
+                    #     referrer is owed exactly the same money either way, and
+                    #     refusing would take money from them to avoid an imprecise
+                    #     label. Dropping it was the defect, not the conservative option.
+                    #
+                    # The sentinel is a visible, queryable value rather than a guess at
+                    # which plan was bought: `SELECT ... WHERE subscription_tier =
+                    # 'unknown'` finds every row needing a label, and the amount is
+                    # already correct, so the follow-up is bookkeeping and not a payment.
+                    _tier = str(item_key or "").strip() or "unknown"
+                    if _tier == "unknown":
+                        logger.error(
+                            "[BILLING] MONEY-05: Stripe payment %s carries no plan "
+                            "identifier, so its referral commission is recorded with "
+                            "subscription_tier='unknown'. The AMOUNT IS CORRECT (the "
+                            "rate is a flat percentage of the payment and does not "
+                            "depend on tier); only the label needs reconciling. "
+                            "user=%s amount=%s",
+                            payment_id, user_id, payment_amount,
+                        )
                     try:
                         sb = _background_sb()
                         sb.rpc("process_referral_commission", {
                             "p_referred_id": user_id,
                             "p_payment_id": payment_id,
-                            "p_subscription_tier": item_key,
-                            "p_payment_amount_usd": payment_amount
+                            "p_subscription_tier": _tier,
+                            # MONEY-02: a decimal string, so the commission base the
+                            # database computes 20% of is the exact charged amount.
+                            "p_payment_amount_usd": str(payment_amount),
                         }).execute()
                         logger.info(f"Referral commission processed for Stripe payment {payment_id}")
                     except Exception as ref_err:
                         logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
                         # Don't fail the webhook if commission processing fails
+                        #
+                        # MONEY-06, THE SCOPE THE FINDING DID NOT NAME. This `except` is
+                        # the Stripe half of the same defect: a transient PostgREST
+                        # failure, a connection reset or a database hiccup lost a REAL
+                        # USD commission, logged once and gone. The three writes in this
+                        # branch -- tier, invoice, commission -- are three independent
+                        # transactions (PostgREST commits each before responding), so
+                        # this one failing while the others succeeded is not an edge case,
+                        # it is the ordinary consequence of the access pattern.
+                        #
+                        # The obligation is recorded as `payable` rather than
+                        # `unresolved`: the amount IS computable, because the payment is
+                        # already in the ledger's own currency. Nothing needs deciding,
+                        # only retrying.
+                        await _record_referral_obligation(
+                            provider="stripe",
+                            payment_id=payment_id,
+                            user_id=user_id,
+                            amount=payment_amount,
+                            currency="USD",
+                            subscription_tier=_tier,
+                            reason_code="COMMISSION_RPC_FAILED",
+                            detail={
+                                "handler": "stripe_webhook",
+                                "event": "checkout.session.completed",
+                                "error_type": ref_err.__class__.__name__,
+                                "error": str(ref_err)[:500],
+                            },
+                        )
+                elif payment_amount is None:
+                    logger.error(
+                        "[BILLING] MONEY-02: no referral commission issued for Stripe "
+                        "payment %s because the charged amount could not be read "
+                        "exactly. The entitlement was still granted; the commission is "
+                        "reconcilable from the provider record.",
+                        payment_id,
+                    )
+                    # MONEY-06. The amount could not be read, so no obligation ROW can
+                    # state it -- `referral_obligations.payment_amount` is NOT NULL and
+                    # `> 0`, deliberately, because an obligation with no amount is not an
+                    # obligation. Recording a zero or a guess would be worse than the log
+                    # line. This remains the one commission-loss path with no durable
+                    # row, and it is bounded: `_provider_major_amount` returns None only
+                    # for a float, a bool, an unparseable value or an out-of-range
+                    # magnitude, all of which mean the provider sent something this
+                    # platform cannot treat as money at all. Stated here rather than
+                    # left as an implicit gap.
             except Exception as e:
                 logger.error(f"Stripe entitlement processing failed: {e}")
                 raise HTTPException(
@@ -2187,7 +2660,10 @@ async def stripe_webhook(
                         await BillingLifecycle.renew_subscription(renewal_user_id, sb_renew)
                         await invalidate_profile_cache(renewal_user_id)
                         # Insert billing_invoices record for renewal
-                        renewal_amount = invoice_obj.get("amount_paid", 0) / 100.0
+                        # MONEY-02: exact Minor_Units -> Decimal, never float division.
+                        renewal_amount = _provider_major_amount(
+                            invoice_obj.get("amount_paid"), "USD"
+                        )
                         renewal_payment_id = invoice_obj.get("payment_intent") or invoice_obj.get("id", "")
                         try:
                             sb_inv = _background_sb()
@@ -2195,7 +2671,9 @@ async def stripe_webhook(
                                 "user_id": renewal_user_id,
                                 "provider": "stripe",
                                 "provider_payment_id": renewal_payment_id,
-                                "amount_usd": round(renewal_amount, 2),
+                                "amount_usd": (
+                                    str(renewal_amount) if renewal_amount is not None else None
+                                ),
                                 "amount_inr": 0,
                                 "currency": "USD",
                                 "status": "paid",
@@ -2213,7 +2691,12 @@ async def stripe_webhook(
                                 category="billing",
                                 severity="info",
                                 title="Subscription Renewed",
-                                message=f"Your subscription has been renewed successfully. Amount: ${renewal_amount:.2f} USD.",
+                                message=(
+                                    "Your subscription has been renewed successfully. "
+                                    f"Amount: ${renewal_amount:.2f} USD."
+                                    if renewal_amount is not None
+                                    else "Your subscription has been renewed successfully."
+                                ),
                                 metadata={"item_key": renewal_item_key, "payment_id": renewal_payment_id, "provider": "stripe"},
                             )
                         except Exception as notif_err:
@@ -2282,6 +2765,23 @@ async def stripe_webhook(
                 except Exception as ref_err:
                     logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
                     # Don't fail the webhook if commission reversal fails
+
+                # MONEY-06: a recorded OBLIGATION must be reversed too, or a refunded
+                # payment would leave a payable standing forever.
+                #
+                # Guarded to `charge.refunded` for the same reason the marketplace
+                # reversal below is: `charge.refund.updated` also fires when a refund
+                # FAILS, and reversing an obligation for money that never went back would
+                # cancel a payable the referrer is still owed. The commission-reversal RPC
+                # above is NOT so guarded -- an existing inconsistency, recorded in
+                # staging/MONEY_FLOW_AUDIT.md rather than changed here, because altering
+                # when a COMMISSION reverses is a money decision outside this finding.
+                if event["type"] == "charge.refunded":
+                    await _reverse_referral_obligation(
+                        provider="stripe",
+                        payment_id=payment_id,
+                        reason=event["type"],
+                    )
 
                 # MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8: the ledger half of a
                 # refund. Only ``charge.refunded`` means money actually went back — ``charge.
@@ -2397,24 +2897,94 @@ async def razorpay_webhook(
                 await _process_razorpay_entitlement(user_id, item_key, discount_applied, _razorpay_settlement_metadata(notes, payment))
                 
                 payment_id = payment.get("id")
-                payment_amount = payment.get("amount", 0) / 100.0  # Convert from paise to INR
+
+                # ══════════════════════════════════════════════════════════════
+                # MONEY-07: THE PROVIDER DECLARES THE DENOMINATION. CHECK IT.
+                # ══════════════════════════════════════════════════════════════
+                # The amount below is converted as INR. Until this block existed, that
+                # was true *because this code path expects INR* and for no other reason:
+                # Razorpay's payment entity carries its own `currency` field in the same
+                # object as `amount`, and measured across this whole module it was read
+                # exactly once -- inside `_razorpay_settlement_metadata`, which
+                # early-returns for anything that is not a marketplace item. So on the
+                # plan-purchase path the payload's own denomination was available and
+                # ignored.
+                #
+                # The literal "INR" below STAYS, and is now load-bearing in a different
+                # way: it is the single denomination this handler can record, because the
+                # invoice insert writes a fixed `amount_inr` column and a fixed
+                # `"currency": "INR"`. The provider's declaration is checked against it
+                # rather than substituted for it -- see `ProviderCurrencyMismatch` for
+                # why substituting is the wrong fix in two separate ways.
+                _currency_ok = True
+                try:
+                    _require_provider_currency(
+                        payment.get("currency"),
+                        "INR",
+                        provider="razorpay",
+                        payment_id=payment_id,
+                    )
+                except ProviderCurrencyMismatch as mismatch:
+                    _currency_ok = False
+                    logger.critical(
+                        "[BILLING] MONEY-07: Razorpay payment %s was NOT recorded as an "
+                        "invoice because its declared currency is not INR (%s). The "
+                        "entitlement was already granted and STANDS -- the customer paid. "
+                        "No amount is filed, because filing it against amount_inr would "
+                        "record a figure in the wrong unit. %s",
+                        payment_id, mismatch.code, mismatch.detail,
+                    )
+                    # The amount is still owed to a referrer if one exists, so state it
+                    # in the unit it was actually charged in -- but only when that unit
+                    # has a persisted minor-unit exponent. For CURRENCY_MISSING,
+                    # CURRENCY_MALFORMED or CURRENCY_UNSUPPORTED there is no exponent, so
+                    # the amount's SCALE is unknown and any figure would be a guess;
+                    # those cases are logged above and deliberately record nothing. This
+                    # is a real limitation, stated rather than papered over.
+                    if mismatch.code == "CURRENCY_MISMATCH":
+                        _declared = str(payment.get("currency") or "").strip().upper()
+                        _declared_amount = _amount_in_declared_currency(
+                            payment.get("amount"), _declared
+                        )
+                        if _declared_amount is not None and _declared_amount > 0:
+                            await _record_referral_obligation(
+                                provider="razorpay",
+                                payment_id=payment_id,
+                                user_id=user_id,
+                                amount=_declared_amount,
+                                currency=_declared,
+                                subscription_tier=item_key,
+                                reason_code="PROVIDER_CURRENCY_MISMATCH",
+                                detail={
+                                    "handler_currency": "INR",
+                                    "declared_currency": _declared,
+                                    "mismatch_code": mismatch.code,
+                                },
+                            )
+
+                # MONEY-02: exact paise -> Decimal INR, never float division.
+                payment_amount = _provider_major_amount(payment.get("amount"), "INR")
 
                 # ── Insert billing_invoices record ──
-                try:
-                    sb_inv = _background_sb()
-                    sb_inv.table("billing_invoices").insert({
-                        "user_id": user_id,
-                        "provider": "razorpay",
-                        "provider_payment_id": payment_id or "",
-                        "amount_usd": 0,
-                        "amount_inr": round(payment_amount, 2),
-                        "currency": "INR",
-                        "status": "paid",
-                        "plan": item_key,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }).execute()
-                except Exception as inv_err:
-                    logger.warning(f"[BILLING] Could not insert billing_invoices (Razorpay): {inv_err}")
+                # Skipped when the declared currency is not INR: `amount_inr` and
+                # `"currency": "INR"` are fixed, so writing a non-INR payment here would
+                # mislabel it. The refusal is logged at CRITICAL above.
+                if _currency_ok:
+                    try:
+                        sb_inv = _background_sb()
+                        sb_inv.table("billing_invoices").insert({
+                            "user_id": user_id,
+                            "provider": "razorpay",
+                            "provider_payment_id": payment_id or "",
+                            "amount_usd": 0,
+                            "amount_inr": str(payment_amount) if payment_amount is not None else None,
+                            "currency": "INR",
+                            "status": "paid",
+                            "plan": item_key,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        }).execute()
+                    except Exception as inv_err:
+                        logger.warning(f"[BILLING] Could not insert billing_invoices (Razorpay): {inv_err}")
 
                 # ── Dispatch payment_succeeded notification ──
                 try:
@@ -2425,25 +2995,100 @@ async def razorpay_webhook(
                         category="billing",
                         severity="info",
                         title="Payment Successful",
-                        message=f"Your payment of ₹{payment_amount:.2f} INR was successful. Plan: {item_key.upper()}.",
+                        message=(
+                            f"Your payment of \u20b9{payment_amount:.2f} INR was successful. "
+                            f"Plan: {item_key.upper()}."
+                            if payment_amount is not None
+                            else f"Your payment was successful. Plan: {item_key.upper()}."
+                        ),
                         metadata={"item_key": item_key, "payment_id": payment_id, "provider": "razorpay"},
                     )
                 except Exception as notif_err:
                     logger.debug(f"[BILLING] payment_succeeded notification error: {notif_err}")
 
-                if payment_amount > 0:
-                    try:
-                        sb = _background_sb()
-                        sb.rpc("process_referral_commission", {
-                            "p_referred_id": user_id,
-                            "p_payment_id": payment_id,
-                            "p_subscription_tier": item_key,
-                            "p_payment_amount_usd": payment_amount  # Note: This is INR, not USD
-                        }).execute()
-                        logger.info(f"Referral commission processed for Razorpay payment {payment_id}")
-                    except Exception as ref_err:
-                        logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
-                        # Don't fail the webhook if commission processing fails
+                # ══════════════════════════════════════════════════════════════
+                # MONEY-04: A RAZORPAY PAYMENT MUST NOT CREDIT AN "USD" COMMISSION
+                # ══════════════════════════════════════════════════════════════
+                # This branch used to call `process_referral_commission` with the INR
+                # amount in the `p_payment_amount_usd` argument, carrying the comment
+                #
+                #     "p_payment_amount_usd": payment_amount  # Note: This is INR, not USD
+                #
+                # `referral_commissions` has NO currency column — it has
+                # `payment_amount_usd` and `commission_amount_usd`, and the function
+                # computes a flat 20% of whatever it is handed. So an INR payment
+                # credited a commission roughly 83x larger than the real USD value, and
+                # the row recorded it as dollars. The defect was known and annotated;
+                # it was never fixed.
+                #
+                # WHY THIS REFUSES RATHER THAN CONVERTING. Converting would require
+                # choosing an FX policy — which rate, as of when, and who absorbs the
+                # drift between accrual and payout — and that is a product decision
+                # about money owed to a referrer, not something to infer in a webhook
+                # handler. `core/fx_service.py` exists, but reaching for it here would
+                # bake an unreviewed rate-at-time rule into the ledger.
+                #
+                # So the conservative correct action is to record NO commission rather
+                # than a knowingly wrong one. The entitlement is still granted, the
+                # invoice is still written in INR, and the omission is logged loudly
+                # with everything needed to settle it once the model supports a
+                # currency. Recorded in staging/REMEDIATION_REPORT.md as requiring a
+                # product decision before Razorpay referrals can be credited.
+                if payment_amount is None:
+                    logger.error(
+                        "[BILLING] MONEY-02: no referral commission issued for Razorpay "
+                        "payment %s because the charged amount could not be read exactly.",
+                        payment_id,
+                    )
+                elif payment_amount > 0:
+                    logger.error(
+                        "[BILLING] MONEY-04: referral commission SKIPPED for Razorpay "
+                        "payment %s (amount %s INR, user %s, plan %s). "
+                        "referral_commissions stores USD only, so crediting an INR "
+                        "amount there would overstate the commission by the USD/INR "
+                        "rate. The obligation is now recorded durably in "
+                        "referral_obligations instead of only in this log line.",
+                        payment_id,
+                        payment_amount,
+                        user_id,
+                        item_key,
+                    )
+                    # ══════════════════════════════════════════════════════════
+                    # MONEY-06: THE OBLIGATION IS NOW A ROW, NOT ONLY A LOG LINE
+                    # ══════════════════════════════════════════════════════════
+                    # The refusal above is CORRECT and is kept exactly as it was -- an
+                    # INR amount must not be credited to a USD-only ledger, and
+                    # converting it would require choosing an FX rate, an as-of instant
+                    # and who absorbs the accrual-to-payout drift. That is a product
+                    # decision about a customer's money.
+                    #
+                    # What was wrong is that the refusal was the ONLY artefact. The
+                    # commission was genuinely owed, the facts needed to settle it were
+                    # printed once to a log, and nothing could query, age, reconcile or
+                    # pay it. `referral_obligations` records the amount in the currency
+                    # it was actually charged in, with the resolved referrer and a
+                    # machine-readable reason, under a real unique constraint on
+                    # (provider, provider_payment_id) so a redelivery cannot duplicate it.
+                    #
+                    # Note what is NOT done here: no `process_referral_commission` call,
+                    # no wallet credit, no conversion. The obligation and a credited
+                    # commission are mutually exclusive states of one payment, and 029's
+                    # postflight asserts the obligation writer touches neither ledger
+                    # table.
+                    await _record_referral_obligation(
+                        provider="razorpay",
+                        payment_id=payment_id,
+                        user_id=user_id,
+                        amount=payment_amount,
+                        currency="INR",
+                        subscription_tier=item_key,
+                        reason_code="LEDGER_IS_USD_ONLY",
+                        detail={
+                            "handler": "razorpay_webhook",
+                            "event": "payment.captured",
+                            "ledger_currency": "USD",
+                        },
+                    )
             except Exception as e:
                 logger.error(f"Razorpay entitlement processing failed: {e}")
                 raise HTTPException(
@@ -2467,6 +3112,21 @@ async def razorpay_webhook(
                 except Exception as ref_err:
                     logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
                     # Don't fail the webhook if commission reversal fails
+
+                # MONEY-06: reverse the recorded obligation. On this provider it is the
+                # ONLY reversal that can do anything -- the commission RPC above looks in
+                # `referral_commissions`, where a Razorpay payment never created a row,
+                # which the audit recorded as "structurally dead".
+                #
+                # Guarded to `refund.processed`: Razorpay's `refund.failed` shares this
+                # branch and means the refund did NOT go through, so reversing on it would
+                # cancel a payable for money that never came back.
+                if payload.get("event") == "refund.processed":
+                    await _reverse_referral_obligation(
+                        provider="razorpay",
+                        payment_id=payment_id,
+                        reason=payload.get("event"),
+                    )
 
                 # MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8: the ledger half of a
                 # refund, on the branch that already exists. ``refund.failed`` shares this branch

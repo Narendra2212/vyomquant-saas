@@ -1,0 +1,35 @@
+============================================================================================
+WORKFLOW: what has to change in PR #6's copy
+============================================================================================
+  PR #6 copy : 812 lines
+  worktree   : 836 lines
+
+  AERORA_TEST_REDIS_URL occurrences in PR #6's copy:
+     216: AERORA_TEST_REDIS_URL: redis://localhost:6379/15
+     735: AERORA_TEST_REDIS_URL: redis://localhost:6379/15
+  -> both must become /0 (unit-tests AND the diagnostic job)
+
+  jobs in PR #6's copy:
+    unit-tests:                    yes
+    d5-redis-diagnostics:          yes
+    provisioning-and-isolation:    no
+  -> provisioning-and-isolation is absent from PR #6 and MUST NOT be added
+
+  lines changed by the gate-database edit: 2 (expected 2)
+
+============================================================================================
+FILE-LEVEL PLAN vs PR #6
+============================================================================================
+  tests/test_webhook_duplicate_delivery_real_redis.py    PR#6=383   worktree=646   DIFFERS
+  tests/test_quota01_metered_reservation_is_hard.py      PR#6=264   worktree=530   DIFFERS
+  tests/test_quota01_exchange_slot_is_atomic.py          PR#6=867   worktree=867   identical
+
+============================================================================================
+PATCH EMITTED (inert text, nothing applied)
+============================================================================================
+  staging/p11b15_proposed.patch  35041 bytes, 654 lines
+  +545 / -16 across 3 files
+  slot-lock test removal is NOT in this patch (needs separate approval)
+
+  shared .git/index before: 3dbf1cb07e58b1e9ffb1a70154f9c008ad539188f45ab2cbe2b367fc1caf5676
+  shared .git/index after : 3dbf1cb07e58b1e9ffb1a70154f9c008ad539188f45ab2cbe2b367fc1caf5676

@@ -19,19 +19,27 @@
  * place a typed secret is held is the controlled `<input>` the trader is filling in, behind a
  * reveal control they operate themselves.
  *
- * **The one path that can put a typed secret back on screen is the server's own error
- * detail, and it is recorded here rather than patched.** `POST /api/exchanges/test` raises
- * `HTTPException(400, f"Connection failed: {str(e)}")` and `POST /api/exchanges/keys` raises
- * `f"Exchange connection verification failed: {str(e)}"` (`routers/exchange.py:519`, `:161`),
- * where `e` is a ccxt exception raised while connecting with the credential the trader just
- * typed — and ccxt authentication errors routinely quote the request they failed on.
- * `sanitizeErrorMessage` below returns an unmatched `detail` verbatim, so such a string would
- * reach the alert. It is the trader's own key on the trader's own screen rather than a
- * cross-account leak, but it can travel into a screenshot or a support ticket. The fix is a
- * server-side one and Requirement 16.7 puts `backend_app/` outside this spec, so this is a
- * finding, not a silent client-side redaction — and `sanitizeErrorMessage` is carried across
- * byte-identical, because `exchange_manager_phase6.test.jsx` case 7 is what pins its
- * traceback, SQL and raw-exception branches.
+ * **The one path that could put a typed secret back on screen was the server's own error
+ * detail. That is now FIXED SERVER-SIDE and this note records the resolution.** The finding
+ * this header used to report was that `POST /api/exchanges/test` raised
+ * `HTTPException(400, f"Connection failed: {str(e)}")` and `POST /api/exchanges/keys` raised
+ * `f"Exchange connection verification failed: {str(e)}"`, where `e` is a ccxt exception
+ * raised while connecting with the credential the trader had just typed — and ccxt
+ * authentication errors routinely quote the request they failed on. `sanitizeErrorMessage`
+ * returns an unmatched string `detail` verbatim, so such a string reached the alert.
+ *
+ * `routers/exchange.py` no longer interpolates an exception into any response. It classifies
+ * the failure against ccxt's exception hierarchy and answers a structured
+ * `{error, message}` detail whose message is this repository's own copy; the provider text
+ * goes to the operator log with a traceback instead. See the "CREDENTIAL-VERIFICATION
+ * REFUSALS (SC-27)" section there.
+ *
+ * Two consequences for this file. `sanitizeErrorMessage` gained an OBJECT branch, because a
+ * structured detail is not a string and every such refusal was otherwise collapsing into the
+ * generic fallback — the trader lost the actionable sentence the server had written. Its
+ * string branch is still carried across byte-identical, because
+ * `exchange_manager_phase6.test.jsx` case 7 is what pins the traceback, SQL and
+ * raw-exception branches and it supplies a string.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * THE CONNECTION STATE WAS NOT A MEASUREMENT, AND NEITHER WAS THE HEALTH
@@ -437,6 +445,40 @@ function sanitizeErrorMessage(err, fallback = "An error occurred. Please try aga
   if (status === 429) return "Exchange rate limit reached. Please try again shortly.";
 
   const detail = err?.response?.data?.detail;
+
+  /*
+   * The server's STRUCTURED refusal: `detail` is `{error, message}` rather than a string.
+   * `routers/exchange.py` now answers this shape for every credential-verification,
+   * storage, disconnect and schema failure (SC-27), and `core/schemas.py`'s
+   * `create_api_error_response` passes a dict `detail` through unchanged, so it arrives
+   * here as an object. Without this branch every one of those refusals fell past the
+   * string branch below to the generic `fallback`, which is how the trader lost the
+   * actionable sentence the server took care to write ("check the API key for typos",
+   * "enable read access on the key", "the venue is rate-limiting us").
+   *
+   * The message is composed server-side out of this repository's own copy and carries no
+   * provider or database text — that is the point of the server-side fix, and it is why
+   * this returns it as-is. The internal-leak guard is still applied, because defence in
+   * depth here costs three lines and the alternative is trusting every future `detail`
+   * dict in the application.
+   *
+   * Placed BEFORE the string branch, which is carried across byte-identical:
+   * `exchange_manager_phase6.test.jsx` case 7 pins its traceback / SQL / raw-exception
+   * behaviour and feeds it a string, so that case never reaches this branch.
+   */
+  if (detail && typeof detail === "object" && typeof detail.message === "string") {
+    const message = detail.message;
+    if (
+      message.includes("Traceback") ||
+      message.includes("SELECT") ||
+      message.includes("TypeError") ||
+      message.includes("500 Internal")
+    ) {
+      return "Exchange service temporarily unavailable. Please try again.";
+    }
+    return message;
+  }
+
   if (typeof detail === "string") {
     // Check for internal stack traces, DB errors, or raw exceptions
     if (detail.includes("Traceback") || detail.includes("SELECT") || detail.includes("TypeError") || detail.includes("500 Internal")) {

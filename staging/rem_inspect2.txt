@@ -1,0 +1,80 @@
+REFCOMM_EXISTS| referral_commissions
+REFCOMM_COLS| id ~ uuid
+REFCOMM_COLS| referrer_id ~ uuid
+REFCOMM_COLS| referred_id ~ uuid
+REFCOMM_COLS| referral_relationship_id ~ uuid
+REFCOMM_COLS| payment_id ~ character varying
+REFCOMM_COLS| subscription_tier ~ character varying
+REFCOMM_COLS| payment_amount_usd ~ numeric
+REFCOMM_COLS| commission_rate ~ numeric
+REFCOMM_COLS| commission_amount_usd ~ numeric
+REFCOMM_COLS| status ~ character varying
+REFCOMM_COLS| reversal_reason ~ text
+REFCOMM_COLS| created_at ~ timestamp with time zone
+REFCOMM_COLS| updated_at ~ timestamp with time zone
+REFCOMM_COLS| paid_at ~ timestamp with time zone
+REFCOMM_COLS| reversed_at ~ timestamp with time zone
+REFCOMM_CONSTRAINTS| referral_commissions_pkey ~ PRIMARY KEY (id)
+REFCOMM_CONSTRAINTS| referral_commissions_referral_relationship_id_fkey ~ FOREIGN KEY (referral_relationship_id) REFERENCES referral_relationships(id) ON DELETE SET NULL
+REFCOMM_CONSTRAINTS| referral_commissions_referred_id_fkey ~ FOREIGN KEY (referred_id) REFERENCES profiles(id) ON DELETE CASCADE
+REFCOMM_CONSTRAINTS| referral_commissions_referrer_id_fkey ~ FOREIGN KEY (referrer_id) REFERENCES profiles(id) ON DELETE CASCADE
+REFCOMM_CONSTRAINTS| referral_commissions_status_check ~ CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'approved'::character varying, 'paid'::character varying, 'reversed'::character varying])::text[])))
+REFCOMM_INDEXES| idx_ref_comm_referrer
+REFCOMM_INDEXES| idx_referral_commissions_created
+REFCOMM_INDEXES| idx_referral_commissions_payment
+REFCOMM_INDEXES| idx_referral_commissions_referred
+REFCOMM_INDEXES| idx_referral_commissions_referrer
+REFCOMM_INDEXES| idx_referral_commissions_status
+REFCOMM_INDEXES| referral_commissions_pkey
+REFWALLET_COLS| id ~ uuid
+REFWALLET_COLS| user_id ~ uuid
+REFWALLET_COLS| balance_usd ~ numeric
+REFWALLET_COLS| total_earned_usd ~ numeric
+REFWALLET_COLS| pending_usd ~ numeric
+REFWALLET_COLS| payout_method ~ character varying
+REFWALLET_COLS| payout_details ~ jsonb
+REFWALLET_COLS| created_at ~ timestamp with time zone
+REFWALLET_COLS| updated_at ~ timestamp with time zone
+REFWALLET_COLS| pending_balance_usd ~ numeric
+REFWALLET_COLS| approved_balance_usd ~ numeric
+REFWALLET_COLS| paid_balance_usd ~ numeric
+REFWALLET_COLS| lifetime_earnings_usd ~ numeric
+SECDEF_FUNCS| fn_get_library_recent_ratings ~ {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+SECDEF_FUNCS| fn_get_user_library_status ~ {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+SECDEF_FUNCS| fn_has_user_cloned ~ {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+SECDEF_FUNCS| increment_ml_addon ~ {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PROCESS_REF_COMM_HAS_DUP_GUARD| NO_EXISTS_GUARD
+LS_UPDATE_POLICY_ROLES| Users can update their own strategies ~ authenticated
+STRATEGIES_COLS| id
+STRATEGIES_COLS| user_id
+STRATEGIES_COLS| name
+STRATEGIES_COLS| symbol
+STRATEGIES_COLS| timeframe
+STRATEGIES_COLS| buy_logic
+STRATEGIES_COLS| sell_logic
+STRATEGIES_COLS| risk
+STRATEGIES_COLS| indicators
+STRATEGIES_COLS| ml_model_path
+STRATEGIES_COLS| exchange_id
+STRATEGIES_COLS| status
+STRATEGIES_COLS| created_at
+STRATEGIES_COLS| updated_at
+STRATEGIES_COLS| source_library_id
+STRATEGIES_COLS| backtest_result
+STRATEGIES_COLS| current_version
+STRATEGIES_COLS| environment
+STRATEGIES_COLS| is_active
+STRATEGIES_COLS| dag_config
+STRATEGIES_COLS| dag_hash
+STRATEGIES_COLS| dag_version
+STRATEGIES_COLS| dag_schema_version
+STRATEGIES_COLS| execution_order
+STRATEGIES_COLS| last_signal_at
+STRATEGIES_COLS| archived_at
+STRATEGIES_COLS| is_published
+STRATEGIES_COLS| marketplace_listing_id
+STRATEGIES_COLS| is_subscribed
+STRATEGIES_COLS| is_read_only
+STRATEGIES_COLS| subscription_id
+STRATEGIES_COLS| cloned_from
+DEPLOY_LIVE_UNIQ_INDEX| uq_strategy_deployments_one_live

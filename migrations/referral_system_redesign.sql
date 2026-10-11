@@ -8,6 +8,64 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- EXTENSION: pgcrypto
+-- ═══════════════════════════════════════════════════════════════════════════
+-- generate_unique_referral_code() below calls gen_random_bytes(4), which is
+-- pgcrypto's, not core PostgreSQL's. Before this line, no file in this
+-- repository issued CREATE EXTENSION at all -- the only occurrence of the
+-- phrase was inside an error-message string in 009_paper_trading.sql, which
+-- tells an operator to run it but does not run it.
+--
+-- WHY NOTHING CAUGHT IT. 009's preflight checks for gen_random_uuid(), and
+-- gen_random_uuid() has been in core PostgreSQL since version 13. So on any
+-- modern server that check passes whether or not pgcrypto is installed, and the
+-- one function that genuinely requires the extension went unverified.
+--
+-- WHAT IT COSTS. create_referral_code_for_user() is invoked by the
+-- trigger_create_referral_code trigger on public.profiles, so without pgcrypto
+-- EVERY INSERT INTO public.profiles fails:
+--
+--     UndefinedFunction: function gen_random_bytes(integer) does not exist
+--     CONTEXT: PL/pgSQL function generate_unique_referral_code() line 10
+--              SQL statement "SELECT create_referral_code_for_user(NEW.id)"
+--
+-- A profiles row is created for every user, so on a database provisioned from
+-- this repository alone, user signup is broken outright. Production is unaffected
+-- today because Supabase enables pgcrypto by default -- which is precisely why
+-- the dependency stayed invisible, and why a disaster-recovery rebuild onto plain
+-- PostgreSQL would not have worked.
+--
+-- WHY THIS IS NOT A BARE `CREATE EXTENSION IF NOT EXISTS pgcrypto`. That form
+-- still fails hard where the extension is not INSTALLED ON THE SERVER at all --
+-- `IF NOT EXISTS` only suppresses the "already exists" case, not a missing
+-- control file -- and it reports the problem as a bare FeatureNotSupported
+-- pointing at a filesystem path, which says nothing about what breaks.
+--
+-- So the real dependency is tested first: `gen_random_bytes` being resolvable.
+-- That is satisfied by pgcrypto in production, and it is also satisfied by the
+-- stand-in `scripts/provision_database.py --create-substrate` installs on servers
+-- that ship no pgcrypto package. Where neither holds, CREATE EXTENSION is
+-- attempted and any refusal is re-raised as a message that names the consequence.
+DO $pgcrypto_dependency$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'gen_random_bytes') THEN
+        RAISE NOTICE 'referral_system_redesign: gen_random_bytes() already available';
+        RETURN;
+    END IF;
+
+    BEGIN
+        CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    EXCEPTION WHEN others THEN
+        RAISE EXCEPTION
+            'referral_system_redesign requires pgcrypto: generate_unique_referral_code() '
+            'calls gen_random_bytes(), and trigger_create_referral_code on '
+            'public.profiles calls that function, so without it EVERY INSERT INTO '
+            'public.profiles fails and no user can sign up. CREATE EXTENSION was '
+            'attempted and refused: %', SQLERRM;
+    END;
+END $pgcrypto_dependency$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- TABLE: referral_codes
 -- Purpose: Store unique referral codes for each user
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -23,17 +81,37 @@ CREATE TABLE IF NOT EXISTS referral_codes (
 );
 
 -- Index for fast code lookup
-CREATE INDEX idx_referral_codes_code ON referral_codes(code);
-CREATE INDEX idx_referral_codes_user ON referral_codes(user_id);
+CREATE INDEX IF NOT EXISTS idx_referral_codes_code ON referral_codes(code);
+CREATE INDEX IF NOT EXISTS idx_referral_codes_user ON referral_codes(user_id);
 
 -- RLS Policy: Users can only see their own referral code
 ALTER TABLE referral_codes ENABLE ROW LEVEL SECURITY;
 
+-- The policies this redesign SUPERSEDES must be dropped, not merely out-voted.
+--
+-- `006_reconcile_production_database.sql` line 569 creates
+--     POLICY referral_codes_select FOR SELECT TO authenticated
+--     USING (user_id = auth.uid() OR is_active = true)
+-- and this file used to create `referral_codes_select_own` alongside it without removing
+-- it. Permissive RLS policies are OR-ed together, so the broader predicate still decided
+-- the outcome and the narrower one changed nothing. The redesign report states the
+-- intent as "Users can only see their own referral code"; it was not achieved.
+--
+-- Measured, not inferred: `staging/anon_read_sweep.py authenticated` seeds a referral
+-- code owned by customer A and reads it as customer B, and before this drop it reported
+--     referral_codes   authenticated saw 1 of 1 row(s)
+-- i.e. any logged-in customer could enumerate every active referral code together with
+-- the `user_id` that owns it -- the whole referrer list.
+DROP POLICY IF EXISTS referral_codes_select ON referral_codes;
+DROP POLICY IF EXISTS referral_codes_insert ON referral_codes;
+
+DROP POLICY IF EXISTS referral_codes_select_own ON referral_codes;
 CREATE POLICY referral_codes_select_own ON referral_codes
     FOR SELECT
     TO authenticated
     USING (user_id = auth.uid());
 
+DROP POLICY IF EXISTS referral_codes_insert_own ON referral_codes;
 CREATE POLICY referral_codes_insert_own ON referral_codes
     FOR INSERT
     TO authenticated
@@ -57,13 +135,14 @@ CREATE TABLE IF NOT EXISTS referral_relationships (
 );
 
 -- Indexes for relationship queries
-CREATE INDEX idx_referral_relationships_referrer ON referral_relationships(referrer_id);
-CREATE INDEX idx_referral_relationships_referred ON referral_relationships(referred_id);
-CREATE INDEX idx_referral_relationships_status ON referral_relationships(status);
+CREATE INDEX IF NOT EXISTS idx_referral_relationships_referrer ON referral_relationships(referrer_id);
+CREATE INDEX IF NOT EXISTS idx_referral_relationships_referred ON referral_relationships(referred_id);
+CREATE INDEX IF NOT EXISTS idx_referral_relationships_status ON referral_relationships(status);
 
 -- RLS Policy: Users can see relationships where they are referrer or referred
 ALTER TABLE referral_relationships ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS referral_relationships_select_own ON referral_relationships;
 CREATE POLICY referral_relationships_select_own ON referral_relationships
     FOR SELECT
     TO authenticated
@@ -92,15 +171,16 @@ CREATE TABLE IF NOT EXISTS referral_commissions (
 );
 
 -- Indexes for commission queries
-CREATE INDEX idx_referral_commissions_referrer ON referral_commissions(referrer_id);
-CREATE INDEX idx_referral_commissions_referred ON referral_commissions(referred_id);
-CREATE INDEX idx_referral_commissions_status ON referral_commissions(status);
-CREATE INDEX idx_referral_commissions_payment ON referral_commissions(payment_id);
-CREATE INDEX idx_referral_commissions_created ON referral_commissions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_referral_commissions_referrer ON referral_commissions(referrer_id);
+CREATE INDEX IF NOT EXISTS idx_referral_commissions_referred ON referral_commissions(referred_id);
+CREATE INDEX IF NOT EXISTS idx_referral_commissions_status ON referral_commissions(status);
+CREATE INDEX IF NOT EXISTS idx_referral_commissions_payment ON referral_commissions(payment_id);
+CREATE INDEX IF NOT EXISTS idx_referral_commissions_created ON referral_commissions(created_at DESC);
 
 -- RLS Policy: Users can only see their own commissions
 ALTER TABLE referral_commissions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS referral_commissions_select_own ON referral_commissions;
 CREATE POLICY referral_commissions_select_own ON referral_commissions
     FOR SELECT
     TO authenticated
@@ -130,11 +210,12 @@ CREATE TABLE IF NOT EXISTS referral_wallets (
 );
 
 -- Index for wallet lookups
-CREATE INDEX idx_referral_wallets_user ON referral_wallets(user_id);
+CREATE INDEX IF NOT EXISTS idx_referral_wallets_user ON referral_wallets(user_id);
 
 -- RLS Policy: Users can only see their own wallet
 ALTER TABLE referral_wallets ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS referral_wallets_select_own ON referral_wallets;
 CREATE POLICY referral_wallets_select_own ON referral_wallets
     FOR SELECT
     TO authenticated
@@ -164,13 +245,14 @@ CREATE TABLE IF NOT EXISTS referral_payouts (
 );
 
 -- Indexes for payout queries
-CREATE INDEX idx_referral_payouts_user ON referral_payouts(user_id);
-CREATE INDEX idx_referral_payouts_status ON referral_payouts(status);
-CREATE INDEX idx_referral_payouts_created ON referral_payouts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_referral_payouts_user ON referral_payouts(user_id);
+CREATE INDEX IF NOT EXISTS idx_referral_payouts_status ON referral_payouts(status);
+CREATE INDEX IF NOT EXISTS idx_referral_payouts_created ON referral_payouts(created_at DESC);
 
 -- RLS Policy: Users can only see their own payouts
 ALTER TABLE referral_payouts ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS referral_payouts_select_own ON referral_payouts;
 CREATE POLICY referral_payouts_select_own ON referral_payouts
     FOR SELECT
     TO authenticated
@@ -182,43 +264,137 @@ CREATE POLICY referral_payouts_select_own ON referral_payouts
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS referral_code VARCHAR(20);
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS referred_by_user_id UUID;
 
--- Add foreign key constraint
-ALTER TABLE profiles 
-    ADD CONSTRAINT fk_profiles_referred_by 
-    FOREIGN KEY (referred_by_user_id) 
-    REFERENCES profiles(id) 
-    ON DELETE SET NULL;
+-- Add foreign key and unique constraints, each behind a pg_constraint guard.
+--
+-- These were bare `ALTER TABLE ... ADD CONSTRAINT`, which PostgreSQL refuses on a
+-- second run with `42710 DuplicateObject: constraint "fk_profiles_referred_by" for
+-- relation "profiles" already exists`. `020_declare_pre_existing_tables.sql` already
+-- declares `profiles` and other files touch it, so this file is not the only writer and
+-- cannot assume a clean slate.
+--
+-- The guard pattern is the one the rest of this repository already uses -- see
+-- `backend_app/migrations/009_paper_trading.sql`, whose header records that it wraps
+-- "every ADD CONSTRAINT behind a pg_constraint guard". Found by provisioning staging
+-- from source; this file was not idempotent in three separate ways (indexes, policies
+-- and these constraints).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_profiles_referred_by'
+    ) THEN
+        ALTER TABLE profiles
+            ADD CONSTRAINT fk_profiles_referred_by
+            FOREIGN KEY (referred_by_user_id)
+            REFERENCES profiles(id)
+            ON DELETE SET NULL;
+    END IF;
 
--- Add unique constraint for referral_code
-ALTER TABLE profiles ADD CONSTRAINT uq_profiles_referral_code UNIQUE (referral_code);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'uq_profiles_referral_code'
+    ) THEN
+        ALTER TABLE profiles
+            ADD CONSTRAINT uq_profiles_referral_code UNIQUE (referral_code);
+    END IF;
+END $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- DROP THE SUPERSEDED DEFINITIONS FIRST
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Three of the functions below are ALSO declared by
+-- `migrations/006_reconcile_production_database.sql`, with different signatures:
+--
+--   function                        006 declares        this file declares
+--   create_referral_code_for_user   RETURNS VARCHAR     RETURNS VOID
+--   process_referral_commission     (p_payment_id ...)  (p_referred_id ...)
+--   reverse_referral_commission     (p_payment_id ...)  (p_payment_id ...)
+--
+-- `CREATE OR REPLACE FUNCTION` CANNOT CHANGE A RETURN TYPE. PostgreSQL refuses with
+-- `42P13 InvalidFunctionDefinition: cannot change return type of existing function`,
+-- so this file aborted whenever 006 had run first -- which it always does, because 006
+-- is numbered and this file is not, and the numbered set is applied first.
+--
+-- Found by provisioning staging from source (scripts/provision_database.py).
+--
+-- This file is the REDESIGN and is intended to supersede, so the old definitions are
+-- dropped explicitly rather than replaced. Dropped by name across all overloads,
+-- because the two files disagree about the argument lists too and naming one signature
+-- would miss the other. `CASCADE` is deliberately NOT used: if something depends on one
+-- of these functions, that dependency needs a decision, not a silent removal.
+DO $$
+DECLARE
+    fn record;
+BEGIN
+    FOR fn IN
+        SELECT p.oid::regprocedure AS signature
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.proname IN (
+              'create_referral_code_for_user',
+              'process_referral_commission',
+              'reverse_referral_commission'
+          )
+    LOOP
+        EXECUTE format('DROP FUNCTION IF EXISTS %s', fn.signature);
+        RAISE NOTICE 'referral_system_redesign: dropped superseded function %', fn.signature;
+    END LOOP;
+END $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- FUNCTION: generate_unique_referral_code
 -- Purpose: Generate a unique referral code with retry logic
 -- ═══════════════════════════════════════════════════════════════════════════
+-- THE LOCAL VARIABLE WAS NAMED `code`, AND SO IS referral_codes.code.
+--
+-- The uniqueness check read `SELECT 1 FROM referral_codes WHERE code = code`, where
+-- both sides could be either the PL/pgSQL variable or the table column. PostgreSQL does
+-- not guess:
+--
+--     AmbiguousColumn: column reference "code" is ambiguous
+--
+-- raised from inside this function, which `create_referral_code_for_user` calls, which
+-- `trigger_create_referral_code` on `public.profiles` calls -- so the symptom was that
+-- every INSERT INTO public.profiles failed. User signup, again, for a second and
+-- entirely separate reason from the missing pgcrypto above. Found by executing the
+-- insert against a database provisioned from source; no test in the suite inserts a
+-- profiles row against PostgreSQL, so nothing caught either one.
+--
+-- Worth noting that resolving the ambiguity the other way would not have saved it: read
+-- as column-equals-column, `WHERE code = code` is true for every row with a non-null
+-- code, so `NOT EXISTS` would be false as soon as one code existed, all ten attempts
+-- would fail, and the function would end at its own RAISE EXCEPTION. Two different
+-- failures, one typo.
+--
+-- Renamed to `v_code`, matching the `v_` convention this file already uses for locals
+-- (`v_referrer_id`, `v_commission_amount`, `v_commission_id`). The column references
+-- are also schema-qualified now so the comparison cannot be misread again.
 CREATE OR REPLACE FUNCTION generate_unique_referral_code()
 RETURNS VARCHAR(20) AS $$
 DECLARE
-    code VARCHAR(20);
+    v_code VARCHAR(20);
     max_attempts INTEGER := 10;
     attempt INTEGER := 0;
 BEGIN
     WHILE attempt < max_attempts LOOP
         attempt := attempt + 1;
         -- Generate code: VQ-XXXXXX (6 random alphanumeric)
-        code := 'VQ-' || upper(substring(encode(gen_random_bytes(4), 'base64'), 1, 6));
-        
+        v_code := 'VQ-' || upper(substring(encode(gen_random_bytes(4), 'base64'), 1, 6));
+
         -- Remove non-alphanumeric characters
-        code := regexp_replace(code, '[^A-Z0-9]', '', 'g');
-        code := 'VQ-' || substring(code, 4, 6);
-        
+        v_code := regexp_replace(v_code, '[^A-Z0-9]', '', 'g');
+        v_code := 'VQ-' || substring(v_code, 4, 6);
+
         -- Check if code already exists
-        IF NOT EXISTS (SELECT 1 FROM referral_codes WHERE code = code) AND
-           NOT EXISTS (SELECT 1 FROM profiles WHERE referral_code = code) THEN
-            RETURN code;
+        IF NOT EXISTS (
+               SELECT 1 FROM referral_codes rc WHERE rc.code = v_code
+           ) AND
+           NOT EXISTS (
+               SELECT 1 FROM profiles p WHERE p.referral_code = v_code
+           ) THEN
+            RETURN v_code;
         END IF;
     END LOOP;
-    
+
     RAISE EXCEPTION 'Failed to generate unique referral code after % attempts', max_attempts;
 END;
 $$ LANGUAGE plpgsql;
@@ -487,15 +663,232 @@ $referrals_guard$;
 -- Initialize wallets for existing users
 --   guarded for the same reason. Skipped wholesale where `referrals` is absent,
 --   which is the behaviour the note above records.
+-- ═══════════════════════════════════════════════════════════════════════════
+-- FORWARD MIGRATION: 006's THREE-COLUMN WALLET -> THIS FILE'S FOUR-STATE WALLET
+-- ═══════════════════════════════════════════════════════════════════════════
+-- The CREATE TABLE IF NOT EXISTS above is a no-op on every real database, because
+-- `006_reconcile_production_database.sql` creates `referral_wallets` first with a
+-- different column set:
+--
+--     006 (what the table has)   balance_usd, total_earned_usd, pending_usd
+--     this file (what everything else expects)
+--                                pending_balance_usd, approved_balance_usd,
+--                                paid_balance_usd, lifetime_earnings_usd
+--
+-- So the table kept 006's shape while the rest of the referral system moved to this
+-- one, and `IF NOT EXISTS` is precisely what hid it. That divergence is BUG-035, and it
+-- is not a cosmetic naming difference -- it broke every money path in the feature:
+--
+--   * `process_referral_commission` (the version THIS FILE installs, which is the one
+--     actually present -- verified against pg_proc) writes `pending_balance_usd` and
+--     `lifetime_earnings_usd`. Against 006's table that is `UndefinedColumn`, so
+--     CREDITING a referral commission fails.
+--   * `reverse_referral_commission` writes `pending_balance_usd`,
+--     `approved_balance_usd` and `lifetime_earnings_usd`. So REVERSING a commission on
+--     a refund fails.
+--   * `routers/referral.py` reads all four columns in three endpoints, and its payout
+--     handler does `float(wallet.get("approved_balance_usd", 0))`. A missing column
+--     cannot come back from `select("*")`, so that resolves to 0 and -- with the $10
+--     minimum -- EVERY payout request is answered
+--     "Insufficient approved balance. Available: $0.00", silently, for every user.
+--
+-- WHICH SHAPE IS CANONICAL, AND HOW THAT WAS DECIDED. Not by preference. The installed
+-- functions write the four-state shape, the router reads the four-state shape, and a
+-- search of `backend_app/` finds NO reader of 006's three columns at all. The table is
+-- the only thing out of step, so it is the thing that moves.
+--
+-- WHY THE MAPPING IS WHAT IT IS, STATED EXPLICITLY BECAUSE IT IS MONEY:
+--     pending_balance_usd   <- pending_usd        same meaning: earned, not yet cleared
+--     approved_balance_usd  <- balance_usd        006's spendable balance is what the
+--                                                 payout path calls "approved"
+--     lifetime_earnings_usd <- total_earned_usd   same meaning
+--     paid_balance_usd      <- total_earned_usd - balance_usd - pending_usd
+--
+-- The last one is DERIVED, because 006 never tracked it: anything earned that is neither
+-- spendable nor pending must already have been paid out. That derivation is only valid
+-- if the three columns are mutually consistent, so it is CHECKED first and the migration
+-- RAISES on any row where it would go negative, having changed nothing. A negative would
+-- mean 006's own columns disagreed, and inventing a paid-out figure for a referrer is
+-- not something a migration may guess at.
+--
+-- WHY THE OLD COLUMNS ARE DROPPED. Leaving them is how this happened: two column sets on
+-- one table, each believed to be the live one by different code. Nothing reads them.
+DO $wallet_forward_migration$
+DECLARE
+    inconsistent integer;
+    sample text;
+BEGIN
+    IF to_regclass('public.referral_wallets') IS NULL THEN
+        RAISE NOTICE 'referral_wallets does not exist; nothing to migrate';
+        RETURN;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'referral_wallets'
+          AND column_name = 'approved_balance_usd'
+    ) THEN
+        RAISE NOTICE 'referral_wallets already carries the four-state shape; nothing to do';
+        RETURN;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'referral_wallets'
+          AND column_name = 'balance_usd'
+    ) THEN
+        RAISE EXCEPTION
+            'referral_wallets has neither the four-state shape nor 006''s three-column '
+            'shape. Refusing to guess at its layout.';
+    END IF;
+
+    -- Consistency precheck, before anything is altered.
+    SELECT count(*) INTO inconsistent
+    FROM public.referral_wallets
+    WHERE coalesce(total_earned_usd, 0)
+          - coalesce(balance_usd, 0) - coalesce(pending_usd, 0) < 0;
+
+    IF inconsistent > 0 THEN
+        SELECT string_agg(
+                   format('user=%s earned=%s balance=%s pending=%s',
+                          user_id, total_earned_usd, balance_usd, pending_usd),
+                   '; ')
+          INTO sample
+          FROM (
+              SELECT * FROM public.referral_wallets
+              WHERE coalesce(total_earned_usd, 0)
+                    - coalesce(balance_usd, 0) - coalesce(pending_usd, 0) < 0
+              LIMIT 3
+          ) bad;
+        RAISE EXCEPTION
+            'referral_wallets: % row(s) have total_earned_usd < balance_usd + '
+            'pending_usd, so paid_balance_usd cannot be derived without inventing a '
+            'figure. NOTHING HAS BEEN ALTERED. Reconcile these rows first: %',
+            inconsistent, sample;
+    END IF;
+
+    ALTER TABLE public.referral_wallets
+        ADD COLUMN pending_balance_usd  DECIMAL(10, 2) DEFAULT 0.00,
+        ADD COLUMN approved_balance_usd DECIMAL(10, 2) DEFAULT 0.00,
+        ADD COLUMN paid_balance_usd     DECIMAL(10, 2) DEFAULT 0.00,
+        ADD COLUMN lifetime_earnings_usd DECIMAL(10, 2) DEFAULT 0.00;
+
+    UPDATE public.referral_wallets
+       SET pending_balance_usd   = coalesce(pending_usd, 0),
+           approved_balance_usd  = coalesce(balance_usd, 0),
+           lifetime_earnings_usd = coalesce(total_earned_usd, 0),
+           paid_balance_usd      = coalesce(total_earned_usd, 0)
+                                   - coalesce(balance_usd, 0)
+                                   - coalesce(pending_usd, 0);
+
+    -- THE OLD COLUMNS ARE DELIBERATELY NOT DROPPED.
+    --
+    -- An earlier version of this block ended with
+    --     ALTER TABLE public.referral_wallets
+    --         DROP COLUMN balance_usd, DROP COLUMN total_earned_usd, DROP COLUMN pending_usd;
+    -- and `tests/test_marketplace_paper_schema_contract.py::test_no_destructive_statements`
+    -- rejected it: Requirement 24.7 forbids destructive statements anywhere in the
+    -- migration set. The test is right and the requirement is right. These three columns
+    -- hold MONEY BALANCES. A DROP COLUMN executed against production is irreversible, and
+    -- if the backfill above turns out to have mapped something wrongly, the original
+    -- figures are the only way to find out -- or to put it back.
+    --
+    -- Keeping them costs nothing and risks nothing:
+    --   * all three are nullable with DEFAULT 0.00 (006 lines 660-662), so no INSERT
+    --     anywhere needs to mention them;
+    --   * no code reads them. `routers/referral.py` reads the four-state columns in all
+    --     three endpoints that touch a wallet;
+    --   * no installed function writes them. Verified against `pg_proc` rather than
+    --     against these files, because the question is what the database has --
+    --     `staging/which_referral_funcs.py` reports:
+    --         process_referral_commission   redesign four-state shape
+    --         reverse_referral_commission   redesign four-state shape
+    --     `CREATE OR REPLACE FUNCTION` means the last file to run wins, and this one
+    --     runs after 006.
+    --
+    -- So they are vestigial, readable, and available for reconciliation. Removing them is
+    -- a separate decision for a separate change, taken once the four-state figures have
+    -- been checked against real balances -- see POST_LAUNCH_IMPROVEMENTS.md.
+
+    RAISE NOTICE 'referral_wallets migrated to the four-state shape (BUG-035); '
+                 'the three 006 columns are retained for reconciliation';
+END
+$wallet_forward_migration$;
+
+-- The non-negative invariant this file's CREATE TABLE declares. Added separately so it
+-- also lands on a table that arrived via 006 and was converted above.
+DO $wallet_check$
+BEGIN
+    IF to_regclass('public.referral_wallets') IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM pg_constraint
+           WHERE conname = 'chk_non_negative_balances'
+       ) THEN
+        ALTER TABLE public.referral_wallets
+            ADD CONSTRAINT chk_non_negative_balances CHECK (
+                pending_balance_usd >= 0 AND
+                approved_balance_usd >= 0 AND
+                paid_balance_usd >= 0 AND
+                lifetime_earnings_usd >= 0
+            );
+        RAISE NOTICE 'referral_wallets: non-negative balance constraint added';
+    END IF;
+END
+$wallet_check$;
+
+--   SECOND CONDITION, AND WHY THE FIRST ONE WAS NOT ENOUGH.
+--   This backfill writes pending_balance_usd / approved_balance_usd /
+--   paid_balance_usd / lifetime_earnings_usd. Those are THIS file's columns. They are
+--   not the columns `referral_wallets` actually has on a provisioned database:
+--   `006_reconcile_production_database.sql` declares the same table as
+--   balance_usd / total_earned_usd / pending_usd, it runs earlier, and the
+--   CREATE TABLE IF NOT EXISTS above therefore does nothing. 006 is the file that
+--   reconciles against production, so its shape is the real one and this file's is
+--   the one that never landed.
+--
+--   The `referrals` check alone hid that. While `referrals` was absent this block
+--   skipped and the mismatch was never reached -- and `referrals` was absent because
+--   the alembic revision that creates it, 6f1b3d9c8a7e, sits downstream of
+--   `add_foreign_keys`, which could not commit, so `upgrade head` never got there.
+--   Repairing that revision made `referrals` exist, this block fired for the first
+--   time, and it failed:
+--
+--     UndefinedColumn: column "pending_balance_usd" of relation
+--     "referral_wallets" does not exist
+--
+--   So the guard now tests the thing the statement actually depends on. Where 006's
+--   shape is in place this skips and says so; it does not write one shape's data into
+--   the other's columns, and it does not silently convert a schema conflict into a
+--   provisioning failure. The divergence itself is a defect in its own right and is
+--   reported separately -- five tables in this file disagree with 006, and
+--   `routers/referral.py` writes `approved_balance_usd`, a column the live shape does
+--   not have.
 DO $referrals_wallet_guard$
 BEGIN
     IF to_regclass('referrals') IS NULL THEN
         RAISE NOTICE 'referral_system_redesign: legacy relation "referrals" is absent; skipping the referral_wallets initialisation';
+    ELSIF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'referral_wallets'
+          AND column_name = 'pending_balance_usd'
+    ) THEN
+        RAISE NOTICE 'referral_system_redesign: referral_wallets does not carry this file''s column set (006_reconcile_production_database.sql declares balance_usd/total_earned_usd/pending_usd instead); skipping the referral_wallets initialisation';
     ELSE
+        -- `p.id`, NOT `id`. It was unqualified, and both `profiles` and `referrals`
+        -- have an `id` column, so the statement failed with
+        --
+        --     AmbiguousColumn: column reference "id" is ambiguous
+        --
+        -- which means this backfill had never once run successfully. Three things hid
+        -- that in sequence: `referrals` did not exist (the alembic revision creating it
+        -- was downstream of a revision that could not commit -- BUG-028), then the
+        -- column set did not match (BUG-035, fixed above), and only then was the
+        -- statement itself reached.
         EXECUTE $referrals_wallets_backfill$
 INSERT INTO referral_wallets (user_id, pending_balance_usd, approved_balance_usd, paid_balance_usd, lifetime_earnings_usd)
 SELECT 
-    id,
+    p.id,
     COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'pending'), 0),
     COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'approved'), 0),
     COALESCE(SUM(r.commission_usd) FILTER (WHERE r.status = 'paid'), 0),

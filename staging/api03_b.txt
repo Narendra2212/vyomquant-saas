@@ -1,0 +1,3 @@
+E       AttributeError: 'SharedRedisManager' object has no attribute '_mock_cache_is_acceptable'
+FAILED tests/test_api03_rate_limit_storage_is_fail_closed.py::test_the_cache_and_the_limiter_now_share_one_definition
+1 failed, 46 passed in 8.63s

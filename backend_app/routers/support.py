@@ -141,7 +141,7 @@ FAQS_DATA = [
         "id": "faq-5",
         "category": "exchanges",
         "question": "Which exchanges support Sandbox / Testnet mode?",
-        "answer": "Binance (Testnet), Bybit (Testnet), OKX (Demo Mode), Coinbase (Sandbox), and KuCoin (Sandbox) support simulated trading with real API contracts. Kraken runs on production endpoints exclusively.",
+        "answer": "Binance (Testnet), Bybit (Testnet), and OKX (Demo Mode) support simulated trading with real API contracts. Coinbase, KuCoin, and Kraken run on production endpoints exclusively and have no public CCXT sandbox.",
     },
     {
         "id": "faq-6",

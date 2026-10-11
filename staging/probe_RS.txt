@@ -1,0 +1,20 @@
+START=2026-10-09T12:02:29.0126523+05:30
+SCRIPT=staging\probe_risk_settings_seeding.py 
+DSN=postgresql://postgres:@127.0.0.1:58620/postgres
+CONSTRAINT fk_bug049_risk_settings_user_id: FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+CONSTRAINT risk_settings_pkey: PRIMARY KEY (id)
+CONSTRAINT risk_settings_user_id_key: UNIQUE (user_id)
+RISK_SETTINGS_ROWS=18
+PROFILES_ROWS=20
+TRIGGERS_ON_PROFILES=1
+  tr_profiles_create_referral_code -> trigger_create_referral_code  touches_risk_settings=False
+TRIGGERS_INSERTING_RISK_SETTINGS=1
+  public.risk_settings log_risk_settings_changes_trigger -> log_risk_settings_changes
+BEFORE_INSERT_RISK_ROWS_FOR_PROBE=0
+Traceback (most recent call last):
+  File "C:\aerora_quant_backend_updated_final1\staging\probe_risk_settings_seeding.py", line 83, in <module>
+    cur.execute(
+psycopg2.errors.ForeignKeyViolation: insert or update on table "profiles" violates foreign key constraint "profiles_id_fkey"
+DETAIL:  Key (id)=(44601773-bc33-4bb3-ac31-1f1fcc62fdc5) is not present in table "users".
+System.Management.Automation.RemoteException
+EXITCODE=1

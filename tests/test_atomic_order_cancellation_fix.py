@@ -23,6 +23,7 @@ leaving it to be discovered.
 """
 
 import os
+import uuid
 
 import pytest
 import threading
@@ -39,6 +40,74 @@ pytestmark = pytest.mark.skipif(
         "job in .github/workflows/01-pr-check.yml, skipped in the SQLite lane"
     ),
 )
+
+# ─── WHY THE TENANT ID IS NOW A REAL UUID WITH A REAL PROFILE BEHIND IT ──────
+#
+# These tests used the literal string 'test_tenant'. That worked only because
+# `orders.tenant_id` was `varchar(36)` with no foreign key, so any string went in. Both
+# halves of that were the defect BUG-033 describes: `tenant_id` is supposed to reference
+# `profiles.id`, which is `uuid`, and PostgreSQL has no equality operator between uuid
+# and varchar -- so `fk_orders_tenant_id` could not be created and nothing stopped a row
+# from naming a tenant that did not exist.
+#
+# Alembic revision `a1b2c3d4e5f6` retypes the column and creates the constraint, after
+# which 'test_tenant' is refused twice over:
+#
+#     psycopg2.errors.InvalidTextRepresentation:
+#         invalid input syntax for type uuid: TEST_TENANT_ID
+#
+# So the fixture below seeds an actual tenant. Nothing about what these tests ASSERT has
+# changed -- the atomic UPDATE predicate, the concurrency race and the idempotency check
+# are all untouched. What changed is that the rows they operate on are now valid rows,
+# which is what the schema always meant to require.
+TEST_TENANT_ID = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+
+
+@pytest.fixture(autouse=True)
+def _seeded_tenant():
+    """A real `profiles` row for TEST_TENANT_ID, removed afterwards.
+
+    Autouse because every test in this file inserts into `orders`, and
+    `fk_orders_tenant_id` now requires the parent to exist. `auth.users` is seeded first
+    for the same reason one level up -- `profiles.id` references it.
+
+    ON CONFLICT DO NOTHING so a leftover row from an interrupted run is tolerated, and
+    the delete at the end is ordered child-first so the cascade is not relied upon.
+    """
+    session = SessionLocal()
+    try:
+        session.execute(
+            text("INSERT INTO auth.users (id, email) VALUES (:i, :e) "
+                 "ON CONFLICT (id) DO NOTHING"),
+            {"i": TEST_TENANT_ID, "e": "atomic-cancellation-test@example.test"},
+        )
+        session.execute(
+            text("INSERT INTO public.profiles (id) VALUES (:i) "
+                 "ON CONFLICT (id) DO NOTHING"),
+            {"i": TEST_TENANT_ID},
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    yield TEST_TENANT_ID
+
+    session = SessionLocal()
+    try:
+        session.execute(
+            text("DELETE FROM orders WHERE tenant_id = :i"), {"i": TEST_TENANT_ID}
+        )
+        session.execute(
+            text("DELETE FROM public.profiles WHERE id = :i"), {"i": TEST_TENANT_ID}
+        )
+        session.execute(
+            text("DELETE FROM auth.users WHERE id = :i"), {"i": TEST_TENANT_ID}
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
 
 
 def test_atomic_order_cancellation():
@@ -59,7 +128,7 @@ def test_atomic_order_cancellation():
             """),
             {
                 "order_id": "test_order_001",
-                "tenant_id": "test_tenant",
+                "tenant_id": TEST_TENANT_ID,
                 "data": '{"status": "pending", "symbol": "BTC/USDT"}'
             }
         )
@@ -77,7 +146,7 @@ def test_atomic_order_cancellation():
             {
                 "data": '{"status": "cancelled", "symbol": "BTC/USDT"}',
                 "order_id": "test_order_001",
-                "tenant_id": "test_tenant"
+                "tenant_id": TEST_TENANT_ID
             }
         )
         
@@ -97,7 +166,7 @@ def test_atomic_order_cancellation():
             {
                 "data": '{"status": "cancelled", "symbol": "BTC/USDT"}',
                 "order_id": "test_order_001",
-                "tenant_id": "test_tenant"
+                "tenant_id": TEST_TENANT_ID
             }
         )
         
@@ -138,7 +207,7 @@ def test_concurrent_order_cancellation():
             """),
             {
                 "order_id": "test_order_concurrent",
-                "tenant_id": "test_tenant",
+                "tenant_id": TEST_TENANT_ID,
                 "data": '{"status": "pending", "symbol": "BTC/USDT"}'
             }
         )
@@ -162,7 +231,7 @@ def test_concurrent_order_cancellation():
                     {
                         "data": f'{{"status": "cancelled", "worker": "{worker_id}", "symbol": "BTC/USDT"}}',
                         "order_id": "test_order_concurrent",
-                        "tenant_id": "test_tenant"
+                        "tenant_id": TEST_TENANT_ID
                     }
                 )
                 
@@ -247,7 +316,7 @@ def test_order_cancellation_idempotency():
             """),
             {
                 "order_id": "test_order_idempotent",
-                "tenant_id": "test_tenant",
+                "tenant_id": TEST_TENANT_ID,
                 "data": '{"status": "pending", "symbol": "BTC/USDT"}'
             }
         )
@@ -265,7 +334,7 @@ def test_order_cancellation_idempotency():
             {
                 "data": '{"status": "cancelled", "symbol": "BTC/USDT"}',
                 "order_id": "test_order_idempotent",
-                "tenant_id": "test_tenant"
+                "tenant_id": TEST_TENANT_ID
             }
         )
         session.commit()
@@ -284,7 +353,7 @@ def test_order_cancellation_idempotency():
             {
                 "data": '{"status": "cancelled", "symbol": "BTC/USDT"}',
                 "order_id": "test_order_idempotent",
-                "tenant_id": "test_tenant"
+                "tenant_id": TEST_TENANT_ID
             }
         )
         session.commit()

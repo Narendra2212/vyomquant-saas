@@ -1,0 +1,58 @@
+====================================================================================================
+STAGE 0A. ENTRY SNAPSHOT
+====================================================================================================
+  branch              : main
+  HEAD                : 074b772ab16cece62cbfca0f2b78497be2ae56d5  SAME as A20
+  origin/main         : 074b772ab16cece62cbfca0f2b78497be2ae56d5
+  upstream divergence : 0	0
+  index digest        : 7379218b992868bbbb693e22f7c94b0ae7d45ff9bbacf71d9ee4efe1a201392d  SAME
+  staged / unstaged   : 22 / 101  staged SAME
+  untracked (collapsed): 139
+  unmerged            : 0  OK
+
+  worktrees:
+    C:/aerora_quant_backend_updated_final1 074b772a [main]
+
+  entry snapshots written: p11b22_entry_staged.txt, p11b22_entry_status.txt
+
+====================================================================================================
+STAGE 0B. OWNERSHIP OF TARGET FILES
+====================================================================================================
+  backend_app/backend/redis_manager.py                     clean          593 lines  d7b0e811b615  clean (NOT authorization)
+  backend_app/core/cache/redis_manager.py             M    +185/-5       1488 lines  6c8a3692c350  OTHER WORKSTREAM -- read-only
+  tests/conftest.py                                   M    +172/-0        443 lines  c6c67672d007  OTHER WORKSTREAM -- read-only
+
+====================================================================================================
+STAGE 0C. DESTINATION
+====================================================================================================
+  staging/PHASE11B_A22_REDIS_R6_CHARACTERIZATION_REPORT.md       ABSENT -- safe
+
+====================================================================================================
+STAGE 0D. EXISTING REDIS-MANAGER / RECONNECTION / FAULT-INJECTION TESTS
+====================================================================================================
+  tests/conftest.py                                              RedisManager(,_set_test_mode,_bypass_dev_mode
+  tests/regression/baseline/surface_exchange_connection.json     get_redis_manager
+  tests/regression/baseline/surface_strategies.json              get_redis_manager
+  tests/test_backtest_stream_worker.py                           RedisManager(
+  tests/test_dag_redis_migration.py                              RedisManager(,backend.redis_manager
+  tests/test_durable_event_bus.py                                _set_test_mode,_bypass_dev_mode
+  tests/test_exchange_connections_read_regression.py             _connected
+  tests/test_exchange_credential_log_redaction.py                _connected
+  tests/test_exchange_health_probe.py                            _connected
+  tests/test_exchange_vault_singleton.py                         get_redis_manager,backend.redis_manager
+  tests/test_no_credential_in_api_response_body.py               get_redis_manager,backend.redis_manager
+  tests/test_notifications_feature_e2e.py                        get_redis_manager,backend.redis_manager
+  tests/test_performance_resource_stability.py                   _connected
+  tests/test_rate_limiter.py                                     backend.redis_manager
+  tests/test_redis_debounce.py                                   get_redis_manager,try_reconnect,_connected,backend.redis_manager
+  tests/test_schema_as_code_completeness.py                      _connected
+  tests/test_task_9_5_compile_is_io_free.py                      backend.redis_manager
+  tests/test_training_realtime_channels.py                       _connected
+
+  candidate modules by name:
+    tests/real_redis_gate.py                                          187 lines  ??
+    tests/test_dag_redis_migration.py                                 194 lines  tracked
+    tests/test_redis_cluster.py                                       234 lines  tracked
+    tests/test_redis_debounce.py                                      188 lines  tracked
+    tests/test_redis_fallback_does_not_fake_a_distributed_lock.py     251 lines  ??
+    tests/test_webhook_duplicate_delivery_real_redis.py               646 lines  ??

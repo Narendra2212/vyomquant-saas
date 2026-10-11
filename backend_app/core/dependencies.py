@@ -326,7 +326,41 @@ async def get_current_user(
             "tenant_id": tenant_id,
             "access_token": token,
             "role": payload.get("role", "authenticated"),
-            "app_metadata": payload.get("app_metadata", {})
+            "app_metadata": payload.get("app_metadata", {}),
+            # ── SC-3: `aal` MUST be propagated, or `require_aal2` rejects everyone ──────
+            #
+            # `aal` ("aal1" / "aal2") is a REQUIRED TOP-LEVEL claim in a Supabase access
+            # token — it is not inside `app_metadata`, which carries application data like
+            # `{"provider": "email"}`. See
+            # https://supabase.com/docs/guides/auth/jwt-fields.
+            #
+            # This dict used to stop at `app_metadata`, so the claim was decoded by
+            # `decode_token_local` and then dropped on the floor here. `require_aal2`
+            # reads `app_metadata.get("aal") or user.get("aal", "aal1")`; against a real
+            # token the first is absent (wrong location) and the second was absent (never
+            # copied), so it resolved to the "aal1" default and answered 403 — for EVERY
+            # caller, including one who had just completed a TOTP challenge. The dependency
+            # was not merely unused, it was unusable: wiring it to an endpoint would have
+            # locked out MFA-enrolled and non-enrolled users alike.
+            #
+            # Why no test caught it: the three suites that cover `require_aal2`
+            # (`test_phase7b_auth_remediation`, `test_phase12a_production_security_validation`,
+            # `tests/regression/capture_baseline.py`) all call it with a hand-built user
+            # dict, and `create_test_jwt` sets `aal` in `app_metadata` as well as at the top
+            # level. The fixture is unrepresentative of a real Supabase token in precisely
+            # the field under test, so the gate's logic was verified while its integration
+            # with this function was not. `tests/test_sc3_aal_claim_propagation.py` closes
+            # that by asserting through `get_current_user` itself.
+            #
+            # This is propagation only and changes no decision today: `require_aal2` is
+            # still applied to zero endpoints, so nothing reads this value yet. It is the
+            # prerequisite that makes enforcement possible rather than an outage.
+            "aal": payload.get("aal", "aal1"),
+            # `amr` (the authentication-methods array, e.g. [{"method": "totp", ...}]) is
+            # carried for the same reason and is not read by anything yet. It is what a
+            # factor-level decision ("TOTP specifically, not any second factor") or an audit
+            # record of how a session was elevated would need.
+            "amr": payload.get("amr", []),
         }
 
         # Verify frozen status.

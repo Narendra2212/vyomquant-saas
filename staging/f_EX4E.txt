@@ -1,0 +1,26 @@
+assert res1[0] is True  # success
+E   assert False is True
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution test_exec_001: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+assert successful_count == 100
+E   assert 0 == 100
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_0: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_1: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_2: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_3: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_4: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_5: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_6: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_7: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_8: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_9: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_10: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_11: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_12: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_13: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_14: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_15: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_16: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_17: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_18: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+CRITICAL backend_app.core.execution_engine:execution_engine.py:1023 Refusing execution exec_19: a live order reached the venue path without an approved risk evaluation (risk_approved=None, reason='').
+NONCE_END=EX4E

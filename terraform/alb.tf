@@ -63,11 +63,31 @@ resource "aws_lb_listener" "http" {
     }
   }
 
+  # Plaintext fallback: serves the frontend directly over :80 when no custom domain (and
+  # therefore no ACM certificate and no HTTPS listener) exists. Retained for local and
+  # bootstrap use only — the precondition below keeps it out of production.
   dynamic "default_action" {
     for_each = var.enable_custom_domain ? [] : [1]
     content {
       type             = "forward"
       target_group_arn = aws_lb_target_group.frontend.arn
+    }
+  }
+
+  # SC-7: `enable_custom_domain` defaults to false (variables.tf), and with it false there is
+  # no HTTPS listener at all (count = 0 below), the API and WebSocket rules attach to this
+  # plaintext listener, and outputs.tf advertises http:// and ws:// endpoints. A production
+  # apply in that state carries every request, including Authorization headers and broker
+  # credentials, in clear text. Making the redirect unconditional would instead point :80 at
+  # a :443 listener that does not exist, so the fix is to refuse the combination rather than
+  # to silently rewrite it.
+  lifecycle {
+    precondition {
+      # NOTE: error_message is a literal on purpose. Interpolation inside precondition
+      # error messages is only accepted from Terraform 1.6 onward, and providers.tf
+      # declares required_version = ">= 1.5.0".
+      condition     = var.enable_custom_domain || !contains(["prod", "production"], var.environment)
+      error_message = "A prod/production environment requires enable_custom_domain=true. Without it no HTTPS listener is created and every request, including Authorization headers and broker credentials, is served in clear text over port 80."
     }
   }
 }
@@ -120,7 +140,10 @@ resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.main.arn
   port              = "443"
   protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  # SC-7: TLS 1.2 is the floor. ELBSecurityPolicy-2016-08 (the AWS default, and what stood
+  # here) still negotiates TLS 1.0 and 1.1, which fails the constraint and any compliance
+  # scan that checks protocol versions. This policy offers TLS 1.3 and 1.2 only.
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
   certificate_arn   = aws_acm_certificate_validation.main[0].certificate_arn
 
   default_action {

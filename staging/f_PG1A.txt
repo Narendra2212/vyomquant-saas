@@ -1,0 +1,5 @@
+outcomes=5159 of 13326 time=01:51:23 state=ALIVE
+tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic FAILED [  1%]
+tests/test_bandit_sast_gate_is_green.py::test_every_interpolation_into_sql_is_constrained_before_it_gets_there FAILED [  8%]
+tests/test_exchange_safety_fix.py::test_connection_pooling_safety FAILED [ 20%]
+NONCE_END=PG1A

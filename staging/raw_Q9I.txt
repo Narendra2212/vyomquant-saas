@@ -1,0 +1,33 @@
+DSN=postgresql://postgres:@127.0.0.1:57227/postgres
+A. ONE UNFUNDABLE MARKET BUY (capital 100, buy 500 @ 1 -> required 500.75)
+  call -> raised PaperInsufficientFunds PAPER_INSUFFICIENT_FUNDS
+       PAPER_INSUFFICIENT_FUNDS: The order needs more funds than this paper account has available, so no funds were reserved.
+  --- database after the unfundable buy ---
+    order side=buy  qty=500.0000000000 state=REJECTED         legacy=REJECTED   filled=0E-10 reason='INSUFFICIENT_FUNDS'
+    account avail=100.0000000000 locked=0E-10 equity=100.0000000000 version=1
+    counts fills=0 positions=0 balance_events=0 trades=0
+  PAPER02_STRANDED_ORDERS=0
+  PAPER02_REASON_RECORDED=True
+
+B/C. TWO SEPARATE OS PROCESSES, capital 100, each buying 80 @ 1
+     required per order = 80 * (1 + 0.001 + 0.0005) = 80.12
+  worker A -> returned  
+  worker B -> raised PaperInsufficientFunds PAPER_INSUFFICIENT_FUNDS
+       PAPER_INSUFFICIENT_FUNDS: The order needs more funds than this paper account has available, so no funds were reserved.
+  --- database after the race ---
+    order side=buy  qty=80.0000000000 state=FILLED           legacy=FILLED     filled=80.0000000000 reason=None
+    order side=buy  qty=80.0000000000 state=REJECTED         legacy=REJECTED   filled=0E-10 reason='INSUFFICIENT_FUNDS'
+    account avail=19.8800000000 locked=0E-10 equity=99.9200000000 version=2
+    counts fills=1 positions=1 balance_events=1 trades=0
+    event cause=FILL         avail_delta=-80.1200000000 locked_delta=0E-10
+  RACE_ORDERS=2
+  RACE_FILLED=1
+  RACE_REJECTED=1
+  RACE_STRANDED=0
+  RACE_FILL_ROWS=1
+  RACE_AVAILABLE=19.8800000000
+  RACE_NEGATIVE_CASH=False
+  RACE_PHANTOM_FILL=False  (fill rows 1 vs FILLED orders 1)
+  RACE_VERDICT=CORRECT (exactly one filled, exactly one rejected)
+exit=0
+NONCE_END=Q9I

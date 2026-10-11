@@ -638,6 +638,21 @@ def test_p47_no_response_or_event_contains_protected_logic(strategy: Any) -> Non
 PREVIEW_NODE_HANDLER = inspect.unwrap(strategy_ops.preview_node)
 COMPARE_VERSIONS_HANDLER = inspect.unwrap(strategy_ops.compare_versions)
 
+#: The ``RestrictedOperation.name`` values the two refusal bodies echo into
+#: ``details.operation``. Read FROM THE GUARD'S OWN CONSTANTS, not hand-typed, so the corpus
+#: cannot drift from what the routes actually put in the body. These are the operations the two
+#: guarded handlers under test pass to ``refuse_if_entitled_subscriber`` -- ``node_preview`` for
+#: the trace surface and ``version_compare`` for the export surface. They are strategy-
+#: independent constants (fixed before any strategy existed, identical for every caller), so a
+#: generated Protected_Logic token that is a substring of one -- e.g. ``vie`` inside
+#: ``node_preview`` -- is a spelling coincidence, exactly as the P-47 banner documents for
+#: ``avg_rating``/``details``. Including them lets ``assume`` skip such an example without
+#: weakening the property: every token is still searched over every value of every body.
+_OPERATION_NAMES_ECHOED_BY_REFUSALS: Tuple[str, ...] = (
+    _subscriber_guard.NODE_PREVIEW.name,
+    _subscriber_guard.VERSION_COMPARE.name,
+)
+
 for _handler, _name in (
     (PREVIEW_NODE_HANDLER, "preview_node"),
     (COMPARE_VERSIONS_HANDLER, "compare_versions"),
@@ -718,7 +733,22 @@ def test_trace_and_export_surfaces_contain_no_protected_logic(
     # substring of THIS example's `strategy_id` is therefore the same false positive the P-47
     # banner describes for `avg_rating`/`details`, and is skipped the same way: declared text
     # local to this example, never read from the response under test.
-    independent_text = STRATEGY_INDEPENDENT_TEXT + (str(strategy_id),)
+    #
+    # The refusal body ALSO echoes the operation NAME, verbatim, in `details.operation` — the
+    # `_guard_stub` below raises `details={"operation": operation.name, ...}`. Those names are
+    # the route's own constants (`node_preview`, `version_compare`, …), fixed before any
+    # strategy existed and identical for every caller, so a generated token that is a substring
+    # of one is the same spelling coincidence as `avg_rating`/`details`, not a disclosure.
+    # Measured: a generated indicator parameter named `vie` collided with the `node_preview`
+    # operation name, which is why `preview_node`'s and `compare_versions`' operation names are
+    # part of the strategy-independent corpus here. Added as a declared constant — the route's
+    # own `RestrictedOperation.name` — never read from the response under test, so a token that
+    # reaches `details.operation` BECAUSE of the strategy still cannot appear in it.
+    independent_text = (
+        STRATEGY_INDEPENDENT_TEXT
+        + (str(strategy_id),)
+        + _OPERATION_NAMES_ECHOED_BY_REFUSALS
+    )
     assume(
         not any(
             any(token in text for text in independent_text) for token in tokens
@@ -908,6 +938,7 @@ class _CloneQuery:
         self.payload: Any = None
         self.filters: List[Tuple[str, Any]] = []
         self.single_row = False
+        self.row_limit: Optional[int] = None
 
     def select(self, columns: Any) -> "_CloneQuery":
         self.columns = columns
@@ -934,6 +965,14 @@ class _CloneQuery:
 
     def single(self) -> "_CloneQuery":
         self.single_row = True
+        return self
+
+    def limit(self, count: int) -> "_CloneQuery":
+        # Present because the product uses it (LIB-03). ``clone_strategy``'s step-1 listing
+        # lookup and step-6 source lookup ask for ``.limit(1)`` where they used to ask for
+        # ``.single()``; a double that lags the client surface the handler calls turns a
+        # product change into an ``AttributeError`` that says nothing about the product.
+        self.row_limit = count
         return self
 
     def execute(self) -> _CloneResponse:
@@ -975,18 +1014,39 @@ class CloneClient:
         if query.op in ("update", "upsert"):
             return _CloneResponse([dict(query.payload)])
         if query.table_name == "library_strategies":
-            return _CloneResponse(
-                dict(self.listing) if query.single_row else [dict(self.listing)]
-            )
-        if query.table_name == "strategy_versions":
-            return _CloneResponse([dict(row) for row in self.version_rows])
-        if query.table_name == "strategies":
             if query.single_row:
-                return _CloneResponse(
-                    dict(self.source_strategy) if self.source_strategy else None
-                )
-            return _CloneResponse([dict(row) for row in self.existing_clones])
+                return _CloneResponse(dict(self.listing))
+            return _CloneResponse(self._limited([dict(self.listing)], query))
+        if query.table_name == "strategy_versions":
+            return _CloneResponse(
+                self._limited([dict(row) for row in self.version_rows], query)
+            )
+        if query.table_name == "strategies":
+            # Told apart the way the SERVER tells them apart - by the filter - not by the
+            # Accept header. `clone_strategy` reads this table twice: step 5 looks up the
+            # caller's EXISTING clones by (`source_library_id`, `user_id`), and step 6 looks
+            # up the SOURCE strategy by `id`. Until LIB-03 the source read carried `.single()`
+            # and this double keyed off that flag; `.limit(1)` replaced it, so the flag no
+            # longer separates the two reads and the filter has to.
+            by_column = dict(query.filters)
+            if "id" in by_column:
+                if query.single_row:
+                    return _CloneResponse(
+                        dict(self.source_strategy) if self.source_strategy else None
+                    )
+                rows = [dict(self.source_strategy)] if self.source_strategy else []
+                return _CloneResponse(self._limited(rows, query))
+            return _CloneResponse(
+                self._limited([dict(row) for row in self.existing_clones], query)
+            )
         return _CloneResponse([])
+
+    @staticmethod
+    def _limited(rows: List[Dict[str, Any]], query: _CloneQuery) -> List[Dict[str, Any]]:
+        """Apply `.limit(n)` the way PostgREST does: truncate, do not raise."""
+        if query.row_limit is None:
+            return rows
+        return rows[: query.row_limit]
 
     # -- reading the recording ---------------------------------------------------------------
     def writes(self) -> List[_CloneQuery]:

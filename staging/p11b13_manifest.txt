@@ -1,0 +1,69 @@
+==========================================================================================
+tests/test_webhook_duplicate_delivery_real_redis.py
+==========================================================================================
+  main (HEAD)            ABSENT
+  PR6 base b43e990d        383 lines   A5 fail-not-skip=NO  A12 keyspace fix=NO
+  PR6 head d07014d3        383 lines   A5 fail-not-skip=NO  A12 keyspace fix=NO
+  PR7 head 49e70da2        416 lines   A5 fail-not-skip=yes  A12 keyspace fix=NO
+  PR8 head a624ce89        416 lines   A5 fail-not-skip=yes  A12 keyspace fix=NO
+  WORKTREE                 646 lines   A5 fail-not-skip=yes  A12 keyspace fix=yes
+
+==========================================================================================
+tests/real_redis_gate.py
+==========================================================================================
+  main (HEAD)            ABSENT
+  PR6 base b43e990d        187 lines   
+  PR6 head d07014d3        187 lines   
+  PR7 head 49e70da2        187 lines   
+  PR8 head a624ce89        187 lines   
+  WORKTREE                 187 lines   
+
+==========================================================================================
+tests/test_quota01_exchange_slot_is_atomic.py
+==========================================================================================
+  main (HEAD)            ABSENT
+  PR6 base b43e990d        867 lines   
+  PR6 head d07014d3        867 lines   
+  PR7 head 49e70da2        867 lines   
+  PR8 head a624ce89        867 lines   
+  WORKTREE                 867 lines   
+
+==========================================================================================
+tests/test_quota01_metered_reservation_is_hard.py
+==========================================================================================
+  main (HEAD)            ABSENT
+  PR6 base b43e990d        264 lines   
+  PR6 head d07014d3        264 lines   
+  PR7 head 49e70da2        264 lines   
+  PR8 head a624ce89        264 lines   
+  WORKTREE                 264 lines   
+
+==========================================================================================
+backend_app/core/subscription_dependencies.py
+==========================================================================================
+  main (HEAD)              929 lines   slot guard=NO  lock key=NO
+  PR6 base b43e990d        929 lines   slot guard=NO  lock key=NO
+  PR6 head d07014d3        929 lines   slot guard=NO  lock key=NO
+  PR7 head 49e70da2        929 lines   slot guard=NO  lock key=NO
+  PR8 head a624ce89        929 lines   slot guard=NO  lock key=NO
+  WORKTREE                1182 lines   slot guard=yes  lock key=yes
+
+==========================================================================================
+backend_app/routers/exchange.py
+==========================================================================================
+  main (HEAD)              825 lines   store_keys guard=NO
+  PR6 base b43e990d        825 lines   store_keys guard=NO
+  PR6 head d07014d3        825 lines   store_keys guard=NO
+  PR7 head 49e70da2        825 lines   store_keys guard=NO
+  PR8 head a624ce89        825 lines   store_keys guard=NO
+  WORKTREE                1218 lines   store_keys guard=yes
+
+==========================================================================================
+.github/workflows/01-pr-check.yml
+==========================================================================================
+  main (HEAD)              634 lines   hunk1 opt-in=NO  A11 diagnostic job=NO  provisioning job=NO
+  PR6 base b43e990d        661 lines   hunk1 opt-in=yes  A11 diagnostic job=NO  provisioning job=NO
+  PR6 head d07014d3        812 lines   hunk1 opt-in=yes  A11 diagnostic job=yes  provisioning job=NO
+  PR7 head 49e70da2        661 lines   hunk1 opt-in=yes  A11 diagnostic job=NO  provisioning job=NO
+  PR8 head a624ce89        661 lines   hunk1 opt-in=yes  A11 diagnostic job=NO  provisioning job=NO
+  WORKTREE                 836 lines   hunk1 opt-in=yes  A11 diagnostic job=NO  provisioning job=yes

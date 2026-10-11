@@ -1,0 +1,32 @@
+--- every source of a 429 in backend_app ---
+  backend_app\api_ws\ws_manager.py:197: status_code=429,
+  backend_app\api_ws\ws_routes.py:313: #    [2026-10-01 20:45:06 +0000] [43] [INFO] ('10.0.0.101', 42908) -
+  backend_app\backend\alert_engine.py:15: ?  AE-2  No rate-limit (429) handling ? now exponential backoff            ?
+  backend_app\backend\alert_engine.py:117: if resp.status == 429:
+  backend_app\backend\alert_engine.py:186: if resp.status == 429:
+  backend_app\backend\alert_engine.py:355: if resp.status == 429:
+  backend_app\backend\exchange_reconciliation.py:242: # Transient errors (timeout, 429, 500) must propagate so the caller aborts.
+  backend_app\backend\exchange_simulator.py:342: raise ExchangeError("Rate limit exceeded - too many requests", error_code="429", retryable=True)
+  backend_app\backend\exchange_simulator.py:673: raise ExchangeError("Rate limit exceeded - too many requests", error_code="429", retryable=True)
+  backend_app\backend\exchange_simulator.py:704: raise ExchangeError("Rate limit exceeded - too many requests", error_code="429", retryable=True)
+  backend_app\core\country_detection.py:30: # Private and loopback network ranges (RFC 1918, RFC 3927, RFC 4291)
+  backend_app\core\exchange_rate_limiter.py:670: "429",
+  backend_app\core\exchange_rate_limit_engine.py:41: - Adaptive throttling based on 429 responses
+  backend_app\core\exchange_rate_limit_engine.py:183: throttle_reduction: float = 0.8  # Reduce rate by 20% on 429
+  backend_app\core\exchange_rate_limit_engine.py:584: Handle rate limit error (HTTP 429) from exchange.
+  backend_app\core\rate_limit_keys.py:25: exception escaping it does not become a 429 - it becomes a 500, so a malformed
+  backend_app\core\rate_limit_keys.py:54: as the catalogue's ``MARKETPLACE_RATE_LIMITED`` (429) through the one structured error
+  backend_app\core\rate_limit_keys.py:120: except Exception:  # noqa: BLE001 - a key function that raises turns a 429 into a 500
+  backend_app\core\rate_limit_keys.py:170: """Answer ``slowapi``'s ``RateLimitExceeded`` with ``MARKETPLACE_RATE_LIMITED`` (429).
+  backend_app\core\rate_limit_keys.py:180: machine-readable 429 before, and one shape for all of them is better than two.
+  backend_app\core\rate_limit_middleware.py:100: status_code=429,  # Too Many Requests
+  backend_app\core\rate_limit_middleware.py:193: status_code=429,
+  backend_app\core\reconciliation_engine.py:499: # orders, this is almost certainly a transient API failure (timeout, 429, 500)
+  backend_app\core\schemas.py:105: status_code: int = Field(..., description="HTTP status code (e.g. 400, 401, 403, 404, 429, 500)")
+  backend_app\core\schemas.py:182: elif status_code == 429:
+  backend_app\core\subscription_middleware.py:221: status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+  backend_app\routers\exchange.py:157: 429,
+  backend_app\routers\market.py:207: **401** from ``get_current_user``; **429** from the existing limiter.
+  backend_app\routers\paper_trading.py:935: PaperError: 403/409/422 ``PAPER_START_REFUSED`` naming the validation, 429
+  backend_app\routers\strategy_operations.py:788: **429** from the existing limiter.
+NONCE_END=P6H1

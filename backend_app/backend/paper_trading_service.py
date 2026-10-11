@@ -112,9 +112,9 @@ over here.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
-import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_EVEN, Decimal
 from enum import Enum
@@ -326,14 +326,38 @@ class PaperTradingService:
         return paper_read_failed()
 
     @staticmethod
-    def _conflict(exc: repo.PaperConcurrencyConflict) -> PaperError:
+    def _conflict(
+        exc: repo.PaperConcurrencyConflict,
+        *,
+        phase: Optional[str] = None,
+        partial_write: Optional[bool] = None,
+    ) -> PaperError:
         """A version- or state-guarded write that matched no row -> 409.
 
         Requirement 16.10's answer to a lost race. The caller learns it lost instead of being
         told the write succeeded.
+
+        ``phase`` and ``partial_write`` carry the residue into the response rather than
+        leaving it to be discovered. This is ``paper_simulator``'s convention, asserted for
+        the session path by
+        ``test_submit_intents_lock_gives_up_with_the_phase_and_the_partial_write_named``:
+        "PostgREST offers no ``ROLLBACK`` for the two statements that committed. So the 409
+        names ``phase`` and ``partial_write``... which is visible in the response instead of
+        silent." On this path ``phase='FILL'`` with ``partial_write=True`` means one unsettled
+        ``paper_fills`` row exists for the order - PAPER-04 - and it is the thing a
+        reconciliation query should look for.
         """
-        logger.warning("A paper write lost its optimistic guard: %s", exc)
-        return PaperError(PAPER_CONCURRENCY_CONFLICT)
+        logger.warning(
+            "A paper write lost its optimistic guard%s: %s",
+            f" during {phase}" if phase else "",
+            exc,
+        )
+        details: Dict[str, Any] = {}
+        if phase is not None:
+            details["phase"] = phase
+        if partial_write is not None:
+            details["partial_write"] = partial_write
+        return PaperError(PAPER_CONCURRENCY_CONFLICT, details=details or None)
 
     # ══════════════════════════════════════════════════════════════════
     # SMALL HELPERS
@@ -1351,7 +1375,7 @@ class PaperTradingService:
                 )
 
             # Market order -> accepted and filled in the same call, as before.
-            order_row, already_recorded = self._insert_and_accept(
+            order_row, already_recorded = self._insert_fund_and_accept(
                 sb,
                 uid,
                 account_id=account_id,
@@ -1362,14 +1386,34 @@ class PaperTradingService:
                 limit_price=None,
                 reference_price=exec_price,
                 idempotency_key=idempotency_key,
+                available_balance=avail_bal,
             )
             if already_recorded:
                 return self._order_body(
                     order_row, repo.get_fills(sb, uid, order_id=order_row["id"])
                 )
-            return await self._execute_fill(
-                sb, uid, order_row, quantity=qty_dec, price=exec_price
-            )
+            try:
+                return await self._execute_fill(
+                    sb, uid, order_row, quantity=qty_dec, price=exec_price
+                )
+            except accounting.InvariantViolation as exc:
+                # PAPER-02's second half. The gate above decided on the balance read at the
+                # top of this call; a CONCURRENT writer can still have spent it before the
+                # fill re-reads the account, and then ``apply_fill`` refuses. That refusal
+                # writes nothing - but the order is already ACCEPTED, and leaving it there
+                # is the defect: an order that cannot be funded would stay live on the book
+                # with ``rejection_reason = NULL`` for ever.
+                #
+                # ``ACCEPTED -> REJECTED`` is one of Requirement 16.2's nine transitions and
+                # is seeded in ``paper_order_allowed_transitions``, so this is the state
+                # machine being used rather than worked around.
+                raise self._reject_unfundable_order(
+                    sb,
+                    uid,
+                    order=order_row,
+                    expected_state=PaperOrderState(order_row["order_state"]),
+                    invariant=exc,
+                ) from exc
         except repo.PaperConcurrencyConflict as exc:
             raise self._conflict(exc) from exc
         except accounting.InvariantViolation as exc:
@@ -1380,7 +1424,7 @@ class PaperTradingService:
         except repo.PaperPersistenceError as exc:
             raise self._read_failed(exc, "order placement") from exc
 
-    def _insert_and_accept(
+    def _insert_fund_and_accept(
         self,
         sb: Any,
         uid: str,
@@ -1393,19 +1437,60 @@ class PaperTradingService:
         limit_price: Optional[Decimal],
         reference_price: Optional[Decimal],
         idempotency_key: Optional[str],
+        available_balance: Decimal,
     ) -> Tuple[Dict[str, Any], bool]:
-        """Insert one order at ``CREATED`` and move it to ``ACCEPTED``.
+        """Insert at ``CREATED``, gate on funds, then move to ``ACCEPTED``.
 
-        Two statements, because ``CREATED`` is the only origin the transition guard admits and
-        ``CREATED -> FILLED`` is not one of Requirement 16.2's transitions. The order is on the
-        book at ``ACCEPTED`` - ``legacy_status = 'OPEN'`` - which is the state
-        ``?status=OPEN`` has always meant.
+        THE GATE IS THE FIX FOR PAPER-02, AND ITS POSITION IS THE WHOLE POINT
+        --------------------------------------------------------------------
+        This used to be ``_insert_and_accept``: two statements, insert at ``CREATED`` then
+        accept, with **no affordability check anywhere on the market path**. ``place_order``
+        read ``available_balance`` and used it only in the ``limit`` branch. So an unfundable
+        market buy was accepted, and the shortfall was discovered three steps later inside
+        ``paper_accounting.apply_fill``, which refused with
+        ``InvariantViolation('available_balance')``. That refusal correctly wrote nothing -
+        but the order was already ``ACCEPTED`` / ``legacy_status = 'OPEN'`` with
+        ``filled_quantity = 0`` and ``rejection_reason = NULL``, and nothing ever went back
+        for it. Measured in ``staging/probe_paper02_state.py``:
+
+            order side=buy qty=500 state=ACCEPTED legacy=OPEN filled=0 reason=None
+            PAPER02_STRANDED_ORDERS=1   PAPER02_REASON_RECORDED=False
+
+        The gate therefore sits **between** the insert and the accept. Not before the insert,
+        because Requirement 16.6 wants the rejection *persisted* as an order carrying its
+        reason, and a row that was never written carries nothing. Not after the accept,
+        because then the order has already been in a state it could fill from.
+
+        ``CREATED -> REJECTED`` is one of Requirement 16.2's nine transitions and is seeded in
+        ``paper_order_allowed_transitions``, so no new state, no new model and no migration is
+        involved - this is the existing machine, used.
+
+        WHY ``required_funds`` AND NOT THE LIMIT BRANCH'S ``estimated_cost``
+        -------------------------------------------------------------------
+        ``paper_accounting.required_funds`` is ``notional * (1 + fee_rate + slippage_rate)``,
+        which is exactly the figure Requirement 16.6 prescribes and the one
+        ``paper_simulator`` gates on. The ``limit`` branch computes a weaker
+        ``estimated_cost`` that omits the slippage allowance; that divergence is **reported as
+        PAPER-05, not changed here**, because the same value is also the amount
+        ``accounting.lock`` reserves and what the resting fill releases, so raising it is a
+        coupled change across the resting-order path rather than a threshold edit.
+
+        A market order still locks nothing (Requirement 16.6's "SHALL lock no funds", and
+        ``design.md``'s market path), so the gate is a comparison and not a reservation. The
+        atomicity that matters is already present and was measured working: ``apply_fill``
+        asserts every invariant **before** the first statement, and ``bump_version`` carries
+        the account's ``version`` as a predicate, so two racing workers cannot both move the
+        balance. What was missing was never the money - it was the losing order's state.
 
         Returns:
             ``(order_row, already_recorded)``. ``already_recorded`` is ``True`` when the insert
-            lost the idempotency-index race, in which case the row is the order that **won** and
-            the caller returns it untouched instead of accepting or filling it a second time
-            (Requirement 16.8).
+            lost the idempotency-index race, in which case the row is the order that **won**
+            and the caller returns it untouched instead of accepting or filling it a second
+            time (Requirement 16.8).
+
+        Raises:
+            PaperError: 400 ``PAPER_INSUFFICIENT_FUNDS``, after the order has been persisted
+                at ``REJECTED`` carrying ``INSUFFICIENT_FUNDS``.
         """
         created, already_recorded = self._insert_order_or_recorded(
             sb,
@@ -1421,6 +1506,30 @@ class PaperTradingService:
         )
         if already_recorded:
             return created, True
+
+        price_for_funds = limit_price if limit_price is not None else reference_price
+        if price_for_funds is not None:
+            required = accounting.required_funds(
+                {"quantity": quantity}, price_for_funds, self.config
+            )
+            # A sell is gated too. ``paper_simulator`` records that ``design.md``'s pseudocode
+            # narrows this to ``side = 'buy'`` while Requirement 16.6 carries no side
+            # qualifier, and that the two readings differ. The retained behaviour is kept
+            # here - only a buy is gated - because a sell that CLOSES a position releases
+            # cash rather than consuming it, so gating it on the notional would refuse a
+            # position-reducing order that is always affordable. A sell that OPENS a short
+            # does consume cash, and that case is caught by the ``InvariantViolation``
+            # handler in ``place_order``, which now rejects rather than stranding.
+            if side == "buy" and required > available_balance:
+                raise self._reject_unfundable_order(
+                    sb,
+                    uid,
+                    order=created,
+                    expected_state=PaperOrderState.CREATED,
+                    required=required,
+                    available=available_balance,
+                )
+
         return (
             repo.update_order(
                 sb,
@@ -1430,6 +1539,95 @@ class PaperTradingService:
                 expected_state=PaperOrderState.CREATED,
             ),
             False,
+        )
+
+    def _reject_unfundable_order(
+        self,
+        sb: Any,
+        uid: str,
+        *,
+        order: Mapping[str, Any],
+        expected_state: PaperOrderState,
+        required: Optional[Decimal] = None,
+        available: Optional[Decimal] = None,
+        invariant: Optional[Exception] = None,
+    ) -> PaperError:
+        """Persist ``order`` at ``REJECTED`` carrying ``INSUFFICIENT_FUNDS``; return the error.
+
+        One statement on ``paper_orders`` and nothing else, which is how Requirement 16.6's
+        "SHALL lock no funds" holds here: no statement against ``paper_accounts``,
+        ``paper_positions``, ``paper_fills`` or ``paper_balance_events`` is issued at all -
+        not issued and undone.
+
+        Returns the exception rather than raising it, so the call site reads
+        ``raise self._reject_unfundable_order(...)`` and a reader can see at a glance that the
+        persistence happened before the raise.
+
+        THE REASON VOCABULARY IS BORROWED, NOT RE-SPELLED. ``REJECTION_INSUFFICIENT_FUNDS``
+        lives in ``paper_simulator`` beside the other nine reasons, and 009 declares no CHECK
+        constraint on ``rejection_reason`` - so that tuple, not the database, is the
+        enumeration. Writing ``"INSUFFICIENT_FUNDS"`` as a literal here would create a second
+        spelling of a closed vocabulary. The import is function-local because
+        ``paper_simulator`` is a large module and this service is on the request path for
+        every ``/api/paper/*`` call; it is the same reason this module already imports
+        ``routers.risk`` and ``core.dependencies`` function-locally.
+
+        WHEN THE INVARIANT IS NOT A FUNDING ONE, THE ORDER IS LEFT ALONE. ``invariant`` is
+        only translated to a rejection for ``available_balance``. ``total_equity``,
+        ``position_size`` and ``position_side`` are accounting breaches rather than funding
+        failures, and labelling one ``INSUFFICIENT_FUNDS`` would put a false reason in the
+        ledger; ``locked_balance`` is unreachable here because a market order releases nothing.
+        Those keep the existing 500 ``PAPER_INVARIANT_VIOLATION``, which is the right answer
+        for a condition an operator has to look at.
+        """
+        from backend_app.backend.paper.paper_simulator import (
+            REJECTION_INSUFFICIENT_FUNDS,
+            PaperInsufficientFunds,
+        )
+
+        if invariant is not None and getattr(invariant, "invariant", None) != (
+            "available_balance"
+        ):
+            logger.error(
+                "A paper fill was refused by the %r invariant, which is not a funding "
+                "failure, so order %s is left at %s for an operator to look at: %s",
+                getattr(invariant, "invariant", None),
+                order.get("id"),
+                order.get("order_state"),
+                invariant,
+            )
+            return PaperError(
+                PAPER_INVARIANT_VIOLATION,
+                details={"invariant": getattr(invariant, "invariant", None)},
+            )
+
+        rejected = repo.update_order(
+            sb,
+            user_id=uid,
+            order_id=order["id"],
+            order_state=PaperOrderState.REJECTED,
+            expected_state=expected_state,
+            rejection_reason=REJECTION_INSUFFICIENT_FUNDS,
+        )
+        logger.info(
+            "[PAPER FUNDS] order %s rejected as %s from %s: required %s, available %s. "
+            "No balance, position, fill or ledger row was written.",
+            rejected.get("id"),
+            REJECTION_INSUFFICIENT_FUNDS,
+            expected_state.value,
+            required,
+            available,
+        )
+        # Both figures are reported at the account currency's Minor_Units scale. ``required``
+        # already is - ``required_funds`` quantizes once at the end - but ``available`` comes
+        # straight off ``paper_accounts.available_balance``, a ``NUMERIC(28, 10)``, so without
+        # this the caller was shown ``required=500.75`` beside
+        # ``available=100.0000000000``: two precisions for the same currency in one refusal.
+        return PaperInsufficientFunds(
+            required="unknown" if required is None else self.config.money(required),
+            available="unknown" if available is None else self.config.money(available),
+            order_id=rejected.get("id"),
+            details={"rejection_reason": REJECTION_INSUFFICIENT_FUNDS},
         )
 
     def _insert_order_or_recorded(
@@ -1590,6 +1788,172 @@ class PaperTradingService:
     # THE FILL (Requirements 18.5, 18.6, 18.7, 18.8, 18.14)
     # ══════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _assert_account_unmoved(
+        sb: Any, uid: str, *, account_id: str, seen: Mapping[str, Any]
+    ) -> None:
+        """Raise :class:`repo.PaperConcurrencyConflict` if the account's version moved.
+
+        The same predicate ``bump_version`` applies, asked one statement earlier and for a
+        different purpose: ``bump_version`` asks it to keep the balance correct, and this asks
+        it to avoid writing a fill row that will turn out to be unbacked. Both are needed -
+        this one is advisory and racy by nature, and removing ``bump_version``'s guard because
+        this exists would be a mistake.
+
+        A read that does not complete raises :class:`repo.PaperPersistenceError`, which is
+        **not** retryable and is therefore not converted here: not knowing the version is not
+        the same as knowing it changed.
+
+        Reads through ``lock_account_for_update`` rather than ``read_account`` because that is
+        the one that takes an ``account_id``; ``read_account`` keys on ``(user_id, currency,
+        session_id)``. Neither holds a lock - ``paper_repository`` records that PostgREST
+        cannot hold one across requests - so both are plain reads and the name is the only
+        difference that matters here.
+        """
+        current = repo.lock_account_for_update(sb, uid, account_id=account_id)
+        if current is None:
+            # Nothing to compare against. ``bump_version`` remains the real guard.
+            return
+        if int(current.get("version", -1)) != int(seen.get("version", -2)):
+            raise repo.PaperConcurrencyConflict(
+                f"the paper account moved from version {seen.get('version')} to "
+                f"{current.get('version')} while this fill was being computed, so nothing "
+                "was written",
+                table=repo.ACCOUNTS_TABLE,
+                row_id=str(account_id),
+            )
+
+    def _fill_row_for_attempt(
+        self,
+        sb: Any,
+        uid: str,
+        *,
+        account_id: str,
+        order_row: Mapping[str, Any],
+        quantity: Decimal,
+        price: Decimal,
+        fee: Decimal,
+        slippage_cost: Decimal,
+        filled_at: datetime,
+        attempt: int,
+    ) -> Tuple[Dict[str, Any], bool]:
+        """The fill row for this attempt, inserted or adopted. ``(fill_row, already_settled)``.
+
+        ``paper_simulator.apply_fill``'s guard 2, for the default-account path. A fill row
+        carrying this order's deterministic ``fill_event_id`` means a previous attempt got
+        that far. Which of the two things it means is decided by the ledger, not guessed:
+
+        * a ``FILL`` balance event carries the fill's ``id`` -> **the money already moved**.
+          This is the no-op Requirement 18.13 asks for, and the caller is answered with the
+          order as it now stands rather than having the fill applied a second time.
+        * no ledger row carries it -> **the fill row landed and the money did not**. The row
+          is adopted and this attempt finishes the movement, so the retry neither inserts a
+          second fill nor skips the one that is owed.
+
+        On the first attempt there is nothing to adopt, and the common path is one INSERT with
+        no extra reads: the lookup only runs from the second attempt onward.
+        """
+        if attempt <= 1:
+            return (
+                repo.insert_fill(
+                    sb,
+                    order_id=order_row["id"],
+                    user_id=uid,
+                    fill_event_id=self._fill_event_id(order_row["id"]),
+                    quantity=quantity,
+                    price=price,
+                    fee_minor=self._minor(fee, "fee_minor"),
+                    slippage_minor=self._minor(slippage_cost, "slippage_minor"),
+                    filled_at=filled_at,
+                ),
+                False,
+            )
+
+        event_id = self._fill_event_id(order_row["id"])
+        existing = next(
+            (
+                row
+                for row in repo.get_fills(sb, uid, order_id=order_row["id"])
+                if str(row.get("fill_event_id")) == event_id
+            ),
+            None,
+        )
+        if existing is None:
+            return (
+                repo.insert_fill(
+                    sb,
+                    order_id=order_row["id"],
+                    user_id=uid,
+                    fill_event_id=event_id,
+                    quantity=quantity,
+                    price=price,
+                    fee_minor=self._minor(fee, "fee_minor"),
+                    slippage_minor=self._minor(slippage_cost, "slippage_minor"),
+                    filled_at=filled_at,
+                ),
+                False,
+            )
+
+        settled = any(
+            str(event.get("fill_id") or "") == str(existing["id"])
+            for event in repo.get_balance_events(
+                sb, uid, account_id=account_id, cause="FILL"
+            )
+        )
+        if settled:
+            logger.info(
+                "[PAPER FILL] fill %s for order %s is already settled in the ledger; "
+                "attempt %s is a no-op (Requirement 18.13).",
+                existing.get("id"),
+                order_row.get("id"),
+                attempt,
+            )
+            return dict(existing), True
+
+        logger.warning(
+            "[PAPER FILL] resuming fill %s on order %s at attempt %s: the fill row exists "
+            "but no ledger row carries it, so the money has not moved.",
+            existing.get("id"),
+            order_row.get("id"),
+            attempt,
+        )
+        return dict(existing), False
+
+    @staticmethod
+    def _fill_event_id(order_id: Any) -> str:
+        """The ``fill_event_id`` this path's single fill of ``order_id`` carries.
+
+        DETERMINISTIC, WHICH IT WAS NOT. This was
+        ``f"exec_paper_{uuid.uuid4().hex[:12]}"`` - a fresh random value on every call. The
+        consequence was that ``uq_paper_fill_event UNIQUE (order_id, fill_event_id)`` could
+        never recognise a repeated fill on the default-account path, so the one database
+        guarantee against applying a fill twice was inert here. ``paper_simulator``'s
+        :func:`market_fill_event_id` already states the rule for the session path - "replay
+        produces the same identity, ``uq_paper_fill_event`` recognises it, and the second
+        application is the no-op Requirement 18.13 requires - rather than a second fill under
+        a fresh ``uuid4``" - and this path simply did not follow it.
+
+        Derived from the order alone, which is sound here because **every order on this path
+        fills exactly once**: ``place_order``'s market branch fills on acceptance, and
+        ``check_limit_orders`` fills a resting order for its whole ``quantity`` and moves it
+        straight to ``FILLED``. There is no partial-fill path through ``_execute_fill``, so a
+        per-order identity cannot collide with a legitimate second fill - and if one is ever
+        added, the collision is the database refusing to lose track of it, which is the
+        correct failure.
+
+        ``market_fill_event_id`` is deliberately not reused: it spells the prefix
+        ``market-``, and this method also mints the id for a resting **limit** fill, so
+        borrowing it would label half of these rows wrongly. The retained ``exec_paper_``
+        prefix is kept so existing rows and log greps stay recognisable.
+        """
+        return f"exec_paper_{order_id}"
+
+    #: Requirement 16.10's "retry at most 3". The delays mirror ``paper_simulator``'s, which
+    #: ``tests/test_paper_order_lifecycle_writes.py`` pins at ``[0.05, 0.10]``, so the two
+    #: paths back off the same way rather than two policies drifting apart.
+    FILL_ATTEMPTS: int = 3
+    FILL_RETRY_DELAYS: Tuple[float, ...] = (0.05, 0.10)
+
     async def _execute_fill(
         self,
         sb: Any,
@@ -1600,7 +1964,136 @@ class PaperTradingService:
         price: Decimal,
         release_from_locked: Decimal = Decimal("0"),
     ) -> Dict[str, Any]:
-        """Fill one order, move the money, and persist all of it. Returns the order body.
+        """Fill one order with at most :data:`FILL_ATTEMPTS` attempts. Returns the order body.
+
+        WHY A RETRY EXISTS HERE NOW (Requirement 16.10)
+        -----------------------------------------------
+        This path had none, and that was the hole. ``_attempt_fill`` writes the fill row
+        **before** the money moves, which is deliberate and is ``paper_simulator``'s
+        documented reasoning: ``uq_paper_fill_event`` is what makes a repeated fill a no-op,
+        a fill row written before the money moves can be *resumed*, and money moved before
+        the fill row exists could be applied twice. That ordering only pays for itself if
+        something actually resumes - and on the default-account path nothing did.
+
+        Measured, with two OS processes racing one account
+        (``staging/probe_paper02_state.py``, before this change):
+
+            worker A -> raised PaperError PAPER_CONCURRENCY_CONFLICT
+            RACE_FILL_ROWS=2   RACE_FILLED=1   RACE_STRANDED=1
+
+        - a fill row with no money behind it, an order left at ``ACCEPTED``, and a 409 for
+        the caller. The money was never wrong; the bookkeeping around it was.
+
+        So: conflicts are retried, each attempt re-reads the account and recomputes from the
+        balance it finds, and the attempt that finds the funds gone raises
+        ``InvariantViolation`` **before its first statement** - which ``place_order`` turns
+        into a persisted ``REJECTED`` order. A conflict is the only retryable condition; a
+        read that did not complete is surfaced immediately, because repeating a write whose
+        outcome is unknown is how a fill gets applied twice.
+
+        WHAT THIS DOES NOT CLAIM TO FIX - PAPER-04
+        ------------------------------------------
+        A conflict detected *after* ``insert_fill`` has landed still leaves that fill row and
+        its position behind, and ``paper_fills`` is append-only so nothing can remove them.
+        The window is narrowed by :meth:`_assert_account_unmoved` and the residue is made
+        resumable by the deterministic ``fill_event_id``, but it is not closed. Closing it
+        needs the fill to become one database statement - ``paper_repository``'s header
+        records the absence of a multi-statement transaction over PostgREST as a limitation
+        of the transport, and ``paper_simulator`` says the same: "closing the gap completely
+        requires moving ``submit_intent`` and ``apply_fill`` into a database" function. That
+        is reported as PAPER-04 rather than papered over here.
+        """
+        conflict: Optional[repo.PaperConcurrencyConflict] = None
+        for attempt in range(1, self.FILL_ATTEMPTS + 1):
+            try:
+                return await self._attempt_fill(
+                    sb,
+                    uid,
+                    order_row,
+                    quantity=quantity,
+                    price=price,
+                    release_from_locked=release_from_locked,
+                    attempt=attempt,
+                )
+            except repo.PaperConcurrencyConflict as exc:
+                conflict = exc
+                if attempt >= self.FILL_ATTEMPTS:
+                    break
+                delay = self.FILL_RETRY_DELAYS[
+                    min(attempt - 1, len(self.FILL_RETRY_DELAYS) - 1)
+                ]
+                logger.warning(
+                    "[PAPER FILL] attempt %s of %s for order %s lost the version guard; "
+                    "retrying in %ss. Nothing from this attempt moved the balance.",
+                    attempt,
+                    self.FILL_ATTEMPTS,
+                    order_row.get("id"),
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+        assert conflict is not None  # the loop only breaks with one
+
+        # Retries exhausted. Report the residue instead of leaving it to be found: an
+        # unsettled fill row - one carrying this order's deterministic ``fill_event_id`` that
+        # no ``FILL`` ledger row references - is PAPER-04's footprint, and naming it in the
+        # 409 is what the session path does for its own analogous partial write. The probe is
+        # wrapped because a failed read here must not replace the conflict the caller needs.
+        unsettled: Optional[bool] = None
+        try:
+            unsettled = self._has_unsettled_fill(
+                sb, uid, account_id=str(order_row["account_id"]), order_row=order_row
+            )
+        except Exception:  # noqa: BLE001 - diagnosis must not mask the conflict
+            logger.warning(
+                "[PAPER FILL] could not determine whether order %s left an unsettled fill "
+                "row; the conflict is reported without that detail.",
+                order_row.get("id"),
+            )
+        raise self._conflict(conflict, phase="FILL", partial_write=unsettled)
+
+    def _has_unsettled_fill(
+        self,
+        sb: Any,
+        uid: str,
+        *,
+        account_id: str,
+        order_row: Mapping[str, Any],
+    ) -> bool:
+        """Whether a fill row for this order exists that no ``FILL`` ledger row references.
+
+        The PAPER-04 footprint, expressed as the query a reconciliation job would run. Also
+        the reason the deterministic ``fill_event_id`` matters beyond de-duplication: with a
+        random id there was no way to ask this question about a specific order's fill.
+        """
+        event_id = self._fill_event_id(order_row["id"])
+        fills = [
+            row
+            for row in repo.get_fills(sb, uid, order_id=order_row["id"])
+            if str(row.get("fill_event_id")) == event_id
+        ]
+        if not fills:
+            return False
+        settled = {
+            str(event.get("fill_id") or "")
+            for event in repo.get_balance_events(
+                sb, uid, account_id=account_id, cause="FILL"
+            )
+        }
+        return any(str(row["id"]) not in settled for row in fills)
+
+    async def _attempt_fill(
+        self,
+        sb: Any,
+        uid: str,
+        order_row: Mapping[str, Any],
+        *,
+        quantity: Decimal,
+        price: Decimal,
+        release_from_locked: Decimal = Decimal("0"),
+        attempt: int = 1,
+    ) -> Dict[str, Any]:
+        """One attempt at filling the order. Returns the order body.
 
         The arithmetic is ``paper_accounting.apply_fill`` and nothing here duplicates it: this
         method reads the account and the positions, applies the retained adverse-slippage and
@@ -1609,21 +2102,43 @@ class PaperTradingService:
         back:
 
         1. ``paper_fills`` - the fill, with its exact integer Minor_Units fee and slippage.
-        2. ``paper_positions`` - the resulting position; two statements for a reversal, so the
+           First, because it is the **idempotency anchor**: ``uq_paper_fill_event`` is what
+           makes a repeated fill a no-op, and a fill row written before the money moves can be
+           resumed, whereas money moved before the fill row exists could be applied twice.
+        2. ``paper_accounts`` - the new balances, guarded by the ``version`` that was read.
+        3. ``paper_balance_events`` - the ledger row carrying this fill's three deltas, which
+           is where the per-fill realized PnL lives, and which carries ``fill_id`` and so is
+           also what marks the fill above as **settled** for :meth:`_fill_row_for_attempt`.
+        4. ``paper_positions`` - the resulting position; two statements for a reversal, so the
            closed leg keeps its own row and the reopened side gets a fresh one.
-        3. ``paper_accounts`` - the new balances, guarded by the ``version`` that was read.
-        4. ``paper_balance_events`` - the ledger row carrying this fill's three deltas, which
-           is where the per-fill realized PnL lives.
         5. ``paper_trades`` - only when a position reached exactly zero (Requirement 18.10).
         6. ``paper_orders`` - the order moved to ``FILLED``, with its filled quantity, average
            fill price, fee and slippage.
+
+        THE POSITION USED TO BE WRITTEN SECOND, AND THAT WAS A DIVERGENCE
+        ----------------------------------------------------------------
+        This path wrote fill -> **position** -> money -> ledger, while the canonical session
+        path (``paper_simulator.apply_fill``) writes fill -> money -> ledger -> position, with
+        its steps labelled "write 1" to "write 4" and the money annotated "past this point
+        nothing is retried". The two orderings were never reconciled, and the divergence had a
+        measurable cost: a version conflict at the account UPDATE left behind both an
+        unsettled fill row **and a position**, and a position with no cash movement behind it
+        is a phantom holding that breaks the equity identity. Measured in
+        ``staging/probe_paper02_phantom.py``: ``fills=1 positions=1 balance_events=0`` with
+        the account unchanged.
+
+        The order here now matches the canonical one. The fill row keeps its place because its
+        earliness is what makes a resume possible; the position has no such justification, so
+        it moves behind the money. A conflicted attempt now leaves one unsettled fill row and
+        nothing else.
 
         These are six statements and PostgREST offers no transaction to put them in, which
         ``paper_repository`` records as a limitation of the transport rather than glossing over.
         The assert runs first, so an arithmetic refusal writes nothing at all; the database's own
         guards (``uq_paper_fill_event``, ``chk_paper_order_fill_bound``,
         ``chk_paper_balances_non_negative``, ``uq_paper_position_open``) and the version
-        predicate are what make a partial sequence detectable rather than silent.
+        predicate are what make a partial sequence detectable rather than silent. The one
+        residue that remains is PAPER-04, described on :meth:`_execute_fill`.
         """
         account_id = str(order_row["account_id"])
         symbol = str(order_row["symbol"])
@@ -1676,18 +2191,88 @@ class PaperTradingService:
             self.config,
         )
 
-        fill_row = repo.insert_fill(
+        # ── The last check before the first statement ──────────────────────────────
+        # Re-read the account's version and refuse if it moved while this attempt was
+        # computing. Everything above is reads and arithmetic, so a conflict discovered
+        # here costs nothing; a conflict discovered at ``bump_version`` instead costs an
+        # orphaned fill row and position, because ``paper_fills`` is append-only. This does
+        # not close the window - two statements still sit between here and the guard - it
+        # moves most of it in front of the writes. See :meth:`_execute_fill`'s PAPER-04 note.
+        self._assert_account_unmoved(sb, uid, account_id=account_id, seen=account_row)
+
+        # ── The fill row, which is also the resume anchor ──────────────────────────
+        # On a retry the row from the previous attempt is already there. Re-inserting would
+        # be refused by ``uq_paper_fill_event (order_id, fill_event_id)`` now that the id is
+        # deterministic, so the row is adopted instead: if the ledger already carries it the
+        # money moved and this is the no-op Requirement 18.13 asks for; if it does not, this
+        # attempt finishes the movement rather than losing it.
+        fill_row, already_settled = self._fill_row_for_attempt(
             sb,
-            order_id=order_row["id"],
-            user_id=uid,
-            fill_event_id=f"exec_paper_{uuid.uuid4().hex[:12]}",
+            uid,
+            account_id=account_id,
+            order_row=order_row,
             quantity=fill_qty,
             price=fill_price,
-            fee_minor=self._minor(fee, "fee_minor"),
-            slippage_minor=self._minor(slippage_cost, "slippage_minor"),
+            fee=fee,
+            slippage_cost=slippage_cost,
             filled_at=filled_at,
+            attempt=attempt,
+        )
+        if already_settled:
+            # The order is re-read rather than reusing ``order_row``: the previous attempt
+            # that settled this fill also moved the order to ``FILLED``, and answering with
+            # the pre-fill image would report an order that is live on the book.
+            # ``paper_repository`` has no single-order read, so this filters the account's
+            # orders rather than inventing one.
+            current = next(
+                (
+                    row
+                    for row in repo.get_orders(sb, uid, account_id=account_id)
+                    if str(row.get("id")) == str(order_row["id"])
+                ),
+                dict(order_row),
+            )
+            return self._order_body(
+                current, repo.get_fills(sb, uid, order_id=order_row["id"])
+            )
+
+        # ── write 2: the money. Guarded by the version that was read ───────────────
+        # Everything above this line is a read, arithmetic, or the one anchor statement. A
+        # conflict here therefore leaves the fill row and NOTHING ELSE, which is what makes
+        # the retry in :meth:`_execute_fill` able to resume rather than reconcile.
+        repo.bump_version(
+            sb,
+            user_id=uid,
+            account_id=account_id,
+            expected_version=account_row["version"],
+            payload={
+                "available_balance": result.account.available_balance,
+                "locked_balance": result.account.locked_balance,
+                "realized_pnl": result.account.realized_pnl,
+                "total_equity": result.account.total_equity,
+                "last_price_at": filled_at,
+                "stale": False,
+            },
+        )
+        repo.insert_balance_event(
+            sb,
+            account_id=account_id,
+            user_id=uid,
+            cause="FILL",
+            available_delta=result.available_delta,
+            locked_delta=result.locked_delta,
+            realized_delta=result.realized_delta,
+            available_after=result.account.available_balance,
+            locked_after=result.account.locked_balance,
+            realized_after=result.account.realized_pnl,
+            fill_id=fill_row["id"],
+            occurred_at=filled_at,
         )
 
+        # ── write 4: the position ──────────────────────────────────────────────────
+        # After the money, matching ``paper_simulator.apply_fill``'s "write 4". It used to be
+        # written before the account UPDATE, which meant a version conflict left a holding
+        # with no cash movement behind it. See this method's docstring.
         new_position = result.position
         if (
             existing is not None
@@ -1724,35 +2309,6 @@ class PaperTradingService:
             unrealized_pnl=new_position.unrealized_pnl,
             price_at=filled_at,
             closed_at=new_position.closed_at,
-        )
-
-        repo.bump_version(
-            sb,
-            user_id=uid,
-            account_id=account_id,
-            expected_version=account_row["version"],
-            payload={
-                "available_balance": result.account.available_balance,
-                "locked_balance": result.account.locked_balance,
-                "realized_pnl": result.account.realized_pnl,
-                "total_equity": result.account.total_equity,
-                "last_price_at": filled_at,
-                "stale": False,
-            },
-        )
-        repo.insert_balance_event(
-            sb,
-            account_id=account_id,
-            user_id=uid,
-            cause="FILL",
-            available_delta=result.available_delta,
-            locked_delta=result.locked_delta,
-            realized_delta=result.realized_delta,
-            available_after=result.account.available_balance,
-            locked_after=result.account.locked_balance,
-            realized_after=result.account.realized_pnl,
-            fill_id=fill_row["id"],
-            occurred_at=filled_at,
         )
 
         if result.closed_trade is not None:

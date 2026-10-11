@@ -1,0 +1,11 @@
+======================================================================
+  MARKETPLACE_OPERATION_NOT_PERMITTED           = 'MARKETPLACE_OPERATION_NOT_PERMITTED'
+  REFUSAL_CODE                                  = 'MARKETPLACE_OPERATION_NOT_PERMITTED'
+VERDICT
+======================================================================
+  No fixed literal containing 'vie' found -- the leak claim is NOT explained
+  by a collision and must be treated as real.
+  protected_logic_tokens emitted 7 tokens for a minimal strategy;
+  2 of them are <= 4 characters: ['400', 'vie']
+  A <=4-character token searched with `in` against prose is a false-positive
+NONCE_END=PL1B

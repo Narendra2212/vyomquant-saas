@@ -1,0 +1,78 @@
+START=2026-10-09T01:23:20.7735222+05:30
+FILES=tests\test_lib04_a_broken_client_is_503_not_500.py
+........FFFFFFFF.F.                                                      [100%]
+================================== FAILURES ===================================
+__ test_unpublish_answers_503_whatever_the_client_raised[httpx.ConnectError] __
+tests\test_lib04_a_broken_client_is_503_not_500.py:223: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:191: in _unpublish
+    lib.unpublish_strategy.__wrapped__.__wrapped__(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'function' object has no attribute '__wrapped__'
+__ test_unpublish_answers_503_whatever_the_client_raised[httpx.ReadTimeout] ___
+tests\test_lib04_a_broken_client_is_503_not_500.py:223: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:191: in _unpublish
+    lib.unpublish_strategy.__wrapped__.__wrapped__(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'function' object has no attribute '__wrapped__'
+_ test_unpublish_answers_503_whatever_the_client_raised[httpx.RemoteProtocolError] _
+tests\test_lib04_a_broken_client_is_503_not_500.py:223: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:191: in _unpublish
+    lib.unpublish_strategy.__wrapped__.__wrapped__(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'function' object has no attribute '__wrapped__'
+_ test_unpublish_answers_503_whatever_the_client_raised[psycopg2.InterfaceError] _
+tests\test_lib04_a_broken_client_is_503_not_500.py:223: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:191: in _unpublish
+    lib.unpublish_strategy.__wrapped__.__wrapped__(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'function' object has no attribute '__wrapped__'
+_____ test_unpublish_answers_503_whatever_the_client_raised[RuntimeError] _____
+tests\test_lib04_a_broken_client_is_503_not_500.py:223: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:191: in _unpublish
+    lib.unpublish_strategy.__wrapped__.__wrapped__(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'function' object has no attribute '__wrapped__'
+____ test_unpublish_answers_503_whatever_the_client_raised[AttributeError] ____
+tests\test_lib04_a_broken_client_is_503_not_500.py:223: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:191: in _unpublish
+    lib.unpublish_strategy.__wrapped__.__wrapped__(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'function' object has no attribute '__wrapped__'
+______ test_unpublish_answers_503_whatever_the_client_raised[ValueError] ______
+tests\test_lib04_a_broken_client_is_503_not_500.py:223: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:191: in _unpublish
+    lib.unpublish_strategy.__wrapped__.__wrapped__(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'function' object has no attribute '__wrapped__'
+_______ test_unpublish_answers_503_whatever_the_client_raised[KeyError] _______
+tests\test_lib04_a_broken_client_is_503_not_500.py:223: in test_unpublish_answers_503_whatever_the_client_raised
+    _unpublish(client, monkeypatch)
+tests\test_lib04_a_broken_client_is_503_not_500.py:191: in _unpublish
+    lib.unpublish_strategy.__wrapped__.__wrapped__(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'function' object has no attribute '__wrapped__'
+___________ test_a_postgrest_api_error_still_takes_its_own_handler ____________
+tests\test_lib04_a_broken_client_is_503_not_500.py:267: in test_a_postgrest_api_error_still_takes_its_own_handler
+    assert narrow < broad, (
+E   AssertionError: the broad handler now precedes the narrow one, so a PostgREST APIError would be logged without the database's own answer
+E   assert 5240 < 3586
+=========================== short test summary info ===========================
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[httpx.ConnectError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[httpx.ReadTimeout]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[httpx.RemoteProtocolError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[psycopg2.InterfaceError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[RuntimeError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[AttributeError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[ValueError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_unpublish_answers_503_whatever_the_client_raised[KeyError]
+FAILED tests/test_lib04_a_broken_client_is_503_not_500.py::test_a_postgrest_api_error_still_takes_its_own_handler
+9 failed, 10 passed in 8.92s
+EXITCODE=1
+END=2026-10-09T01:23:33.9557023+05:30

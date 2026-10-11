@@ -1,0 +1,11 @@
+TOTAL 1488
+88:     async def get(self, key: str) -> Optional[str]:
+91:     async def set(self, key: str, value: str, ex: int = None, **kwargs):
+98:     async def delete(self, key: str):
+102:     async def exists(self, key: str) -> bool:
+508:     def _bypass_dev_mode(self, enabled: bool = True):
+676:     async def _get_active_cache(self):
+757:     async def get(self, key: str):
+767:     async def set(self, key: str, value: Any, **kwargs):
+777:     async def delete(self, *keys: str):
+827:     async def exists(self, key: str) -> bool:

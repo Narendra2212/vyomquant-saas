@@ -1,0 +1,44 @@
+lines: in PR commits = 264   worktree = 530
+
+tests in PR commits: 7
+    test_concurrent_reservations_admit_exactly_the_limit_and_no_more
+    test_a_sequential_run_to_the_limit_then_one_more_refuses
+    test_a_zero_allowance_reserves_nothing_and_accumulates_nothing
+    test_an_unlimited_plan_always_admits
+    test_reservations_are_isolated_per_user
+    test_the_full_enforce_quota_path_refuses_at_the_limit
+    test_concurrent_reservations_are_atomic_against_real_redis
+
+tests in worktree: 9
+      test_concurrent_reservations_admit_exactly_the_limit_and_no_more
+      test_a_sequential_run_to_the_limit_then_one_more_refuses
+      test_a_zero_allowance_reserves_nothing_and_accumulates_nothing
+      test_an_unlimited_plan_always_admits
+      test_reservations_are_isolated_per_user
+      test_the_full_enforce_quota_path_refuses_at_the_limit
+      test_concurrent_reservations_are_atomic_against_real_redis
+  >> NEW test_production_reserve_quota_admits_exactly_the_limit_against_real_redis
+  >> NEW test_production_zero_allowance_writes_no_meter_against_real_redis
+
+ADDED  : 2
+REMOVED: 0  (none -- all preserved)
+
+======================================================================================
+NEW TESTS - gating and API provenance (comments/docstrings stripped)
+======================================================================================
+
+  test_production_reserve_quota_admits_exactly_the_limit_against_real_redis   (line 415)
+    real_redis_required marker : yes
+    require_real_redis() call  : yes
+    production API             : SubscriptionEngine., _meter_key, get_quota_usage, reserve_quota
+    raw Redis                  : client.delete, client.get
+    keyspace proof             : yes
+    mock refused (pytest.fail) : no
+
+  test_production_zero_allowance_writes_no_meter_against_real_redis   (line 491)
+    real_redis_required marker : yes
+    require_real_redis() call  : yes
+    production API             : SubscriptionEngine., _meter_key, get_quota_usage, reserve_quota
+    raw Redis                  : client.delete
+    keyspace proof             : yes
+    mock refused (pytest.fail) : no

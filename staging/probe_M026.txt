@@ -1,0 +1,17 @@
+START=2026-10-09T11:37:03.6586308+05:30
+SCRIPT=staging\apply_migration.py backend_app/migrations/026_fee_records_row_level_security.sql
+FILE=migrations/026_fee_records_row_level_security.sql
+SHA256=588e6b6d010f4602f148c19112bb05cb04ac4ea16f782899f920bcfbfea67f96
+BYTES=23588
+  NOTICE:  relation "schema_migrations" already exists, skipping
+  WARNING:  there is already a transaction in progress
+  NOTICE:  relation "fee_records" already exists, skipping
+  NOTICE:  relation "idx_fee_records_tenant_symbol" already exists, skipping
+  NOTICE:  relation "idx_fee_records_execution" already exists, skipping
+  NOTICE:  relation "idx_fee_records_position" already exists, skipping
+  NOTICE:  relation "idx_fee_records_type" already exists, skipping
+  NOTICE:  relation "ix_fee_records_tenant_id" already exists, skipping
+  NOTICE:  relation "ix_fee_records_order_id" already exists, skipping
+  NOTICE:  026: fee_records has row level security, an owner policy keyed on tenant_id, a service_role policy, and no browser-role privileges.
+STATUS=applied
+EXITCODE=0

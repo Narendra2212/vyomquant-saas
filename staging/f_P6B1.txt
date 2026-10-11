@@ -1,0 +1,34 @@
+    + CategoryInfo
+    + FullyQualifiedErrorId
+=== 1-sell-with-no-position ===
+  step 0: sell 0.01 @ 50000 -> ACCEPTED
+    account  available=99499.7500000000 locked=0E-10 realized=0E-10 equity=99999.5000000000
+    position BTC-USDT side=SHORT size=0.0100000000 entry=49975.0000000000 closed_at=NULL
+    orders=1 fills=1 trades=0
+=== 2-sell-larger-than-long ===
+  step 0: buy 0.01 @ 50000 -> ACCEPTED
+  step 1: sell 0.03 @ 51000 -> ACCEPTED
+    account  available=98987.9700000000 locked=0E-10 realized=9.5000000000 equity=100007.4600000000
+    position BTC-USDT side=LONG size=0E-10 entry=50025.0000000000 closed_at=set
+    position BTC-USDT side=SHORT size=0.0200000000 entry=50974.5000000000 closed_at=NULL
+    orders=2 fills=2 trades=1
+    trade    BTC-USDT side=LONG qty=0.0100000000 entry=50025.0000000000 exit=50974.5000000000 pnl=9.5000000000 fee_minor=153
+=== 3-full-close ===
+  step 0: buy 0.01 @ 50000 -> ACCEPTED
+  step 1: sell 0.01 @ 51000 -> ACCEPTED
+    account  available=100008.4800000000 locked=0E-10 realized=9.5000000000 equity=100008.4800000000
+    position BTC-USDT side=LONG size=0E-10 entry=50025.0000000000 closed_at=set
+    orders=2 fills=2 trades=1
+    trade    BTC-USDT side=LONG qty=0.0100000000 entry=50025.0000000000 exit=50974.5000000000 pnl=9.5000000000 fee_minor=51
+=== 4-partial-close ===
+  step 0: buy 0.02 @ 50000 -> ACCEPTED
+  step 1: sell 0.01 @ 51000 -> ACCEPTED
+    account  available=99507.7400000000 locked=0E-10 realized=9.5000000000 equity=100017.4800000000
+    position BTC-USDT side=LONG size=0.0100000000 entry=50025.0000000000 closed_at=NULL
+    orders=2 fills=2 trades=0
+=== 5-buy-beyond-cash ===
+  step 0: buy 100 @ 50000 -> REFUSED PaperError: PAPER_INVARIANT_VIOLATION: The operation was undone because an accounting check did not hold. Your balances, positions and results are unchanged.
+    account  available=100000.0000000000 locked=0E-10 realized=0E-10 equity=100000.0000000000
+    orders=1 fills=0 trades=0
+DONE
+NONCE_END=P6B1

@@ -1,0 +1,39 @@
+NONCE=RUNF3
+=== auth.users NOT NULL columns without defaults ===
+   id                           uuid                     udt=uuid                 max=None default=None
+
+=== public.profiles NOT NULL columns without defaults ===
+   id                           uuid                     udt=uuid                 max=None default=None
+   available_discounts          integer                  udt=int4                 max=None default=0
+   max_api_slots                integer                  udt=int4                 max=None default=1
+
+=== FK target of profiles.id ===
+    [('auth', 'users', 'id'), ('public', 'profiles', 'id')]
+
+=== can we actually insert an identity? ===
+   auth.users(id) only: OK
+
+=== enum types in use on the target tables, with labels ===
+   execution_records.status (executionstatus) -> PENDING,EXECUTING,COMPLETED,FAILED,UNKNOWN
+   positions.side (positionside) -> LONG,SHORT
+   positions.status (positionstatus) -> OPEN,PARTIAL,CLOSED,LIQUIDATED
+
+=== check constraints on the paper/side tables ===
+   library_subscriptions.chk_ls_active_has_period: CHECK (((status <> 'active'::text) OR ((period_start IS NOT NULL) AND (period_expiry IS NOT NULL) AND (period_expiry > period_start))))
+   library_subscriptions.chk_ls_split_conserved: CHECK (((price_minor IS NULL) OR ((owner_share_minor + platform_fee_minor) = price_minor)))
+   library_subscriptions.valid_currency: CHECK ((currency = ANY (ARRAY['USD'::text, 'INR'::text])))
+   library_subscriptions.valid_subscription_status: CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'expired'::text, 'cancelled'::text, 'refunded'::text, 'payment_failed'::text, 'suspended'::text])))
+   library_subscriptions.valid_subscription_tier: CHECK ((subscription_tier = ANY (ARRAY['free'::text, 'pro'::text, 'elite'::text])))
+   paper_orders.chk_paper_order_fill_bound: CHECK (((filled_quantity >= (0)::numeric) AND (filled_quantity <= quantity)))
+   paper_orders.chk_paper_order_idem_len: CHECK (((idempotency_key IS NULL) OR ((length(idempotency_key) >= 1) AND (length(idempotency_key) <= 128))))
+   paper_orders.chk_paper_order_limit_price: CHECK (((limit_price IS NULL) OR (limit_price > (0)::numeric)))
+   paper_orders.chk_paper_order_quantity: CHECK ((quantity > (0)::numeric))
+   paper_orders.chk_paper_order_side: CHECK ((side = ANY (ARRAY['buy'::text, 'sell'::text])))
+   paper_orders.chk_paper_order_state: CHECK ((order_state = ANY (ARRAY['CREATED'::text, 'ACCEPTED'::text, 'PARTIALLY_FILLED'::text, 'FILLED'::text, 'CANCELLED'::text, 'REJECTED'::text])))
+   paper_orders.chk_paper_order_type: CHECK ((order_type = ANY (ARRAY['market'::text, 'limit'::text])))
+   paper_positions.chk_paper_position_side: CHECK ((side = ANY (ARRAY['LONG'::text, 'SHORT'::text])))
+   paper_positions.chk_paper_position_size: CHECK ((size >= (0)::numeric))
+   signals.chk_signals_environment: CHECK ((environment = ANY (ARRAY['BACKTEST'::text, 'PAPER'::text, 'LIVE'::text])))
+   signals.chk_signals_order_lifecycle_state: CHECK ((order_lifecycle_state = ANY (ARRAY['GENERATED'::text, 'PENDING'::text, 'SUBMITTED'::text, 'PARTIALLY_EXECUTED'::text, 'EXECUTED'::text, 'CLOSED'::text, 'FAILED'::
+
+NONCE_END=RUNF3

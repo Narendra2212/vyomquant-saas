@@ -1,0 +1,41 @@
+==============================================================================
+add_foreign_keys_20260817.py -- all 7 FKs attempted independently
+==============================================================================
+
+WOULD FAIL  fk_execution_records_task_id
+   execution_records.task_id  [uuid]  ->  dag_tasks.task_id  [character varying(36)]
+   DatatypeMismatch: foreign key constraint "fk_execution_records_task_id" cannot be implemented
+
+WOULD SUCCEED  fk_execution_records_order_id
+   execution_records.order_id  [character varying]  ->  orders.id  [character varying(36)]
+
+WOULD FAIL  fk_fills_tenant_id
+   fills.tenant_id  [character varying(36)]  ->  profiles.id  [uuid]
+   DatatypeMismatch: foreign key constraint "fk_fills_tenant_id" cannot be implemented
+
+WOULD FAIL  fk_orders_tenant_id
+   orders.tenant_id  [character varying(36)]  ->  profiles.id  [uuid]
+   DatatypeMismatch: foreign key constraint "fk_orders_tenant_id" cannot be implemented
+
+WOULD FAIL  fk_positions_tenant_id
+   positions.tenant_id  [character varying(36)]  ->  profiles.id  [uuid]
+   DatatypeMismatch: foreign key constraint "fk_positions_tenant_id" cannot be implemented
+
+WOULD FAIL  fk_dag_tasks_tenant_id
+   dag_tasks.tenant_id  [character varying(36)]  ->  profiles.id  [uuid]
+   DatatypeMismatch: foreign key constraint "fk_dag_tasks_tenant_id" cannot be implemented
+
+WOULD SUCCEED  fk_execution_records_tenant_id
+   execution_records.tenant_id  [uuid]  ->  profiles.id  [uuid]
+
+------------------------------------------------------------------------------
+SUMMARY: 2/7 would succeed, 5 would fail
+  FAIL fk_execution_records_task_id
+  FAIL fk_fills_tenant_id
+  FAIL fk_orders_tenant_id
+  FAIL fk_positions_tenant_id
+  FAIL fk_dag_tasks_tenant_id
+
+Because all seven run in ONE transaction, a single failure aborts the revision
+and `UPDATE alembic_version` never commits -- so `upgrade head` cannot pass
+`add_foreign_keys`, and `implement_rls_policies` downstream of it never runs.

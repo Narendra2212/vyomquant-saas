@@ -1,0 +1,43 @@
+suite: tests=37 failures=0 errors=0 skipped=11 time=19.240
+
+tally: {'SKIPPED': 11, 'PASSED': 26}
+
+NON-PASSED, individually classified:
+  SKIPPED  test_webhook_duplicate_delivery_real_redis::test_the_credential_gate_refuses_test_keys
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_webhook_duplicate_delivery_real_redis::test_a_redelivered_webhook_is_ignored
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_webhook_duplicate_delivery_real_redis::test_the_lock_is_recorded_in_redis_under_the_documented_key
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_webhook_duplicate_delivery_real_redis::test_a_different_event_id_is_not_deduplicated
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_webhook_duplicate_delivery_real_redis::test_an_in_flight_delivery_blocks_a_concurrent_one
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_webhook_duplicate_delivery_real_redis::test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_quota01_exchange_slot_is_atomic::test_the_slot_lock_is_mutually_exclusive_against_real_redis
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_quota01_exchange_slot_is_atomic::test_the_guard_admits_exactly_the_limit_against_real_redis
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_quota01_metered_reservation_is_hard::test_concurrent_reservations_are_atomic_against_real_redis
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_quota01_metered_reservation_is_hard::test_production_reserve_quota_admits_exactly_the_limit_against_real_redis
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+  SKIPPED  test_quota01_metered_reservation_is_hard::test_production_zero_allowance_writes_no_meter_against_real_redis
+           reason: AERORA_TEST_REDIS_URL is not set. Real-Redis coverage is opt-in: the default suite runs on the in-process substrate, and
+
+REQUIRED REAL-REDIS CASES -- execution status on this machine:
+  webhook  test_the_credential_gate_refuses_test_keys                                 SKIPPED
+  webhook  test_a_redelivered_webhook_is_ignored                                      SKIPPED
+  webhook  test_the_lock_is_recorded_in_redis_under_the_documented_key                SKIPPED
+  webhook  test_a_different_event_id_is_not_deduplicated                              SKIPPED
+  webhook  test_an_in_flight_delivery_blocks_a_concurrent_one                         SKIPPED
+  webhook  test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind            SKIPPED
+  slot     test_the_slot_lock_is_mutually_exclusive_against_real_redis                SKIPPED
+  slot     test_the_guard_admits_exactly_the_limit_against_real_redis                 SKIPPED
+  metered  test_concurrent_reservations_are_atomic_against_real_redis                 SKIPPED
+  metered  test_production_reserve_quota_admits_exactly_the_limit_against_real_redis  SKIPPED
+  metered  test_production_zero_allowance_writes_no_meter_against_real_redis          SKIPPED
+
+  All 11 are SKIPPED via the legitimate opt-out (AERORA_TEST_REDIS_URL unset).
+  A SKIP IS NOT A PASS. Zero real-Redis assertions executed on this machine.

@@ -1,0 +1,31 @@
+E       AssertionError: `session.get("amount_total", 0) / 100.0` is still executable code in billing.py. MONEY-02 is open.
+E       assert not True
+E        +  where True = any(<generator object test_the_float_division_expressions_are_gone.<locals>.<genexpr> at 0x00000189DFB22260>)
+E       AssertionError: `invoice_obj.get("amount_paid", 0) / 100.0` is still executable code in billing.py. MONEY-02 is open.
+E       assert not True
+E        +  where True = any(<generator object test_the_float_division_expressions_are_gone.<locals>.<genexpr> at 0x00000189DFB23030>)
+E       AssertionError: `payment.get("amount", 0) / 100.0` is still executable code in billing.py. MONEY-02 is open.
+E       assert not True
+E        +  where True = any(<generator object test_the_float_division_expressions_are_gone.<locals>.<genexpr> at 0x00000189DFB23440>)
+E       AssertionError: float division by 100.0 still present in executable billing.py code: ['payment_amount = session.get("amount_total", 0) / 100.0   # cents -> USD', 'renewal_amount = invoice_obj.get("amount_paid", 0) / 100.0', 'payment_amount = payment.get("amount", 0) / 100.0         # paise -> INR']
+E       assert ['payment_amo...paise -> INR'] == []
+E         
+E         Left contains 3 more items, first extra item: 'payment_amount = session.get("amount_total", 0) / 100.0   # cents -> USD'
+E         Use -v to get more diff
+E       AssertionError: the annotated INR-as-USD commission call is still present. MONEY-04 is open.
+E       assert '# Note: Thi...INR, not USD' not in '"""\nrouter...{str(e)}")\n'
+E         
+E         '# Note: This is INR, not USD' is contained here:
+E           t_amount  # Note: This is INR, not USD
+E                           #
+E                           # `referral_commissions` has NO currency column ? it has
+E                           # `payment_amount_usd` and `commission_amount_usd`, and the function
+E                           # computes a flat 20% of whatever it is handed. So an INR payment...
+E         
+E         ...Full output truncated (381 lines hidden), use '-vv' to show
+FAILED tests/test_money02_billing_amount_precision.py::test_the_float_division_expressions_are_gone[session.get("amount_total", 0) / 100.0]
+FAILED tests/test_money02_billing_amount_precision.py::test_the_float_division_expressions_are_gone[invoice_obj.get("amount_paid", 0) / 100.0]
+FAILED tests/test_money02_billing_amount_precision.py::test_the_float_division_expressions_are_gone[payment.get("amount", 0) / 100.0]
+FAILED tests/test_money02_billing_amount_precision.py::test_no_executable_division_by_one_hundred_float_remains
+FAILED tests/test_money02_billing_amount_precision.py::test_razorpay_no_longer_passes_inr_as_usd
+5 failed, 39 passed, 8 warnings in 19.53s

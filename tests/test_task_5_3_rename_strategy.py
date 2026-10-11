@@ -364,7 +364,44 @@ class TestTheRouteIsReachableAndNotShadowed:
         assert refused.json()["detail"]["reason"] == router_module.RENAME_REASON_MISSING
 
     def test_the_edit_route_still_works(self):
-        """The new, more specific route did not shadow the general one either."""
+        """The new, more specific route did not shadow the general one either.
+
+        FIELD CHANGED FROM ``description`` TO ``timeframe`` BY API-01, and the reason is
+        not cosmetic: **``public.strategies`` has no ``description`` column.** The
+        canonical declaration in ``backend_app/migrations/020_declare_pre_existing_tables.sql``
+        lists 27 columns and none of them is ``description``, and the live database agrees.
+
+        This test passed before only because the route did
+        ``update_payload = dict(body)`` straight into ``.table("strategies").update(...)``
+        with no column allowlist, and the fake Supabase used here accepts any key. Against
+        the real store that UPDATE would have been rejected for an unknown column. The
+        test was asserting that the route forwards arbitrary caller fields -- which is the
+        API-01 mass-assignment defect itself, not a feature.
+
+        The subject of this test is route REACHABILITY -- that ``PUT /api/strategies/{id}``
+        is not shadowed by the more specific ``PUT /api/strategies/{id}/rename``. The field
+        was always incidental; it just had to be something updatable. ``timeframe`` is a
+        real column and is on the allowlist, so the test now proves the same thing against
+        a payload the database would actually accept.
+        """
+        sb = _Supabase(_rows())
+
+        with patch("backend_app.routers.strategies._sb", new=AsyncMock(return_value=sb)):
+            response = _client().put(
+                f"/api/strategies/{STRATEGY_ID}", json={"timeframe": "15m"}
+            )
+
+        assert response.status_code == 200
+        assert sb.row("strategies", STRATEGY_ID)["timeframe"] == "15m"
+
+    def test_a_field_that_is_not_a_column_is_refused_rather_than_forwarded(self):
+        """API-01: the general route must not forward an unknown field to the store.
+
+        ``description`` is used deliberately -- it is not a column on
+        ``public.strategies``, and before API-01 this route passed it through to the
+        UPDATE. A 422 here is the allowlist doing its job, and the stored row must be
+        untouched: a refused request writes nothing at all.
+        """
         sb = _Supabase(_rows())
 
         with patch("backend_app.routers.strategies._sb", new=AsyncMock(return_value=sb)):
@@ -372,8 +409,10 @@ class TestTheRouteIsReachableAndNotShadowed:
                 f"/api/strategies/{STRATEGY_ID}", json={"description": "edited"}
             )
 
-        assert response.status_code == 200
-        assert sb.row("strategies", STRATEGY_ID)["description"] == "edited"
+        assert response.status_code == 422
+        assert sb.row("strategies", STRATEGY_ID)["description"] == "unchanged", (
+            "a refused update still wrote to the row"
+        )
 
     @pytest.mark.parametrize("method", ["get", "post", "delete", "patch"])
     def test_only_put_serves_the_rename_path(self, method):

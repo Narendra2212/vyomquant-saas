@@ -1,0 +1,103 @@
+START=2026-10-09T11:55:14.0512698+05:30
+DSN=postgresql://postgres:@127.0.0.1:58620/postgres
+ARGS=tests\test_marketplace_paper_schema_contract.py tests\test_marketplace_paper_migrations.py tests\test_library_schema_contract.py tests\test_my_strategies_ownership_and_actions.py tests\test_no_dormant_schema_references.py tests\test_schema_table_reference_drift.py tests\test_submission_state_agreement.py tests\test_orm_models_match_provisioned_schema.py tests\test_cross_tenant_read_sweep_postgres.py tests\test_production_security_probe_rolls_back_postgres.py --deselect tests/test_marketplace_paper_schema_contract.py::test_p58_migration_set_is_idempotent
+........................................................................ [ 20%]
+........................................................................ [ 41%]
+........................................................................ [ 62%]
+........................................................................ [ 83%]
+............................x..FF...............F......                  [100%]
+================================== FAILURES ===================================
+___________ test_every_readable_table_was_actually_exercised[anon] ____________
+
+role = 'anon'
+anon_sweep = '==============================================================================\nBEHAVIOURAL READ SWEEP as ANON -- see...----------------------------------------\nSUMMARY: 0 leaked, 43 proven blocked, 5 intentionally public, 1 not proven\n'
+authenticated_sweep = '==============================================================================\nBEHAVIOURAL READ SWEEP as AUTHENTICAT...---------------------------------------\nSUMMARY: 0 leaked, 69 proven blocked, 10 intentionally public, 1 not proven\n'
+
+    @pytest.mark.parametrize("role", ["anon", "authenticated"])
+    def test_every_readable_table_was_actually_exercised(role, anon_sweep, authenticated_sweep):
+        """No table may drop out of coverage by being unseedable.
+    
+        This is the assertion that keeps the two tests above honest. Without it, a table
+        whose seed fails is reported NOT PROVEN, contributes nothing, and the leak count
+        stays at zero -- a green run that measured less than the last one.
+        """
+        output = anon_sweep if role == "anon" else authenticated_sweep
+        summary = _summary(output)
+        unproven = summary["not proven"]
+>       assert unproven == 0, (
+            f"{unproven} table(s) could not be seeded for role {role}, so isolation was "
+            f"NOT measured for them. Add the missing CHECK value to CHECK_OVERRIDES in "
+            f"staging/anon_read_sweep.py:\n"
+            + "\n".join(
+                l
+                for l in output.splitlines()
+                if "violates" in l or "does not exist" in l or "invalid input" in l
+            )
+        )
+E       AssertionError: 1 table(s) could not be seeded for role anon, so isolation was NOT measured for them. Add the missing CHECK value to CHECK_OVERRIDES in staging/anon_read_sweep.py:
+E           risk_settings                      duplicate key value violates unique constraint "risk_settings_user_id_key"
+E       assert 1 == 0
+
+tests\test_cross_tenant_read_sweep_postgres.py:152: AssertionError
+_______ test_every_readable_table_was_actually_exercised[authenticated] _______
+
+role = 'authenticated'
+anon_sweep = '==============================================================================\nBEHAVIOURAL READ SWEEP as ANON -- see...----------------------------------------\nSUMMARY: 0 leaked, 43 proven blocked, 5 intentionally public, 1 not proven\n'
+authenticated_sweep = '==============================================================================\nBEHAVIOURAL READ SWEEP as AUTHENTICAT...---------------------------------------\nSUMMARY: 0 leaked, 69 proven blocked, 10 intentionally public, 1 not proven\n'
+
+    @pytest.mark.parametrize("role", ["anon", "authenticated"])
+    def test_every_readable_table_was_actually_exercised(role, anon_sweep, authenticated_sweep):
+        """No table may drop out of coverage by being unseedable.
+    
+        This is the assertion that keeps the two tests above honest. Without it, a table
+        whose seed fails is reported NOT PROVEN, contributes nothing, and the leak count
+        stays at zero -- a green run that measured less than the last one.
+        """
+        output = anon_sweep if role == "anon" else authenticated_sweep
+        summary = _summary(output)
+        unproven = summary["not proven"]
+>       assert unproven == 0, (
+            f"{unproven} table(s) could not be seeded for role {role}, so isolation was "
+            f"NOT measured for them. Add the missing CHECK value to CHECK_OVERRIDES in "
+            f"staging/anon_read_sweep.py:\n"
+            + "\n".join(
+                l
+                for l in output.splitlines()
+                if "violates" in l or "does not exist" in l or "invalid input" in l
+            )
+        )
+E       AssertionError: 1 table(s) could not be seeded for role authenticated, so isolation was NOT measured for them. Add the missing CHECK value to CHECK_OVERRIDES in staging/anon_read_sweep.py:
+E           risk_settings                      duplicate key value violates unique constraint "risk_settings_user_id_key"
+E       assert 1 == 0
+
+tests\test_cross_tenant_read_sweep_postgres.py:152: AssertionError
+___________________ test_no_synthetic_marker_value_survives ___________________
+
+probe_run = {'before': {'rows': {'alembic_version': 1, 'billing_invoices': 18, 'block_registry_snapshots': 0, 'bot_ownership_claim....}, 'rows_before': 22, ...}, ...], 'rolled_back': True, ...}, 'markers': [('paper_orders', 'idempotency_key', 1)], ...}
+
+    @_needs_pg
+    def test_no_synthetic_marker_value_survives(probe_run):
+        """The probe stamps synthesised text as `probe-<hex>` and its identities as
+        `...@example.invalid`. None of it may remain anywhere in `public`.
+    
+        This catches what row counts cannot: a committed insert into a table that also lost
+        a row, leaving the count unchanged.
+        """
+>       assert probe_run["markers"] == [], (
+            "rows carrying the probe's synthetic markers survived the rollback:\n"
+            + "\n".join(f"  {t}.{c}: {n} row(s)" for t, c, n in probe_run["markers"])
+        )
+E       AssertionError: rows carrying the probe's synthetic markers survived the rollback:
+E           paper_orders.idempotency_key: 1 row(s)
+E       assert [('paper_orde...ency_key', 1)] == []
+E         
+E         Left contains one more item: ('paper_orders', 'idempotency_key', 1)
+E         Use -v to get more diff
+
+tests\test_production_security_probe_rolls_back_postgres.py:527: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_cross_tenant_read_sweep_postgres.py::test_every_readable_table_was_actually_exercised[anon]
+FAILED tests/test_cross_tenant_read_sweep_postgres.py::test_every_readable_table_was_actually_exercised[authenticated]
+FAILED tests/test_production_security_probe_rolls_back_postgres.py::test_no_synthetic_marker_value_survives
+3 failed, 339 passed, 1 deselected, 1 xfailed in 102.58s (0:01:42)
+EXITCODE=1

@@ -74,6 +74,71 @@ def _get_jwks_client() -> PyJWKClient:
 # Token verification
 # ---------------------------------------------------------------------------
 
+#: The ONLY two ``ENV`` spellings that enable the HS256 test-token path below.
+#:
+#: Deliberately narrower than the sets used elsewhere in this codebase, and for the same
+#: reason ``core/execution_engine.py``'s ``_SYNTHETIC_STRATEGY_ID_ENVS`` is narrower: what
+#: this gate governs is whether a token the platform's OWN application secret can mint is
+#: accepted as proof of identity. ``development``, ``dev`` and ``local`` were in this set
+#: and are now gone — see :func:`_test_token_fallback_allowed`.
+_TEST_TOKEN_ENVS = frozenset({"testing", "test"})
+
+
+def _test_token_fallback_allowed() -> bool:
+    """Whether the ``iss="algo22-test"`` HS256 token path is in force.
+
+    FAILS CLOSED, AND THAT IS THE WHOLE FIX.
+
+    The previous expression was::
+
+        current_env = (os.environ.get("ENV") or getattr(settings, "ENV", "") or "").lower()
+        if current_env in ("testing", "test", "development", "dev", "local"):
+
+    ``settings.ENV`` is ``os.getenv("ENV", "development")`` (``core/config.py``), so when a
+    deployment did not set ``ENV`` at all, this resolved to ``"development"`` — a member of
+    that set. The fallback was therefore LIVE IN PRODUCTION on any deployment that had not
+    explicitly set the variable, which was verified by execution during the pre-launch
+    audit: with ``ENV`` and ``ENVIRONMENT`` unset, ``settings.ENV`` is ``'development'`` and
+    a token signed with ``JWT_SECRET`` carrying ``iss="algo22-test"`` was accepted with an
+    arbitrary ``sub``, an arbitrary ``app_metadata.role`` of ``"operator"`` and
+    ``aal="aal2"``.
+
+    That is total authentication collapse rather than a weakening, because:
+
+    * ``sub`` is the user id every router scopes its queries by, so an arbitrary ``sub`` is
+      impersonation of any account.
+    * ``get_admin_user`` / ``get_operator_user`` trust ``app_metadata.role``, so the same
+      token grants the global kill switch and user-status administration.
+    * The signing key is ``JWT_SECRET`` / ``SUPABASE_JWT_SECRET`` — an ordinary application
+      secret that lives in ``.env`` files, CI configuration and task definitions, and is
+      handled far more widely than Supabase's ES256 private key, which never leaves
+      Supabase. The fallback therefore demoted the trust root from a key nobody here holds
+      to a key everybody here holds.
+
+    Two changes, both narrowing:
+
+    1. **Only the real environment variables are read.** ``settings.ENV`` is not consulted,
+       because its default is indistinguishable from a deliberate setting, and conflating
+       "nobody configured this" with "this is a development box" is precisely the defect.
+       An unset or blank value returns ``False``.
+    2. **Only ``testing`` and ``test`` are admitted.** ``development``, ``dev`` and
+       ``local`` are removed. ``tests/conftest.py`` sets ``ENV=testing`` at import time, so
+       the suite is unaffected; a developer running against real Supabase uses real
+       Supabase tokens and never needed this path.
+
+    Read from the environment on every call rather than cached at import, because
+    individual tests ``monkeypatch.setenv`` it and a cached value would make the gate
+    depend on module import order.
+
+    Regression: tests/test_test_token_fallback_fails_closed.py
+    """
+    raw = os.environ.get("ENV") or os.environ.get("ENVIRONMENT")
+    if raw is None or not raw.strip():
+        # Unset is NOT a test environment. This single line is the production fix.
+        return False
+    return raw.strip().lower() in _TEST_TOKEN_ENVS
+
+
 def decode_token_local(token: str) -> dict:
     """
     Decodes and validates a JWT token locally.
@@ -81,6 +146,9 @@ def decode_token_local(token: str) -> dict:
     CWE-347 Algorithm Confusion Fix:
     All tokens are validated against a server-determined trust root (ES256 JWKS).
     The token's own unverified 'alg' header is never used to select secret keys or bypass verification.
+
+    The ``iss="algo22-test"`` HS256 branch below is gated on
+    :func:`_test_token_fallback_allowed`, which fails closed on an unset ``ENV``.
     """
     try:
         client = _get_jwks_client()
@@ -98,8 +166,7 @@ def decode_token_local(token: str) -> dict:
     except Exception as e:
         # SECURITY: No test fallback with verify_signature=False - prevents algorithm confusion attacks
         # Test tokens must be properly signed with the test secret
-        current_env = (os.environ.get("ENV") or getattr(settings, "ENV", "") or "").lower()
-        if current_env in ("testing", "test", "development", "dev", "local"):
+        if _test_token_fallback_allowed():
             # Narrowly-scoped test fallback for properly signed test tokens only in non-production
             try:
                 unverified_payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["ES256", "HS256"])
@@ -131,9 +198,11 @@ def _decode_test_hs256_token(token: str) -> dict:
     if not secret:
         raise InvalidTokenError("Test mode requires a configured secret")
     
-    # SECURITY: Only allow in non-production environments
-    current_env = (os.environ.get("ENV") or getattr(settings, "ENV", "") or "").lower()
-    if current_env not in ("testing", "test", "development", "dev", "local"):
+    # SECURITY: Only allow in an explicitly-declared test environment.
+    # Shares the one gate with decode_token_local so the two cannot drift apart — this
+    # helper used to carry its own copy of the env list, including the `development`
+    # default that made the gate ineffective in production.
+    if not _test_token_fallback_allowed():
         raise InvalidTokenError("Test mode not allowed in production environment")
     
     return jwt.decode(

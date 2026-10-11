@@ -1,0 +1,78 @@
+START=2026-10-09T11:52:00.3340773+05:30
+SCRIPT=staging\probe_quote_balance.py backend_app\migrations\026_fee_records_row_level_security.sql
+FILE=backend_app\migrations\026_fee_records_row_level_security.sql
+BYTES=23588
+L128   quotes=2   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+L130   quotes=2   '026 precondition failed: role "authenticated" does not exist. This file '
+L131   quotes=2   'declares row level security policies that name it. Create the Supabase-like '
+L132   quotes=1   'substrate first: scripts/provision_database.py
+L135   quotes=2   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+L137   quotes=2   '026 precondition failed: role "service_role" does not exist. See '
+L138   quotes=1   'scripts/provision_database.py
+L143   quotes=4   WHERE n.nspname = 'auth' AND p.proname = 'uid'
+L146   quotes=2   '026 precondition failed: auth.uid() does not exist. The owner policy below '
+L147   quotes=2   'is expressed in terms of it. See scripts/provision_database.py '
+L148   quotes=1   '
+L166   quotes=2   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'feetype') THEN
+L168   quotes=12  'MAKER', 'TAKER', 'FUNDING', 'LIQUIDATION', 'WITHDRAWAL', 'DEPOSIT'
+L172   quotes=2   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'feestatus') THEN
+L173   quotes=6   CREATE TYPE public.feestatus AS ENUM ('PENDING', 'DEDUCTED', 'REBATED');
+L225   quotes=2   SELECT 1 FROM pg_constraint WHERE conname = 'fee_records_execution_id_fkey'
+L228   quotes=4   WHERE table_schema = 'public' AND table_name = 'execution_records'
+L236   quotes=2   SELECT 1 FROM pg_constraint WHERE conname = 'fee_records_position_id_fkey'
+L239   quotes=4   WHERE table_schema = 'public' AND table_name = 'positions'
+L278   quotes=2   WHERE c.table_schema = 'public'
+L279   quotes=2   AND c.table_name = 'fee_records'
+L280   quotes=2   AND c.column_name = 'tenant_id';
+L284   quotes=2   '026 refused: public.fee_records has no tenant_id column on this database, so '
+L285   quotes=2   'the owner policy this file declares would filter nothing. The ownership key '
+L286   quotes=2   'must be established before row security can express it. Inspect the table and '
+L287   quotes=2   'update this migration rather than leaving a policy that looks protective.';
+L290   quotes=2   IF tenant_type <> 'uuid' THEN
+L292   quotes=2   '026 refused: public.fee_records.tenant_id is %, not uuid. The policy below '
+L293   quotes=2   'compares it to auth.uid() as a plain uuid; against another type the '
+L294   quotes=2   'comparison would either fail to compile or silently coerce. Reconcile the '
+L295   quotes=2   'column type first (see migrations/hardening/998_bug049_identity_types.sql '
+L296   quotes=2   'for the established pattern).', tenant_type;
+L324   quotes=2   WHERE schemaname = 'public'
+L325   quotes=2   AND tablename  = 'fee_records'
+L326   quotes=2   AND policyname = 'fee_records_owner_access'
+L335   quotes=2   WHERE schemaname = 'public'
+L336   quotes=2   AND tablename  = 'fee_records'
+L337   quotes=2   AND policyname = 'fee_records_service_role'
+L381   quotes=4   WHERE n.nspname = 'public' AND c.relname = 'fee_records';
+L384   quotes=2   RAISE EXCEPTION '026 postflight FAILED: row level security is not enabled on '
+L385   quotes=2   'public.fee_records.';
+L390   quotes=4   WHERE schemaname = 'public' AND tablename = 'fee_records'
+L391   quotes=4   AND policyname IN ('fee_records_owner_access', 'fee_records_service_role');
+L394   quotes=2   RAISE EXCEPTION '026 postflight FAILED: expected both fee_records policies, found '
+L395   quotes=2   '% of 2. RLS with no owner policy denies the owner too, and RLS '
+L396   quotes=2   'with no service_role policy would break fee recording for any '
+L397   quotes=2   'caller that is not the table owner.', policy_cnt;
+L402   quotes=4   WHERE table_schema = 'public' AND table_name = 'fee_records'
+L403   quotes=4   AND grantee IN ('anon', 'authenticated');
+L406   quotes=2   RAISE EXCEPTION '026 postflight FAILED: a browser role still holds % privilege(s) '
+L407   quotes=2   'on public.fee_records. The REVOKEs in section 5 are what retract '
+L408   quotes=2   'the substrate default privileges; if they did not take effect, '
+L409   quotes=2   'the table is still reachable with the anon key that ships in the '
+L410   quotes=2   'browser.', browser_cnt;
+L413   quotes=2   RAISE NOTICE '026: fee_records has row level security, an owner policy keyed on '
+L414   quotes=2   'tenant_id, a service_role policy, and no browser-role privileges.';
+L422   quotes=2   'Per-customer trading fees, owned by tenant_id (which in this codebase is the auth '
+L423   quotes=1   'user id
+L424   quotes=2   'backend_app/backend/fee_engine.py::FeeEngine through SQLAlchemy as the table owner, '
+L425   quotes=2   'which is why row level security is ENABLED rather than FORCED and why neither '
+L426   quotes=2   'browser role holds any privilege. Declared here rather than only as a SQLAlchemy '
+L427   quotes=2   'model so that it exists before provisioning step 4, where '
+L428   quotes=2   'migrations/hardening/999_privilege_hardening.sql section 4 checks every table '
+L429   quotes=2   'carrying a per-customer column for exactly the exposure this file closes (TENANT-02).';
+L432   quotes=2   'The owning customer. NOT NULL and the subject of fee_records_owner_access. '
+L433   quotes=2   'FeeEngine._get_tenant_id_from_execution / _get_tenant_id_from_position fall back to '
+L434   quotes=2   'the all-zero uuid when the parent execution or position is missing, so an '
+L435   quotes=2   'unattributable fee row is visible only to service_role rather than to a wrong owner '
+L436   quotes=1   '
+TOTAL_QUOTES_AFTER_COMMENT_STRIP=163  (odd total means an unbalanced literal)
+UNCLOSED_LITERAL_OPENS_AT offset=23536 line=436
+CONTEXT="tion is missing, so an '\n    'unattributable fee row is visible only to service_role rather than to a wrong owner '\n    '-- fail-closed, and reported as FEE-01.';\n\nCOMMIT;\n"
+DOLLAR_MARKERS=12
+EXITCODE=0

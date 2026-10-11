@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="9" time="1.222" timestamp="2026-10-10T15:07:32.121085+00:00" hostname="runnervmmprz5"><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_concurrent_reservations_admit_exactly_the_limit_and_no_more" time="0.002" /><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_a_sequential_run_to_the_limit_then_one_more_refuses" time="0.001" /><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_a_zero_allowance_reserves_nothing_and_accumulates_nothing" time="0.001" /><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_an_unlimited_plan_always_admits" time="0.002" /><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_reservations_are_isolated_per_user" time="0.002" /><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_the_full_enforce_quota_path_refuses_at_the_limit" time="0.797" /><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_concurrent_reservations_are_atomic_against_real_redis" time="0.045" /><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_production_reserve_quota_admits_exactly_the_limit_against_real_redis" time="0.042"><failure message="AssertionError: a refusal reported usage 36, outside [0, 10] -- the revert either did not happen or overshot&#10;assert 36 &lt;= 10">@real_redis_required
+    async def test_production_reserve_quota_admits_exactly_the_limit_against_real_redis():
+        """THE production hard-limit proof: `reserve_quota` itself, 50 racers, limit 10.
+    
+        This is the function `subscription_dependencies.enforce_quota` calls for a metered
+        resource, driven concurrently against a real out-of-process counter. The figure is then
+        read back through the production reader AND off the raw key, because agreeing with
+        itself is not evidence -- `get_quota_usage` and the key have to agree.
+        """
+        redis_url = require_real_redis()  # fails (not skips) if configured but unusable
+        assert redis_url  # the gate returned an endpoint; it is deliberately not echoed
+    
+        manager = await _app_cache_or_fail()
+        client = await _probe_client_on_the_apps_database()
+    
+        user = f"q01-prod-{uuid.uuid4().hex[:8]}"
+        resource = "backtests"
+        period = _period()
+        key = SubscriptionEngine._meter_key(user, resource, period)
+        limit = 10
+        racers = 50
+    
+        try:
+            await _prove_one_keyspace(manager, client)
+            await client.delete(key)
+    
+            results = await asyncio.gather(
+                *[
+                    SubscriptionEngine.reserve_quota(
+                        user, "free", resource, amount=1, limit=limit, period=period
+                    )
+                    for _ in range(racers)
+                ]
+            )
+            allowed = [r for r in results if r[0] is True]
+            refused = [r for r in results if r[0] is False]
+    
+            assert len(allowed) == limit, (
+                f"production reserve_quota admitted {len(allowed)} of {racers} concurrent "
+                f"reservations against a limit of {limit}; the hard limit was overrun on a real "
+                f"Redis"
+            )
+            assert len(refused) == racers - limit
+    
+            # The production reader and the raw key must agree, and both must be exactly the
+            # limit -- not above it (overrun) and not below it (over-refusal).
+            via_api = await SubscriptionEngine.get_quota_usage(user, resource, period)
+            via_key = int(await client.get(key))
+            assert via_api == limit, f"get_quota_usage reported {via_api}, expected {limit}"
+            assert via_key == limit, f"the raw meter key holds {via_key}, expected {limit}"
+    
+            # A refusal must report the REVERTED figure, never the inflated one, and the meter
+            # must never be driven negative by the revert.
+            for ok, usage, eff in refused:
+                assert eff == limit
+&gt;               assert 0 &lt;= usage &lt;= limit, (
+                    f"a refusal reported usage {usage}, outside [0, {limit}] -- the revert "
+                    f"either did not happen or overshot"
+                )
+E               AssertionError: a refusal reported usage 36, outside [0, 10] -- the revert either did not happen or overshot
+E               assert 36 &lt;= 10
+
+tests/test_quota01_metered_reservation_is_hard.py:469: AssertionError</failure></testcase><testcase classname="tests.test_quota01_metered_reservation_is_hard" name="test_production_zero_allowance_writes_no_meter_against_real_redis" time="0.010" /></testsuite></testsuites>

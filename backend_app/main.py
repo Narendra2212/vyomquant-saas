@@ -92,6 +92,8 @@ from backend_app.core.position_model import PositionModel  # noqa: F401
 from backend_app.core.rate_limit import limiter
 from backend_app.core.reconciliation_scheduler import (
     start_reconciliation_scheduler, stop_reconciliation_scheduler)
+from backend_app.core.runtime_env import (deployment_environment,
+                                          local_state_is_acceptable)
 #  SYSTEM FREEZE: Import safety config FIRST to block all execution
 # This must be imported before any engine that could execute trades
 from backend_app.core.safety_config import ExecutionFlags, SafetyMonitor
@@ -254,10 +256,25 @@ _runtime_service_status: dict = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize Sentry early
+    #
+    # ENV-06: `environment` is the DEPLOYMENT environment and `trading_mode` is the trading
+    # mode. This call used to read `environment=get_vyomquant_mode("production")` — a
+    # trading mode supplying Sentry's environment tag — so with the documented production
+    # setting `VYOMQUANT_MODE=paper` every production event was filed under an environment
+    # called `paper`, mixed in with developer machines, and no `production` environment
+    # existed for an alert rule to select. Same substitution as API-03 (`core/rate_limit`)
+    # and the `redis_manager` fix, on the reporting side.
+    #
+    # Both dimensions are now recorded independently: `deployment_environment()` reads
+    # ENV/ENVIRONMENT and never a trading mode, and the trading mode is attached as its own
+    # global tag. `"unknown"` rather than a plausible-looking default, because a process
+    # that has not declared where it runs should be visibly unlabelled.
+    # Regression: tests/test_api05_documentation_exposure_matrix.py
     initialize_sentry(
         dsn=os.getenv("SENTRY_DSN"),
-        environment=get_vyomquant_mode("production"),
-        release="2.4.0"
+        environment=deployment_environment() or "unknown",
+        release="2.4.0",
+        trading_mode=get_vyomquant_mode("safe"),
     )
     # Print configuration status at startup
     print_config_status()
@@ -266,6 +283,37 @@ async def lifespan(app: FastAPI):
         logger.critical(f"FATAL: Missing required environment variables: {', '.join(missing_settings)}")
         raise RuntimeError(f"FATAL: Missing required environment variables: {', '.join(missing_settings)}")
     
+    # ══════════════════════════════════════════════════════════════════════
+    #  JWT SECRET STRENGTH  (BUG-012) — fails the boot, not just the log
+    # ══════════════════════════════════════════════════════════════════════
+    # `validate_required` above only checks that JWT_SECRET is PRESENT. Its strength
+    # used to be two `logger.warning` calls that the application started straight
+    # through, so the 24-byte secret this deployment actually had shipped with nothing
+    # but a line in the boot log.
+    #
+    # Placed here, immediately after the required-variables check and before any
+    # service is initialised or any port is bound, so a deployment with an unfit secret
+    # never accepts a request. The raised message names every problem and no part of the
+    # secret.
+    # Regression: tests/test_jwt_secret_is_production_grade.py
+    settings.assert_jwt_secret_is_production_grade()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  CREDENTIALS ARE CONFIGURED, NOT MERELY PRESENT  (ENV-03)
+    # ══════════════════════════════════════════════════════════════════════
+    # `validate_required` above is spelled `if not v`, and
+    # `bool("YOUR_SUPABASE_SERVICE_ROLE_KEY")` is True — so the placeholders committed in
+    # `backend_app/.env` satisfied it completely. This is the check that tells a template
+    # value from a credential: MISSING, EMPTY and PLACEHOLDER are all refused for a
+    # deployed environment, and a local run with `ENV=development` or `DEV_MODE=true` keeps
+    # its documented behaviour (reported by `print_config_status` above, not fatal).
+    #
+    # Placed immediately after the JWT check and before any service is initialised or any
+    # port is bound, so a misconfigured deployment never answers a request. The raised
+    # message names every unfit variable and no part of any value.
+    # Regression: tests/test_env03_placeholder_secrets_are_invalid.py
+    settings.assert_credentials_are_production_grade()
+
     # Security check: DEV_MODE should not be enabled in production-like environments
     if settings.DEV_MODE and settings.ENV.lower() in ("production", "staging"):
         logger.critical(
@@ -454,6 +502,9 @@ async def lifespan(app: FastAPI):
 
     # Publish to module-level dict so /health/services can read it without request context
     _runtime_service_status.update(service_status)
+    # OBS-01: stamp the snapshot so /health/services can report its age rather than
+    # presenting boot-time state as live state.
+    _runtime_service_status["_captured_at"] = datetime.now(timezone.utc).isoformat()
 
     yield  #  Server is live and accepting requests here
 
@@ -520,6 +571,31 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f" Fleet shutdown error: {e}")
 
+    # CONN-01: drain the exchange connection pool.
+    # ------------------------------------------------------------------------------------
+    # Every block above stops a service that OPENED venue connections; none of them closed
+    # one. `backend/connection_engine.py::_exchange_pool` holds one authenticated ccxt client
+    # per (user, venue) pair, each with a live aiohttp session and a plaintext credential in
+    # memory, and nothing in this lifespan reached it — so every pooled client survived until
+    # the process died, which is where the "Unclosed client session" / "ccxt requires you to
+    # release all resources" noise at shutdown came from.
+    #
+    # Placed AFTER `fleet.shutdown_all()` deliberately: the bots are the main consumers of
+    # these connections, so closing the sockets before their tasks have stopped would pull the
+    # transport out from under an in-flight call. Placed BEFORE the Redis disconnect because a
+    # close may still want to record telemetry.
+    #
+    # Failures are logged, never raised: shutdown must continue to the remaining engines.
+    # Regression: tests/test_conn01_pool_lifecycle_and_shutdown.py
+    try:
+        from backend_app.backend.connection_engine import (close_all_exchanges,
+                                                           exchange_pool_size)
+        pooled = exchange_pool_size()
+        closed = await close_all_exchanges()
+        logger.info(f" Exchange pool: closed {closed} of {pooled} pooled venue client(s)")
+    except Exception as e:
+        logger.warning(f" Exchange pool drain error: {e}")
+
     # Engine B  close QuestDB connection pool
     try:
         await app_state.telemetry.disconnect()
@@ -541,25 +617,106 @@ async def lifespan(app: FastAPI):
     logger.info(" All engines stopped. Server offline.")
 
 
+def _interactive_docs_allowed() -> bool:
+    """Whether this process may serve ``/docs`` and ``/redoc``.
+
+    WHAT WAS WRONG. Both URL helpers decided with::
+
+        os.getenv("ENV", get_vyomquant_mode("development")).lower() in ("production", "prod", "live")
+
+    -- a **trading mode** supplying the default for a **deployment environment**. That is
+    the API-03 defect, which ``core/rate_limit.py`` was fixed for and this was not. With
+    ``ENV`` unset and the documented production setting ``VYOMQUANT_MODE=paper``, the
+    expression evaluated ``"paper" in ("production", "prod", "live")`` -> ``False``, so the
+    interactive docs were served. And the mirror image was just as wrong in the other
+    direction: ``VYOMQUANT_MODE=live`` made ``is_prod`` true and hid the docs on a machine
+    that had declared no environment at all. The docs followed what the system was allowed
+    to do with money.
+
+    WHAT IT DOES NOW. ``runtime_env.local_state_is_acceptable()`` -- the single precedence
+    rule (RUNTIME-01), which reads ``ENV`` / ``ENVIRONMENT`` / ``DEV_MODE`` and never a
+    trading mode. Docs are served only where that returns ``True``: a declared
+    development/test environment, or a silent one that says ``DEV_MODE=true``.
+
+    This is never looser than the old behaviour, case by case:
+
+        ENV=development                  served  ->  served      (unchanged)
+        ENV=production                   hidden  ->  hidden       (unchanged)
+        ENV=production + DEV_MODE=true   hidden  ->  hidden       (unchanged)
+        ENV=staging                      SERVED  ->  hidden       (stricter)
+        ENV unset + VYOMQUANT_MODE=paper SERVED  ->  hidden       (stricter)
+        ENV unset, no DEV_MODE           SERVED  ->  hidden       (stricter)
+        ENV unset + DEV_MODE=true        served  ->  served       (unchanged)
+
+    ``ENABLE_DOCS`` remains an explicit operator override in both directions and is
+    consulted first, because an operator who names the behaviour outranks an inference.
+
+    Regression: tests/test_environment_precedence_is_centralised.py
+    """
+    return local_state_is_acceptable()
+
+
 def _get_docs_url():
-    is_prod = os.getenv("ENV", get_vyomquant_mode("development")).lower() in ("production", "prod", "live")
     enable_docs = os.getenv("ENABLE_DOCS")
     if enable_docs is not None:
         return "/docs" if enable_docs.lower() in ("true", "1", "yes") else None
-    return None if is_prod else "/docs"
+    return "/docs" if _interactive_docs_allowed() else None
 
 def _get_redoc_url():
-    is_prod = os.getenv("ENV", get_vyomquant_mode("development")).lower() in ("production", "prod", "live")
     enable_docs = os.getenv("ENABLE_DOCS")
     if enable_docs is not None:
         return "/redoc" if enable_docs.lower() in ("true", "1", "yes") else None
-    return None if is_prod else "/redoc"
+    return "/redoc" if _interactive_docs_allowed() else None
 
 def _get_openapi_url():
+    """``/openapi.json``: the schema follows the pages it feeds (API-05).
+
+    THE POLICY, STATED. There are two distinct surfaces here and they were being governed
+    by two different rules by accident rather than by decision:
+
+      * ``/docs`` and ``/redoc`` are the INTERACTIVE, browser-executable consoles. Served
+        only where ``runtime_env.local_state_is_acceptable()`` is true (ENV-05).
+      * ``/openapi.json`` is the MACHINE-READABLE SCHEMA those consoles render from. It
+        enumerates every path, method, parameter and model in the application.
+
+    Hiding the console while publishing the schema discloses exactly the surface the hiding
+    withholds, so the schema now follows the same rule. ``ENABLE_OPENAPI`` remains an
+    explicit operator override in BOTH directions and is consulted first, which is the
+    escape hatch for a deployed environment that genuinely has a schema consumer.
+
+    DOCUMENTATION IS NOT DISABLED EVERYWHERE. In a declared development or test
+    environment — and on any machine that says ``DEV_MODE=true`` — all three URLs are
+    served exactly as before. What changes is production and staging, and only by default.
+
+    WHY THIS WAS DEFERRED BEFORE, AND WHAT THE EVIDENCE NOW SAYS. The earlier pass left it
+    alone because unmounting the schema can break a generated client, a contract test or an
+    API-gateway import. Measured since:
+
+      * NOTHING in this repository fetches ``/openapi.json`` over HTTP. The frontend
+        mentions it only in comments (``algo22-terminal/.env.production``, two test
+        docstrings); no CI workflow references it; and ``tests/test_route_contract.py``
+        reads ``app.openapi()`` IN PROCESS, so it is unaffected by this URL.
+      * CloudFront distribution EEOXECPHQ8SR0 does carry an explicit ``/openapi.json`` cache
+        behaviour (``infra/rollback/cloudfront-...-pre-domain.json``,
+        ``scripts/update_cloudfront_policies.py``, ``infra/dns.md``), and
+        ``core/tenant_middleware.py`` and ``core/subscription_middleware.py`` both list the
+        path as public. Those are ROUTING and AUTH facts, and they predate the ENV-05
+        change: they exist because ``/docs`` used to be served in production and had to be
+        reachable unauthenticated for the page to work. Once the console became local-only
+        the schema's publication lost its reason.
+
+    CONSEQUENCE, SPELLED OUT. In production ``/openapi.json`` now answers 404, and the
+    CloudFront behaviour for it becomes a no-op forwarding to a 404. Neither the CDN
+    behaviour nor the middleware allowlists are removed here — deleting a deployed cache
+    behaviour is an infrastructure change, and a routed path that answers 404 is harmless.
+    ``ENABLE_OPENAPI=true`` restores the previous behaviour with one variable.
+
+    Regression: tests/test_api05_documentation_exposure_matrix.py
+    """
     enable_openapi = os.getenv("ENABLE_OPENAPI")
     if enable_openapi is not None:
         return "/openapi.json" if enable_openapi.lower() in ("true", "1", "yes") else None
-    return "/openapi.json"
+    return "/openapi.json" if _interactive_docs_allowed() else None
 
 #  FastAPI app 
 app = FastAPI(
@@ -874,12 +1031,29 @@ async def health():
     except Exception as e:
         service_status["supabase"] = f"failed: {str(e)[:50]}"
     
-    # Overall status - ok if at least core functions work
+    # Overall status.
+    #
+    # OBS-01: this considered only supabase and questdb, so REDIS BEING DOWN STILL
+    # REPORTED "ok" — and Redis is not a cache here, it backs the rate limiter (API-03)
+    # and the distributed execution locks. The redis probe above was already running and
+    # its result was simply discarded.
+    #
+    # Redis is only counted when this environment actually requires it, using the same
+    # detector as the rate limiter and the readiness gate, so a developer with no Redis
+    # does not see a permanently degraded dashboard.
+    from backend_app.core.runtime_env import local_state_is_acceptable
+
+    _redis_required = not local_state_is_acceptable()
+    _redis_state = str(service_status.get("redis", ""))
+    _redis_ok = (not _redis_required) or _redis_state == "connected"
+
     all_ok = (
         service_status.get("supabase") in ("connected", "fallback")
         and not str(service_status.get("supabase", "")).startswith("failed")
         and service_status.get("questdb") != "failed"
+        and _redis_ok
     )
+    service_status["redis_required"] = _redis_required
     
     return {
         "status": "ok" if all_ok else "degraded",
@@ -914,6 +1088,27 @@ async def health_services():
     overall = "ok" if failed_count == 0 and inactive_count == 0 else (
               "degraded" if failed_count == 0 else "failed")
 
+    # OBS-01: this snapshot is written ONCE, during lifespan startup, and never
+    # refreshed. A service that died an hour ago still reports ACTIVE, so the answer is
+    # not "are these services running" but "did these services start" — and those are
+    # different questions that were being conflated.
+    #
+    # Refreshing it properly means each service publishing a heartbeat, which is what
+    # `WorkerBase.report_health` now does for workers after OBS-04 (it was writing
+    # nowhere at all). These four are not WorkerBase subclasses, so the honest fix
+    # available here is to STOP PRESENTING A BOOT SNAPSHOT AS LIVE STATE: the age is
+    # reported, and `as_of` says plainly what the reading is.
+    _age_seconds = None
+    _captured = _runtime_service_status.get("_captured_at")
+    if _captured:
+        try:
+            _age_seconds = round(
+                (datetime.now(timezone.utc)
+                 - datetime.fromisoformat(_captured)).total_seconds(), 1
+            )
+        except Exception:  # noqa: BLE001
+            _age_seconds = None
+
     return {
         "status": overall,
         "summary": {
@@ -922,7 +1117,18 @@ async def health_services():
             "failed":   failed_count,
         },
         "services": services,
-        "raw": runtime,
+        "raw": {k: v for k, v in runtime.items() if not k.startswith("_")},
+        # The honesty fields. A consumer that treats `services` as live state is wrong,
+        # and now has the information to know it.
+        "as_of": "process_startup",
+        "captured_at": _captured,
+        "age_seconds": _age_seconds,
+        "note": (
+            "These values are a BOOT-TIME snapshot, not live state: they are written "
+            "once during startup and never refreshed, so a service that has since died "
+            "still reads ACTIVE. Use /health/ready for a traffic decision and "
+            "worker:health:* (see WorkerBase.report_health) for live worker liveness."
+        ),
     }
 
 
@@ -936,31 +1142,61 @@ async def health_live():
 #  Readiness probe (Docker HEALTHCHECK / K8s readiness) 
 @app.get("/health/ready", tags=["System"])
 async def health_ready():
-    """Minimal readiness probe — returns 200 if the process is ready to serve traffic."""
-    return {"status": "ready"}
+    """OBS-01: readiness now MEASURES its required dependencies.
+
+    This returned `{"status": "ready"}` unconditionally -- it checked nothing -- so an
+    orchestrator would route production traffic to a pod with no database and no Redis.
+
+    Required: the database (every authenticated request resolves identity and RLS through
+    it) and Redis outside a declared local environment (it backs the rate limiter per
+    API-03 and the distributed execution locks). Telemetry is NOT required: it degrades to
+    a mock by design, and making readiness depend on an optional service turns a metrics
+    outage into a total outage.
+
+    **503 when not ready.** A 200 carrying a sad body is invisible to every load balancer,
+    which is the whole reason the old version was harmless-looking and useless.
+
+    Liveness (`/health/live`) stays dependency-free: a pod whose database is down is not a
+    broken pod, and restarting it does not fix the database.
+    """
+    from backend_app.core.readiness import evaluate_readiness
+
+    report = await evaluate_readiness()
+    return JSONResponse(status_code=report.http_status, content=report.to_dict())
 
 
 @app.get("/api/system/readiness", tags=["System"])
 async def system_readiness():
-    """System readiness check — confirms critical dependencies are operational."""
-    from backend_app.core.exchange_certification import get_exchange_certification_registry
-    registry = get_exchange_certification_registry()
-    
-    dependencies = {
-        "database": "HEALTHY",
-        "redis": "HEALTHY",
-        "risk_engine": "HEALTHY",
-        "execution_engine": "HEALTHY",
-        "reconciliation": "HEALTHY",
-        "certified_exchanges": registry.get_certification_matrix()["total_certified_level_5"],
-    }
-    
-    return {
-        "status": "READY",
-        "mode": "DEV_MODE" if os.environ.get("DEV_MODE", "").lower() == "true" else "production",
-        "dependencies": dependencies,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    """System readiness check — confirms critical dependencies are operational.
+
+    OBS-01: this returned the literal string "HEALTHY" for database, redis, risk_engine,
+    execution_engine and reconciliation, and `"status": "READY"` always. Nothing was
+    probed. It now reports the same measured dependency set as `/health/ready` and
+    carries the same 503, with the exchange-certification matrix retained because that
+    part was always real.
+    """
+    from backend_app.core.exchange_certification import \
+        get_exchange_certification_registry
+    from backend_app.core.readiness import evaluate_readiness
+
+    report = await evaluate_readiness()
+    body = report.to_dict()
+
+    try:
+        registry = get_exchange_certification_registry()
+        body["certified_exchanges"] = (
+            registry.get_certification_matrix()["total_certified_level_5"]
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Informational only; it must not change the readiness verdict.
+        body["certified_exchanges"] = None
+        body["certified_exchanges_error"] = type(exc).__name__
+
+    body["mode"] = (
+        "DEV_MODE" if os.environ.get("DEV_MODE", "").lower() == "true" else "production"
+    )
+    body["timestamp"] = datetime.now(timezone.utc).isoformat()
+    return JSONResponse(status_code=report.http_status, content=body)
 
 
 @app.get("/api/system/health", tags=["System"])
@@ -971,13 +1207,30 @@ async def system_health():
 
 @app.get("/api/system/dependencies", tags=["System"])
 async def system_dependencies():
-    """Dependencies health status."""
+    """Dependency health, measured.
+
+    OBS-01: every value here was a hardcoded literal — `"HEALTHY"` for all five, plus
+    fabricated detail (`"circuit_breaker": "ARMED"`, `"idempotency_guard": "ACTIVE"`)
+    that was never read from anything. `risk_engine`, `execution_engine` and
+    `reconciliation_scheduler` are in-process components rather than things we talk to, so
+    reporting them as reachable dependencies was category error on top of fabrication;
+    worker/service state is at `/health/services`.
+
+    Always 200: this is a diagnostic, not a gate. `/health/ready` is the gate.
+    """
+    from backend_app.core.readiness import evaluate_readiness
+
+    report = await evaluate_readiness()
     return {
-        "database": {"status": "HEALTHY", "driver": "supabase/postgres"},
-        "redis": {"status": "HEALTHY", "driver": "redis-py"},
-        "risk_engine": {"status": "HEALTHY", "circuit_breaker": "ARMED"},
-        "execution_engine": {"status": "HEALTHY", "idempotency_guard": "ACTIVE"},
-        "reconciliation_scheduler": {"status": "HEALTHY", "poll_interval_sec": 30},
+        "dependencies": report.to_dict()["dependencies"],
+        "ready": report.ready,
+        "blocking": list(report.blocking),
+        "checked_at": report.checked_at,
+        "note": (
+            "In-process components (risk engine, execution gateway, reconciliation "
+            "scheduler) are reported at /health/services, not here: they are not "
+            "external dependencies and cannot be probed by reachability."
+        ),
     }
 
 
