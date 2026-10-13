@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from backend_app.backend.connection_engine import (ConnectionEngine,
                                                    release_exchange)
 from backend_app.backend.data_seeking_engine import DataEngine
+from backend_app.backend.exchange_key_permissions import inspect_key_permissions
 from backend_app.core.dependencies import (get_current_user,
                                            get_request_supabase, get_vault,
                                            get_ws_manager, require_aal2)
@@ -104,6 +105,10 @@ EXCHANGE_VERIFICATION_FAILED = "EXCHANGE_VERIFICATION_FAILED"
 EXCHANGE_UNSUPPORTED = "EXCHANGE_UNSUPPORTED"
 EXCHANGE_KEY_STORAGE_FAILED = "EXCHANGE_KEY_STORAGE_FAILED"
 EXCHANGE_NO_STORED_CREDENTIALS = "EXCHANGE_NO_STORED_CREDENTIALS"
+#: EXCH-02: the submitted key can withdraw funds (or, in strict mode, its permissions could
+#: not be established). Refused before anything is stored.
+EXCHANGE_KEY_WITHDRAW_ENABLED = "EXCHANGE_KEY_WITHDRAW_ENABLED"
+EXCHANGE_KEY_PERMISSIONS_UNVERIFIABLE = "EXCHANGE_KEY_PERMISSIONS_UNVERIFIABLE"
 
 #: The sentence a failed storage write answers with. The write is to Supabase, so the
 #: exception is a PostgREST error carrying table and column names; those name this
@@ -398,6 +403,8 @@ async def store_keys(
         )
         exchange = await bridge.connect()
         await DataEngine(exchange).fetch_wallet_balance_snapshot()
+        # EXCH-02: introspect the key's permissions on the same connection (never raises).
+        permission_report = await inspect_key_permissions(exchange, body.exchange_id)
     except Exception as e:
         # SC-27: logged in full for an operator, classified for the caller. The previous
         # `f"...{str(e)}"` reflected a ccxt message produced from the credentials in this
@@ -415,6 +422,36 @@ async def store_keys(
     finally:
         if bridge:
             await bridge.disconnect()
+
+    # EXCH-02: refuse a key that can withdraw funds, BEFORE it is stored. A trading platform
+    # never needs withdrawal rights; keeping such a key turns any compromise into theft.
+    refusal = permission_report.refuse_reason
+    if refusal == "WITHDRAW_ENABLED":
+        logger.warning("EXCH-02: refused withdraw-enabled key user=%s exchange=%s",
+                       user["id"], body.exchange_id)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": EXCHANGE_KEY_WITHDRAW_ENABLED,
+                "message": (
+                    "This API key has withdrawal permission enabled. For your safety we only "
+                    "accept keys limited to reading and trading. Create a new key at the "
+                    "exchange with withdrawals disabled (and, ideally, restricted to our "
+                    "server IP addresses), then submit it again. Nothing was stored."
+                ),
+            },
+        )
+    if refusal == "PERMISSIONS_UNVERIFIABLE":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": EXCHANGE_KEY_PERMISSIONS_UNVERIFIABLE,
+                "message": (
+                    "We could not confirm that this API key is unable to withdraw funds on "
+                    "this exchange, so it was not stored."
+                ),
+            },
+        )
 
     try:
         # QUOTA-01: the authoritative slot decision and the write it authorises, in one
@@ -523,7 +560,16 @@ async def store_keys(
     except Exception as notif_err:
         logger.debug(f"[EXCHANGE] Notification dispatch error: {notif_err}")
 
-    return {"status": "ok", "message": "Exchange keys securely encrypted and stored in vault."}
+    # EXCH-02: tell the customer what we could and could not establish about the key.
+    warnings = []
+    if not permission_report.verified:
+        warnings.append("withdrawal_permission_unverified")
+    if permission_report.ip_restricted is False:
+        warnings.append("ip_allowlist_not_enabled")
+    if not warnings:
+        return {"status": "ok", "message": "Exchange keys securely encrypted and stored in vault."}
+    return {"status": "ok", "message": "Exchange keys securely encrypted and stored in vault.",
+            "key_warnings": warnings}
 
 
 @router.get("")

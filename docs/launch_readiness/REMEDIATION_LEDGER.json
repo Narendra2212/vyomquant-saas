@@ -366,12 +366,12 @@
       "severity": "Medium",
       "component": "Exchange integration",
       "title": "Stored exchange keys are not checked for withdrawal permission or IP restriction",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "backend/exchange_key_permissions.py introspects Binance (apiRestrictions), OKX (account/config perm) and Bybit (v5 user/query-api); POST /api/exchanges/keys refuses withdraw-enabled keys with 400 before storage, reports ip_allowlist_not_enabled / withdrawal_permission_unverified warnings, EXCHANGE_KEY_PERMISSIONS_STRICT=true refuses unverifiable keys. tests/test_exch02_withdraw_enabled_keys_are_refused.py (8)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Per-venue permission introspection (e.g. Binance apiRestrictions) - refuse withdraw-enabled keys; recommend IP allowlist."
+      "remaining_action": "Parsers follow vendor docs but are NOT verified against live venue responses (needs exchange sandbox/test keys - EXTERNAL). Other venues are UNVERIFIED (allowed with warning unless STRICT; operators should set STRICT=true for live). Existing already-stored keys are not retro-checked."
     },
     {
       "id": "API-01",
