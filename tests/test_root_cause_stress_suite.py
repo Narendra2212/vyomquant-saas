@@ -73,6 +73,11 @@ class StressRepo:
     def claim_execution(self, execution_id, tenant_id):
         return True, {"execution_id": execution_id}
 
+    def has_unresolved_submission(self, tenant_id, symbol):
+        """RT-17: the live path asks whether the symbol is frozen by an UNKNOWN
+        submission. These doubles model a clean account."""
+        return False
+
     def claim_execution_within_capacity(self, execution_id, tenant_id, **kwargs):
         return True, {"execution_id": execution_id}, None
 

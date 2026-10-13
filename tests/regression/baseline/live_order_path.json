@@ -1,10 +1,10 @@
 {
   "_baseline_note_ambiguous_submission_refusal_dup02": "Phase 11B-D3 (DUP-02). `contract.returns` gained ONE entry: the `skipped_ambiguous_submission` refusal returned by `ExecutionEngine.execute_with_idempotency` when `check_idempotent_execution` reports that a previous attempt for this execution may already have reached the venue (`submitted_at` committed before `create_order`, or a status of UNKNOWN). Before this change the `allow_retry` action had no branch in the engine and reached the claim by fall-through, which resubmitted an order that may already have been live -- undetectable at coinbase and kraken, which do not honour our clientOrderId on ccxt 4.3.92. The added entry is shape-identical to the existing refusal returns (status/execution_id/result/message); it is a NEW OUTCOME, not a changed or removed one, and no recorded key was renamed, retyped or re-meaninged. Evidence: staging/PHASE11B_D3_DUP01_RETRY_FIX_REPORT.md; regression: tests/test_dup02_ambiguous_submission_is_not_retried.py.",
   "_baseline_note_collaborator_sequence_trade01": "TRADE-01 AUTHORISES the replacement of `ExecutionRecordRepository.claim_execution` with `ExecutionRecordRepository.claim_execution_within_capacity` in the live order path's collaborator sequence. ONE entry is re-recorded; nothing else in this file is added, removed or retyped, and the ORDER of the sequence is unchanged - the claim occupies exactly the position it did before. WHY. The only capital bound on this path was a read-then-compare in `_execute_trade_internal` (`_notional > _ceiling`, where `_ceiling` is `self.current_equity * self.max_leverage` read from PROCESS MEMORY), with nothing reserved, decremented or locked, and no `FOR UPDATE`, advisory lock or exposure table anywhere on the path. `claim_execution` guarantees that one worker executes a GIVEN execution and says nothing about two DIFFERENT ones - and `generate_execution_id` folds quantity and price into the canonical string, so two orders differing in either take different execution ids AND different Redis locks, clear the identical ceiling independently, and both proceed. Two orders at 60% of the ceiling committed 120% of it. `claim_execution_within_capacity` makes the claim and the capacity decision one transaction serialised per tenant by `pg_advisory_xact_lock`, summing admitted notional from `execution_records` instead of reading equity from memory. The reservation IS the `executing` row, so no separate reservation state can leak. The per-order ceiling is UNCHANGED and still runs. Declared simulator engines keep `claim_execution`: there is no real account whose capacity could be oversubscribed. Evidence: tests/test_trade01_concurrent_exposure_postgres.py (28 tests, real PostgreSQL, multi-connection), including `test_without_the_reservation_two_rows_both_reach_executing` which demonstrates the pre-fix defect against authoritative database state.",
+  "_baseline_note_unknown_submission_rt17": "RT-17 AUTHORISES (a) a new refusal on the live branch of execute_with_idempotency: status 'blocked' when the tenant+symbol holds an UNKNOWN execution record (ExecutionRecordRepository.has_unresolved_submission is now consulted once, after the idempotency check and before the claim, for live-bound orders only), and (b) a new result status 'submission_unknown' (same keys: status, execution_id, result, message) returned, and ExecutionStatus.UNKNOWN persisted instead of FAILED, when the venue call may have reached the venue but its outcome is not known (lost response, timeout, no order id, or an error raised after the submission evidence was written). No existing field is removed, renamed or retyped.",
   "_baseline_note_update_status_venue_order_id_trade12": "TRADE-12 AUTHORISES the replacement of the `order_id` argument with `venue_order_id` in the `ExecutionRecordRepository.update_status` call on the completing live order (collaborator_sequence[7]). ONE argument name changes; the call itself, its POSITION in the sequence, and every other argument (`execution_id`, `result`, `status`, `tenant_id`) are unchanged. WHY. `execution_records.order_id` carries a FOREIGN KEY to `orders(id)`, but the engine was writing the VENUE order id into it. No `orders` row has the venue's id as its primary key, so every real completion raised 23503 (foreign_key_violation) and the execution row was left stuck in EXECUTING -- a guaranteed producer of exactly the stale-EXECUTING population TRADE-07 remediates. Migration 030 (`030_execution_venue_order_id.sql`) adds a dedicated `venue_order_id` column with NO foreign key, and `update_status` now records the venue identifier there. The orders FK is unchanged and still constrains `order_id`; this is a corrected target for a value that never belonged under the FK, not a removal, retype or re-meaning of a recorded field. Evidence: tests/test_trade07_stale_execution_recovery_postgres.py (27 passed, real PostgreSQL) and migration 030's append-only RLS postflight.",
   "capture": "live_order_path",
   "contract": {
-    "_baseline_note_parameters_risk_verdict": "TRADE-05 AUTHORISES the addition of `risk_approved` and `risk_reason` to `ExecutionEngine.execute_with_idempotency`. Before the fix this method placed LIVE orders with no risk verdict of any kind: `execute_trade` forwarded none and the venue branch did not ask for one, so reaching the gateway conferred permission to skip risk. The verdict is now a property of the gateway rather than of the caller: `risk_approved` defaults to `None` and the venue branch refuses anything that is not `True` (`execution_engine.py`, the `self._live_risk_approved is not True` refusal), so a caller that does not evaluate risk cannot supply the evidence and cannot place a live order. That is what makes the invariant structural rather than a convention the caller is trusted to follow - it closes the two doors the audit flagged as inheriting `bot_runner` authorisation without inheriting the risk check (`distributed_execution/execution_worker.py` and `idempotent_exchange_submission.py`). Paper orders are unaffected: they do not reach that branch. Evidence: tests/test_trade04_live_order_gate_at_venue_boundary.py and tests/test_live_risk_gate_enforcement.py::test_unapproved_live_order_never_reaches_ccxt. PROVENANCE: this note is a RECONSTRUCTION. The original was an uncommitted working-tree change and was destroyed by a `git checkout --` on this file during the TRADE-01 re-record in Phase 8; HEAD never carried it. Its surviving opening ran to \"The verdict is now a pro...\" and the remainder above is rebuilt from the code and tests it cites, not recovered. Recorded in staging/REMEDIATION_REPORT.md's Phase 8 block.",
     "decorators": [],
     "handler": "execute_with_idempotency",
     "module": "backend_app.core.execution_engine",
@@ -125,6 +125,12 @@
       },
       {
         "execution_id": "computed",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
         "message": "computed",
         "result": "null",
         "status": "str"
@@ -157,9 +163,20 @@
         "message": "str",
         "result": "computed",
         "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "computed",
+        "status": "str"
+      },
+      {
+        "execution_id": "computed",
+        "message": "str",
+        "result": "computed",
+        "status": "str"
       }
-    ],
-    "_baseline_note_returns_tenant_halt": "RT-19 AUTHORISES one ADDED return in execute_with_idempotency: the per-tenant kill switch (durable, cross-worker, fail-closed) answers {status:'blocked', execution_id:None, result:None, message:str} before any strategy lookup or venue call, exactly like the existing global kill switch return."
+    ]
   },
   "execution_statuses_available": [
     "completed",
@@ -208,6 +225,10 @@
           ],
           "call": "ExecutionRecordRepository.check_idempotent_execution",
           "returns_action": "proceed"
+        },
+        {
+          "call": "ExecutionRecordRepository.has_unresolved_submission",
+          "returns": "bool"
         },
         {
           "arguments": [

@@ -353,12 +353,12 @@
       "severity": "High",
       "component": "Order safety (live)",
       "title": "Lost responses are recorded as rejections; strategy state rolls back and can re-enter",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "CCXTExchangeExecutor.place_order: failures at/after create_order that are ccxt OperationFailed (timeouts, network, BadResponse) or non-ccxt, and a response with no order id, return status=unknown/SUBMISSION_UNKNOWN (venue ExchangeError refusals and pre-send failures stay rejected); ExecutionEngine persists ExecutionStatus.UNKNOWN (never FAILED) and returns submission_unknown, including for any exception after the submission evidence is written; execute_with_idempotency refuses ('blocked', frozen) a NEW live order for a tenant+symbol that holds an UNKNOWN record (fails closed). tests/test_rt17_lost_order_response_is_unknown_not_rejected.py (26); live_order_path baseline re-recorded with authorisation note",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Classify network/timeouts as UNKNOWN; freeze the strategy's symbol until adjudicated (needs RT-16)."
+      "remaining_action": "Code-level only. Adjudication of UNKNOWN rows depends on RT-16 (OrderWatchdog has no production executor): until an operator resolves the row the symbol stays frozen for that tenant (intended, fails safe). Real venue timeout behaviour and clientOrderId lookup not verified on a sandbox (EXTERNAL). BotRunner exposure already ignores non-completed results (RT-06)."
     },
     {
       "id": "EXCH-02",

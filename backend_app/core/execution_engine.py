@@ -984,6 +984,46 @@ class ExecutionEngine:
                     "was recorded for it.", execution_id,
                 )
             
+            # RT-17 SYMBOL FREEZE. An earlier submission for this tenant+symbol is UNKNOWN
+            # (the venue may hold an order we cannot see). A new order -- which would get a
+            # new execution id and so bypass the per-execution guard -- could double the
+            # position. Refuse until the UNKNOWN row is adjudicated. Live-bound only;
+            # fails closed when the check itself errors.
+            if not _is_declared_simulator:
+                try:
+                    _frozen = repo.has_unresolved_submission(tenant_id, symbol)
+                except Exception as _freeze_err:  # noqa: BLE001
+                    logger.critical(
+                        "Refusing execution %s: unresolved-submission check failed: %s",
+                        execution_id, _freeze_err,
+                    )
+                    _frozen = True
+                if _frozen is True:
+                    # The idempotency check above inserted a PENDING row for this attempt.
+                    # Close it out (never submitted, so FAILED is truthful and retryable)
+                    # rather than leaving an orphan for the stale-execution sweeper.
+                    try:
+                        repo.update_status(
+                            execution_id=execution_id,
+                            tenant_id=tenant_id,
+                            status=ExecutionStatus.FAILED,
+                            result={'error': 'symbol frozen: unresolved UNKNOWN submission',
+                                    'symbol': symbol, 'side': side},
+                        )
+                    except Exception:  # noqa: BLE001 - the refusal stands regardless
+                        logger.warning("Could not close the placeholder row for %s", execution_id)
+                    return {
+                        'status': 'blocked',
+                        'execution_id': execution_id,
+                        'result': None,
+                        'message': (
+                            f'Risk gateway: {symbol} is frozen -- an earlier order submission '
+                            f'for it has an unknown outcome and may be live at the venue. '
+                            f'Reconcile it before sending another order. Refused before any '
+                            f'exchange call.'
+                        ),
+                    }
+
             # STEP 3: Acquire execution lock (only ONE worker proceeds)
             #
             # TRADE-01. THE CLAIM IS NOW ALSO A CAPACITY RESERVATION, FOR LIVE ORDERS.
@@ -1135,6 +1175,37 @@ class ExecutionEngine:
                         'result': final_result,
                         'message': 'Trade executed successfully'
                     }
+                elif isinstance(trade_result, dict) and trade_result.get('submission_unknown'):
+                    # ═══════════════════════════════════════════════════════════
+                    # RT-17: THE ORDER MAY BE LIVE. Record UNKNOWN, not FAILED.
+                    # FAILED would let the strategy roll back and re-enter on the next
+                    # tick (a different price is a different execution id), doubling the
+                    # position. UNKNOWN is refused for retry by `check_idempotent_execution`
+                    # and freezes this symbol below until it is adjudicated.
+                    # ═══════════════════════════════════════════════════════════
+                    unknown_result = serialize_decimals({
+                        'error': trade_result.get('error'),
+                        'error_code': trade_result.get('error_code'),
+                        'symbol': symbol,
+                        'side': side,
+                        'unknown_at': datetime.utcnow().isoformat(),
+                    })
+                    repo.update_status(
+                        execution_id=execution_id,
+                        tenant_id=tenant_id,
+                        status=ExecutionStatus.UNKNOWN,
+                        result=unknown_result,
+                    )
+                    return {
+                        'status': 'submission_unknown',
+                        'execution_id': execution_id,
+                        'result': unknown_result,
+                        'message': (
+                            'The order may be live at the venue. It was NOT recorded as '
+                            'rejected and NOT resubmitted; new orders for this symbol are '
+                            'frozen until it is reconciled.'
+                        ),
+                    }
                 else:
                     # ═══════════════════════════════════════════════════════════
                     # Execution failed - store error BEFORE returning
@@ -1177,6 +1248,34 @@ class ExecutionEngine:
                 # UPDATE execution_records
                 # SET status = 'failed', result = ?, updated_at = now()
                 # WHERE execution_id = ?
+                # RT-17: an unexpected error AFTER the submission evidence was written must
+                # not be recorded as FAILED -- the venue may hold the order.
+                _may_be_live = False
+                try:
+                    _rec = repo.get_by_id(execution_id, tenant_id)
+                    _may_be_live = (not _is_declared_simulator) and (
+                        getattr(_rec, "submitted_at", None) is not None
+                    )
+                except Exception:  # noqa: BLE001 - unreadable evidence is not proof of safety
+                    _may_be_live = not _is_declared_simulator
+                if _may_be_live is True:
+                    logger.critical(
+                        "ORDER SUBMISSION UNKNOWN for execution %s: unexpected %s after "
+                        "submission evidence was recorded.", execution_id, type(e).__name__,
+                    )
+                    repo.update_status(
+                        execution_id=execution_id,
+                        tenant_id=tenant_id,
+                        status=ExecutionStatus.UNKNOWN,
+                        result=error_result,
+                    )
+                    return {
+                        'status': 'submission_unknown',
+                        'execution_id': execution_id,
+                        'result': error_result,
+                        'message': f'Unexpected error after submission; order may be live: {str(e)}',
+                    }
+
                 repo.update_status(
                     execution_id=execution_id,
                     tenant_id=tenant_id,
@@ -1424,6 +1523,7 @@ class ExecutionEngine:
                     + "). Refused before any exchange call."
                 )
 
+            _venue_call_possible = False  # RT-17: set True once the venue call may have been made
             try:
                 from backend_app.core.global_safety import generate_validation_token
                 from backend_app.core.live_execution_gate import (
@@ -1547,6 +1647,10 @@ class ExecutionEngine:
                         "the venue. Refused before any exchange call."
                     )
 
+                # RT-17: from here on, any failure -- including one raised while reading the
+                # response -- may follow a venue order that really exists.
+                _venue_call_possible = True
+
                 # Map inputs to CCXT requirements
                 c_order_type = CoreOrderType.market if price <= Decimal("0") else CoreOrderType.limit
                 c_side = OrderSide.buy if side.lower() == "buy" else OrderSide.sell
@@ -1575,6 +1679,21 @@ class ExecutionEngine:
                         actual_fee = Decimal(str(raw_cost or "0"))
                         actual_fee_currency = fee_obj.get("currency")  # e.g. "BTC", "USDT", "BNB"
 
+                if getattr(result, "status", None) == "unknown" and not result.success:
+                    # RT-17: the executor could not tell whether the venue accepted the
+                    # order (lost response / timeout / no order id). That is NOT a
+                    # failure: the caller must record UNKNOWN, freeze the symbol and
+                    # adjudicate, never treat it as rejected.
+                    logger.critical(
+                        "ORDER SUBMISSION UNKNOWN for execution %s (%s %s): %s",
+                        execution_id, side, symbol, result.error_message,
+                    )
+                    return False, {
+                        'submission_unknown': True,
+                        'error_code': getattr(result, "error_code", None) or "SUBMISSION_UNKNOWN",
+                        'error': f"Order submission outcome unknown: {result.error_message}",
+                    }
+
                 if result.success:
                     return True, {
                         'order_id': result.exchange_order_id,
@@ -1595,6 +1714,18 @@ class ExecutionEngine:
                 else:
                     return False, f"Exchange execution failed: {result.error_message}"
             except Exception as e:
+                if _venue_call_possible:
+                    # RT-17: raised after the submission evidence was committed, so the
+                    # venue may hold an order. Not a plain failure.
+                    logger.critical(
+                        "ORDER SUBMISSION UNKNOWN for execution %s: executor raised %s after "
+                        "the venue call became possible.", execution_id, type(e).__name__,
+                    )
+                    return False, {
+                        'submission_unknown': True,
+                        'error_code': 'SUBMISSION_UNKNOWN',
+                        'error': f"Exchange executor exception after submission: {str(e)}",
+                    }
                 return False, f"Exchange executor exception: {str(e)}"
 
         # ═══════════════════════════════════════════════════════════════════

@@ -1261,6 +1261,26 @@ class BaseExchangeExecutor(ABC):
 # STEP 6.2 — CCXT EXCHANGE IMPLEMENTATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _outcome_is_ambiguous(exc: BaseException) -> bool:
+    """RT-17: could a failure raised at/after the venue call mean the order was accepted?
+
+    * ccxt ``ExchangeError`` family (InsufficientFunds, InvalidOrder, BadSymbol,
+      AuthenticationError, ...): the venue ANSWERED and refused -> definite rejection.
+    * ccxt ``OperationFailed`` family (NetworkError and subclasses, BadResponse): the outcome
+      is unknown -> ambiguous.
+    * Anything else (asyncio.TimeoutError, aiohttp/OS errors, cancellation of the awaiting
+      task is not an Exception so never reaches here): the request may have been sent ->
+      ambiguous.
+    """
+    if not CCXT_AVAILABLE:
+        return True
+    if isinstance(exc, ccxt.OperationFailed):
+        return True
+    if isinstance(exc, ccxt.ExchangeError):
+        return False
+    return True
+
+
 class CCXTExchangeExecutor(BaseExchangeExecutor):
     """
     STEP 6.2: CCXT-based exchange executor.
@@ -1505,6 +1525,10 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
 
         await enforce_kill_switch()
 
+        # RT-17: set True immediately before the venue call. An exception BEFORE this is a
+        # definite local refusal ("rejected"); one at or after it may have reached the venue.
+        _submit_attempted = False
+
         try:
             if isinstance(order_type, str):
                 order_type = OrderType(order_type.lower())
@@ -1642,6 +1666,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             
             # Execute via CCXT — positional, matching
             # create_order(symbol, type, side, amount, price, params)
+            _submit_attempted = True
             response = await self._exchange.create_order(
                 params["symbol"],
                 params["type"],
@@ -1659,6 +1684,26 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
 
             raw_id = response.get("id")
             order_id_str = str(raw_id) if raw_id is not None else None
+
+            if order_id_str is None:
+                # RT-17: the venue answered without an order id. It may have accepted the order;
+                # reporting that as a plain failure invites a duplicate. Ambiguous.
+                logger.critical(
+                    "ORDER SUBMISSION UNKNOWN: %s %s - the venue response carried no order id; "
+                    "the order may be live. Do NOT resubmit; adjudicate by clientOrderId.",
+                    symbol, side.value,
+                )
+                return OrderResult(
+                    success=False,
+                    exchange_order_id=None,
+                    status="unknown",
+                    filled_size=None,
+                    remaining_size=None,
+                    avg_price=None,
+                    raw_response=response,
+                    error_message="The exchange response carried no order id; the order may be live.",
+                    error_code="SUBMISSION_UNKNOWN",
+                )
 
             result = OrderResult(
                 success=True if order_id_str else False,
@@ -1680,7 +1725,33 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             
         except Exception as e:
             error = self._handle_ccxt_error(e)
-            
+
+            # RT-17: A LOST RESPONSE IS NOT A REJECTION.
+            # Once the request may have left this process, a timeout / network error / bad
+            # response says nothing about whether the venue accepted the order. Recording it
+            # as "rejected" lets the strategy roll back, re-enter on the next tick (new price
+            # => new execution id) and double the position. ccxt marks exactly this class as
+            # `OperationFailed` (NetworkError, RequestTimeout, ExchangeNotAvailable,
+            # DDoSProtection, RateLimitExceeded, BadResponse, ...); venue refusals are
+            # `ExchangeError`s and stay "rejected". A non-ccxt failure after the send
+            # (asyncio/aiohttp timeouts, resets) is equally ambiguous.
+            if _submit_attempted and _outcome_is_ambiguous(e):
+                logger.critical(
+                    "ORDER SUBMISSION UNKNOWN: %s %s | %s | the request may have reached the "
+                    "venue. NOT recorded as rejected; do NOT resubmit; adjudicate by "
+                    "clientOrderId.", symbol, side.value, type(e).__name__,
+                )
+                return OrderResult(
+                    success=False,
+                    exchange_order_id=None,
+                    status="unknown",
+                    filled_size=None,
+                    remaining_size=None,
+                    avg_price=None,
+                    error_message=error.message,
+                    error_code="SUBMISSION_UNKNOWN",
+                )
+
             logger.error(
                 f"ORDER FAILED: {symbol} {side.value} | "
                 f"error={error.message} | "
