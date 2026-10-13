@@ -209,7 +209,7 @@ def _refuse_if_uncastable(conn, raw_table: str, raw_column: str) -> None:
     column = _validate_table_name(raw_column)
     bad_count = conn.execute(
         sa.text(
-            f"SELECT count(*) FROM public.{table} "
+            f"SELECT count(*) FROM public.{table} "  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
             f"WHERE {column} IS NOT NULL AND {column} !~* :re"
         ),
         {"re": UUID_REGEX},
@@ -219,7 +219,7 @@ def _refuse_if_uncastable(conn, raw_table: str, raw_column: str) -> None:
 
     sample = conn.execute(
         sa.text(
-            f"SELECT DISTINCT {column} FROM public.{table} "
+            f"SELECT DISTINCT {column} FROM public.{table} "  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
             f"WHERE {column} IS NOT NULL AND {column} !~* :re "
             f"LIMIT 5"
         ),

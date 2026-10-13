@@ -76,3 +76,35 @@ def test_test_workflow_also_runs_on_push_to_main_and_gate_name_matches():
     triggers = wf[True]
     assert "push" in triggers and "main" in triggers["push"]["branches"]
     assert wf["name"] == "01 PR Check"  # the name the gate looks up
+
+
+# ── CI-03: the frontend is on the same release train ─────────────────────────
+
+
+def _frontend_job():
+    wf = yaml.safe_load(open(os.path.join(WF, "06-frontend-deploy.yml")))
+    return wf, wf["jobs"]["deploy-frontend"]
+
+
+def test_ci03_frontend_deploy_is_gated_on_the_test_workflow_before_building():
+    wf, job = _frontend_job()
+    cmds = [s.get("run", "") for s in job["steps"]]
+    gate = next(k for k, c in enumerate(cmds) if "require_tests_passed.py" in c)
+    install = next(k for k, c in enumerate(cmds) if "npm ci" in c)
+    build = next(k for k, c in enumerate(cmds) if "npm run build" in c)
+    sync = next(k for k, c in enumerate(cmds) if "s3 sync" in c)
+    assert gate < install < build < sync
+    assert job["permissions"].get("actions") == "read"      # the gate lists workflow runs
+    assert "allow_untested" in wf[True]["workflow_dispatch"]["inputs"]
+    gate_env = job["steps"][gate]["env"]
+    assert gate_env["DEPLOY_SHA"] == "${{ github.sha }}"
+
+
+def test_ci03_frontend_build_is_stamped_with_its_commit_before_publishing():
+    _, job = _frontend_job()
+    cmds = [s.get("run", "") for s in job["steps"]]
+    stamp = next(k for k, c in enumerate(cmds) if "dist/release.json" in c)
+    build = next(k for k, c in enumerate(cmds) if "npm run build" in c)
+    sync = next(k for k, c in enumerate(cmds) if "s3 sync" in c)
+    assert build < stamp < sync
+    assert "$GITHUB_SHA" in cmds[stamp]
