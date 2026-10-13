@@ -52,6 +52,13 @@ tables, so applying it first on an existing environment costs nothing.
 (`003`–`007`, then the unnumbered ones). `006_reconcile_production_database.sql`
 is the one that reconciles shapes rather than adding tables.
 
+Then `backend_app/migrations/021` and up (DB-01). These go **after** `migrations/`, not
+directly after `019`: `024` ALTERs `referral_commissions`, which only
+`migrations/006_reconcile_production_database.sql` /
+`migrations/referral_system_redesign.sql` declare, so the previous order failed a fresh
+build with `42P01`. `scripts/provision_database.py::_numbered_sql_files()` implements this
+order and `tests/test_db01_provisioning_order.py` pins it.
+
 ### Step 2 — the Alembic chain, for the sixteen tables SQL does not declare
 
 ```
