@@ -789,7 +789,6 @@ async def get_open_orders(
     keys = vault.load_decrypted_keys(
         user["id"],
         exchange_id,
-        access_token=user.get("access_token"),
     )
     exchange = await get_or_create_exchange(
         user_id=user["id"],
@@ -1095,7 +1094,6 @@ async def get_history(
         keys = vault.load_decrypted_keys(
             user["id"],
             exchange_id,
-            access_token=user.get("access_token"),
         )
         exchange = await get_or_create_exchange(
             user_id=user["id"],

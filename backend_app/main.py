@@ -1165,6 +1165,29 @@ async def health_ready():
     return JSONResponse(status_code=report.http_status, content=report.to_dict())
 
 
+@app.get("/api/system/trading-capabilities", tags=["System"])
+async def system_trading_capabilities():
+    """FE-03 / RT-15: tell the UI whether LIVE execution is available on this platform.
+
+    ``live_trading_available`` is true only when the platform is in live mode AND live
+    trading is explicitly enabled - the same two conditions the order gate enforces
+    (``core.live_execution_gate.assert_platform_live_trading_enabled``). The gate also
+    applies a per-tenant allowlist, which is deliberately not reported here: this is a
+    public, unauthenticated probe and says nothing about any account. The UI uses it to
+    avoid offering Live when the server would refuse it; the server remains the authority.
+    """
+    from backend_app.core.safety_config import (get_live_trading_confirmation,
+                                                get_vyomquant_mode)
+
+    mode = str(get_vyomquant_mode("safe") or "").strip().lower()
+    enabled = str(get_live_trading_confirmation("false") or "").strip().lower() == "true"
+    live_mode = mode in ("live", "live_trading")
+    return {
+        "mode": mode if mode in ("safe", "paper", "live", "live_trading") else "safe",
+        "live_trading_available": bool(live_mode and enabled),
+    }
+
+
 @app.get("/api/system/readiness", tags=["System"])
 async def system_readiness():
     """System readiness check — confirms critical dependencies are operational.

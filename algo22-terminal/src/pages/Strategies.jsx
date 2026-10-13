@@ -5,7 +5,7 @@ import {
   BarChart2, Pause, Play, Trash2, Copy, Settings,
   Activity, Zap, Globe, Shield, RefreshCw
 } from "lucide-react";
-import { endpoints, api } from "../api";
+import { endpoints, api, publicGet } from "../api";
 import { CONFIG } from "../config";
 import { Button } from "../components/ui/Button";
 // Task 10.3: two of the three confirmation surfaces (archive and rename); task 17.2's last
@@ -251,10 +251,11 @@ const NO_STRATEGIES_STATE = Object.freeze({
  * The deploy target the row's control opens on — task 17.2
  * ══════════════════════════════════════════════════════════════════════════
  *
- * The deploy modal has always opened with `environment: "live"` selected, so the row's
- * deploy control is, by default, the start of a Live transition. That is what earns it
- * Requirement 4.3's separated treatment and `intent="live"`; the trader can change the
- * target inside the modal, and the label describes what happens if they change nothing.
+ * FE-03: the deploy modal now opens on PAPER. It used to open with `environment: "live"`
+ * preselected, so one careless confirm started a Live transition. Live is only OFFERED
+ * when the server reports the platform can run it (`/system/trading-capabilities`, read
+ * below; unknown or unreachable means NOT offered). The label and `intent` describe what
+ * happens if the trader changes nothing, so they now describe a paper deployment.
  *
  * The label and the intent are READ from `lib/deployFlow.js` rather than authored here, so
  * this control and §8.3's flow are titled by the same table — the precedent task 10.4 set
@@ -263,7 +264,7 @@ const NO_STRATEGIES_STATE = Object.freeze({
  * `intent` is a presentation treatment on a menu entry, and the POST is still
  * `endpoints.strategies.deployVersion` with `deploymentRequest`'s own body and query.
  */
-const ROW_DEPLOY_ENVIRONMENT = "live";
+const ROW_DEPLOY_ENVIRONMENT = "paper";
 const ROW_DEPLOY_PRESENTATION = deployPresentation(ROW_DEPLOY_ENVIRONMENT);
 
 /* ── The deploy modal's own form vocabulary (task 17.2c) ─────────────────────────────────
@@ -279,6 +280,11 @@ const EXECUTION_MODE_OPTIONS = Object.freeze([
   Object.freeze({ value: "paper", label: "Paper Simulation (Virtual Execution)" }),
   Object.freeze({ value: "live", label: "Live Execution (Master Executor)" }),
 ]);
+
+/** FE-03: what the mode control offers while the server has not said Live is available. */
+const PAPER_ONLY_MODE_OPTIONS = Object.freeze(
+  EXECUTION_MODE_OPTIONS.filter((option) => option.value === "paper"),
+);
 
 /**
  * Requirement 15.2's message for the capital field, and the whole of its validity rule.
@@ -740,6 +746,8 @@ export default function Strategies() {
     stopLoss: "2",
   });
   const [deployError, setDeployError] = useState(null);
+  // FE-03: fail closed. Live is offered only after the server says the platform is live.
+  const [liveAvailable, setLiveAvailable] = useState(false);
   const [connectedExchanges, setConnectedExchanges] = useState([]);
   const [exchangesLoading, setExchangesLoading] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState(null);
@@ -759,6 +767,30 @@ export default function Strategies() {
   const [subscriptionAction, setSubscriptionAction] = useState({});
 
   const resumeBuilderStrategy = location.state?.resumeBuilderStrategy || null;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const caps = await publicGet("/system/trading-capabilities");
+        if (!cancelled) setLiveAvailable(caps?.live_trading_available === true);
+      } catch {
+        if (!cancelled) setLiveAvailable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // FE-03: the request is built from `deployConfig.environment`, so if Live stops being
+  // available (or was never confirmed) the state itself is forced back to paper - the
+  // control and the request can never disagree.
+  useEffect(() => {
+    if (!liveAvailable) {
+      setDeployConfig((prev) => (prev.environment === "paper" ? prev : { ...prev, environment: "paper" }));
+    }
+  }, [liveAvailable]);
 
   /** Re-read the owner list. The retry action on the error state, and nothing else. */
   const reloadStrategies = useCallback(() => setListReloadKey((k) => k + 1), []);
@@ -2432,8 +2464,8 @@ export default function Strategies() {
               <Field
                 id="deploy-execution-mode"
                 label="Execution mode"
-                options={EXECUTION_MODE_OPTIONS}
-                value={deployConfig.environment}
+                options={liveAvailable ? EXECUTION_MODE_OPTIONS : PAPER_ONLY_MODE_OPTIONS}
+                value={liveAvailable ? deployConfig.environment : "paper"}
                 onChange={(e) => setDeployConfig(prev => ({ ...prev, environment: e.target.value }))}
               />
 

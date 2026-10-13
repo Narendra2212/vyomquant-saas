@@ -72,6 +72,31 @@ ML_INFERENCE_TIMEOUT = float(os.getenv("ML_INFERENCE_TIMEOUT", 2.0))
 MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", 5))
 
 
+def settle_exposure(*, side: str, qty: Decimal, previous_exposure: Decimal, result):
+    """RT-06: the exposure consequence of one ``execute_with_idempotency`` result.
+
+    Returns ``(filled_qty, new_exposure)``. ONLY a ``completed`` result is a fill; blocked,
+    failed and ``skipped_*`` outcomes (a dedupe replay, a contention skip, an ambiguous
+    prior submission, a refused live order) executed nothing in this call and leave
+    exposure exactly as it was. This used to treat every status except two as a full fill
+    of ``qty`` and counted a deduplicated ``skipped_completed`` replay a second time.
+    """
+    status = result.get("status") if result else None
+    if status != "completed":
+        return Decimal("0"), previous_exposure
+
+    trade_result = result.get("result", {}) or {}
+    filled_qty = Decimal(str((trade_result.get("trade_result") or {}).get("size", qty)))
+    if filled_qty <= 0:
+        return Decimal("0"), previous_exposure
+
+    if side == "buy":
+        new_exposure = (previous_exposure + filled_qty).quantize(Decimal("0.00000001"))
+    else:
+        new_exposure = max(Decimal("0"), (previous_exposure - filled_qty).quantize(Decimal("0.00000001")))
+    return filled_qty, new_exposure
+
+
 class BotRunner:
     """
     One BotRunner per (user, symbol, strategy).
@@ -264,22 +289,33 @@ class BotRunner:
             self.ml_block.load_model_to_memory(self.ml_model_path)
 
         # 3. Recover live balance for position sizing
-        if self.ccxt_bridge.api_key:
-            wallet = await self.data_engine.fetch_wallet_balance_snapshot()
-        else:
-            wallet = {"USDT": {"total": 10000.0}}
-            
+        #
+        # RT-07: a live bot is sized from the account's MEASURED quote balance. There is
+        # no substitute figure: this used to fall back to 10,000 when the wallet showed
+        # a zero (or no) quote balance, and to a fabricated {"USDT": 10000} wallet when
+        # no API key was present, and that number became the engine's `total_equity` -
+        # i.e. the capital ceiling real orders are checked against.
+        if not self.ccxt_bridge.api_key:
+            raise RuntimeError(
+                f"Refusing to start live bot {self.user_id}/{self.symbol}: no exchange API "
+                "key is available, so the account balance cannot be measured."
+            )
+        wallet = await self.data_engine.fetch_wallet_balance_snapshot()
+
         base_coin = self.symbol.split("/")[0]
         quote_coin = self.symbol.split("/")[1] if "/" in self.symbol else "USDT"
-        
+
         self.recovered_exposure_coins = Decimal(
-            str(wallet.get(base_coin, {}).get("total", 0.0))
+            str((wallet.get(base_coin) or {}).get("total", 0.0))
         )
-        
-        quote_balance = Decimal(str(wallet.get(quote_coin, {}).get("total", 10000.0)))
-        if quote_balance == 0:
-            quote_balance = Decimal("10000.0")
-            
+
+        quote_balance = Decimal(str((wallet.get(quote_coin) or {}).get("total", 0)))
+        if quote_balance <= 0:
+            raise RuntimeError(
+                f"Refusing to start live bot {self.user_id}/{self.symbol}: the measured "
+                f"{quote_coin} balance is {quote_balance}, not a positive amount."
+            )
+
         portfolio_state = {"total_equity": float(quote_balance)}
 
         # LIVE: Initialize real ExchangeExecutor
@@ -672,33 +708,32 @@ class BotRunner:
                     )
 
                     # ── Record execution result ─────────────────────────────
-                    if result and result.get("status") in ["completed", "skipped_completed"]:
-                        trade_result = result.get("result", {})
-                        if trade_result:
-                            self.data_processor.record_execution(trade_result)
-                            filled_qty = Decimal(str(trade_result.get('trade_result', {}).get('size', qty)))
-                        else:
-                            filled_qty = qty
+                    # RT-06: see `settle_exposure` - only a `completed` result is a fill.
+                    _status = result.get("status") if result else None
+                    if _status == "completed":
+                        _tr = result.get("result", {})
+                        if _tr:
+                            self.data_processor.record_execution(_tr)
+                    filled_qty, self.recovered_exposure_coins = settle_exposure(
+                        side=side,
+                        qty=qty,
+                        previous_exposure=previous_exposure,
+                        result=result,
+                    )
+                    if filled_qty > 0:
+                        logger.info(f"✅ Executed {side} {filled_qty} {self.symbol} @ {price} (exposure: {self.recovered_exposure_coins})")
                     else:
-                        filled_qty = qty
-
-                    # ── Atomic exposure update ───────────────────────────
-                    if side == "buy":
-                        self.recovered_exposure_coins = (previous_exposure + filled_qty).quantize(Decimal("0.00000001"))
-                    else:
-                        self.recovered_exposure_coins = max(
-                            Decimal("0"),
-                            (previous_exposure - filled_qty).quantize(Decimal("0.00000001"))
+                        logger.warning(
+                            f"⚠️ Order {side} {qty} {self.symbol} was NOT executed "
+                            f"(status={_status!r}); exposure unchanged at {previous_exposure}"
                         )
-
-                    logger.info(f"✅ Executed {side} {filled_qty} {self.symbol} @ {price} (exposure: {self.recovered_exposure_coins})")
 
                     # Record successful trace in background
                     asyncio.create_task(record_audit_signal(
                         verdict,
                         reason,
                         v_exec_id=execution_id,
-                        v_status=result.get("status") if result else "completed",
+                        v_status=_status if _status else "no_result",
                         v_fill=float(filled_qty),
                         v_result=result
                     ))
@@ -716,7 +751,8 @@ class BotRunner:
                         except Exception as e:
                             logger.error(f"Telemetry failed: {e}")
 
-                    asyncio.create_task(safe_log())
+                    if filled_qty > 0:
+                        asyncio.create_task(safe_log())
 
                 except Exception as e:
                     # ── ROLLBACK: Restore previous exposure state ───────────

@@ -2476,134 +2476,30 @@ async def deploy_strategy_pipeline(request: Request,
     body: DeploymentRequest,
     user: dict = Depends(get_current_user)
 ):
+    """RETIRED (RT-22). Always answers ``410 Gone``.
+
+    This endpoint used to hand a strategy to ``DeploymentManager``, which started an
+    unbounded in-process loop evaluating the DAG once a second against ``np.random``
+    OHLCV data, fabricated worker CPU/memory/latency figures, inserted a
+    ``strategy_deployments`` row and reported the strategy "deployed". Its only gate was
+    ``strategy_research_reports.deployment_approved``, a row the user can write
+    themselves. Deploying a strategy is done through
+    ``POST /api/strategies/{strategy_id}/deploy`` (or the versioned deploy route), which
+    carries the entitlement, binding and quota gates.
+
+    The signature is kept so the route table and request validation stay stable; nothing
+    is evaluated, no row is written and no loop is started.
     """
-    Deploy a strategy to live trading pipeline.
-    
-    PHASE Deployment Engine: Deploys validated strategy using Strategy Package.
-    
-    Workflow:
-    - Validates strategy has passed deployment gate (research approved)
-    - Allocates worker
-    - Initializes exchange connection
-    - Initializes runtime (DAG Engine)
-    - Performs health check
-    - Starts execution loop
-    
-    Deployment executes ONLY the Strategy Package from compiler.
-    """
-    try:
-        # Get strategy to retrieve version info
-        strategy_service = await get_strategy_service()
-        strategy = await strategy_service.get_strategy(user=user, strategy_id=strategy_id)
-        
-        if not strategy:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_NOT_FOUND", "message": f"Strategy {strategy_id} not found"}
-            )
-        
-        # PHASE K: Check deployment gate - strategy must be approved by research
-        from backend_app.core.dependencies import create_request_supabase_async
-        sb_res = create_request_supabase_async(user.get("access_token"))
-        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
-        
-        # Get latest research report
-        q1 = (sb.table("strategy_research_reports")
-                         .select("*")
-                         .eq("strategy_id", strategy_id)
-                         .eq("user_id", user["id"])
-                         .order("created_at", desc=True)
-                         .limit(1)
-                         .execute())
-        research_result = await q1 if inspect.isawaitable(q1) else q1
-        
-        if not research_result.data or not research_result.data[0].get("deployment_approved"):
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "DEPLOYMENT_GATE_FAILED", "message": "Strategy must pass research deployment gate before deployment"}
-            )
-        
-        # Reconstruct Strategy Package from execution graph
-        from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
-        from backend_app.backend.deployment_manager import StrategyDeploymentConfig, DeploymentEnvironment
-        
-        execution_graph = ExecutionGraph(
-            id=body.execution_graph.get("id", str(uuid4())),
-            version=body.execution_graph.get("version", "v1.0"),
-            nodes=body.execution_graph.get("nodes", []),
-            edges=body.execution_graph.get("edges", []),
-            execution_order=body.execution_graph.get("execution_order", []),
-            metadata=body.execution_graph.get("metadata", {})
-        )
-        
-        # Create deployment config
-        deployment_config = StrategyDeploymentConfig(
-            deployment_id=str(uuid4()),
-            strategy_id=strategy_id,
-            user_id=user["id"],
-            version_id=strategy["version"]["id"] if strategy["version"] else None,
-            version=strategy["version"]["version"] if strategy["version"] else "v1.0",
-            execution_graph=execution_graph,
-            environment=DeploymentEnvironment(body.environment),
-            exchange_id=body.exchange_id,
-            exchange_symbol=body.exchange_symbol,
-            worker_region=body.worker_region,
-            initial_capital=body.initial_capital,
-            risk_per_trade=body.risk_per_trade,
-            max_drawdown=body.max_drawdown,
-            daily_loss_limit=body.daily_loss_limit
-        )
-        
-        # Get deployment manager
-        deployment_manager = get_deployment_manager()
-        
-        # Inject exchange instance
-        import ccxt
-        exchange_instance = ccxt.binance()  # Default to Binance
-        
-        # Deploy strategy
-        deployment_state = await deployment_manager.deploy_strategy(
-            deployment_config=deployment_config,
-            exchange_instance=exchange_instance
-        )
-        
-        # Store deployment in database
-        deployment_data = {
-            "id": deployment_config.deployment_id,
-            "strategy_id": strategy_id,
-            "user_id": user["id"],
-            "version_id": deployment_config.version_id,
-            "environment": body.environment,
-            "status": deployment_state.status.value,
-            "worker_id": deployment_state.worker.worker_id if deployment_state.worker else None,
-            "exchange_id": body.exchange_id,
-            "exchange_symbol": body.exchange_symbol,
-            "worker_region": body.worker_region,
-            "initial_capital": body.initial_capital,
-            "started_at": deployment_state.started_at,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
-        if inspect.isawaitable(q2):
-            await q2
-        
-        logger.info(f"[DEPLOYMENT] Strategy {strategy_id} deployed with ID {deployment_config.deployment_id}")
-        
-        return {
-            "status": "deployed",
-            "deployment_id": deployment_config.deployment_id,
-            "deployment_state": deployment_state
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deploying strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOYMENT_FAILED", "message": str(e)}
-        )
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "ENDPOINT_RETIRED",
+            "message": (
+                "deploy-pipeline has been retired. Use POST /api/strategies/"
+                f"{strategy_id}/deploy."
+            ),
+        },
+    )
 
 
 @router.post("/deployments/{deployment_id}/pause")

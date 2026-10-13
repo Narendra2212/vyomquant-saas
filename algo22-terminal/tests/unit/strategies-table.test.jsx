@@ -559,7 +559,10 @@ describe('the row\'s actions survive the rebuild', () => {
     expect(menu.getByRole('separator')).toBeTruthy();
 
     const group = menu.getByRole('group', { name: /destructive and live-trading actions/i });
-    const deploy = within(group).getByRole('menuitem', { name: 'Deploy live' });
+    // FE-03: the entry opens the deploy dialog on PAPER, so it is labelled for what happens
+    // if the trader changes nothing. It KEEPS its place below the divider and its separated
+    // treatment, because the dialog it opens can still reach a Live transition.
+    const deploy = within(group).getByRole('menuitem', { name: 'Start paper session' });
     const archive = within(group).getByRole('menuitem', { name: 'Archive strategy' });
 
     // §7.2's treatments: `env.live` for the deployment, `status.error` for the archive.
