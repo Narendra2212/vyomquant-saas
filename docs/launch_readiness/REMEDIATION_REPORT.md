@@ -76,3 +76,8 @@ MKT-01 was fixed after the validation run above; the real-Postgres lane and migr
 - Manual paper MARKET orders are refused (409 PAPER_MARKET_DATA_UNAVAILABLE) until `get_fresh_market_price` is wired to the MDS feed (PAPER-02).
 - Backtests return an explicit MarketDataUnavailable error instead of synthetic results (BT-01).
 - Live orders require mode=live + enable flag + tenant allowlist (RT-15); /strategies/{id}/deploy-pipeline returns 410 (RT-22); /api/execution/signal refuses without measured equity (SEC-14).
+
+## Addendum — later fixes and re-validation (head of branch)
+Fixed after the first report: **MKT-01** (migration 035), **SEC-02** (order-reconciled Razorpay webhook), **SEC-10** (trusted-proxy rate-limit key; needs `TRUSTED_PROXY_HOPS=2` set by the operator, status FIXED_UNVERIFIED), **RISK-02** (unenforced guards disabled/labelled; guards themselves still unimplemented) and **RT-18** (no-op safety services reported NOT_IMPLEMENTED; real fix is RT-16).
+
+Re-validation on the final head: backend 14,681 passed / 100 skipped / 13 failed (the same 13 that fail on the baseline commit); frontend 3,738 passed (157 files), eslint clean, build OK; fresh provisioning incl. 033-035 exit 0. Outcome remains **NO-GO**; the ledger (`REMEDIATION_LEDGER.json/.csv`) is authoritative for per-finding status. `main` was not touched.
