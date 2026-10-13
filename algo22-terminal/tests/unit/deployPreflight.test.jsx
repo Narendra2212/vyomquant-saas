@@ -752,7 +752,7 @@ const openDeployModalPaper = async () => {
 
 /**
  * Open the modal and switch it to Live, as a trader on a Live-capable platform would.
- * FE-03: it opens on paper; Live is offered only when `/system/trading-capabilities`
+ * FE-03: it opens on paper; Live is offered only when `/api/system/trading-capabilities`
  * reports `live_trading_available`, so the live-flow tests below get that answer from
  * `mockPublicGet` (see `beforeEach`) and must pick Live deliberately.
  */

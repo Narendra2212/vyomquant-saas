@@ -19,7 +19,7 @@ describe("FE-03 deploy dialog defaults", () => {
 
   it("offers Live only after the server says the platform is live (fail closed)", () => {
     expect(src).toMatch(/useState\(false\)[\s\S]{0,40}|const \[liveAvailable, setLiveAvailable\] = useState\(false\)/);
-    expect(src).toContain('publicGet("/system/trading-capabilities")');
+    expect(src).toContain('publicGet("/api/system/trading-capabilities")');
     expect(src).toMatch(/live_trading_available === true/);
     expect(src).toMatch(/options=\{liveAvailable \? EXECUTION_MODE_OPTIONS : PAPER_ONLY_MODE_OPTIONS\}/);
     // an unreachable endpoint must also leave Live un-offered
