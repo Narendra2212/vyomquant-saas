@@ -184,12 +184,12 @@
       "severity": "High",
       "component": "Observability / safety controls",
       "title": "Safety services report ACTIVE while doing nothing",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "(this branch)",
+      "evidence": "/health/services reports ConsistencyChecker and ReconciliationScheduler as NOT_IMPLEMENTED (status degraded); 'kill-switch armed' log claims removed; tests/test_rt18_noop_safety_services_are_not_reported_active.py",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Either implement (RT-16) or disable and report NOT_IMPLEMENTED."
+      "remaining_action": "Implement real venue reconciliation (RT-16), then restore ACTIVE reporting."
     },
     {
       "id": "PAPER-02",
@@ -1068,12 +1068,12 @@
       "severity": "High",
       "component": "Risk controls / frontend",
       "title": "RiskSettings UI advertises three automated protection guards that no code path evaluates",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "(this branch)",
+      "evidence": "UI option of the audit's fix: Black Swan / Consecutive Loss / Capital Utilization toggles render disabled, off and labelled 'Not enforced yet'; riskSettingsKillSwitch.test.jsx updated + 4 new cases",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Either remove the three unimplemented guards from the UI immediately, or implement them in the actual runtime risk gate (ExecutionGuard/risk_manager) with tests before re-enabling the toggles; label paper-only enforcement (max_daily_loss) honestly in the meantime."
+      "remaining_action": "Implement the three guards in the runtime risk gate (ExecutionGuard/risk_manager) with tests before re-enabling the toggles."
     },
     {
       "id": "LEGAL-01",

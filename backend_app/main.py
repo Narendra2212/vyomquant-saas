@@ -413,7 +413,7 @@ async def lifespan(app: FastAPI):
         _consistency_checker = get_consistency_checker()
         await _consistency_checker.start()
         service_status["consistency_checker"] = "ACTIVE"
-        logger.info(" ConsistencyChecker: ACTIVE (interval=10s, kill-switch armed)")
+        logger.info(" ConsistencyChecker: started (interval=10s) - NOT a working safety net yet (RT-18)")
     except Exception as e:
         service_status["consistency_checker"] = "INACTIVE"
         logger.warning(f" ConsistencyChecker: INACTIVE — {e}")
@@ -455,7 +455,7 @@ async def lifespan(app: FastAPI):
     try:
         await start_reconciliation_scheduler()
         service_status["reconciliation_scheduler"] = "ACTIVE"
-        logger.info(" ReconciliationScheduler: ACTIVE (poll=30s, kill-switch armed)")
+        logger.info(" ReconciliationScheduler: started (poll=30s) - NOT a working safety net yet (RT-18)")
     except Exception as e:
         service_status["reconciliation_scheduler"] = "INACTIVE"
         logger.warning(f" ReconciliationScheduler: INACTIVE — {e}")
@@ -1081,11 +1081,20 @@ async def health_services():
         "pnl_engine":                _classify(runtime.get("pnl_engine", "")),
         "reconciliation_scheduler": _classify(runtime.get("reconciliation_scheduler", "")),
     }
+    # RT-18: these two start and loop but do no work today (the checker iterates an empty
+    # list of positions; the scheduler reads a table nothing writes). Reporting ACTIVE, with a
+    # claim of an armed halt, told operators a reconciliation safety net existed. Until RT-16
+    # implements real venue reconciliation they are reported for what they are.
+    for _noop in ("consistency_checker", "reconciliation_scheduler"):
+        if services[_noop] == "ACTIVE":
+            services[_noop] = "NOT_IMPLEMENTED"
+
     active_count   = sum(1 for s in services.values() if s == "ACTIVE")
     inactive_count = sum(1 for s in services.values() if s == "INACTIVE")
     failed_count   = sum(1 for s in services.values() if s == "FAILED")
+    not_implemented_count = sum(1 for s in services.values() if s == "NOT_IMPLEMENTED")
 
-    overall = "ok" if failed_count == 0 and inactive_count == 0 else (
+    overall = "ok" if failed_count == 0 and inactive_count == 0 and not_implemented_count == 0 else (
               "degraded" if failed_count == 0 else "failed")
 
     # OBS-01: this snapshot is written ONCE, during lifespan startup, and never
@@ -1115,6 +1124,7 @@ async def health_services():
             "active":   active_count,
             "inactive": inactive_count,
             "failed":   failed_count,
+            "not_implemented": not_implemented_count,
         },
         "services": services,
         "raw": {k: v for k, v in runtime.items() if not k.startswith("_")},
