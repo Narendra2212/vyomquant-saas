@@ -629,8 +629,36 @@ class OrderAuditLogger:
             row = record.to_db_row()
 
             def _insert():
+                # Literal column list (not `row` itself) so the schema-drift guard checks
+                # every column against migration 036.
                 return client.table("order_audit_log").upsert(
-                    row, on_conflict="audit_id", ignore_duplicates=True
+                    {
+                        "audit_id": row["audit_id"],
+                        "occurred_at": row["occurred_at"],
+                        "event_type": row["event_type"],
+                        "user_id": row["user_id"],
+                        "strategy_id": row["strategy_id"],
+                        "execution_id": row["execution_id"],
+                        "symbol": row["symbol"],
+                        "side": row["side"],
+                        "size": row["size"],
+                        "price": row["price"],
+                        "order_type": row["order_type"],
+                        "exchange_id": row["exchange_id"],
+                        "client_order_id": row["client_order_id"],
+                        "exchange_order_id": row["exchange_order_id"],
+                        "status": row["status"],
+                        "filled_amount": row["filled_amount"],
+                        "remaining_amount": row["remaining_amount"],
+                        "average_price": row["average_price"],
+                        "fee": row["fee"],
+                        "decision_reason": row["decision_reason"],
+                        "error_message": row["error_message"],
+                        "signal": row["signal"],
+                        "exchange_response": row["exchange_response"],
+                        "metadata": row["metadata"],
+                    },
+                    on_conflict="audit_id", ignore_duplicates=True,
                 ).execute()
 
             await asyncio.to_thread(_insert)

@@ -1307,28 +1307,32 @@ def _record_plan_period(sb: Any, user_id: str, item_key: str, previous_plan: Opt
         return
     from backend_app.core.billing_lifecycle import BillingLifecycle
 
-    update: dict = {"payment_provider": provider}
-    if provider == "razorpay":
-        now = datetime.now(timezone.utc)
-        start = now
-        if previous_plan == item_key:
-            try:
-                row = sb.table("profiles").select("next_billing_date").eq("id", user_id).execute().data or []
-                current_end = (row[0].get("next_billing_date") if row else None)
-                if current_end:
-                    parsed = datetime.fromisoformat(str(current_end).replace("Z", "+00:00"))
-                    if parsed.tzinfo is None:
-                        parsed = parsed.replace(tzinfo=timezone.utc)
-                    start = max(now, parsed)
-            except Exception:  # noqa: BLE001 - extend from now; never grant LESS time than paid for
-                start = now
-        update.update({
-            "next_billing_date": BillingLifecycle.add_billing_period(start, billing_interval).isoformat(),
-            "subscription_status": "active",
-            "cancel_at_period_end": False,
-        })
+    # Literal payloads (not a mutated dict) so tests/test_schema_table_reference_drift.py can
+    # check every column against the declared schema.
     try:
-        sb.table("profiles").update(update).eq("id", user_id).execute()
+        if provider == "razorpay":
+            now = datetime.now(timezone.utc)
+            start = now
+            if previous_plan == item_key:
+                try:
+                    row = sb.table("profiles").select("next_billing_date").eq("id", user_id).execute().data or []
+                    current_end = (row[0].get("next_billing_date") if row else None)
+                    if current_end:
+                        parsed = datetime.fromisoformat(str(current_end).replace("Z", "+00:00"))
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=timezone.utc)
+                        start = max(now, parsed)
+                except Exception:  # noqa: BLE001 - extend from now; never grant LESS time than paid for
+                    start = now
+            period_end = BillingLifecycle.add_billing_period(start, billing_interval).isoformat()
+            sb.table("profiles").update({
+                "payment_provider": provider,
+                "next_billing_date": period_end,
+                "subscription_status": "active",
+                "cancel_at_period_end": False,
+            }).eq("id", user_id).execute()
+        else:
+            sb.table("profiles").update({"payment_provider": provider}).eq("id", user_id).execute()
     except Exception as exc:  # noqa: BLE001
         logger.critical(
             "[BILLING] BILL-01: plan granted to %s but its period/provider could not be recorded "
