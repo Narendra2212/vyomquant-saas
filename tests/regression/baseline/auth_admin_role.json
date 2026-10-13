@@ -73,7 +73,12 @@
             },
             "user_id": {
               "annotation": "str"
-            }
+            },
+            "_mfa": {
+              "annotation": "dict",
+              "depends_on": "require_aal2"
+            },
+            "_baseline_note_mfa": "SEC-15 AUTHORISES one ADDED dependency parameter `_mfa` (Depends(require_aal2)) on this admin mutation: freezing an account / halting the platform now requires MFA (AAL2) in addition to the role check."
           },
           "raises": [],
           "returns": [
@@ -119,7 +124,12 @@
             "ws_mgr": {
               "annotation": "_empty",
               "depends_on": "get_ws_manager"
-            }
+            },
+            "_mfa": {
+              "annotation": "dict",
+              "depends_on": "require_aal2"
+            },
+            "_baseline_note_mfa": "SEC-15 AUTHORISES one ADDED dependency parameter `_mfa` (Depends(require_aal2)) on this admin mutation: freezing an account / halting the platform now requires MFA (AAL2) in addition to the role check."
           },
           "raises": [],
           "returns": [

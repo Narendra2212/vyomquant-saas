@@ -68,7 +68,7 @@ class TestHighBlastRadiusEndpoints:
             app.dependency_overrides.clear()
 
     def test_kill_switch_rejected_for_empty_reason(self):
-        operator_user = {"id": "101", "email": "op@vyomquant.io", "app_metadata": {"role": "operator"}}
+        operator_user = {"id": "101", "email": "op@vyomquant.io", "aal": "aal2", "app_metadata": {"role": "operator"}}
         app.dependency_overrides[get_current_user] = lambda: operator_user
 
         try:
@@ -83,7 +83,7 @@ class TestHighBlastRadiusEndpoints:
             app.dependency_overrides.clear()
 
     def test_kill_switch_succeeds_for_operator_with_valid_reason(self):
-        operator_user = {"id": "101", "email": "op@vyomquant.io", "app_metadata": {"role": "operator"}}
+        operator_user = {"id": "101", "email": "op@vyomquant.io", "aal": "aal2", "app_metadata": {"role": "operator"}}
         app.dependency_overrides[get_current_user] = lambda: operator_user
 
         mock_fleet = MagicMock()
@@ -125,7 +125,7 @@ class TestHighBlastRadiusEndpoints:
 
     def test_sec08_freeze_of_missing_user_is_404_and_not_audited_as_success(self):
         """SEC-08: a freeze that changed 0 rows must not report success."""
-        operator_user = {"id": "101", "email": "op@vyomquant.io", "app_metadata": {"role": "operator"}}
+        operator_user = {"id": "101", "email": "op@vyomquant.io", "aal": "aal2", "app_metadata": {"role": "operator"}}
         mock_supabase = MagicMock()
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
         app.dependency_overrides[get_current_user] = lambda: operator_user
@@ -145,7 +145,7 @@ class TestHighBlastRadiusEndpoints:
                     app.dependency_overrides.clear()
 
     def test_set_user_status_succeeds_for_operator_with_reason(self):
-        operator_user = {"id": "101", "email": "op@vyomquant.io", "app_metadata": {"role": "operator"}}
+        operator_user = {"id": "101", "email": "op@vyomquant.io", "aal": "aal2", "app_metadata": {"role": "operator"}}
         mock_supabase = MagicMock()
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[{"id": "target-123", "is_frozen": True}]
@@ -173,3 +173,45 @@ class TestHighBlastRadiusEndpoints:
                     assert mock_audit.call_args.kwargs["reason"] == "Risk threshold breach"
                 finally:
                     app.dependency_overrides.clear()
+
+
+class TestSec15AdminMutationsRequireMfa:
+    """SEC-15: platform-halting / account-freezing admin actions need AAL2, not just a role."""
+
+    @staticmethod
+    def _aal1_operator():
+        return {"id": "102", "email": "op1@vyomquant.io", "aal": "aal1",
+                "app_metadata": {"role": "operator"}}
+
+    def test_kill_all_refused_without_mfa_and_nothing_runs(self):
+        app.dependency_overrides[get_current_user] = self._aal1_operator
+        mock_fleet = MagicMock()
+        mock_fleet.shutdown_all = AsyncMock()
+        try:
+            with patch("backend_app.routers.admin.get_fleet", return_value=mock_fleet):
+                res = client.post("/api/admin/kill-all",
+                                  json={"confirm_code": "HALT", "reason": "Market anomaly detected"},
+                                  headers={"Authorization": "Bearer token"})
+            assert res.status_code == 403
+            mock_fleet.shutdown_all.assert_not_called()
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_set_user_status_refused_without_mfa(self):
+        app.dependency_overrides[get_current_user] = self._aal1_operator
+        try:
+            res = client.post("/api/admin/users/abc/status",
+                              json={"is_frozen": True, "reason": "fraud review"},
+                              headers={"Authorization": "Bearer token"})
+            assert res.status_code == 403
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_reinitialize_refused_without_mfa(self):
+        admin = {"id": "103", "aal": "aal1", "app_metadata": {"role": "admin"}}
+        app.dependency_overrides[get_current_user] = lambda: admin
+        try:
+            res = client.post("/api/admin/reinitialize", headers={"Authorization": "Bearer token"})
+            assert res.status_code == 403
+        finally:
+            app.dependency_overrides.clear()

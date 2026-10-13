@@ -678,12 +678,12 @@
       "severity": "High",
       "component": "Supply chain / dependencies",
       "title": "Production pins carry published advisories (starlette, PyJWT, cryptography, python-multipart, requests, aiosmtplib, protobuf) and axios in the frontend",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "fccb412",
+      "evidence": "requirements-base.txt: fastapi 0.124.4, starlette 0.49.3, PyJWT 2.15.0, cryptography 50.0.0, python-multipart 0.0.31, requests 2.33.0, aiosmtplib 5.1.2; axios ^1.20 (npm audit --omit=dev: 0 vulnerabilities); full backend suite re-run with these pins (only baseline failures + authorised re-records)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Upgrade pins (FastAPI/starlette pair together), re-run full test lanes; make 05 Security fail on HIGH/CRITICAL dependency advisories."
+      "remaining_action": "Residual (pip-audit on requirements-base): starlette needs 1.x for PYSEC-2026-161/248/249/2280/2281 - trial of starlette 1.8/fastapi 0.143 broke route-introspection tests at collection, needs its own migration; protobuf 5.x conflicts with tensorflow 2.16/opentelemetry-proto; python-dotenv 1.2.2, setuptools 83. Add a blocking dependency-audit job to CI."
     },
     {
       "id": "OPS-02",
@@ -1003,12 +1003,12 @@
       "severity": "High",
       "component": "Security / admin",
       "title": "require_aal2 (MFA) is wired to only 2 of the endpoints its own security contract requires it on",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "(this commit)",
+      "evidence": "Depends(require_aal2) added to admin set_user_status, global_kill_switch (kill-all) and reinitialize; tests/test_role_granularity_and_audit.py::TestSec15AdminMutationsRequireMfa (3)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Add Depends(require_aal2) to admin.py's global_kill_switch and set_user_status, and to billing.py's mutation endpoints, following the same-codebase precedent in routers/exchange.py."
+      "remaining_action": "Billing mutation endpoints and a backend password-change path still lack AAL2 (product decision: forces every paying user to enrol MFA). Remaining admin read endpoints intentionally unchanged."
     },
     {
       "id": "IMPORT-02",

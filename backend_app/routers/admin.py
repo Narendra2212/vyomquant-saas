@@ -19,7 +19,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend_app.core.dependencies import (get_admin_user, get_operator_user, get_alert,
+from backend_app.core.dependencies import (require_aal2, get_admin_user, get_operator_user, get_alert,
                                            get_fleet, get_service_supabase,
                                            get_telemetry, get_ws_manager,
                                            invalidate_profile_cache)
@@ -144,6 +144,7 @@ async def set_user_status(
     user_id: str,
     body: UserStatusRequest,
     admin: dict = Depends(get_operator_user),
+    _mfa: dict = Depends(require_aal2),  # SEC-15: freeze/unfreeze any account needs MFA
     fleet=Depends(get_fleet),
     alert=Depends(get_alert),
     supabase: SupabaseClient = Depends(get_service_supabase),
@@ -197,6 +198,7 @@ async def set_user_status(
 async def global_kill_switch(
     body: GlobalKillRequest,
     admin: dict = Depends(get_operator_user),
+    _mfa: dict = Depends(require_aal2),  # SEC-15: platform-wide halt needs MFA
     fleet=Depends(get_fleet),
     alert=Depends(get_alert),
     ws_mgr=Depends(get_ws_manager),
@@ -347,6 +349,7 @@ async def kill_switch_status(
 @router.post("/reinitialize")
 async def reinitialize_platform(
     admin: dict = Depends(get_admin_user),
+    _mfa: dict = Depends(require_aal2),  # SEC-15
     alert=Depends(get_alert),
 ):
     fire_and_forget_task(
