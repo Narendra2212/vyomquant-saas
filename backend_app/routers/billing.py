@@ -1449,6 +1449,56 @@ async def _process_stripe_entitlement(user_id: str, item_key: str, discount_appl
     logger.info(f"Stripe: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
+class RazorpayOrderMismatch(Exception):
+    """The captured payment does not match the server-created order it claims to pay for."""
+
+
+async def _fetch_razorpay_order(order_id: str) -> dict:
+    """Fetch an order from Razorpay with the server's API credentials (patchable seam)."""
+    import asyncio
+
+    import razorpay
+
+    rzp = razorpay.Client(
+        auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"])
+    )
+    return await asyncio.to_thread(rzp.order.fetch, order_id)
+
+
+async def _reconcile_razorpay_payment_with_order(payment: dict, claimed_notes: dict) -> dict:
+    """SEC-02: take authorisation facts from the SERVER-CREATED order, never from payment notes.
+
+    Standard Checkout lets the browser add or override ``notes`` on a payment, so
+    ``payment.notes`` (user, item) is attacker-influenced. The order, by contrast, was created
+    by ``create_checkout_session`` with the server's credentials. This returns the ORDER's notes
+    after checking that the payment is for that order, in the same amount and currency, and that
+    any notes the payment claims agree with the order's. Raises :class:`RazorpayOrderMismatch`
+    when they do not (grant nothing). A failure to FETCH the order propagates so the webhook
+    is retried rather than granting on unverified data.
+    """
+    order_id = payment.get("order_id")
+    if not order_id:
+        raise RazorpayOrderMismatch("payment carries no order_id")
+    order = await _fetch_razorpay_order(str(order_id))
+    if str(order.get("id") or order_id) != str(order_id):
+        raise RazorpayOrderMismatch("fetched order id differs from the payment's order_id")
+    if int(order.get("amount") or -1) != int(payment.get("amount") or -2):
+        raise RazorpayOrderMismatch(
+            f"payment amount {payment.get('amount')} != order amount {order.get('amount')}"
+        )
+    if str(order.get("currency") or "").upper() != str(payment.get("currency") or "").upper():
+        raise RazorpayOrderMismatch("payment currency differs from the order's")
+    order_notes = dict(order.get("notes") or {})
+    order_user = order_notes.get("user_id")
+    order_item = order_notes.get("item") or order_notes.get("item_key")
+    if not order_user or not order_item:
+        raise RazorpayOrderMismatch("order carries no user_id/item to authorise against")
+    claimed_item = (claimed_notes or {}).get("item") or (claimed_notes or {}).get("item_key")
+    if str((claimed_notes or {}).get("user_id")) != str(order_user) or str(claimed_item) != str(order_item):
+        raise RazorpayOrderMismatch("payment notes disagree with the server-created order")
+    return order_notes
+
+
 async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
     await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {})
     logger.info(f"Razorpay: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
@@ -2882,6 +2932,17 @@ async def razorpay_webhook(
         if payload.get("event") == "payment.captured":
             payment = payload["payload"]["payment"]["entity"]
             notes = payment.get("notes", {})
+            try:
+                # SEC-02: authorisation comes from the server-created order, not payment notes.
+                notes = await _reconcile_razorpay_payment_with_order(payment, notes)
+            except RazorpayOrderMismatch as mismatch:
+                logger.critical(
+                    "[BILLING] SEC-02: Razorpay payment %s NOT applied - %s. No entitlement granted.",
+                    payment.get("id"), mismatch,
+                )
+                if idempotency_key:
+                    await redis_manager.set(idempotency_key, "completed", ex=86400)
+                return {"status": "ignored", "reason": "order_mismatch"}
             user_id = notes.get("user_id")
             item_key = notes.get("item") or notes.get("item_key")  # Support both keys for compatibility
 

@@ -33,7 +33,7 @@ Candidate code commit: `5346ecd` (validated exactly as committed). Base: `28a4ef
 
 | MKT-01 | P1 | VERIFIED_FIXED | Marketplace | (this branch, post-report) | migration 035 + 8 real-Postgres tests | Apply 035 to staging/production (human-run) |
 
-MKT-01 was fixed after the validation run above; the real-Postgres lane and migration tests were re-run on a freshly provisioned DB with 035 (only the 2 baseline PG failures remain). Remove MKT-01 from the unresolved list below.
+MKT-01 was fixed after the validation run above; the real-Postgres lane and migration tests were re-run on a freshly provisioned DB with 035 (only the 2 baseline PG failures remain). Remove MKT-01 from the unresolved list below. SEC-02 was also fixed afterwards (order-reconciled Razorpay webhook, 10 tests; billing/payment/marketplace lanes 1152 passed) — see the ledger.
 
 ## Unresolved P0/P1 blockers
 - **SEC-01** (P0, EXTERNAL_BLOCKED): Production Postgres credential hardcoded in a tracked script

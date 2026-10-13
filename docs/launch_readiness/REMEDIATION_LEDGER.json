@@ -210,12 +210,12 @@
       "severity": "High",
       "component": "Billing",
       "title": "Razorpay webhook grants the plan named in payment notes without reconciling the order or amount",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "(this commit)",
+      "evidence": "webhook authorises from the Razorpay order fetched with server credentials (amount, currency, user, item must match; mismatch -> ignored, fetch failure -> retry); tests/test_sec02_razorpay_webhook_reconciles_order.py (10)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Persist checkout orders server-side (order_id -> user, item, amount, currency); on webhook fetch the order and compare amount/currency/item; ignore notes for authorisation."
+      "remaining_action": "Sandbox-verify against Razorpay test mode (needs provider credentials); consider persisting orders server-side too."
     },
     {
       "id": "SEC-08",
