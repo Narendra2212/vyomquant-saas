@@ -1787,18 +1787,68 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             )
             
         except Exception as e:
+            # RT-21: a cancel is idempotent. An order the venue no longer knows about is
+            # already not resting, which is what the caller asked for.
+            if CCXT_AVAILABLE and isinstance(e, ccxt.OrderNotFound):
+                logger.info("CANCEL: %s already closed at the venue (%s)", exchange_order_id, symbol)
+                return CancelResult(success=True, status="already_closed")
+
             error = self._handle_ccxt_error(e)
             
             logger.error(
                 f"CANCEL FAILED: {exchange_order_id} | "
                 f"error={error.message}"
             )
-            
+
+            # RT-21: a lost response to a cancel does not say whether the order is still
+            # resting. Reported as such so the caller re-reads open orders rather than
+            # assuming either outcome.
             return CancelResult(
                 success=False,
-                status="error",
+                status="unknown" if _outcome_is_ambiguous(e) else "error",
                 error_message=error.message
             )
+
+    async def cancel_all_open_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """RT-21: cancel every resting order (optionally for one symbol). Reduce-only by nature.
+
+        Lists open orders, then cancels each through :meth:`cancel_order` so there is one
+        venue-cancel call site and one error classification. Per-order outcomes are reported
+        individually; one failure does not stop the rest.
+        """
+        ccxt_symbol = self.normalizer.format_symbol_for_ccxt(symbol) if symbol else None
+        try:
+            await self.rate_limiter.acquire("fetch_open_orders")
+            open_orders = await self._exchange.fetch_open_orders(ccxt_symbol)
+        except Exception as e:
+            error = self._handle_ccxt_error(e)
+            logger.error("CANCEL-ALL: could not list open orders: %s", error.message)
+            return {
+                "success": False, "listed": False, "cancelled": [], "already_closed": [],
+                "failed": [], "unknown": [], "cancelled_count": 0,
+                "error": error.message,
+            }
+
+        cancelled, already_closed, failed, unknown = [], [], [], []
+        for order in open_orders or []:
+            oid = order.get("id")
+            if oid is None:
+                continue
+            res = await self.cancel_order(str(oid), order.get("symbol") or ccxt_symbol)
+            if res.success and res.status == "already_closed":
+                already_closed.append(str(oid))
+            elif res.success:
+                cancelled.append(str(oid))
+            elif res.status == "unknown":
+                unknown.append({"order_id": str(oid), "error": res.error_message})
+            else:
+                failed.append({"order_id": str(oid), "error": res.error_message})
+        return {
+            "success": not failed and not unknown, "listed": True,
+            "cancelled": cancelled, "already_closed": already_closed,
+            "failed": failed, "unknown": unknown,
+            "cancelled_count": len(cancelled),
+        }
     
     async def get_order_status(self, exchange_order_id: str, symbol: str) -> OrderStatusResult:
         """STEP 6.1: Fetch order status from exchange."""

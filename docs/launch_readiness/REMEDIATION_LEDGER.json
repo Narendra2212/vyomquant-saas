@@ -106,12 +106,12 @@
       "severity": "Critical",
       "component": "Order safety (live)",
       "title": "No working cancel, cancel-all or close-all path for users",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "(this commit)",
+      "evidence": "Cancel and cancel-all now work: ExecutionGuard gained an explicit control-action path (cancel/cancel_all/close_all validated for shape only, honoured only with reduce_only=True; no circuit-breaker/size/side-of-order checks, so allowed during halt/kill switch; order checks unchanged); backend/order_control.py -> CCXTExchangeExecutor.cancel_order (OrderNotFound = idempotent success, lost response = unknown) and new cancel_all_open_orders; routes no longer use the blocked _build_execution_engine nor the platform-mode SafetyMonitor gate, are tenant-scoped, Idempotency-Key replayed (24h), audited via the order audit trail, and report unconfirmed cancels as 502 not success. tests/test_rt21_users_can_cancel_resting_orders.py (23; 17 fail on old code); venue-write inventories (test_paper01, test_trade03) updated with a delegating-receiver classification + a test that order_control only cancels",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Implement reduce-only cancel/flatten through the gateway (idempotent, audited, allowed during halt); operator-level flatten per tenant."
+      "remaining_action": "NOT DONE: close-all/flatten (an order placement; /api/portfolio/close-all still returns 403 DIRECT_EXECUTION_BLOCKED) - needs a reduce-only market-order path through the live gates and sandbox verification. Cancel against a real venue (sandbox: open order -> cancel via API -> venue shows canceled) is UNVERIFIED (EXTERNAL). Operator-level per-tenant flatten not implemented."
     },
     {
       "id": "RT-03",

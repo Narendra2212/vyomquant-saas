@@ -101,6 +101,16 @@ LOCAL_RECEIVERS = frozenset(
 #:       ``AttributeError`` -- the PORT-01 shape.
 UNREACHABLE_RECEIVERS = frozenset({"execution_engine"})
 
+#: Receivers that DELEGATE to one of the four pinned venue boundaries rather than being one.
+#:
+#:   ``executor``  backend/order_control.py (RT-21) - ``executor.cancel_order`` /
+#:       ``cancel_all_open_orders`` on a ``CCXTExchangeExecutor``, whose ``cancel_order`` is the
+#:       ``exchange_executor`` boundary already counted below. It is a reduce-only CANCEL (never
+#:       an order placement) and is the user's way to remove resting orders during an incident.
+#:       ``test_order_control_only_cancels`` pins that the module contains no ``create_order``
+#:       and no cancel on any other receiver.
+DELEGATING_RECEIVERS = frozenset({"executor"})
+
 VENUE_METHODS = frozenset({"create_order", "cancel_order"})
 
 
@@ -153,13 +163,20 @@ def test_every_venue_write_site_is_classified():
     This is the tripwire: a NEW call site on an unrecognised receiver fails here, and
     whoever added it has to say whether it reaches a venue.
     """
-    known = VENUE_RECEIVERS | LOCAL_RECEIVERS | UNREACHABLE_RECEIVERS
+    known = VENUE_RECEIVERS | LOCAL_RECEIVERS | UNREACHABLE_RECEIVERS | DELEGATING_RECEIVERS
     unclassified = [site for site in venue_write_sites() if site[3] not in known]
     assert not unclassified, (
         "these create_order/cancel_order call sites are on receivers this inventory does "
         "not know about, so it cannot say whether they reach a real exchange:\n"
         + "\n".join(f"  {p}:{line} {method} on {recv!r}" for p, line, method, recv in unclassified)
     )
+
+
+def test_order_control_only_cancels():
+    """RT-21: the delegating module may cancel, and may do nothing else at the venue."""
+    sites = [s for s in venue_write_sites() if s[0] == "backend_app/backend/order_control.py"]
+    assert sites, "expected the cancel call sites to exist (inventory is stale otherwise)"
+    assert {(m, r) for _p, _l, m, r in sites} == {("cancel_order", "executor")}
 
 
 def test_the_real_venue_boundaries_are_exactly_the_four_already_gated():
