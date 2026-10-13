@@ -314,12 +314,12 @@
       "severity": "Medium",
       "component": "Billing",
       "title": "Razorpay plan purchases never expire",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "Razorpay grant records next_billing_date (now+1 month/year, extended on early same-plan renewal) + payment_provider; get_plan_context stops honouring a lapsed Razorpay tier on every request; core/plan_expiry.py hourly sweep persists tier=free/status=expired (started in lifespan); refund.processed with a FULL refund revokes the plan (invoice lookup, gateway-confirmed, conditional on current tier). migration 037. tests/test_bill01_razorpay_plans_expire.py (11 incl. real-Postgres sweep)",
+      "verification_level": "code+real-postgres sandbox",
       "production_verified": false,
-      "remaining_action": "Store current_period_end; expiry job downgrades; Razorpay Subscriptions API or renewal reminders; revoke on refund."
+      "remaining_action": "Migrations 037 must be applied by an operator (without it grants still succeed but do not expire; logged CRITICAL). Not verified against live Razorpay (refund payload shape, payment.fetch). Razorpay Subscriptions API (true auto-renewal) is not adopted: plans are one-time periods that the customer must re-buy."
     },
     {
       "id": "RT-07",
@@ -979,7 +979,7 @@
       "title": "Cancelling a subscription never calls Stripe; the card keeps being charged every period",
       "status": "FIXED_UNVERIFIED",
       "fix_commit": "(this commit)",
-      "evidence": "/api/billing/cancel and /resume call stripe.Subscription.modify(cancel_at_period_end) first (only subscriptions whose metadata names the caller), fail closed with 502 and leave local state untouched; tests/test_bill05_cancel_tells_stripe.py (6, Stripe mocked)",
+      "evidence": "/api/billing/cancel and /resume call stripe.Subscription.modify(cancel_at_period_end) first (only subscriptions whose metadata names the caller), fail closed with 502 and leave local state untouched; payment_provider None is treated as Stripe when STRIPE_SECRET_KEY is set (checkout never wrote the column); migration 037 declares the 5 profiles billing columns the code already used but no migration declared; tests/test_bill05_cancel_tells_stripe.py (8, Stripe mocked)",
       "verification_level": "code",
       "production_verified": false,
       "remaining_action": "Not verified against a live Stripe account/test-mode clock (EXTERNAL). Local profile is still written directly rather than purely from customer.subscription.updated webhooks; Razorpay is one-time orders so nothing recurs there."

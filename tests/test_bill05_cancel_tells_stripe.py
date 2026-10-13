@@ -29,9 +29,10 @@ def _stripe(customers=None, subs=None, modify_exc=None):
     return st
 
 
-def _call(fn, stripe_mod, provider="stripe"):
+def _call(fn, stripe_mod, provider="stripe", stripe_key="sk_live_x"):
     sb = MagicMock()
     with patch.dict("sys.modules", {"stripe": stripe_mod}), \
+         patch.dict("os.environ", {"STRIPE_SECRET_KEY": stripe_key}), \
          patch.object(billing, "_validate_keys", return_value="sk_live_x"), \
          patch.object(billing, "_background_sb", return_value=sb), \
          patch.object(billing, "_profile_payment_provider", return_value=provider), \
@@ -107,3 +108,18 @@ def test_resume_reverses_at_stripe_and_fails_closed():
     _, sb2, err2 = _call(_unwrap(billing.resume_subscription), st2)
     assert err2 is not None and err2.status_code == 502
     sb2.table.assert_not_called()
+
+
+def test_unknown_provider_is_treated_as_stripe_when_stripe_is_configured():
+    """payment_provider is never written by checkout, so None is the normal Stripe-customer state."""
+    st = _stripe(customers=[_D(id="cus_1", metadata={})], subs=[_live_sub()])
+    out, sb, err = _call(_unwrap(billing.cancel_subscription), st, provider=None)
+    assert err is None
+    st.Subscription.modify.assert_called_once_with("sub_1", cancel_at_period_end=True)
+
+
+def test_unknown_provider_without_stripe_configured_skips_stripe():
+    st = _stripe()
+    out, sb, err = _call(_unwrap(billing.cancel_subscription), st, provider=None, stripe_key="")
+    assert err is None
+    st.Customer.list.assert_not_called()

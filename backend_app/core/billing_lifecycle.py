@@ -52,6 +52,21 @@ class BillingLifecycle:
         return next_date
     
     @staticmethod
+    def add_billing_period(start: datetime, interval: Optional[str]) -> datetime:
+        """End of one paid period starting at *start* (BILL-01).
+
+        ``interval`` is ``"year"`` or anything else (monthly). Calendar-safe: Jan 31 + 1 month
+        is Feb 28/29, not a ValueError (``calculate_next_billing_date`` cannot do that).
+        """
+        import calendar
+
+        months = 12 if interval == "year" else 1
+        total = start.month - 1 + months
+        year, month = start.year + total // 12, total % 12 + 1
+        day = min(start.day, calendar.monthrange(year, month)[1])
+        return start.replace(year=year, month=month, day=day)
+
+    @staticmethod
     def calculate_trial_end_date(start_date: Optional[datetime] = None) -> datetime:
         """Calculate trial end date."""
         if start_date is None:

@@ -53,6 +53,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from fastapi import Depends, HTTPException, status
@@ -420,9 +421,33 @@ _REVOKING_STATUSES = frozenset({"expired"})
 #: because the column that would hold them does not exist. The retry logs a warning naming the
 #: migration, so the skew is visible rather than silent.
 _PROFILE_COLUMN_SETS = (
+    # BILL-01: payment_provider/next_billing_date arrive with migration 037.
+    "subscription_tier,subscription_status,plan_limit_overrides,payment_provider,next_billing_date",
     "subscription_tier,subscription_status,plan_limit_overrides",
     "subscription_tier,subscription_status",
 )
+
+
+def _one_time_period_has_lapsed(row: Mapping) -> bool:
+    """True when a Razorpay (one-time order) plan's paid period has ended.
+
+    Only ``payment_provider == 'razorpay'`` rows are judged here: Stripe's period is owned by
+    Stripe's subscription webhooks, and a row with no recorded end (legacy / un-migrated) is
+    left alone rather than guessed at. An unparseable timestamp is treated as NOT lapsed -
+    this read must not strip a paying customer on a data-format surprise.
+    """
+    if str(row.get("payment_provider") or "").lower() != "razorpay":
+        return False
+    raw = row.get("next_billing_date")
+    if not raw:
+        return False
+    try:
+        end = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) > end
 
 
 def _plan_cache_key(user_id: str) -> str:
@@ -541,6 +566,14 @@ async def get_plan_context(user_id: str, supabase: Any) -> PlanContext:
             subscription_status,
         )
         plan = Plan.FREE.value
+
+    if plan != Plan.FREE.value and _one_time_period_has_lapsed(row):
+        # BILL-01: a Razorpay purchase buys a fixed period. Past its end the tier is no longer
+        # honoured - an entitlement decision for this request; core.plan_expiry persists it.
+        logger.info("Plan %s on user %s lapsed: paid period ended %s",
+                    plan, user_id, row.get("next_billing_date"))
+        plan = Plan.FREE.value
+        subscription_status = "expired"
 
     config = SubscriptionEngine.get_plan_config(plan)
     context = PlanContext(

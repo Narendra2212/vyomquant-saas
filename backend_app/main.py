@@ -27,6 +27,7 @@
 """
 
 
+import asyncio
 from datetime import datetime, timezone
 import logging
 import os
@@ -251,6 +252,9 @@ except ImportError:
 # Shared runtime service status — populated during lifespan startup, read by /health/services
 _runtime_service_status: dict = {}
 
+# BILL-01: handle of the plan-expiry sweep task started in lifespan
+_plan_expiry_task = None
+
 
 # ── Lifespan: boot + graceful shutdown ──────────────────────────────
 @asynccontextmanager
@@ -460,6 +464,17 @@ async def lifespan(app: FastAPI):
         service_status["reconciliation_scheduler"] = "INACTIVE"
         logger.warning(f" ReconciliationScheduler: INACTIVE — {e}")
 
+    # ── BILL-01: expire lapsed one-time (Razorpay) plan purchases ───────────
+    global _plan_expiry_task
+    try:
+        from backend_app.core.dependencies import get_service_supabase
+        from backend_app.core.plan_expiry import run_plan_expiry_loop
+        _plan_expiry_task = asyncio.create_task(run_plan_expiry_loop(get_service_supabase))
+        service_status["plan_expiry_sweep"] = "ACTIVE"
+    except Exception as e:
+        service_status["plan_expiry_sweep"] = "INACTIVE"
+        logger.warning(f" PlanExpirySweep: INACTIVE — {e}")
+
     # ── Runtime Service: PortfolioCacheUpdater ─────────────────────────────
     try:
         await start_portfolio_cache_updater()
@@ -543,6 +558,17 @@ async def lifespan(app: FastAPI):
         logger.info(" ReconciliationScheduler: stopped")
     except Exception as e:
         logger.warning(f" ReconciliationScheduler shutdown error: {e}")
+
+    # BILL-01: stop the plan-expiry sweep
+    try:
+        if _plan_expiry_task is not None:
+            _plan_expiry_task.cancel()
+            try:
+                await _plan_expiry_task
+            except asyncio.CancelledError:
+                pass
+    except Exception as e:
+        logger.warning(f" PlanExpirySweep shutdown error: {e}")
 
     # Runtime Service: PortfolioCacheUpdater — stop background update loop
     try:
