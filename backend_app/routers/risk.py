@@ -66,7 +66,17 @@ def get_user_risk_settings_store(user_id: str) -> Dict[str, Any]:
 
 
 def is_user_kill_switched(user_id: str) -> bool:
-    return _user_kill_switch_state.get(str(user_id), False)
+    """Synchronous, in-process view for dashboards and the paper path.
+
+    The execution engine uses the durable, cross-worker ``tenant_halt`` store instead (RT-19);
+    this mirror is only authoritative for the worker that set it.
+    """
+    uid = str(user_id)
+    if _user_kill_switch_state.get(uid, False):
+        return True
+    from backend_app.core.tenant_halt import mirror_is_halted
+
+    return mirror_is_halted(uid)
 
 
 def record_risk_violation(user_id: str, rule: str, reason: str, details: Optional[Dict[str, Any]] = None) -> None:
@@ -490,6 +500,9 @@ async def activate_kill_switch(
         body = UserKillSwitchRequest()
     uid = str(user.get("id") or user.get("sub"))
     _user_kill_switch_state[uid] = True
+    from backend_app.core.tenant_halt import set_halt
+
+    persisted = await set_halt(uid, True)
     record_risk_violation(uid, "KILL_SWITCH_MANUAL_ACTIVATION", body.reason or "Emergency kill switch activated by user")
 
     fire_and_forget_task(
@@ -525,6 +538,7 @@ async def activate_kill_switch(
     return {
         "status": "halted",
         "kill_switch_active": True,
+        "persisted": persisted,
         "message": "Emergency Kill Switch is ACTIVE. All new strategy and order executions are halted."
     }
 
@@ -539,6 +553,9 @@ async def recover_kill_switch(
     """
     uid = str(user.get("id") or user.get("sub"))
     _user_kill_switch_state[uid] = False
+    from backend_app.core.tenant_halt import set_halt
+
+    await set_halt(uid, False)
 
     fire_and_forget_task(
         ws_mgr.broadcast_user(

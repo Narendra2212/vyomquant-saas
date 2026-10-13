@@ -864,6 +864,27 @@ class ExecutionEngine:
             }
         
         # ═══════════════════════════════════════════════════════════════════
+        # 🔴 RT-19: PER-TENANT HALT (the user's emergency kill switch), durable and
+        # shared across workers. Fail-closed: an unreadable halt state blocks trading.
+        # ═══════════════════════════════════════════════════════════════════
+        try:
+            from backend_app.core.tenant_halt import is_halted as _tenant_halted
+            if await _tenant_halted(tenant_id):
+                return {
+                    'status': 'blocked',
+                    'execution_id': None,
+                    'result': None,
+                    'message': 'Tenant kill switch is active - trading execution blocked'
+                }
+        except Exception as halt_err:
+            return {
+                'status': 'blocked',
+                'execution_id': None,
+                'result': None,
+                'message': f'Tenant halt check failed: {halt_err} - trading execution blocked'
+            }
+
+        # ═══════════════════════════════════════════════════════════════════
         # 🔴 STEP 2: STRATEGY VALIDATION - Must be real strategy from DB
         # ═══════════════════════════════════════════════════════════════════
         if not strategy_id or not self._validate_strategy_exists(tenant_id, strategy_id):

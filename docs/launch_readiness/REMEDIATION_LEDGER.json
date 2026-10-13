@@ -171,12 +171,12 @@
       "severity": "High",
       "component": "Risk controls",
       "title": "User kill switch and risk settings live in process memory and do not stop automated trading",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "backend_app/core/tenant_halt.py: halt persisted in Redis (no expiry), fail-closed read in ExecutionEngine.execute_with_idempotency (the only BotRunner->venue path); tests/test_rt19_tenant_halt_is_durable_and_enforced.py (7)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Persist per-tenant halt in Redis/DB; enforce in execute_with_idempotency, paper session loop and runtime; stop the tenant's deployments."
+      "remaining_action": "Still open: stop the tenant's running deployments on activation; enforce the halt in paper-session loops; verify against real Redis in staging."
     },
     {
       "id": "RT-18",
