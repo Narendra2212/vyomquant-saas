@@ -73,3 +73,9 @@ variable "enable_guardduty" {
   type        = bool
   default     = false
 }
+
+variable "alert_email" {
+  description = "OPS-01: e-mail address subscribed to the production alerts SNS topic. Leave empty to create the topic and alarms without a subscriber (subscribe a pager/Slack integration to the topic ARN output instead)."
+  type        = string
+  default     = ""
+}

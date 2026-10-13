@@ -288,12 +288,12 @@
       "severity": "High",
       "component": "Infrastructure",
       "title": "Market-data service and background workers are not in the committed production deployment",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "(this commit)",
+      "evidence": "MarketplaceExpiryWorker added to local.worker_definitions in terraform/ecs.tf (task definition + ECS service via for_each); tests/test_worker_deployment_coverage.py ledger updated",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "ECS services for mds, runtime worker, backtest worker, expiry worker; QuestDB replaced or given persistent storage; pinned images."
+      "remaining_action": "Not done: runtime/bot worker (RT-08), persistent storage or replacement for QuestDB, image pinning (workers use vyomquant-api:latest). Terraform not planned/applied (EXTERNAL). ReconciliationWorker remains unhosted (xfail documents it)."
     },
     {
       "id": "OPS-01",
@@ -301,12 +301,12 @@
       "severity": "High",
       "component": "Observability",
       "title": "No alerting or error tracking configured in the committed production configuration",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "terraform/alarms.tf: SNS topic (KMS-encrypted, optional e-mail subscription var.alert_email, output alerts_topic_arn) + CloudWatch alarms for API 5xx, unhealthy targets, p99 latency, running-task count below 1, and log-metric alarms for CRITICAL logs, billing webhook failures, kill-switch events and audit-write failures. tests/test_ops01_alarms_are_declared.py (5 static checks)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Configure Sentry + CloudWatch alarms (5xx, task restarts, readiness 503, webhook failures, kill-switch events) and an on-call channel."
+      "remaining_action": "Terraform was parsed (python-hcl2) and statically cross-checked but NOT validated/planned/applied (no terraform binary, no AWS access) - EXTERNAL. Sentry DSN must be set in the production secret store (code initialises Sentry only if SENTRY_DSN is present). Someone must subscribe the on-call channel to the topic."
     },
     {
       "id": "BILL-01",
