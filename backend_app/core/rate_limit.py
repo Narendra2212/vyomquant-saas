@@ -172,7 +172,11 @@ else:
         "shared between replicas.", config.reason,
     )
 
-limiter = Limiter(key_func=get_remote_address, storage_uri=config.storage_uri)
+from backend_app.core.client_address import trusted_client_address  # noqa: E402
+
+# SEC-10: behind CloudFront/ALB the socket peer is shared by all users; key on the address a
+# trusted proxy vouched for (TRUSTED_PROXY_HOPS), falling back to the peer when unset.
+limiter = Limiter(key_func=trusted_client_address, storage_uri=config.storage_uri)
 
 # Kept for backward compatibility with anything that imported these names. `env` is now
 # strictly the deployment environment; it is no longer ever a trading mode.

@@ -236,12 +236,12 @@
       "severity": "High",
       "component": "Availability / rate limiting",
       "title": "Rate limits are keyed on the proxy's IP, so all users share buckets",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "limiter key_func -> backend_app/core/client_address.trusted_client_address (right-to-left X-Forwarded-For with TRUSTED_PROXY_HOPS; peer fallback); tests/test_sec10_rate_limit_keys_on_trusted_client_address.py (12)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Trust X-Forwarded-For only from the ALB/CloudFront ranges (uvicorn --forwarded-allow-ips / ProxyHeadersMiddleware) and key authenticated routes by user."
+      "remaining_action": "OPERATOR: set TRUSTED_PROXY_HOPS=2 (CloudFront+ALB) in the ECS task definition and verify in staging that two clients behind CloudFront get independent buckets. Until set, behaviour is unchanged (peer address). Per-user keying of authenticated routes still open."
     },
     {
       "id": "DB-01",
