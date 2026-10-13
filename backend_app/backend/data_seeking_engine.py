@@ -25,6 +25,10 @@ import ccxt as ccxt_base
 logger = logging.getLogger("DataEngine")
 
 
+class InsufficientHistoryError(RuntimeError):
+    """The exchange holds fewer historical bars than the caller required (DATA-01)."""
+
+
 class DataEngine:
     """
     All market data access for one authenticated exchange connection.
@@ -182,25 +186,48 @@ class DataEngine:
     #  PUBLIC MARKET DATA — REST snapshots
     # ══════════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _timeframe_ms(timeframe: str) -> int:
+        """Milliseconds per bar for a ccxt-style timeframe (``1m``, ``15m``, ``4h``, ``1d``...)."""
+        units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "M": 2_592_000}
+        try:
+            return int(timeframe[:-1]) * units[timeframe[-1]] * 1000
+        except (ValueError, KeyError, IndexError):
+            raise ValueError(f"unsupported timeframe {timeframe!r}") from None
+
     async def fetch_historical_ohlcv(
         self,
         symbol: str,
         timeframe: str = "1m",
         limit: int = 1_000,
         max_retries: int = 3,
+        require_full: bool = False,
     ) -> list:
         """
-        Fetches historical OHLCV bars with pagination and exponential retry.
-        FIX DS-1: Retry sleep is now exponential (1s, 2s, 4s).
-        FIX DS-2: Paginated fetch — collects multiple pages until `limit` bars
-                  are gathered. Most exchanges cap at 500 per call.
+        Fetches up to ``limit`` of the MOST RECENT historical OHLCV bars, oldest first.
+
+        DATA-01: this used to page FORWARD. The first call (``since=None``) returns the
+        latest page; asking for ``since=last_ts+1`` then returns nothing (there is nothing
+        newer), so every request for more than one page silently came back with at most
+        ~500 bars whatever ``limit`` said - a "10,000 bar" backtest ran on 500. It now pages
+        BACKWARD: after the latest page, each request starts one page-width before the
+        oldest bar held and keeps only bars strictly older than it.
+
+        Coverage is never claimed silently. A short result logs a WARNING naming how many
+        bars were wanted and how many exist; with ``require_full=True`` it raises
+        ``InsufficientHistoryError`` instead, for consumers that must not run on less.
+
+        FIX DS-1: Retry sleep is exponential (1s, 2s, 4s).
+        FIX DS-2: Paginated fetch; most exchanges cap at 500 per call.
         """
         exchange_limit = 500  # conservative cap that works for all exchanges
+        tf_ms = self._timeframe_ms(timeframe)
         all_bars: list[list] = []
-        since: Optional[int] = None  # millisecond timestamp for pagination
+        oldest: Optional[int] = None  # oldest bar timestamp collected so far
 
         while len(all_bars) < limit:
             batch_size = min(exchange_limit, limit - len(all_bars))
+            since = None if oldest is None else oldest - batch_size * tf_ms
 
             for attempt in range(max_retries):
                 try:
@@ -219,24 +246,31 @@ class DataEngine:
                     logger.warning(f"OHLCV fetch error: {e}. Retrying in {wait}s...")
                     await asyncio.sleep(wait)
 
+            if oldest is not None:
+                # Only bars strictly older than what we already hold are new information.
+                batch = [bar for bar in (batch or []) if bar[0] < oldest]
             if not batch:
-                break  # no more data available
+                break  # no older data available
 
             all_bars.extend(batch)
-
-            # Advance pagination cursor past the last received bar
-            last_ts = batch[-1][0]
-            if since is not None and last_ts <= since:
-                break  # guard against infinite loop on stale cursor
-            since = last_ts + 1
-
-            if len(batch) < batch_size:
-                break  # exchange returned fewer bars — we've hit the beginning
+            batch_oldest = min(bar[0] for bar in batch)
+            if oldest is not None and batch_oldest >= oldest:
+                break  # defensive: no progress
+            oldest = batch_oldest
 
         # Return sorted, deduplicated, most recent `limit` bars
         unique = {bar[0]: bar for bar in all_bars}
-        sorted_bars = sorted(unique.values(), key=lambda b: b[0])
-        return sorted_bars[-limit:]
+        sorted_bars = sorted(unique.values(), key=lambda b: b[0])[-limit:]
+
+        if len(sorted_bars) < limit:
+            msg = (
+                f"fetch_historical_ohlcv({symbol}, {timeframe}): wanted {limit} bars but "
+                f"only {len(sorted_bars)} are available from the exchange"
+            )
+            if require_full:
+                raise InsufficientHistoryError(msg)
+            logger.warning(msg)
+        return sorted_bars
 
     async def fetch_wallet_balance_snapshot(self) -> dict:
         """Fetches total, free, and used balances for all assets."""

@@ -2959,6 +2959,61 @@ async def get_backtest_status(job_id: str, user: dict = Depends(get_current_user
     return response
 
 
+class MarketDataUnavailable(RuntimeError):
+    """BT-01: the exchange history needed for a backtest could not be fetched."""
+
+
+_TIMEFRAME_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "M": 2592000}
+
+
+def _periods_per_year(timeframe: str) -> float:
+    """Bars per year for a ccxt-style timeframe such as ``15m``, ``1h``, ``1d``."""
+    try:
+        unit = timeframe[-1]
+        seconds = int(timeframe[:-1]) * _TIMEFRAME_SECONDS[unit]
+        return (365.0 * 86400.0) / seconds
+    except Exception:  # noqa: BLE001 - unknown timeframe: say so via None metrics upstream
+        return 0.0
+
+
+def _equity_curve_metrics(equity_history, timeframe: str) -> dict:
+    """BT-01: Sharpe / Sortino / Calmar from the REAL per-bar equity curve.
+
+    These used to be invented: ``sharpe = win_rate*avg_win / ((1-win_rate)*avg_loss)``,
+    ``sortino = sharpe * 1.2`` and a Calmar from a two-point curve. Every figure here is
+    derived from ``equity_history`` or is ``None`` (never 0, never a guess) when the curve
+    cannot support it.
+    """
+    import math
+
+    import numpy as np
+
+    out = {"sharpe_ratio": None, "sortino_ratio": None, "calmar_ratio": None}
+    eq = np.asarray([float(x) for x in equity_history], dtype=float)
+    ppy = _periods_per_year(timeframe)
+    if len(eq) < 3 or ppy <= 0 or not np.all(np.isfinite(eq)) or np.any(eq <= 0):
+        return out
+
+    returns = np.diff(eq) / eq[:-1]
+    std = float(np.std(returns))
+    mean = float(np.mean(returns))
+    if std > 0:
+        out["sharpe_ratio"] = round(mean / std * math.sqrt(ppy), 2)
+
+    downside = returns[returns < 0]
+    dstd = float(np.sqrt(np.mean(downside ** 2))) if len(downside) else 0.0
+    if dstd > 0:
+        out["sortino_ratio"] = round(mean / dstd * math.sqrt(ppy), 2)
+
+    peak = np.maximum.accumulate(eq)
+    max_dd = float(np.max((peak - eq) / peak))
+    years = (len(eq) - 1) / ppy
+    if max_dd > 0 and years > 0:
+        annualised = (eq[-1] / eq[0]) ** (1.0 / years) - 1.0
+        out["calmar_ratio"] = round(annualised / max_dd, 2)
+    return out
+
+
 def backtest_internal(payload: dict):
     """
     Run full DAG-based backtest.
@@ -3078,29 +3133,20 @@ def backtest_internal(payload: dict):
                 df.set_index("timestamp", inplace=True)
                 
                 logger.info(f"[Backtest] {symbol}: {len(df)} candles")
+                if len(df) == 0:
+                    raise ValueError("exchange returned no candles")
                 return df
                 
             except Exception as e:
-                logger.info(f"[Backtest] Data fallback for {symbol}: {e}")
-                
-                # Synthetic data fallback
-                np.random.seed(hash(symbol) % 2**32)
-                returns = np.random.normal(0, 0.01, limit)
-                price = 100 * np.exp(np.cumsum(returns))
-                
-                df = pd.DataFrame({
-                    "open": price,
-                    "high": price * 1.005,
-                    "low": price * 0.995,
-                    "close": price,
-                    "volume": np.random.uniform(100, 1000, limit)
-                })
-                
-                df.index = pd.date_range(start="2024-01-01", periods=limit, freq=timeframe)
-                df.index.name = "timestamp"
-                
-                return df
-        
+                # BT-01: NEVER substitute synthetic data. This used to seed numpy with the
+                # symbol's hash and return a random walk as if it were market history, so a
+                # network failure produced a confident-looking, entirely fabricated result.
+                logger.error(f"[Backtest] market data unavailable for {symbol}: {e}")
+                raise MarketDataUnavailable(
+                    f"Could not fetch market data for {symbol} ({type(e).__name__}); "
+                    "no backtest was run and no result was fabricated."
+                ) from e
+
         # Fetch data for all symbols
         market_data = {}
         for symbol in symbols:
@@ -3191,6 +3237,10 @@ def backtest_internal(payload: dict):
         min_length = min(len(df) for df in market_data.values())
         logger.info(f"[Backtest] Running simulation for {min_length} steps...")
         
+        # BT-01: the equity curve is MEASURED, one point per bar, marked to market. The
+        # headline ratios below are computed from it (they used to be invented).
+        equity_history = [float(initial_capital)]
+
         # Execute trades based on signals
         for i in range(min_length):
             for symbol, signals in all_signals.items():
@@ -3223,6 +3273,12 @@ def backtest_internal(payload: dict):
                     portfolio.close_position(symbol)
                     risk.update_equity(float(pnl))
                     logger.info(f"  [t={i}] SELL {symbol} @ {current_price:.2f} (PnL: {pnl:.2f})")
+
+            # End of bar: mark every open position at this bar's close, record equity.
+            for _sym, _df in market_data.items():
+                if _sym in execution.get_positions() and i < len(_df):
+                    execution.mark_to_market(_sym, Decimal(str(_df["close"].iloc[i])))
+            equity_history.append(float(execution.current_equity))
         
         # Close remaining positions
         for symbol in list(execution.get_positions().keys()):
@@ -3231,6 +3287,7 @@ def backtest_internal(payload: dict):
                 pnl, msg = execution.close_position(symbol, final_price)
                 risk.update_equity(float(pnl))
                 logger.info(f"  [FINAL] CLOSE {symbol} @ {final_price:.2f}")
+        equity_history.append(float(execution.current_equity))
 
         # -----------------------------
         # RESULTS
@@ -3247,29 +3304,16 @@ def backtest_internal(payload: dict):
         total_return_pct = float((current_equity / initial_capital - 1) * 100)
         max_drawdown_pct = float(stats.get('drawdown_pct', 0.0) * 100)
         
-        # Sharpe ratio
-        sharpe_ratio = 0.0
-        if stats['total_trades'] > 0:
-            avg_win = stats.get('avg_win', 0)
-            avg_loss = stats.get('avg_loss', 0)
-            if avg_loss > 0:
-                sharpe_ratio = (stats['win_rate'] * avg_win) / ((1 - stats['win_rate']) * avg_loss)
-        
-        calmar_ratio = abs(total_return_pct / max_drawdown_pct) if max_drawdown_pct > 0 else 0
-        
-        # Build equity curve
-        equity_curve = []
-        if 'equity_history' in stats:
-            equity_curve = [
-                {"timestamp": i, "time": i, "equity": float(eq), "value": float(eq)}
-                for i, eq in enumerate(stats['equity_history'])
-            ]
-        else:
-            equity_curve = [
-                {"timestamp": 0, "time": 0, "equity": float(initial_capital), "value": float(initial_capital)},
-                {"timestamp": 1, "time": 1, "equity": current_equity, "value": current_equity}
-            ]
-        
+        # BT-01: ratios from the measured equity curve (None when it cannot support one).
+        ratios = _equity_curve_metrics(equity_history, timeframe)
+
+        # The measured per-bar curve. There is no two-point fallback: a backtest that
+        # produced no bars has no curve, and says so with an empty list.
+        equity_curve = [
+            {"timestamp": i, "time": i, "equity": float(eq), "value": float(eq)}
+            for i, eq in enumerate(equity_history)
+        ] if len(equity_history) >= 2 else []
+
         # DAG results mapping
         dag_results = None
         if use_dag:
@@ -3301,9 +3345,9 @@ def backtest_internal(payload: dict):
             
             # Extended metrics
             "profit_factor": float(stats.get('profit_factor', 1.0)),
-            "sharpe_ratio": round(sharpe_ratio, 2),
-            "sortino_ratio": round(sharpe_ratio * 1.2, 2),
-            "calmar_ratio": round(calmar_ratio, 2),
+            "sharpe_ratio": ratios["sharpe_ratio"],
+            "sortino_ratio": ratios["sortino_ratio"],
+            "calmar_ratio": ratios["calmar_ratio"],
             
             # Equity curve
             "equity": equity_curve,
@@ -3317,13 +3361,20 @@ def backtest_internal(payload: dict):
             "initial_capital": float(initial_capital),
         }
 
+    except MarketDataUnavailable as e:
+        logger.error("BACKTEST ABORTED: %s", e)
+        return {
+            "error": str(e),
+            "error_type": "MarketDataUnavailable",
+            "fabricated_data_used": False,
+        }
     except Exception as e:
         logger.error("BACKTEST ERROR")
         logger.error(traceback.format_exc())
-        
+
+        # The traceback stays in the server log; it is not returned to the caller.
         return {
             "error": str(e),
-            "traceback": traceback.format_exc(),
             "error_type": type(e).__name__
         }
 
