@@ -769,3 +769,8 @@ class TestTheDesignTableIsApplied:
         }
         assert session_start and max(session_start) < reads
         assert order_placement and max(order_placement) < reads
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02
