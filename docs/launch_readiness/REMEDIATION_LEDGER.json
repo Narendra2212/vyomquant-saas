@@ -925,12 +925,12 @@
       "severity": "High",
       "component": "Audit trail / compliance",
       "title": "The order audit trail is never persisted durably; its own read path always returns empty",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "migration 036 order_audit_log (append-only trigger incl. TRUNCATE, RLS on, browser roles revoked, PK audit_id); OrderAuditRecord.from_dict/to_db_row; _store_to_db now writes via service client (idempotent, failure logged not silent); get_audit_trail reads durable table + merges Redis. tests/test_aud02_order_audit_trail_is_durable.py (13 incl. 8 real-Postgres)",
+      "verification_level": "code+real-postgres sandbox",
       "production_verified": false,
-      "remaining_action": "Implement _store_to_db against a real append-only table (order_audit_log); fix get_audit_trail's from_dict call; migrate the 500-entry/30-day Redis caps to durable storage with Redis as a hot cache only."
+      "remaining_action": "Migration 036 must be applied to staging/production by an operator. Order-path call sites still log-and-continue on audit failure by design (does not abort an order). 500-entry/30-day Redis caps for other audit sinks not migrated."
     },
     {
       "id": "RT-25",

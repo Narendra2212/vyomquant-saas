@@ -20,6 +20,7 @@ EXPECTED RESULT:
 ✔ Full traceability
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -115,6 +116,82 @@ class OrderAuditRecord:
         if self.metadata:
             data['metadata'] = json.dumps(self.metadata)
         return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "OrderAuditRecord":
+        """Inverse of :meth:`to_dict` (AUD-02: the read path called this and it did not exist).
+
+        Accepts both the Redis shape (``to_dict``: JSON-string nested fields, ISO timestamp)
+        and the durable-table shape (``order_audit_log`` row: ``occurred_at``, jsonb already
+        decoded, numerics possibly as strings).
+        """
+        def _obj(v):
+            if v is None or v == "":
+                return None
+            return json.loads(v) if isinstance(v, str) else v
+
+        def _num(v):
+            return None if v is None else float(v)
+
+        ts = data.get("timestamp") or data.get("occurred_at")
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return cls(
+            audit_id=data["audit_id"],
+            timestamp=ts,
+            event_type=AuditEventType(data["event_type"]),
+            user_id=data["user_id"],
+            strategy_id=data.get("strategy_id"),
+            execution_id=data.get("execution_id"),
+            signal=_obj(data.get("signal")),
+            decision_reason=data.get("decision_reason"),
+            symbol=data.get("symbol"),
+            side=data.get("side"),
+            size=_num(data.get("size")) or 0.0,
+            price=_num(data.get("price")),
+            order_type=data.get("order_type"),
+            exchange_id=data.get("exchange_id"),
+            exchange_response=_obj(data.get("exchange_response")),
+            client_order_id=data.get("client_order_id"),
+            exchange_order_id=data.get("exchange_order_id"),
+            status=data.get("status"),
+            filled_amount=_num(data.get("filled_amount")),
+            remaining_amount=_num(data.get("remaining_amount")),
+            average_price=_num(data.get("average_price")),
+            fee=_num(data.get("fee")),
+            error_message=data.get("error_message"),
+            metadata=_obj(data.get("metadata")),
+        )
+
+    def to_db_row(self) -> Dict[str, Any]:
+        """Row for ``public.order_audit_log`` (jsonb columns as real JSON, not JSON strings)."""
+        def _clean(v):
+            return json.loads(json.dumps(v, default=str)) if v is not None else None
+        ts = self.timestamp
+        if ts.tzinfo is None:  # the logger stamps naive UTC (datetime.utcnow())
+            ts = ts.replace(tzinfo=timezone.utc)
+        return {
+            "audit_id": self.audit_id,
+            "occurred_at": ts.isoformat(),
+            "event_type": self.event_type.value,
+            "user_id": str(self.user_id),
+            "strategy_id": None if self.strategy_id is None else str(self.strategy_id),
+            "execution_id": self.execution_id,
+            "symbol": self.symbol, "side": self.side,
+            "size": self.size, "price": self.price,
+            "order_type": self.order_type, "exchange_id": self.exchange_id,
+            "client_order_id": self.client_order_id,
+            "exchange_order_id": self.exchange_order_id,
+            "status": self.status,
+            "filled_amount": self.filled_amount,
+            "remaining_amount": self.remaining_amount,
+            "average_price": self.average_price, "fee": self.fee,
+            "decision_reason": self.decision_reason,
+            "error_message": self.error_message,
+            "signal": _clean(self.signal),
+            "exchange_response": _clean(self.exchange_response),
+            "metadata": _clean(self.metadata),
+        }
 
     def to_log_entry(self) -> str:
         """Convert to structured log entry."""
@@ -520,16 +597,37 @@ class OrderAuditLogger:
             logger.error(f"STEP 7: Failed to store audit record: {e}")
             # Continue - don't fail the order because of audit logging
     
-    async def _store_to_db(self, record: OrderAuditRecord):
-        """Store audit record to database."""
+    async def _store_to_db(self, record: OrderAuditRecord) -> bool:
+        """Append the record to ``public.order_audit_log`` (AUD-02).
+
+        Idempotent on ``audit_id``. Returns True when the row is durably stored. Never
+        raises (an audit failure must not abort the order it describes) but is never
+        silent: a failed durable write is logged at ERROR with the record's identity so the
+        gap is visible, and the log line + Redis copy still happen.
+        """
         try:
-            from backend_app.core.database import get_db_context
-            # Audit log is primarily stored in Redis fast cache and structured logging
-            # Direct DB persistence fallback handled via state_persistence / event_log
-            pass
-        except Exception as e:
-            logger.error(f"STEP 7: Failed to store to DB: {e}")
-    
+            from backend_app.core.dependencies import get_service_supabase
+            client = get_service_supabase()
+            if client is None:
+                logger.error("AUDIT DURABLE WRITE UNAVAILABLE (no service database client): "
+                             "audit_id=%s execution_id=%s event=%s",
+                             record.audit_id, record.execution_id, record.event_type.value)
+                return False
+            row = record.to_db_row()
+
+            def _insert():
+                return client.table("order_audit_log").upsert(
+                    row, on_conflict="audit_id", ignore_duplicates=True
+                ).execute()
+
+            await asyncio.to_thread(_insert)
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.error("AUDIT DURABLE WRITE FAILED: audit_id=%s execution_id=%s event=%s err=%s",
+                         record.audit_id, record.execution_id, record.event_type.value,
+                         type(e).__name__)
+            return False
+
     def _write_to_log(self, record: OrderAuditRecord):
         """Write audit record to structured log."""
         try:
@@ -566,27 +664,41 @@ class OrderAuditLogger:
         execution_id: str
     ) -> List[OrderAuditRecord]:
         """
-        Get complete audit trail for an execution from Redis cache.
-        
-        Returns all audit records for the execution in chronological order.
+        Get the complete audit trail for an execution, oldest first.
+
+        The durable table is authoritative; the Redis hot cache is merged in (by audit_id)
+        so a record whose durable write failed is still visible while it is cached.
         """
+        by_id: Dict[str, OrderAuditRecord] = {}
         try:
-            records = []
+            from backend_app.core.dependencies import get_service_supabase
+            client = get_service_supabase()
+            if client is not None:
+                def _select():
+                    return (client.table("order_audit_log").select("*")
+                            .eq("execution_id", execution_id).order("occurred_at").execute())
+                resp = await asyncio.to_thread(_select)
+                for row in (getattr(resp, "data", None) or []):
+                    try:
+                        rec = OrderAuditRecord.from_dict(row)
+                        by_id[rec.audit_id] = rec
+                    except Exception as e:  # noqa: BLE001
+                        logger.error("AUDIT: unreadable durable row %s: %s", row.get("audit_id"), e)
+        except Exception as e:  # noqa: BLE001
+            logger.error("AUDIT: durable read failed: %s", type(e).__name__)
+        try:
             for event_type in AuditEventType:
-                key = f"audit:{execution_id}:{event_type.value}"
-                raw = await redis_manager.get(key)
+                raw = await redis_manager.get(f"audit:{execution_id}:{event_type.value}")
                 if raw:
                     try:
-                        data = json.loads(raw)
-                        records.append(OrderAuditRecord.from_dict(data))
-                    except Exception:
-                        pass
-            records.sort(key=lambda r: r.timestamp)
-            return records
-        except Exception as e:
-            logger.error(f"STEP 7: Failed to get audit trail: {e}")
-            return []
-    
+                        rec = OrderAuditRecord.from_dict(json.loads(raw))
+                        by_id.setdefault(rec.audit_id, rec)
+                    except Exception as e:  # noqa: BLE001
+                        logger.error("AUDIT: unreadable cached record: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.error("AUDIT: cache read failed: %s", type(e).__name__)
+        return sorted(by_id.values(), key=lambda r: r.timestamp.replace(tzinfo=None))
+
     def _record_from_db(self, db_record) -> OrderAuditRecord:
         """Convert DB record to OrderAuditRecord."""
         return OrderAuditRecord(
