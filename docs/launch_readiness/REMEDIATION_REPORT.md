@@ -31,6 +31,10 @@ Candidate code commit: `5346ecd` (validated exactly as committed). Base: `28a4ef
 | IMPORT-02 | P1 | VERIFIED_FIXED | Infrastructure / broken imports | c992510 | tests/test_import02_internal_imports_resolve.py (AST guard; IMPORT-01/-03 recorded as known-broken) | Fix IMPORT-01 and IMPORT-03 (separate findings). |
 | SEC-16 | P1 | VERIFIED_FIXED | Security / tenant entitlements | fbaf266 | tests/test_sec16_strategy_deployments_guard_postgres.py (12) on real Postgres | Move the API live-deployment insert to a service-role client after entitlement + live-gate checks BEFORE applying migration 034 in production; apply 034 (human-run). |
 
+| MKT-01 | P1 | VERIFIED_FIXED | Marketplace | (this branch, post-report) | migration 035 + 8 real-Postgres tests | Apply 035 to staging/production (human-run) |
+
+MKT-01 was fixed after the validation run above; the real-Postgres lane and migration tests were re-run on a freshly provisioned DB with 035 (only the 2 baseline PG failures remain). Remove MKT-01 from the unresolved list below.
+
 ## Unresolved P0/P1 blockers
 - **SEC-01** (P0, EXTERNAL_BLOCKED): Production Postgres credential hardcoded in a tracked script
 - **RT-04** (P0, OPEN): Paper Sessions (the persisted, canonical paper-trading path) can never start
@@ -55,7 +59,6 @@ Candidate code commit: `5346ecd` (validated exactly as committed). Base: `28a4ef
 - **EXCH-02** (P1, OPEN): Stored exchange keys are not checked for withdrawal permission or IP restriction
 - **DEP-01** (P1, OPEN): Production pins carry published advisories (starlette, PyJWT, cryptography, python-multipart, requests, aiosmtplib, protobuf) and axios in the frontend
 - **PAPER-04** (P1, OPEN): Paper session loops run in the web process on the caller's one-hour JWT and die silently
-- **MKT-01** (P1, OPEN): Any user can grant themselves an active subscription to any paid marketplace strategy
 - **AUD-02** (P1, OPEN): The order audit trail is never persisted durably; its own read path always returns empty
 - **RT-25** (P1, OPEN): OrderStateMachine's Redis lock uses asyncio.run() inside async callers; the venue-reconciliation path would crash before updating any order
 - **BILL-05** (P1, OPEN): Cancelling a subscription never calls Stripe; the card keeps being charged every period

@@ -756,12 +756,12 @@
       "severity": "High",
       "component": "Marketplace / entitlements",
       "title": "Any user can grant themselves an active subscription to any paid marketplace strategy",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "(this commit)",
+      "evidence": "migration 035: browser roles REVOKEd + BEFORE-trigger on library_subscriptions/deployment_permissions; tests/test_mkt01_entitlement_tables_postgres.py (8) on real Postgres; all backend writers already use the service client",
+      "verification_level": "code+real-postgres sandbox",
       "production_verified": false,
-      "remaining_action": "REVOKE INSERT/UPDATE/DELETE on library_subscriptions and deployment_permissions from anon and authenticated; SELECT-own only; write only from the settlement service (service role); add a BEFORE INSERT guard requiring a settlement row."
+      "remaining_action": "Apply migration 035 to staging/production (human-run) and re-run the self-subscribe repro with a real user JWT."
     },
     {
       "id": "FE-03",
