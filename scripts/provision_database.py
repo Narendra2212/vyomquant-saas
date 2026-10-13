@@ -403,8 +403,17 @@ def _archived_root_migrations() -> list[pathlib.Path]:
 def _numbered_sql_files() -> list[pathlib.Path]:
     """Step 1's files, in the order PROVISIONING_ORDER.md prescribes.
 
-    ``backend_app/migrations/001``–``019`` in numeric order, then the files in
-    ``migrations/``. ``020`` is excluded because it is step 0 and step 3.
+    ``backend_app/migrations/001``-``019`` in numeric order, then the files in
+    ``migrations/``, then ``backend_app/migrations/021`` and up. ``020`` is
+    excluded because it is step 0 and step 3.
+
+    DB-01: the ``021``+ files were previously sorted straight after ``019``, i.e.
+    before ``migrations/``. ``024`` ALTERs ``referral_commissions``, which is
+    declared only by ``migrations/006_reconcile_production_database.sql`` /
+    ``migrations/referral_system_redesign.sql``, so a fresh build failed with
+    ``42P01 relation "public.referral_commissions" does not exist``. Every file
+    in ``migrations/`` depends only on tables declared at or below ``019`` (plus
+    step 0), so the later ``backend_app`` files go after them.
     """
     primary = sorted(
         p for p in (ROOT / "backend_app" / "migrations").glob("*.sql")
@@ -417,7 +426,10 @@ def _numbered_sql_files() -> list[pathlib.Path]:
         # Unnumbered files sort last within their directory, as the document says.
         return (0, int(m.group(1)), p.name) if m else (1, 0, p.name)
 
-    return sorted(primary, key=key) + sorted(secondary, key=key)
+    primary = sorted(primary, key=key)
+    early = [p for p in primary if int(re.match(r"^(\d+)", p.name).group(1)) < 20]
+    late = [p for p in primary if int(re.match(r"^(\d+)", p.name).group(1)) > 20]
+    return early + sorted(secondary, key=key) + late
 
 
 def _refuse(message: str) -> None:

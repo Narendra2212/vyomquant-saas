@@ -41,6 +41,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from backend_app.core.live_execution_gate import (  # noqa: E402
     REQUIRED_CHECKS, LiveExecutionRefused, authorize_live_order)
 
+pytestmark = pytest.mark.usefixtures("live_platform_enabled")  # RT-15
+
+
 TENANT = uuid.uuid4()
 
 

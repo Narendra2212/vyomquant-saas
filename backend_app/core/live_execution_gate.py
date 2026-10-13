@@ -53,6 +53,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, FrozenSet, Iterable, Optional
@@ -161,6 +162,61 @@ def _sign(
     return hmac.new(_GATE_SECRET, payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+
+#: Environment variable holding the operator-managed list of tenants allowed to trade live
+#: (comma separated tenant ids, or ``*`` for every tenant). Unset/empty means NOBODY.
+LIVE_TENANT_ALLOWLIST_ENV = "VYOMQUANT_LIVE_TENANT_ALLOWLIST"
+
+_LIVE_MODE_VALUES = frozenset({"live", "live_trading"})
+
+
+def assert_platform_live_trading_enabled(tenant_id: Any = None) -> None:
+    """RT-15: refuse unless the PLATFORM itself is in live mode, for this tenant.
+
+    Until this existed, the gate's ``explicit_live_mode`` / ``safety_config`` checks were
+    names the engine asserted about itself: a LIVE-environment engine holding an executor
+    reached ``place_order`` even with ``VYOMQUANT_MODE=paper``. This reads the deployment's
+    own configuration at call time (never cached at import) and is evaluated twice - when
+    the authorisation is minted and again at the venue boundary - so flipping the platform
+    back to paper/safe stops orders already in flight.
+
+    All three must hold:
+      * ``VYOMQUANT_MODE`` is ``live``;
+      * ``VYOMQUANT_ENABLE_LIVE_TRADING`` is ``true``;
+      * the tenant is in the operator-managed allowlist (``*`` = all; unset = none).
+
+    Raises:
+        LiveExecutionRefused: ``LIVE_TRADING_DISABLED_BY_PLATFORM_MODE``,
+            ``LIVE_TRADING_NOT_ENABLED`` or ``LIVE_TENANT_NOT_ALLOWLISTED``.
+    """
+    from backend_app.core.safety_config import (get_live_trading_confirmation,
+                                                get_vyomquant_mode)
+
+    mode = str(get_vyomquant_mode("safe") or "").strip().lower()
+    if mode not in _LIVE_MODE_VALUES:
+        raise LiveExecutionRefused(
+            "LIVE_TRADING_DISABLED_BY_PLATFORM_MODE",
+            f"the platform trading mode is {mode or 'unset'!r}, not 'live'. "
+            "No order was sent.",
+        )
+    if str(get_live_trading_confirmation("false") or "").strip().lower() != "true":
+        raise LiveExecutionRefused(
+            "LIVE_TRADING_NOT_ENABLED",
+            "VYOMQUANT_ENABLE_LIVE_TRADING is not 'true'. No order was sent.",
+        )
+    allow = {
+        t.strip()
+        for t in os.getenv(LIVE_TENANT_ALLOWLIST_ENV, "").split(",")
+        if t.strip()
+    }
+    if "*" not in allow and str(tenant_id or "").strip() not in allow:
+        raise LiveExecutionRefused(
+            "LIVE_TENANT_NOT_ALLOWLISTED",
+            "this tenant is not in the operator-managed live-trading allowlist. "
+            "No order was sent.",
+        )
+
+
 def authorize_live_order(
     *,
     execution_id: Any,
@@ -182,6 +238,8 @@ def authorize_live_order(
     Raises:
         LiveExecutionRefused: ``LIVE_CHECKS_INCOMPLETE`` or ``LIVE_ORDER_UNIDENTIFIED``.
     """
+    assert_platform_live_trading_enabled(tenant_id)
+
     supplied = frozenset(str(c) for c in checks)
     missing = REQUIRED_CHECKS - supplied
 
@@ -260,6 +318,9 @@ def require_live_authorization(
             f"the authorisation presented is a {type(authorization).__name__}, not a "
             "LiveOrderAuthorization. No order was sent.",
         )
+
+    # RT-15: re-read the platform mode at the boundary itself, per order.
+    assert_platform_live_trading_enabled(authorization.tenant_id)
 
     missing = authorization.missing_checks()
     if missing:

@@ -48,6 +48,9 @@ from backend_app.core.live_execution_gate import (  # noqa: E402
     REQUIRED_CHECKS, LiveExecutionRefused, LiveOrderAuthorization,
     authorize_live_order, require_live_authorization)
 
+pytestmark = pytest.mark.usefixtures("live_platform_enabled")  # RT-15
+
+
 TENANT = uuid.uuid4()
 STRATEGY = "strategy-under-test"
 SYMBOL = "BTC/USDT"

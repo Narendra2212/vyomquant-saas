@@ -441,3 +441,20 @@ def _rate_limit_counts_are_per_test():
         yield
     finally:
         _reset_bound_rate_limiters()
+
+
+
+# ── RT-15 helper ──────────────────────────────────────────────────────────────────────
+# The live-execution gate now also requires the PLATFORM to be in live mode (mode=live,
+# live trading enabled, tenant allowlisted). Tests that deliberately mint and present live
+# authorisations opt in with ``@pytest.mark.usefixtures("live_platform_enabled")`` (or
+# ``pytestmark``). It patches only the environment, per test, and restores it.
+import pytest as _pytest_rt15  # noqa: E402
+
+
+@_pytest_rt15.fixture()
+def live_platform_enabled(monkeypatch):
+    monkeypatch.setenv("VYOMQUANT_MODE", "live")
+    monkeypatch.setenv("VYOMQUANT_ENABLE_LIVE_TRADING", "true")
+    monkeypatch.setenv("VYOMQUANT_LIVE_TENANT_ALLOWLIST", "*")
+    yield

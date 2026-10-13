@@ -52,6 +52,9 @@ from backend_app.backend.exchange_executor import OrderType as ExecutorOrderType
 from backend_app.core.global_safety import generate_validation_token
 from backend_app.core.models.pydantic_models import OrderSide, OrderType
 
+pytestmark = pytest.mark.usefixtures("live_platform_enabled")  # RT-15
+
+
 TICK_SIZE_MARKET = {
     "BTC/USDT": {
         "precision": {"price": 0.01, "amount": 0.00001},

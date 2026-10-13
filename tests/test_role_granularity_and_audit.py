@@ -14,7 +14,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backend_app.core.dependencies import get_admin_user, get_current_user, get_operator_user, get_request_supabase
+from backend_app.core.dependencies import get_admin_user, get_current_user, get_operator_user, get_request_supabase, get_service_supabase
 from backend_app.main import app
 
 client = TestClient(app)
@@ -123,12 +123,36 @@ class TestHighBlastRadiusEndpoints:
         finally:
             app.dependency_overrides.clear()
 
+    def test_sec08_freeze_of_missing_user_is_404_and_not_audited_as_success(self):
+        """SEC-08: a freeze that changed 0 rows must not report success."""
+        operator_user = {"id": "101", "email": "op@vyomquant.io", "app_metadata": {"role": "operator"}}
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+        app.dependency_overrides[get_current_user] = lambda: operator_user
+        app.dependency_overrides[get_service_supabase] = lambda: mock_supabase
+        with patch("backend_app.routers.admin.invalidate_profile_cache", AsyncMock()) as inv:
+            with patch("backend_app.routers.admin._log_admin_audit_event", AsyncMock()) as mock_audit:
+                try:
+                    res = client.post(
+                        "/api/admin/users/ghost/status",
+                        json={"status": "frozen", "reason": "Risk threshold breach"},
+                        headers={"Authorization": "Bearer token"},
+                    )
+                    assert res.status_code == 404
+                    mock_audit.assert_not_called()
+                    inv.assert_not_called()
+                finally:
+                    app.dependency_overrides.clear()
+
     def test_set_user_status_succeeds_for_operator_with_reason(self):
         operator_user = {"id": "101", "email": "op@vyomquant.io", "app_metadata": {"role": "operator"}}
         mock_supabase = MagicMock()
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "target-123", "is_frozen": True}]
+        )
 
         app.dependency_overrides[get_current_user] = lambda: operator_user
-        app.dependency_overrides[get_request_supabase] = lambda: mock_supabase
+        app.dependency_overrides[get_service_supabase] = lambda: mock_supabase
 
         with patch("backend_app.routers.admin.invalidate_profile_cache", AsyncMock()):
             with patch("backend_app.routers.admin._log_admin_audit_event", AsyncMock()) as mock_audit:

@@ -330,13 +330,9 @@ def test_apply_migrations_files_to_run_match_dependency_order():
 #    password
 # ============================================================================
 
-# scripts/run_schema_migration_prod.py is a KNOWN, ACKNOWLEDGED offender - it
-# is the record of the credential leak this tooling exists to not repeat (see
-# the task description: "leave it as the record of the leak; that file's fate
-# is the user's call"). It is explicitly named here, not silently excluded, so
-# the exemption itself is visible in the test and any second offender still
-# fails the scan.
-_KNOWN_ACKNOWLEDGED_LEAK = "run_schema_migration_prod.py"
+# SEC-01: scripts/run_schema_migration_prod.py (which embedded a live production
+# credential) was deleted. There is no exempt file any more: every module under
+# scripts/ must be free of hardcoded postgres URLs with passwords.
 
 # A postgres(ql):// URL with a literal user:password@ (not an interpolation
 # placeholder, not a bare host with no credentials).
@@ -346,9 +342,8 @@ _HARDCODED_POSTGRES_URL_WITH_PASSWORD = re.compile(
 
 # Generic documentation placeholders (`user:pass@host`, `user:password@host`,
 # etc.) used in --help text and docstring usage examples. These are not
-# credential-shaped in the way run_schema_migration_prod.py's leak is - they
-# name no real user, host or secret - so the general guard below excludes
-# exactly this token pair rather than exempting a whole file by name.
+# credential-shaped - they name no real user, host or secret - so the guard
+# below excludes exactly this token pair rather than exempting a whole file.
 _PLACEHOLDER_CREDENTIAL_PAIRS = frozenset(
     {
         ("user", "pass"),
@@ -370,40 +365,24 @@ def _scripts_python_files() -> List[Path]:
     return sorted(p for p in SCRIPTS_DIR.glob("*.py") if p.is_file())
 
 
-def test_known_leak_file_is_still_present_and_still_the_only_acknowledged_offender():
-    """Guards the guard's own premise: if run_schema_migration_prod.py is ever
-    removed or fixed, this acknowledgement becomes stale and must be revisited
-    rather than silently continuing to exempt a name that no longer offends."""
-    path = SCRIPTS_DIR / _KNOWN_ACKNOWLEDGED_LEAK
-    assert path.is_file(), (
-        f"{_KNOWN_ACKNOWLEDGED_LEAK} was expected to exist as the acknowledged "
-        "record of the credential leak this guard test exempts by name. If it "
-        "was removed or fixed, remove the exemption in this test too."
-    )
-    text = path.read_text(encoding="utf-8", errors="replace")
-    assert _HARDCODED_POSTGRES_URL_WITH_PASSWORD.search(text), (
-        f"{_KNOWN_ACKNOWLEDGED_LEAK} no longer contains a hardcoded "
-        "postgres URL with a password - the exemption below is stale and "
-        "should be removed so this file is covered by the general guard."
-    )
+def test_sec01_leaking_script_is_deleted_and_never_returns():
+    """SEC-01 regression: the script that embedded a production DSN is gone."""
+    assert not (SCRIPTS_DIR / "run_schema_migration_prod.py").exists()
 
 
 def test_no_unacknowledged_hardcoded_postgres_url_with_password_in_scripts():
-    """No module under scripts/ (other than the one acknowledged, named
-    exception above) may contain a hardcoded postgres URL with a literal
-    password - the exact class of defect run_schema_migration_prod.py is."""
+    """No module under scripts/ may contain a hardcoded postgres URL with a
+    literal password (SEC-01 class of defect). There are no exemptions."""
     offenders: List[Tuple[str, str]] = []
     for path in _scripts_python_files():
-        if path.name == _KNOWN_ACKNOWLEDGED_LEAK:
-            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for match in _HARDCODED_POSTGRES_URL_WITH_PASSWORD.finditer(text):
             if _is_placeholder_credential(match):
                 continue
             offenders.append((path.name, match.group(0)))
     assert not offenders, (
-        "hardcoded postgres URL(s) with a literal password found outside the "
-        f"acknowledged exemption: {offenders}"
+        "hardcoded postgres URL(s) with a literal password found in scripts/: "
+        f"{offenders}"
     )
 
 
