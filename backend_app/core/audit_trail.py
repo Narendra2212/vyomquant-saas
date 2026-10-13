@@ -45,6 +45,14 @@ class AuditEventType(Enum):
     RECONCILIATION_COMPLETE = "reconciliation_complete"
 
 
+def _uuid_or_none(value: Any) -> Optional[str]:
+    """Canonical UUID string, or None when *value* is not a UUID (see order_audit_log.user_id)."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 @dataclass
 class OrderAuditRecord:
     """
@@ -140,7 +148,7 @@ class OrderAuditRecord:
             audit_id=data["audit_id"],
             timestamp=ts,
             event_type=AuditEventType(data["event_type"]),
-            user_id=data["user_id"],
+            user_id=data.get("user_id") or (_obj(data.get("metadata")) or {}).get("raw_user_id"),
             strategy_id=data.get("strategy_id"),
             execution_id=data.get("execution_id"),
             signal=_obj(data.get("signal")),
@@ -174,7 +182,9 @@ class OrderAuditRecord:
             "audit_id": self.audit_id,
             "occurred_at": ts.isoformat(),
             "event_type": self.event_type.value,
-            "user_id": str(self.user_id),
+            # BUG-049: the column is uuid. A non-UUID identity (e.g. a system actor) is kept in
+            # metadata.raw_user_id rather than dropping the event.
+            "user_id": _uuid_or_none(self.user_id),
             "strategy_id": None if self.strategy_id is None else str(self.strategy_id),
             "execution_id": self.execution_id,
             "symbol": self.symbol, "side": self.side,
@@ -190,7 +200,10 @@ class OrderAuditRecord:
             "error_message": self.error_message,
             "signal": _clean(self.signal),
             "exchange_response": _clean(self.exchange_response),
-            "metadata": _clean(self.metadata),
+            "metadata": _clean(
+                {**(self.metadata or {}), "raw_user_id": str(self.user_id)}
+                if _uuid_or_none(self.user_id) is None else self.metadata
+            ),
         }
 
     def to_log_entry(self) -> str:

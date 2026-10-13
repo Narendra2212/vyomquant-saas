@@ -20,7 +20,10 @@ CREATE TABLE IF NOT EXISTS public.order_audit_log (
     occurred_at        timestamptz NOT NULL,
     recorded_at        timestamptz NOT NULL DEFAULT now(),
     event_type         text NOT NULL,
-    user_id            text NOT NULL,
+    -- uuid, NULLable, NO foreign key: BUG-049 (hardening/998) requires every user_id column to
+    -- be uuid, and an audit row must outlive the customer it describes. A non-UUID identity
+    -- (a system actor) is stored in metadata.raw_user_id so no event is dropped.
+    user_id            uuid,
     strategy_id        text,
     execution_id       text,
     symbol             text,

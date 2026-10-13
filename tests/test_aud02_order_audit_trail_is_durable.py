@@ -41,6 +41,24 @@ def test_from_dict_round_trips_both_shapes():
     assert back.audit_id == "aud-1" and back.signal == {"a": 1} and back.size == 0.5
 
 
+def test_bug049_user_id_column_is_uuid_and_a_non_uuid_actor_is_kept_in_metadata():
+    """hardening/998 requires every user_id column to be uuid; no event may be dropped."""
+    system = _record(user_id="system:reconciler").to_db_row()
+    assert system["user_id"] is None and system["metadata"]["raw_user_id"] == "system:reconciler"
+    assert OrderAuditRecord.from_dict({**system, "timestamp": None}).user_id == "system:reconciler"
+
+    uid = "0f8fad5b-d9cb-469f-a165-70867728950e"
+    real = _record(user_id=uid.upper()).to_db_row()
+    assert real["user_id"] == uid and "raw_user_id" not in (real["metadata"] or {})
+
+
+def test_migration_036_declares_user_id_as_uuid():
+    import re
+    sql = open(os.path.join(os.path.dirname(__file__), "..", "backend_app", "migrations",
+                            "036_order_audit_log_durable.sql"), encoding="utf-8").read()
+    assert re.search(r"^\s*user_id\s+uuid\s*,", sql, re.M)
+
+
 class _Table:
     def __init__(self, store):
         self.store, self._q = store, {}
@@ -155,7 +173,7 @@ def test_pg_table_is_append_only_even_for_the_owner(conn, sql):
 @pytest.mark.parametrize("role", ["anon", "authenticated"])
 @pytest.mark.parametrize("sql", [
     "SELECT * FROM public.order_audit_log",
-    "INSERT INTO public.order_audit_log (audit_id, occurred_at, event_type, user_id) VALUES ('b', now(), 'x', 'u')",
+    "INSERT INTO public.order_audit_log (audit_id, occurred_at, event_type, user_id) VALUES ('b', now(), 'x', '00000000-0000-0000-0000-000000000001')",
 ])
 def test_pg_browser_roles_have_no_access(conn, role, sql):
     from sqlalchemy import text
