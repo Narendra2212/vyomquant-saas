@@ -1,7 +1,7 @@
 {
   "_baseline_note_api_call_count": "AUTHORISED RE-RECORD of `api_call_count` \u2014 12 to 15 (task 32.7; Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8). This figure is `len(api_calls)` and nothing else, so it moves by exactly the number of entries that were added and by no other cause. The three are `api.library.myStrategies` (GET /api/library/my-strategies), `api.library.cancelSubscription` (POST /api/library/subscriptions/{expr}/cancel) and `api.library.renewSubscription` (POST /api/library/subscriptions/{expr}/renew); each carries its own `_baseline_note_entry` beside itself naming the requirement that puts it on this surface. NO CALL WAS REMOVED: all twelve the pre-change baseline recorded are still recorded here, and 12 + 3 = 15. This note covers the count only. It authorises no fourth call: a sixteenth entry appearing here is a failure whether or not this figure is updated with it, because the added entry would be reported in its own right.",
   "_baseline_note_environment_filter": "Re-recorded for tasks 29.3 and 29.4 (Requirements 23.2, 23.3, 23.4, 23.6). ONE ADDITION in this file: the `environment` query parameter on GET /api/signal-trace/signals (`list_signals`, api_calls[5]) \u2014 Requirement 23.4's Execution_Environment filter, declared as a repeatable list like every other Requirement 17.2 filter category, with no default so Requirement 23.6's default (the caller's own signals across all environments) is unchanged. Nothing on that entry was removed, renamed or retyped: no path, method, rate limit or existing filter changed, no response key was removed, and its `raises` \u2014 which already recorded {detail_type: computed, status_code: e.http_status} before this change \u2014 is untouched. The detail handler GET /api/signal-trace/signals/{signal_id} is NOT recorded in this file; the 400/404 that task 29.3 added to it is annotated in `surface_signal_trace.json`, where that handler lives.\nCORRECTION (2026-06, task 30 checkpoint). An earlier version of this note said of the whole file \"Two ADDITIONS, nothing removed, renamed or retyped\". That was FALSE. This file also records four changes that ARE removals, renames and re-recorded shapes, none of them belonging to task 29.3/29.4 and none of them annotated at the time: api_calls[2] `creator_analytics` (decorator renamed, `returns` collapsed), api_calls[3] `my_library` (decorator renamed, `raises` emptied) and api_calls[7] `publish_strategy` (decorator renamed, two `returns` keys removed). Each is authorised by a task in this spec and each now carries its own `_baseline_note_*` member beside the entry it changed \u2014 read them there. The general point, which is why the wording mattered: under Requirements 25.7 and 25.8 the scope of an authorisation is the ENTRY it names, never the file it happens to sit in, so a file-level \"nothing was removed\" claim can only ever be read as covering changes it was never written about.",
-  "api_call_count": 15,
+  "api_call_count": 16,
   "api_calls": [
     {
       "handler_count": 2,
@@ -595,6 +595,37 @@
       "via": "api.strategies.list"
     },
     {
+      "via": "apiClient direct",
+      "path_template": "/api/system/trading-capabilities",
+      "method": "GET",
+      "path": "/api/system/trading-capabilities",
+      "resolved": true,
+      "handlers": [
+        {
+          "route_path": "/api/system/trading-capabilities",
+          "handler": "system_trading_capabilities",
+          "module": "backend_app.main",
+          "decorators": [
+            "app.get('/api/system/trading-capabilities', tags=['System'])"
+          ],
+          "parameters": {},
+          "returns": [
+            {
+              "live_trading_available": "bool",
+              "mode": {
+                "one_of": [
+                  "computed",
+                  "str"
+                ]
+              }
+            }
+          ],
+          "raises": []
+        }
+      ],
+      "handler_count": 1
+    },
+    {
       "handler_count": 1,
       "handlers": [
         {
@@ -1125,5 +1156,6 @@
   ],
   "supabase_auth_calls": [],
   "surface": "strategies",
-  "unresolved_usages": []
+  "unresolved_usages": [],
+  "_baseline_note_trading_capabilities_call": "FE-03 AUTHORISES one ADDED frontend call: GET /api/system/trading-capabilities (Strategies.jsx). The deploy modal previously offered Live unconditionally; it now asks the server whether live trading is available (public, read-only, fail-closed to paper) before offering Live."
 }

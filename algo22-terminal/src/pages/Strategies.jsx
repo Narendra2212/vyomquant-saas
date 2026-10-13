@@ -253,7 +253,7 @@ const NO_STRATEGIES_STATE = Object.freeze({
  *
  * FE-03: the deploy modal now opens on PAPER. It used to open with `environment: "live"`
  * preselected, so one careless confirm started a Live transition. Live is only OFFERED
- * when the server reports the platform can run it (`/system/trading-capabilities`, read
+ * when the server reports the platform can run it (`/api/system/trading-capabilities`, read
  * below; unknown or unreachable means NOT offered). The label and `intent` describe what
  * happens if the trader changes nothing, so they now describe a paper deployment.
  *
@@ -772,7 +772,7 @@ export default function Strategies() {
     let cancelled = false;
     (async () => {
       try {
-        const caps = await publicGet("/system/trading-capabilities");
+        const caps = await publicGet("/api/system/trading-capabilities");
         if (!cancelled) setLiveAvailable(caps?.live_trading_available === true);
       } catch {
         if (!cancelled) setLiveAvailable(false);

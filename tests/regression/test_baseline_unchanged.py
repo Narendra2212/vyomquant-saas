@@ -749,3 +749,8 @@ def test_a_path_inside_a_comment_is_not_attributed_to_the_method_above_it() -> N
     assert api_module_index()["strategies"]["trainMl"] == [
         {"method": "POST", "path_template": "/api/strategies/{strategyId}/train"}
     ]
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

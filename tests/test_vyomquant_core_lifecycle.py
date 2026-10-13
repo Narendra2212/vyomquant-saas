@@ -190,8 +190,33 @@ class TestVyomQuantCoreLifecycle:
         assert plan.execution_order[0] in ("node_feed", "node_const")
         assert plan.execution_order[-1] == "node_action"
 
-    def test_step_2_backtesting_engine_dag_execution(self):
-        """Step 2: Backtester runs DAG simulation and produces complete performance metrics."""
+    def test_step_2_backtesting_engine_dag_execution(self, monkeypatch):
+        """Step 2: Backtester runs DAG simulation and produces complete performance metrics.
+
+        BT-01: a backtest no longer invents candles when the exchange is unreachable, so this
+        test supplies a deterministic OHLCV fixture through the exchange client instead of
+        relying on the removed synthetic fallback.
+        """
+        import sys
+        import types
+
+        import numpy as _np
+
+        _rng = _np.random.default_rng(11)
+        _close = 100 * _np.exp(_np.cumsum(_rng.normal(0, 0.01, 400)))
+        _candles = [[1_700_000_000_000 + i * 3_600_000, c, c * 1.002, c * 0.998, c, 1000.0]
+                    for i, c in enumerate(_close)]
+
+        class _FixtureBinance:
+            def __init__(self, *a, **k):
+                pass
+
+            def fetch_ohlcv(self, **k):
+                return _candles
+
+        _fake = types.ModuleType("ccxt")
+        _fake.binance = _FixtureBinance
+        monkeypatch.setitem(sys.modules, "ccxt", _fake)
         payload = {
             "dag": {
                 "nodes": [

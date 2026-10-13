@@ -25,7 +25,8 @@
             },
             "supabase": {
               "annotation": "SyncClient",
-              "depends_on": "get_request_supabase"
+              "depends_on": "get_service_supabase",
+              "_baseline_note_service_client": "SEC-08 AUTHORISES this re-record: the admin user list and freeze/unfreeze used the request-scoped client, which RLS restricts to the admin's own row (the list silently returned one user and the freeze matched zero rows while reporting success). They now use the process-wide service-role client behind get_admin_user, and the freeze verifies the row was updated."
             }
           },
           "raises": [],
@@ -67,7 +68,8 @@
             },
             "supabase": {
               "annotation": "SyncClient",
-              "depends_on": "get_request_supabase"
+              "depends_on": "get_service_supabase",
+              "_baseline_note_service_client": "SEC-08 AUTHORISES this re-record: the admin user list and freeze/unfreeze used the request-scoped client, which RLS restricts to the admin's own row (the list silently returned one user and the freeze matched zero rows while reporting success). They now use the process-wide service-role client behind get_admin_user, and the freeze verifies the row was updated."
             },
             "user_id": {
               "annotation": "str"
