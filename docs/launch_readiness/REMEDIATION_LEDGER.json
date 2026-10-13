@@ -938,12 +938,12 @@
       "severity": "High",
       "component": "Order safety (live) / reconciliation",
       "title": "OrderStateMachine's Redis lock uses asyncio.run() inside async callers; the venue-reconciliation path would crash before updating any order",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "(this commit)",
+      "evidence": "OrderStateMachine.transition() no longer calls asyncio.run(); per-execution in-process RLock (state is process-local). Also removed a dead duplicate __init__ that made the old Redis lock helpers always fail. tests/test_rt25_order_state_machine_works_inside_event_loop.py (4; 2 fail on old code); 338 related tests pass",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Use an async Redis lock (e.g. redis.asyncio lock primitives or an async-aware distributed lock) instead of asyncio.run(); add to the RT-16 fix as a precondition."
+      "remaining_action": "Code-level only. State remains per-process memory (durable order state is RT-16)."
     },
     {
       "id": "DATA-01",
