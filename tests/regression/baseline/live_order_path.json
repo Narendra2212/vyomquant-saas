@@ -82,6 +82,18 @@
         "status": "str"
       },
       {
+        "execution_id": "null",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
+        "execution_id": "null",
+        "message": "str",
+        "result": "null",
+        "status": "str"
+      },
+      {
         "execution_id": "computed",
         "message": "str",
         "result": "computed",
@@ -146,7 +158,8 @@
         "result": "computed",
         "status": "str"
       }
-    ]
+    ],
+    "_baseline_note_returns_tenant_halt": "RT-19 AUTHORISES one ADDED return in execute_with_idempotency: the per-tenant kill switch (durable, cross-worker, fail-closed) answers {status:'blocked', execution_id:None, result:None, message:str} before any strategy lookup or venue call, exactly like the existing global kill switch return."
   },
   "execution_statuses_available": [
     "completed",

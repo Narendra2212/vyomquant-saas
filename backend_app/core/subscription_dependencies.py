@@ -691,6 +691,7 @@ def feature_guard(feature: str, name: Optional[str] = None) -> Callable:
         return await require_feature(feature, user, supabase)
 
     _dependency.__name__ = name or f"require_{feature}"
+    _dependency.__qualname__ = _dependency.__name__  # newer FastAPI reprs Depends via __qualname__
     return _dependency
 
 
@@ -705,6 +706,7 @@ def quota_guard(resource: str, reserve: bool = False, name: Optional[str] = None
         return True
 
     _dependency.__name__ = name or f"check_{resource}_quota"
+    _dependency.__qualname__ = _dependency.__name__  # newer FastAPI reprs Depends via __qualname__
     return _dependency
 
 
