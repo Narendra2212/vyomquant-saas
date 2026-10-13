@@ -5,6 +5,12 @@ on:
   pull_request:
     branches: [main, master]
     types: [opened, synchronize, reopened]
+  # CI-01: ALSO run on the commit that lands on main. 03 Deploy refuses a commit that has no
+  # passing "01 PR Check" run (scripts/require_tests_passed.py); a squash/merge commit has a
+  # new SHA that no pull_request run ever saw, so without this trigger every deploy would be
+  # refused for lack of a run - and a deploy without one would be ungated.
+  push:
+    branches: [main, master]
 
 env:
   PYTHON_VERSION: '3.11'
@@ -732,8 +738,13 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- \
-            'algo22-terminal' '.github/workflows/01-pr-check.yml')
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # CI-01: no base/head pair on a push; the commit being deployed is always tested.
+            CHANGED="push-to-default-branch"
+          else
+            CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- \
+              'algo22-terminal' '.github/workflows/01-pr-check.yml')
+          fi
           if [ -n "$CHANGED" ]; then
             echo "Frontend-relevant changes detected:"
             echo "$CHANGED"

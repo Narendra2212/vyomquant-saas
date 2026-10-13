@@ -8,6 +8,12 @@ on:
     branches: [main, master]
   workflow_dispatch:
     inputs:
+      allow_untested:
+        description: >-
+          Deploy a commit that has no passing 01 PR Check run. Only for dispatching an
+          older commit; a missing test run is otherwise treated as a failed gate.
+        type: boolean
+        default: false
       allow_unscanned:
         description: >-
           Deploy a commit that has no 05 Security run. Only for dispatching an older
@@ -93,6 +99,19 @@ jobs:
           DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           ALLOW_UNSCANNED: ${{ inputs.allow_unscanned }}
         run: python scripts/require_security_scan.py
+
+      # CI-01: THE TEST SUITE NOW GATES THE DEPLOY TOO.
+      #
+      # `01 PR Check` (backend, PostgreSQL, provisioning, paper-mode, Docker, frontend) ran on
+      # the same commit and gated nothing. The newest run for this exact SHA must have
+      # concluded `success`; a missing run is a failed gate. `01 PR Check` also triggers on
+      # push to main so a merged commit is covered.
+      - name: Require the test workflow to have passed for this commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ALLOW_UNTESTED: ${{ inputs.allow_untested }}
+        run: python scripts/require_tests_passed.py
 
       - name: Free Disk Space on GitHub Runner
         run: |

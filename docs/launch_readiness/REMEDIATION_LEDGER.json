@@ -262,12 +262,12 @@
       "severity": "High",
       "component": "CI/CD",
       "title": "Production deploys are not gated on tests, and the PR gate has never passed",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "scripts/require_tests_passed.py + 03-deploy.yml step: the newest '01 PR Check' run for the deploy SHA must be success (missing/failed/cancelled/running => refuse; allow_untested dispatch override is logged); 01-pr-check.yml now also runs on push to main/master so a merged SHA has a run (frontend change-detection made push-safe). tests/test_ci01_test_workflow_gates_deploy.py (13)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Branch protection: required checks (unit, postgres, provisioning, frontend) on main; 03 depends on a green test workflow for the same SHA."
+      "remaining_action": "NOT verified in GitHub Actions: workflows were edited and YAML-validated but never executed. The PR gate may still be red for pre-existing reasons (13 known baseline failures locally: Supabase-credential/network-dependent tests). Branch protection with required checks on main is a repository setting (EXTERNAL - operator must enable). Until 01 is green on a SHA, deploys of that SHA are refused (intended)."
     },
     {
       "id": "CI-03",
