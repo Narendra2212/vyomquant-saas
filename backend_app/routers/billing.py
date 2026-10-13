@@ -17,6 +17,7 @@ PREVIOUS FIXES:
   N4:     Cache invalidated immediately after successful payment.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -3419,6 +3420,58 @@ async def create_portal_session(
         raise HTTPException(500, f"Billing portal error: {str(e)}")
 
 
+# ── BILL-05: cancel/resume must act on the PROVIDER, not just the local row ──
+class StripeSubscriptionUpdateFailed(Exception):
+    """Stripe refused or could not be reached; local state must NOT be changed."""
+
+
+_STRIPE_LIVE_SUB_STATES = ("active", "trialing", "past_due", "unpaid")
+
+
+def _set_stripe_cancel_at_period_end(user_id: str, email: Optional[str], value: bool) -> int:
+    """Flip ``cancel_at_period_end`` on every live Stripe subscription owned by *user_id*.
+
+    Before this existed ``/cancel`` only wrote ``profiles.cancel_at_period_end``; Stripe was
+    never told, so the card kept being charged every period while the UI said "cancelled".
+    A subscription is only touched when its own metadata (or its customer's) names this
+    user, so a shared e-mail address cannot cancel somebody else's plan.
+
+    Returns the number of subscriptions updated (0 = nothing live at Stripe, i.e. nothing is
+    being charged). Raises :class:`StripeSubscriptionUpdateFailed` on any provider error -
+    the caller must then leave local state untouched and surface the failure.
+    """
+    import stripe
+
+    stripe.api_key = _validate_keys("stripe")
+    updated = 0
+    try:
+        customers = stripe.Customer.list(email=email, limit=10) if email else None
+        for customer in (getattr(customers, "data", None) or []):
+            cust_owner = (getattr(customer, "metadata", None) or {}).get("user_id")
+            subs = stripe.Subscription.list(customer=customer.id, status="all", limit=20)
+            for sub in (getattr(subs, "data", None) or []):
+                if sub.get("status") not in _STRIPE_LIVE_SUB_STATES:
+                    continue
+                owner = (sub.get("metadata") or {}).get("user_id") or cust_owner
+                if owner != user_id:
+                    continue
+                stripe.Subscription.modify(sub["id"], cancel_at_period_end=value)
+                updated += 1
+    except Exception as exc:  # noqa: BLE001 - any provider failure must fail the request
+        logger.error("[BILLING] Stripe cancel_at_period_end=%s failed for user %s: %s",
+                     value, user_id, type(exc).__name__)
+        raise StripeSubscriptionUpdateFailed(type(exc).__name__) from exc
+    return updated
+
+
+def _profile_payment_provider(sb: Any, user_id: str) -> Optional[str]:
+    try:
+        rows = sb.table("profiles").select("payment_provider").eq("id", user_id).execute().data or []
+        return (rows[0].get("payment_provider") or None) if rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── POST /api/billing/cancel ─────────────────────────────────────────────────
 @router.post("/cancel")
 @limiter.limit("5/minute")
@@ -3436,6 +3489,17 @@ async def cancel_subscription(
     try:
         from backend_app.core.billing_lifecycle import BillingLifecycle
         sb = _background_sb()
+        # BILL-05: tell the provider FIRST. If Stripe cannot be updated, local state stays
+        # as it was - never show "cancelled" while the card is still being charged.
+        if _profile_payment_provider(sb, user_id) == "stripe":
+            try:
+                await asyncio.to_thread(_set_stripe_cancel_at_period_end, user_id, user.get("email"), True)
+            except StripeSubscriptionUpdateFailed:
+                raise HTTPException(502, {
+                    "error": "PROVIDER_CANCEL_FAILED",
+                    "message": "We could not cancel your subscription with the payment provider, "
+                               "so nothing was changed. Please retry; you have not been cancelled.",
+                })
         result = await BillingLifecycle.cancel_subscription(
             user_id=user_id,
             cancel_at_period_end=True,
@@ -3462,6 +3526,8 @@ async def cancel_subscription(
         except Exception as notif_err:
             logger.debug(f"[BILLING] cancellation notification error: {notif_err}")
         return {"status": "ok", "detail": result.get("message", "Cancellation scheduled"), "cancel_at_period_end": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to cancel subscription for user {user_id}: {e}")
         raise HTTPException(500, f"Cancellation failed: {str(e)}")
@@ -3482,6 +3548,15 @@ async def resume_subscription(
     user_id = user["id"]
     try:
         sb = _background_sb()
+        if _profile_payment_provider(sb, user_id) == "stripe":
+            try:
+                await asyncio.to_thread(_set_stripe_cancel_at_period_end, user_id, user.get("email"), False)
+            except StripeSubscriptionUpdateFailed:
+                raise HTTPException(502, {
+                    "error": "PROVIDER_RESUME_FAILED",
+                    "message": "We could not resume your subscription with the payment provider, "
+                               "so nothing was changed. Please retry.",
+                })
         sb.table("profiles").update({
             "cancel_at_period_end": False,
             "subscription_status": "active",
@@ -3507,6 +3582,8 @@ async def resume_subscription(
         except Exception as notif_err:
             logger.debug(f"[BILLING] resume notification error: {notif_err}")
         return {"status": "ok", "detail": "Subscription cancellation reversed. Plan is now active.", "cancel_at_period_end": False}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to resume subscription for user {user_id}: {e}")
         raise HTTPException(500, f"Resume failed: {str(e)}")

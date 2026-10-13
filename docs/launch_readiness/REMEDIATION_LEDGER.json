@@ -977,12 +977,12 @@
       "severity": "High",
       "component": "Billing",
       "title": "Cancelling a subscription never calls Stripe; the card keeps being charged every period",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "FIXED_UNVERIFIED",
+      "fix_commit": "(this commit)",
+      "evidence": "/api/billing/cancel and /resume call stripe.Subscription.modify(cancel_at_period_end) first (only subscriptions whose metadata names the caller), fail closed with 502 and leave local state untouched; tests/test_bill05_cancel_tells_stripe.py (6, Stripe mocked)",
+      "verification_level": "code",
       "production_verified": false,
-      "remaining_action": "Call stripe.Subscription.modify(subscription_id, cancel_at_period_end=True) (or .delete() for immediate cancellation) from the cancel endpoint; drive local state from the customer.subscription.updated/deleted webhooks rather than writing it directly."
+      "remaining_action": "Not verified against a live Stripe account/test-mode clock (EXTERNAL). Local profile is still written directly rather than purely from customer.subscription.updated webhooks; Razorpay is one-time orders so nothing recurs there."
     },
     {
       "id": "SEC-14",
