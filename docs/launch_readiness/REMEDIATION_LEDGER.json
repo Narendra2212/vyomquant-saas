@@ -821,12 +821,12 @@
       "severity": "Medium",
       "component": "Order safety",
       "title": "ExecutionGuard assumes 10x margin for every market and lets the risk-engine check fail open",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "80472a4",
+      "evidence": "Two bugs confirmed and fixed. _validate_sufficient_balance assumed a flat 10% margin (10x leverage) for every market, unconditionally -- this platform has no margin/leverage trading anywhere (RT-21's own finding on BotRunner.recovered_exposure_coins). Now requires the full notional + 0.1% fee buffer for market_type=='spot' (default when absent), refuses outright for any other market_type. _validate_risk_engine_status wrapped the Redis read AND the parse in one except Exception, treating a connection drop or corrupted payload exactly like 'no status recorded' and answering PASS either way -- split into three cases: a Redis error BLOCKs, a missing key still PASSes, an unparseable payload BLOCKs. tests/test_guard01_spot_margin_and_fail_closed_risk_status.py (10 tests). Regression: targeted ExecutionGuard/cancel/close-all suite + full validation_sweep/schema_drift (676 passed, 2 failed -- same pre-existing, unrelated billing findings) clean. Commit 80472a4.",
+      "verification_level": "code+test (verified this session); currently unreachable by any wired caller",
       "production_verified": false,
-      "remaining_action": "Use market type: spot requires full notional plus fees; fail closed on status read errors."
+      "remaining_action": "Both checks are confirmed unreachable by every call site that exists today: execution_engine.py's own comment states ExecutionGuard is called only from the two cancel endpoints, and all three existing callers pass reduce_only=True with a control side, which validate_trade's own is_control branch closes these checks' coroutines without ever awaiting them. So this fix has zero effect on current production behaviour -- it corrects the bug for whenever ExecutionGuard is wired into actual order placement, which execution_engine.py's own comment already records as a separate, outstanding item, not attempted here."
     },
     {
       "id": "PERF-01",
