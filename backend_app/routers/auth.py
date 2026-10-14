@@ -12,7 +12,8 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
-from backend_app.core.dependencies import get_current_user, get_supabase
+from backend_app.core.dependencies import (get_current_user, get_service_supabase,
+                                           get_supabase)
 from backend_app.core.rate_limit import limiter
 from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.websocket_auth import (WS_TICKET_REDIS_PREFIX,
@@ -53,26 +54,40 @@ class UserLogin(BaseModel):
 # ----------------------------------
 @router.post("/signout")
 def signout(
-    token: str,
     current_user: dict = Depends(get_current_user)  # BE-CRITICAL-001 FIX: Require authentication
 ):
     """
-    Sign out user by revoking their session.
-    
-    BE-CRITICAL-001 FIX: Now requires authentication to prevent unauthorized signout.
-    SECURITY: No fallback mode - must use Supabase authentication.
+    Sign out the caller by revoking their session's refresh token server-side.
+
+    AUTH-01. ``client.auth.sign_out()`` ON AN ANONYMOUS CLIENT REVOKES NOTHING
+    -----------------------------------------------------------------------------
+    This used to build an ANON-keyed client (``SupabaseConnection().get_client()``,
+    never authenticated as the caller — the caller's own browser SDK performed their
+    login, not this backend) and call its plain ``sign_out()``. That method signs the
+    CLIENT OBJECT'S OWN locally-tracked session out, and this client never had one, so
+    the call was a no-op: it returned 200 "Signed out successfully" while the caller's
+    refresh token remained valid indefinitely. The ``token`` parameter this endpoint
+    used to accept was never even read in the function body.
+
+    The fix revokes the caller's session directly, by JWT, via Supabase's admin API
+    (``POST /auth/v1/logout``, authorised by the service-role key rather than any
+    locally-tracked session) — which is exactly what "use admin sign_out(jwt)" means:
+    this makes a real server-to-server call naming WHOSE session to end, independent
+    of whether this process ever held that session itself. ``scope="global"`` revokes
+    every refresh token for the account, not just the one tied to this access token,
+    matching what a user clicking "Sign out" expects.
     """
-    vault = SupabaseConnection()
-    client = vault.get_client()
-    
-    if not client:
+    service_client = get_service_supabase()
+    if not service_client:
         raise HTTPException(
             status_code=503,
-            detail="Supabase authentication required. Configure SUPABASE_URL and SUPABASE_ANON_KEY."
+            detail="Supabase service-role credentials required to revoke a session.",
         )
-    
+
     try:
-        client.auth.sign_out()
+        service_client.auth.admin.sign_out(
+            jwt=current_user["access_token"], scope="global"
+        )
         return {"message": "Signed out successfully"}
     except Exception as e:
         raise HTTPException(

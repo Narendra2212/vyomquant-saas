@@ -1226,9 +1226,10 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
     MutatingRoute(
         key="auth.signout",
         method="POST",
-        # `token` is a required plain query/body-form str param on a sync `def`, not a
-        # Pydantic model - the malformed case reachable here is an absent value entirely,
-        # which FastAPI still rejects as a validation error (missing required parameter).
+        # AUTH-01: used to take a required, unused `token` plain query/body-form str
+        # param. Removed - the caller's own access_token (already available via
+        # get_current_user) is what actually gets revoked now. No body/query shape to
+        # malform any more.
         path="/api/auth/signout",
         handler="backend_app.routers.auth:signout",
         body=None,
