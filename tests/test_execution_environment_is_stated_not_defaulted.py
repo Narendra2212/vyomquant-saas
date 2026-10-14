@@ -159,22 +159,41 @@ def _funnel_call_sites(root: pathlib.Path) -> list[tuple[str, int, ast.Call]]:
 
 
 def _bot_runner_funnel_call() -> ast.Call:
-    """The single funnel call in ``master_executor``, located by parsing.
+    """The single funnel call in ``BotRunner._inner_loop``, located by parsing.
 
     Not by slicing the source text. ``source.split("execute_with_idempotency(")[1]
     .split(")")[0]`` looks like it isolates the argument list and does not: the first
     ``)`` belongs to ``uuid.UUID(self.user_id)`` on the very first argument, so the slice
     ends four lines early and every argument after it is invisible. That is how the first
     version of this test reported the fix as missing.
+
+    Scoped to ``_inner_loop`` specifically (RT-21), not to every funnel call anywhere in
+    the module: ``BotRunner.close_position`` added a second one, for flattening a
+    position on request rather than on a strategy signal. That call states its own
+    environment the same way (``PAPER if self.paper_trading else LIVE`` --
+    ``tests/test_rt21_close_position_flattens_exposure.py`` covers it), but it is a
+    different call with a different purpose, and conflating the two here would make this
+    test pass or fail on whichever one AST happens to visit first rather than on the tick
+    funnel this file is about.
     """
+    tree = ast.parse((BACKEND / "backend" / "master_executor.py").read_text(encoding="utf-8"))
+    inner_loop = next(
+        (
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_inner_loop"
+        ),
+        None,
+    )
+    assert inner_loop is not None, "BotRunner._inner_loop was not found by parsing"
+
     sites = [
-        node
-        for relative, _lineno, node in _funnel_call_sites(BACKEND)
-        if relative == "backend/master_executor.py"
+        node for node in ast.walk(inner_loop)
+        if isinstance(node, ast.Call)
+        and (getattr(node.func, "attr", None) or getattr(node.func, "id", None)) in FUNNEL_METHODS
     ]
     assert len(sites) == 1, (
-        f"expected exactly one funnel call in master_executor.py, found {len(sites)}; "
-        f"the mode may now be branched and this file's premise has changed"
+        f"expected exactly one funnel call in _inner_loop, found {len(sites)}; the mode "
+        f"may now be branched and this file's premise has changed"
     )
     return sites[0]
 

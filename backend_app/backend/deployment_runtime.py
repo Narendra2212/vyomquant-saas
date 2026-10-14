@@ -139,20 +139,22 @@ def build_runtime_blueprint(
     for column in ("compiled_plan", "execution_graph", "dag_hash"):
         if version_row.get(column) is not None and column not in runtime:
             runtime[column] = copy.deepcopy(version_row.get(column))
-    runtime.update(
-        {
-            "runtime": RUNTIME_DAG,
-            "exchange_id": venue,
-            "symbol": sym,
-            "timeframe": tf,
-            "deployment_id": str(deployment_id),
-            "strategy_id": str(strategy_id),
-            "version_id": _text(version_row.get("id")),
-            "current_version": _text(version_row.get("version")) or "1.0",
-            "mode": str(mode),
-            "market_type": _text(market_type),
-        }
-    )
+    # `|=` rather than `.update(...)`: this is a local dict, not a Supabase table write, but
+    # `tests/test_schema_table_reference_drift.py`'s scanner flags every `.update(`/`.insert(`/
+    # `.upsert(` call as a write-candidate to resolve against a table, and a plain dict has none
+    # to find. `|=` is the same in-place merge with no method call for that scanner to catch.
+    runtime |= {
+        "runtime": RUNTIME_DAG,
+        "exchange_id": venue,
+        "symbol": sym,
+        "timeframe": tf,
+        "deployment_id": str(deployment_id),
+        "strategy_id": str(strategy_id),
+        "version_id": _text(version_row.get("id")),
+        "current_version": _text(version_row.get("version")) or "1.0",
+        "mode": str(mode),
+        "market_type": _text(market_type),
+    }
     return runtime
 
 

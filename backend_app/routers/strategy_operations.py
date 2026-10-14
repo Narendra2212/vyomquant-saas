@@ -2654,6 +2654,88 @@ async def restart_deployment(request: Request,
         )
 
 
+@router.post("/deployments/{deployment_id}/close")
+@limiter.limit("50/minute")
+async def close_deployment_position(request: Request,
+    deployment_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """RT-21: flatten this deployment's position (reduce-only), without stopping it.
+
+    This does not place the order itself: only the process already running the bot knows
+    ``recovered_exposure_coins`` (see migration 038's header), so this writes a durable
+    ``close_requested_at`` the owning process picks up on its own heartbeat, the same
+    mechanism ``stop`` already uses for a cross-process stop. Accepted, not immediate -- the
+    response confirms the request was recorded, not that a position was closed.
+
+    Responses
+        **202** request recorded.
+        **404** no such deployment belongs to this user.
+        **409** the deployment is not running, so there is no owning process to act on it.
+        **429** from the existing limiter.
+    """
+    from backend_app.backend.deployment_state import DeploymentStateStore
+    from backend_app.core.dependencies import create_request_supabase_async
+
+    sb_res = create_request_supabase_async(user.get("access_token"))
+    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+    if sb is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "DEPLOYMENT_CLOSE_UNAVAILABLE",
+                "message": "No database client is available, so ownership of this "
+                           "deployment could not be verified and nothing was requested.",
+            },
+        )
+
+    try:
+        owned_q = (
+            sb.table("strategy_deployments")
+            .select("id")
+            .eq("id", deployment_id)
+            .eq("user_id", user["id"])
+            .limit(1)
+            .execute()
+        )
+        owned = await owned_q if inspect.isawaitable(owned_q) else owned_q
+    except Exception as e:
+        logger.error(
+            "Ownership of deployment %s could not be verified for user %s: %s",
+            deployment_id, user["id"], e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "DEPLOYMENT_CLOSE_UNAVAILABLE",
+                "message": "Ownership of this deployment could not be verified, so "
+                           "nothing was requested.",
+            },
+        )
+
+    if not owned or not getattr(owned, "data", None):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "DEPLOYMENT_NOT_FOUND",
+                "message": f"Deployment {deployment_id} not found",
+            },
+        )
+
+    store = DeploymentStateStore(client_factory=lambda: sb)
+    requested = await store.request_close(deployment_id)
+    if not requested:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "DEPLOYMENT_NOT_RUNNING",
+                "message": "This deployment is not running, so there is no owning "
+                           "process to flatten a position.",
+            },
+        )
+    return {"status": "close_requested", "deployment_id": deployment_id}
+
+
 @router.post("/deployments/{deployment_id}/stop", include_in_schema=False)
 @limiter.limit("50/minute")
 async def stop_deployment_alias(request: Request, 

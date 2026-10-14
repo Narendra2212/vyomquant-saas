@@ -279,11 +279,10 @@ class OrderWatchdog:
             
             for order in open_orders:
                 try:
-                    # Get executor for this order.
-                    # W-1: NOT awaited. `_get_executor_for_order` is a synchronous
-                    # lookup; see the invariant recorded at its definition.
-                    executor = self._get_executor_for_order(order)
-                    
+                    # RT-16: a real, per-tenant executor; see the invariant recorded at
+                    # _get_executor_for_order's definition.
+                    executor = await self._get_executor_for_order(order)
+
                     if not executor:
                         logger.warning(
                             f"STEP 9: No executor for order {order.execution_id}, "
@@ -514,14 +513,10 @@ class OrderWatchdog:
 
         executor = None
         try:
-            # W-1. NOT awaited. This call site is the reason W-1 mattered: the method is
-            # a plain `def`, so `await` raised TypeError, the `except` below swallowed it,
-            # `executor` stayed None, and EVERY ambiguous row therefore took the
-            # "cannot ask" branch below -- UNKNOWN plus an alert, with
-            # `find_order_by_client_order_id` never once reached. The venue lookup this
-            # method exists to perform was unreachable for every row.
-            # Regression: tests/test_d5_watchdog_adjudication_repair.py
-            executor = self._get_executor_for_order(shim)
+            # RT-16: a real, per-tenant executor built from this tenant's stored keys.
+            # Regression: tests/test_d5_watchdog_adjudication_repair.py,
+            # tests/test_rt16_watchdog_executor_is_real.py
+            executor = await self._get_executor_for_order(shim)
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "TRADE-07: could not build an executor to adjudicate %s: %s",
@@ -723,11 +718,8 @@ class OrderWatchdog:
             f"last_sync={order.last_exchange_sync}"
         )
         
-        # STEP 1: Get exchange executor for this order
-        # W-1: NOT awaited; see the invariant at `_get_executor_for_order`. This call site
-        # was not inside a `try`, so the TypeError propagated to `_check_stale_orders`'
-        # handler and was logged as "Failed to refresh order".
-        executor = self._get_executor_for_order(order)
+        # STEP 1: Get exchange executor for this order. RT-16: a real, per-tenant one.
+        executor = await self._get_executor_for_order(order)
         
         # STEP 3: FAIL-SAFE - If no executor (credentials unavailable), mark as UNKNOWN
         if not executor:
@@ -1048,65 +1040,45 @@ class OrderWatchdog:
         except Exception as e:
             logger.error(f"Failed to send alert: {e}")
     
-    def _get_executor_for_order(
+    async def _get_executor_for_order(
         self,
         order: ExecutionRecordModel
     ) -> Optional[Any]:
-        """Get exchange executor for this order based on exchange_id and tenant_id.
+        """Get a real exchange executor for this order's tenant, via the account vault.
 
-        W-1. THE INVARIANT: THIS IS SYNCHRONOUS AND NO CALL SITE MAY AWAIT IT.
-        ---------------------------------------------------------------------
-        It was a plain `def` and all three call sites awaited it -- `_reconcile_open_orders`,
-        `_adjudicate_ambiguous_execution` and `_refresh_order_status`. `await` on a
-        non-awaitable raises `TypeError`, and at the adjudication call site that exception
-        was caught by a `try/except Exception` which logged "could not build an executor"
-        and left `executor = None`. So every ambiguous submission took the "cannot ask"
-        branch and `find_order_by_client_order_id` was never reached for any row.
+        RT-16 / W-1b. THIS METHOD IS NOW ASYNC; EVERY CALL SITE MUST `await` IT.
+        --------------------------------------------------------------------------
+        Previously neither dependency this reached for existed (`app_state.exchange_router`
+        was never set anywhere in the application; `vault.get_exchange_client` was never a
+        method `APIKeyVault` defines) -- see W-1's own history, and git blame on this
+        docstring for the full account of why it was deliberately left synchronous and
+        returning ``None`` until an executor could legitimately be built.
 
-        IT IS LEFT SYNCHRONOUS RATHER THAN MADE `async`, deliberately. The body performs
-        no I/O: it reads an attribute, imports a module-level singleton, and calls one
-        factory. `async def` would declare work that does not happen and would leave the
-        three `await`s looking correct while the real defect -- that nothing here is
-        awaitable -- moved out of sight. The structural regression test asserts the
-        declaration and the call sites agree, in BOTH directions, so if a future executor
-        factory becomes a coroutine this must become `async def` and the awaits must come
-        back together, in one change.
+        That became possible once RT-21's `order_control._executor_for` existed: a real,
+        per-tenant executor built from the SAME decrypted keys the manual cancel path uses
+        (`APIKeyVault.load_decrypted_keys` -> `get_exchange_executor` -> `.connect()`).
+        Reused here rather than re-implemented, so there is exactly one place that builds an
+        executor from a tenant's stored keys, not two that could drift.
 
-        W-1b, NOT FIXED HERE AND NOT IN THIS PHASE'S SCOPE. Removing the awaits restores
-        control flow; it does not make this method return an executor in production,
-        because NEITHER dependency it reaches for exists:
+        Still returns ``None`` -- not an exception -- for every unreachable case the callers
+        already treat as "cannot ask" (no stored keys for this tenant+exchange, vault
+        unavailable, connect failure), which is the existing fail-safe behaviour at all
+        three call sites: no executor means UNKNOWN, with an alert, never a resubmission.
 
-          * `app_state.exchange_router` -- `AppState` (`backend_app/core/state.py:88`)
-            declares `vault`, `telemetry`, `risk`, `alert`, `fleet`, `ws` and nothing
-            else, and the only two references to `exchange_router` in the entire
-            application are the two lines below. `hasattr` is therefore False.
-          * `app_state.vault.get_exchange_client` -- there is NO `def get_exchange_client`
-            anywhere in the application. `APIKeyVault` exposes `store_exchange_keys`,
-            `load_decrypted_keys`, `delete_exchange_keys`, `list_connected_exchanges`,
-            `get_user_tier` and `rotate_key`. The call raises `AttributeError`, which the
-            `except` below converts to `None`.
-
-        So an executor must be INJECTED for adjudication to query a venue. Wiring one is
-        credential and executor-lifecycle work this phase is explicitly not authorised to
-        do, and the tests prove reachability with an injected stub rather than claiming
-        venue recovery works end to end.
-
-        Regression: tests/test_d5_watchdog_adjudication_repair.py
+        Regression: tests/test_d5_watchdog_adjudication_repair.py,
+        tests/test_rt16_watchdog_executor_is_real.py
         """
         try:
             exchange_id = getattr(order, "exchange_id", None) or "binance"
+            tenant_id = getattr(order, "tenant_id", None)
+            if not tenant_id:
+                return None
             from backend_app.core.state import app_state
-            if hasattr(app_state, "exchange_router") and app_state.exchange_router:
-                return app_state.exchange_router.get_executor(
-                    tenant_id=str(order.tenant_id),
-                    exchange_id=exchange_id
-                )
-            elif hasattr(app_state, "vault") and app_state.vault:
-                return app_state.vault.get_exchange_client(
-                    user_id=str(order.tenant_id),
-                    exchange=exchange_id
-                )
-            return None
+            vault = getattr(app_state, "vault", None)
+            if vault is None:
+                return None
+            from backend_app.backend.order_control import _executor_for
+            return await _executor_for(str(tenant_id), str(exchange_id), vault)
         except Exception as e:
             logger.warning(f"Could not route executor for order {getattr(order, 'execution_id', 'unknown')}: {e}")
             return None
