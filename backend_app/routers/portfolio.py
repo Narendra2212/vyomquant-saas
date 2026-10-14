@@ -9,6 +9,7 @@ CRITICAL FIXES APPLIED:
   H8: NO hardcoded portfolio data - all real data from exchange
 """
 
+import inspect
 import logging
 import re
 from datetime import datetime
@@ -394,31 +395,75 @@ async def close_all_positions(
             detail={"error": "EXECUTION_GUARD_ERROR", "message": str(e)}
         )
     # CRITICAL FIX C4: No await redis_client.close() - shared pool!
-    
+
     # ═══════════════════════════════════════════════════════════════════════════════
-    # PHASE 1 BOUNDARY LOCK: STRICT ALGO-ONLY EXECUTION ENFORCEMENT
+    # RT-21: REQUEST A FLATTEN ON EVERY RUNNING DEPLOYMENT THIS USER OWNS
     # ═══════════════════════════════════════════════════════════════════════════════
-    # 🔴 DIRECT EXECUTION BLOCKED: This endpoint previously bypassed the unified
-    # execution engine, creating a security vulnerability. All execution MUST flow
-    # through the UnifiedExecutionEngine and ONLY from bot_runner (strategy DAG).
-    # 
-    # VALID PATH: Strategy → DAG → Signal → BotRunner → UnifiedExecutionEngine → Exchange
-    # INVALID PATH: UI → API → Direct Execution (BLOCKED)
-    # ═══════════════════════════════════════════════════════════════════════════════
-    
-    logger.critical(
-        f"🚫 BLOCKED DIRECT EXECUTION ATTEMPT | "
-        f"User: {user['id']} | Endpoint: /portfolio/close-all | "
-        f"Reason: Direct execution is not allowed. Use strategy deployment."
+    # This never places an order itself (ALGO-ONLY still holds: only BotRunner, via
+    # ``execute_with_idempotency(source="bot_runner", ...)``, ever does). What changed is
+    # that a position is no longer unreachable from here -- each running deployment is
+    # asked to flatten ITS OWN recorded exposure, the same durable, cross-process
+    # mechanism ``stop`` already uses (``deployment_state.DeploymentStateStore``,
+    # ``FleetManager._honour_close_request``, ``BotRunner.close_position``). The caller's
+    # ``symbol``/``exchange_id`` narrow which deployments are asked; omitted, every running
+    # deployment of this user is asked.
+    #
+    # This is necessarily best-effort and asynchronous: a deployment with nothing to close
+    # answers that honestly on its own next heartbeat, and this endpoint has no way to wait
+    # for or report that outcome synchronously. 202, not 200 -- the response confirms what
+    # was requested, not what was closed.
+    from backend_app.backend.deployment_state import DeploymentStateStore, LIVE_STATES
+    from backend_app.core.dependencies import create_request_supabase_async
+
+    sb_res = create_request_supabase_async(user.get("access_token"))
+    sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+    if sb is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "CLOSE_ALL_UNAVAILABLE",
+                "message": "No database client is available, so no running deployments "
+                           "could be found and nothing was requested.",
+            },
+        )
+
+    try:
+        q = (
+            sb.table("strategy_deployments")
+            .select("id, exchange_symbol, exchange_id")
+            .eq("user_id", user["id"])
+            .in_("status", list(LIVE_STATES))
+        )
+        if body.symbol:
+            q = q.eq("exchange_symbol", body.symbol)
+        if body.exchange_id:
+            q = q.eq("exchange_id", body.exchange_id)
+        res = q.execute()
+        res = await res if inspect.isawaitable(res) else res
+    except Exception as e:
+        logger.error(f"❌ Could not list running deployments to close for {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "CLOSE_ALL_UNAVAILABLE", "message": str(e)},
+        )
+
+    rows = getattr(res, "data", None) or []
+    store = DeploymentStateStore(client_factory=lambda: sb)
+    requested, skipped = [], []
+    for row in rows:
+        dep_id = str(row["id"])
+        if await store.request_close(dep_id):
+            requested.append(dep_id)
+        else:
+            skipped.append(dep_id)
+
+    logger.warning(
+        "RT-21: close-all for %s requested on %d deployment(s), %d could not be "
+        "requested (no longer running).",
+        user["id"], len(requested), len(skipped),
     )
-    
-    raise HTTPException(
-        status_code=403,
-        detail={
-            "error": "DIRECT_EXECUTION_BLOCKED",
-            "message": "Direct execution is not allowed. Use strategy deployment.",
-            "allowed_path": "Strategy → DAG → BotRunner → UnifiedExecutionEngine",
-            "blocked_path": "UI → API → Direct Execution",
-            "solution": "Deploy a strategy with close_positions logic via the strategy DAG system."
-        }
-    )
+    return {
+        "status": "close_requested" if requested else "no_running_deployments",
+        "deployments_requested": requested,
+        "deployments_skipped": skipped,
+    }

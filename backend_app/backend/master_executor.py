@@ -20,7 +20,7 @@ import logging
 import os
 import time
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -207,6 +207,12 @@ class BotRunner:
 
         # ── Exposure tracking (coins held) ───────────────────────────────
         self.recovered_exposure_coins = Decimal("0")
+
+        # RT-21: the last ticked price, for close_position() -- which runs from the
+        # fleet's heartbeat task, not from inside _inner_loop, so it has no local `price`
+        # of its own. `None` until the first tick; close_position refuses rather than
+        # invent one.
+        self._last_price: Optional[float] = None
 
     # ══════════════════════════════════════════════════════════════════════
     #  BOOT SEQUENCE
@@ -501,6 +507,8 @@ class BotRunner:
 
                 if price <= 0:
                     continue
+
+                self._last_price = price
 
                 # ── Update Numba matrix ───────────────────────────────────
                 new_candles = self.data_processor.process_live_tick(
@@ -1021,6 +1029,69 @@ class BotRunner:
     # ══════════════════════════════════════════════════════════════════════
     #  SHUTDOWN
     # ══════════════════════════════════════════════════════════════════════
+
+    async def close_position(self) -> Tuple[bool, str]:
+        """RT-21: flatten this bot's own recorded exposure, through the SAME gateway and
+        SAME ``source="bot_runner"`` call every regular order already uses -- nothing new is
+        exposed to the live-order boundary.
+
+        Called from ``FleetManager``'s heartbeat task (``_honour_close_request``), never
+        from a request handler directly: only the process actually running this bot knows
+        ``recovered_exposure_coins``, which exists nowhere else (no second, externally
+        readable copy -- see migration 038's header). Spot-only, so exposure is never
+        negative (``settle_exposure``); closing is always a SELL of the exact amount held,
+        which cannot open a new or larger position regardless of what submitted it.
+
+        Pausing for the call's duration (restored after, whatever it was) keeps this from
+        racing the tick loop's own order submission, which already checks ``self.paused``
+        before it submits -- the same control the fleet already uses for a user's pause
+        request, reused rather than a second lock introduced beside it. It narrows the race
+        without the full exposure-locking rework a stronger guarantee would need; see the
+        regression test for the one window this does not close.
+        """
+        exposure = self.recovered_exposure_coins
+        if exposure <= 0:
+            return True, "no open position to close"
+        if self._last_price is None:
+            return False, "no measured price yet; refusing to close without one"
+
+        was_paused = self.paused
+        self.paused = True
+        try:
+            import uuid
+
+            price = Decimal(str(self._last_price))
+            previous_exposure = exposure
+            result = await self.execution_engine.execute_with_idempotency(
+                tenant_id=uuid.UUID(self.user_id),
+                strategy_id=self.blueprint.get("strategy_id", "default"),
+                symbol=self.symbol,
+                side="sell",
+                size=exposure,
+                price=price,
+                source="bot_runner",
+                execution_environment=(
+                    ExecutionEnvironment.PAPER if self.paper_trading else ExecutionEnvironment.LIVE
+                ),
+                risk_approved=True,
+                risk_reason=(
+                    "RT-21 close: selling exactly the recorded long exposure; "
+                    "cannot increase risk"
+                ),
+            )
+            filled_qty, self.recovered_exposure_coins = settle_exposure(
+                side="sell", qty=exposure, previous_exposure=previous_exposure, result=result,
+            )
+            status = result.get("status") if result else None
+            if status == "completed":
+                logger.info(
+                    f"RT-21: closed {filled_qty} {self.symbol} for {self.user_id}; "
+                    f"exposure {previous_exposure} -> {self.recovered_exposure_coins}"
+                )
+                return True, f"closed {filled_qty} {self.symbol}"
+            return False, f"close did not fill: {(result or {}).get('message') or 'no result'}"
+        finally:
+            self.paused = was_paused
 
     async def shutdown(self):
         """Cleanly closes all connections."""

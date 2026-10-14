@@ -26,9 +26,13 @@ asserts the symbol resolves to the *same* `SafetyMonitor` the rest of the codeba
 that the module the route names actually exists, and that the route's intended controls
 are still present in its body.
 
-The route's final behaviour is a deliberate 403 `DIRECT_EXECUTION_BLOCKED` (all execution
-must go through the strategy path), so reachability is asserted by the route getting *past
-its imports* to its own refusal, rather than by a 200.
+At the time this file was written, the route's final behaviour past these two controls was
+a deliberate 403 `DIRECT_EXECUTION_BLOCKED`, and reachability was asserted by the route
+getting *past its imports* to that refusal rather than by a 200. RT-21 replaced that refusal
+with a real implementation (`backend/deployment_state.py`,
+`tests/test_rt21_close_position_flattens_exposure.py`) -- these tests still hold unchanged,
+because PORT-01's defect and its fix were entirely in the two imports above the refusal, not
+in what came after them.
 """
 
 from __future__ import annotations

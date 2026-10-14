@@ -291,6 +291,11 @@ class FleetManager:
                 asyncio.create_task(self._honour_stop_request(bot_key))
                 return
 
+            # RT-21: likewise for a flatten request. Independent of stop -- a close does not
+            # end the deployment, so it does not return/stop the heartbeat loop.
+            if await self._close_requested(bot_key):
+                asyncio.create_task(self._honour_close_request(bot_key))
+
     async def _boot_and_run(self, bot, bot_key: str):
         """Background task: initialize the bot then enter the trading loop.
         FIX 1: Runs outside the HTTP request so Gunicorn timeout cannot kill it."""
@@ -342,6 +347,36 @@ class FleetManager:
         ok, _ = await self.stop_bot(getattr(bot, "user_id"), symbol)
         if ok and deployment_id:
             await self._store().mark_stopped(deployment_id)
+
+    async def _close_requested(self, bot_key: str) -> bool:
+        """RT-21: is this bot's position due to be flattened?"""
+        record = self._active_fleet.get(bot_key)
+        deployment_id = self._deployment_id_of(record.get("bot")) if record else None
+        if not deployment_id:
+            return False
+        return await self._store().close_requested(deployment_id)
+
+    async def _honour_close_request(self, bot_key: str) -> None:
+        """Flatten the local bot's position because its deployment row asked for it.
+
+        The request is cleared BEFORE acting (not after): ``close_position`` can itself
+        take a tick cycle or more if a fill is slow, and the next heartbeat must not
+        re-dispatch a second close for the one request already in flight. If the bot
+        turns out to hold nothing, that is success too -- "no position to close" is not a
+        failure of the request.
+        """
+        record = self._active_fleet.get(bot_key)
+        if record is None:
+            return
+        bot = record["bot"]
+        deployment_id = self._deployment_id_of(bot)
+        if not deployment_id:
+            return
+        await self._store().clear_close_request(deployment_id)
+        logger.warning("RT-21: close requested for %s via the deployment row; flattening.", bot_key)
+        ok, detail = await bot.close_position()
+        if not ok:
+            logger.error("RT-21: close for %s did not complete: %s", bot_key, detail)
 
     async def resume_deployments(self, rebuild) -> Dict[str, int]:
         """RT-08: after a restart, start what the database says should be running.

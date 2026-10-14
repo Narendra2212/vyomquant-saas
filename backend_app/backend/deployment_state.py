@@ -75,6 +75,21 @@ class DeploymentStateStore:
         rows = getattr(res, "data", None) or []
         return str(rows[0].get("status")) if rows else None
 
+    async def close_requested(self, deployment_id: str) -> bool:
+        """RT-21: is a flatten due? ``False`` (never guessed True) when the read fails."""
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments")
+                .select("close_requested_at")
+                .eq("id", deployment_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("deployment %s close-request unreadable: %s", deployment_id, exc)
+            return False
+        rows = getattr(res, "data", None) or []
+        return bool(rows) and rows[0].get("close_requested_at") is not None
+
     async def rows_in(self, statuses: tuple) -> List[Dict[str, Any]]:
         sb = self._client()
         res = await _run(
@@ -128,6 +143,34 @@ class DeploymentStateStore:
             .in_("status", list(LIVE_STATES))
         )
         return bool(getattr(res, "data", None))
+
+    async def request_close(self, deployment_id: str) -> bool:
+        """RT-21: durable flatten request, honoured by the owning bot's own heartbeat tick.
+
+        Status-independent of ``request_stop``: a close does not change ``status``, because
+        a position request cannot be confirmed here -- only the owning process knows its own
+        ``recovered_exposure_coins``, and may legitimately have none to close. ``False``
+        means the row was not found, never that nothing was requested.
+        """
+        sb = self._client()
+        res = await _run(
+            sb.table("strategy_deployments")
+            .update({"close_requested_at": _now()})
+            .eq("id", deployment_id)
+            .in_("status", [*LIVE_STATES, "stopping"])
+        )
+        return bool(getattr(res, "data", None))
+
+    async def clear_close_request(self, deployment_id: str) -> None:
+        """The owner calls this once it has acted on the request (whether or not a position
+        existed to close) -- never on its own initiative, so a request cannot be dropped by
+        anything other than the one process entitled to answer it."""
+        sb = self._client()
+        await _run(
+            sb.table("strategy_deployments")
+            .update({"close_requested_at": None})
+            .eq("id", deployment_id)
+        )
 
     async def _release_quota(self, deployment_id: str) -> None:
         """A failed deployment no longer occupies a bot slot."""
