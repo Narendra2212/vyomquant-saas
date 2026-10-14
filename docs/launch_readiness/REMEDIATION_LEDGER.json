@@ -107,7 +107,7 @@
       "component": "Order safety (live)",
       "title": "No working cancel, cancel-all or close-all path for users",
       "status": "VERIFIED_FIXED",
-      "fix_commit": "(pending commit)",
+      "fix_commit": "ef97d4b",
       "evidence": "Close-all/close now implemented for BotRunner-tracked positions: migration 038 (strategy_deployments.close_requested_at + browser-role allow-list update), deployment_state.{request_close,close_requested,clear_close_request}, FleetManager.{_close_requested,_honour_close_request} (heartbeat-driven, mirrors the existing stop mechanism), BotRunner.close_position() (sells exactly the recorded recovered_exposure_coins through execute_with_idempotency(source='bot_runner'...) -- the same gateway call every regular order uses, no new source value, no new token). POST /api/deployments/{id}/close and POST /api/portfolio/close-all (now requests a close on every running deployment instead of an unconditional 403) added. tests/test_rt21_close_position_flattens_exposure.py (13 tests) + full targeted regression (tests/test_rt21_*, test_rt08_*, test_rt02_*, test_port01_*, test_schema_table_reference_drift coverage ratchet) all passing this session; no new failures in an 800-test regression slice covering portfolio/fleet/deployment/strategy_operations.",
       "verification_level": "code+test (verified this session)",
       "production_verified": false,
