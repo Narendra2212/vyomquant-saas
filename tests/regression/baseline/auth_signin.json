@@ -153,6 +153,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_parameters": "AUTHORISED RE-RECORD (AUTH-01): the token parameter is REMOVED -- it was never read in the function body (the route built an anon Supabase client and called its plain, session-less sign_out(), a no-op). The fix revokes the caller's own session by JWT via a service-role client (client.auth.admin.sign_out(jwt=current_user[\"access_token\"], scope=\"global\")), so the real access token is read off current_user, which was already a parameter, rather than taken as a second, unused request field. See tests/test_auth01_signout_revokes_the_real_session.py.",
           "decorators": [
             "router.post('/signout')"
           ],
@@ -162,9 +163,6 @@
             "current_user": {
               "annotation": "dict",
               "depends_on": "get_current_user"
-            },
-            "token": {
-              "annotation": "str"
             }
           },
           "raises": [
