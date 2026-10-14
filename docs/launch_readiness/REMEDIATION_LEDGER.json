@@ -1484,12 +1484,12 @@
       "severity": "Medium",
       "component": "Infrastructure / Redis",
       "title": "The shared Redis manager swallows every error and returns neutral values, so counters and membership checks silently fail open when Redis degrades",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "0357897",
+      "evidence": "The 'remove the duplicate method definitions' half is done (commit 0357897). MockRedisClient and SharedRedisManager each defined several of their own methods twice (9 pairs, 19 dead method bodies total); Python keeps only the LAST def, so the first copy of each pair never ran. At least one pair (incr/decr) had a DIFFERENT signature in its dead copy than the one actually executing. Removed every dead (shadowed) definition after diffing each pair by hand to confirm zero behavioural change (several byte-identical copy-paste; a few an older implementation style shadowed by a newer, more complete one -- e.g. xadd gaining retries + PublishError-raising for TRADING_CRITICAL_STREAMS in its winning definition). incrby/decrby were genuinely single-definition but sat inside the same dead line range as the real duplicates -- a first pass deleted them by accident, caught by running their real caller's (subscription_engine.py) tests before committing; restored and pinned by name in the new test file. tests/test_red01_no_duplicate_redis_manager_methods.py (4 tests, AST-based): neither class defines any method name twice; incrby/decrby still exist exactly once and work end-to-end. Regression: a ~2500-test sweep across quota/idempotency/billing/paper-trading/rate-limiting/dashboard suites + full validation_sweep/schema_drift (484 passed, 2 failed -- same pre-existing, unrelated billing findings) both clean.",
+      "verification_level": "code+test (verified this session); larger API-split remains open",
       "production_verified": false,
-      "remaining_action": "Split the API: cache-style reads may fail-open, but counters/membership checks used for quotas, idempotency or safety gates must raise on a Redis error and be handled fail-closed by the caller; remove the duplicate method definitions."
+      "remaining_action": "NOT done, deliberately: the larger half of this finding's own remediation text -- splitting the API so counters/membership checks used for quotas, idempotency or safety gates raise on a Redis error and are handled fail-closed by the caller, rather than every method here keeping today's uniform fail-open-with-a-neutral-value contract. That change touches every call site across the codebase (incrby/decrby alone has 5 call sites in subscription_engine.py; sismember/sadd/get/set have many more elsewhere) and each one would need individual review of whether its current fail-open assumption is actually still safe once the method it calls can raise -- a much larger, invasive, high-risk change than a dead-code cleanup, and not something to bundle into the same pass. Needs its own dedicated session: enumerate every safety-relevant caller (quota reservation, idempotency claims, kill-switch reads), design the split API (e.g. separate *_or_raise variants, or a fail_closed=True kwarg), migrate callers one at a time with tests proving the fail-closed behaviour, then flip the default."
     },
     {
       "id": "LOG-01",
