@@ -470,12 +470,12 @@
       "severity": "Medium",
       "component": "Database",
       "title": "Base.metadata.create_all runs at import in production",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "9ae0cd7",
+      "evidence": "Removed Base.metadata.create_all(bind=engine) from backend_app/main.py, which ran unconditionally at IMPORT time -- a third schema-management mechanism alongside the hand-written numbered SQL migrations (RLS, triggers, check constraints, grants) and Alembic, risking a silent under-protected shadow table in any environment where real migrations had not yet applied, plus issuing DDL as a side effect of merely importing the module (test collection, a short-lived worker). Removed the now-dead Base/engine imports too (engine's import alone triggered real connection-pool initialisation at import time). SessionLocal, which has real callers, is untouched. The second, pre-existing occurrence in backend/state_persistence.py::DatabaseStateStore.__init__ is left alone: it is gated behind a config flag and that class has no caller anywhere in the tree, so it is not reachable at all, let alone at import. Regression: tests/test_api05_no_create_all_at_import.py (3 tests, code+test, verified this session). validation_sweep/schema_drift/baseline: 540 passed / 2 known pre-existing unrelated billing failures. App import verified clean.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Remove; rely on migrations."
+      "remaining_action": ""
     },
     {
       "id": "INF-01",
