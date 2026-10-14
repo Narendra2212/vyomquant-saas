@@ -54,12 +54,12 @@
       "severity": "Critical",
       "component": "Strategy runtime",
       "title": "Deploying a version saved by the current builder can never start a bot",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "32b14af",
+      "evidence": "deploy_version now runs builder graphs on the canonical DAG evaluator via deployment_runtime.build_runtime_blueprint + GraphSignalEvaluator, not legacy BotRunner.run_logic; tests/test_rt02_builder_strategy_runs_on_deployment_runtime.py (30 tests) - verified passing this session",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Run deployments on the canonical DAG runtime (the same execute_plan path paper sessions and backtests use), in a dedicated worker service, keyed by deployment_id; retire BotRunner's legacy evaluator. Interim: refuse deploys whose blueprint is not startable before inserting (consistent 422)."
+      "remaining_action": "No staging E2E (builder -> save -> deploy -> paper fill) run against a live feed; code-level verification only."
     },
     {
       "id": "RT-01",
@@ -67,12 +67,12 @@
       "severity": "Critical",
       "component": "Strategy runtime (paper)",
       "title": "Paper-mode bots have no market data: exchange object is None and the loop crashes",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "32b14af",
+      "evidence": "paper bots no longer use the DEV_MODE mock/exchange=None path; connect keyless to public market data via the canonical deployment_runtime evaluator; tests/test_rt02_builder_strategy_runs_on_deployment_runtime.py (bundled, 78 total with RT-08 all passing, verified this session: `pytest tests/test_rt02_... tests/test_rt08_... -q` -> 78 passed)",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "If BotRunner is retained: feed paper bots from MDS (stream_live_ohlcv) or a public ccxt client; never use the mock outside tests; propagate runtime exit to deployment status. Preferably superseded by RT-02's canonical runtime."
+      "remaining_action": "Still no production/staging soak run on live public data for 24h+ as the audit's acceptance criterion asks; code-level verification only."
     },
     {
       "id": "RT-15",
@@ -119,12 +119,12 @@
       "severity": "High",
       "component": "Strategy runtime",
       "title": "Legacy deploy endpoint (the one that wins routing) starts bots that can never emit an order",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "32b14af",
+      "evidence": "strategies router now delegates deploy/stop to the same deployment service as the canonical path instead of the legacy buy_logic/sell_logic blueprint route",
+      "verification_level": "code (verified by inspection + passing RT-02/08 suite this session)",
       "production_verified": false,
-      "remaining_action": "Remove the legacy deploy/stop routes once RT-02 lands, or route them to the canonical deploy."
+      "remaining_action": "No dedicated route-uniqueness test confirmed (API-01 still open, separately)."
     },
     {
       "id": "RT-05",
@@ -132,12 +132,12 @@
       "severity": "High",
       "component": "Strategy runtime / architecture",
       "title": "Canonical live runtime (DAGEventLoop + LiveSignalPath) has no production caller",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "32b14af",
+      "evidence": "deployment_runtime.GraphSignalEvaluator wraps paper_session_runtime.PaperDagRuntime (DAGEngine.execute_plan), giving the canonical runtime a real production caller on the deployment path",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Part of RT-02."
+      "remaining_action": "LiveSignalPath/DAGEventLoop.attach_signal_path itself still has no separate caller outside this; subsumed by RT-02 as the audit anticipated."
     },
     {
       "id": "RT-08",
@@ -145,12 +145,12 @@
       "severity": "High",
       "component": "Runtime orchestration",
       "title": "Bots live in per-process memory: stop requests can miss, crashes and restarts are not reflected, nothing is resumed",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "32b14af",
+      "evidence": "deployment_state.DeploymentStateStore: conditioned writes (mark_failed/mark_stopped/request_stop), FleetManager resume-on-boot, stop_deployment fixed to key on symbol not exchange_id; tests/test_rt08_deployment_state_is_durable.py (29 tests) - verified passing this session",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Separate runtime worker service consuming a durable command stream keyed by deployment_id; desired-state reconciler on start; stop acknowledged only after owner confirms; status written from runtime events."
+      "remaining_action": "No live multi-process/chaos test (kill a worker mid-deployment in staging) run; code-level verification only."
     },
     {
       "id": "RT-06",
