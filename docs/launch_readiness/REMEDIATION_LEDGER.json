@@ -1055,12 +1055,12 @@
       "severity": "Medium",
       "component": "Security / secrets",
       "title": "Hardcoded static HMAC secret in the live-order authorization gate",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "ca63faf",
+      "evidence": "Both core/live_execution_gate._GATE_SECRET and core/global_safety._VALIDATION_SECRET (an identical, previously-undocumented sibling bug the audit's remaining_action did not separately name) were hardcoded bytes literals in source. Both now os.urandom(32), generated fresh at module import -- safe because mint and verify for each are always called from the same synchronous order-placement call stack in the same process (traced: execution_engine.py -> exchange_executor.py/transactional_execution_manager.py for both), never persisted or read back across a restart or by a different process, so a per-process random key loses nothing a fixed one provided while closing the actual gap (unreadable from source, rotates automatically with no operator/deployment action needed -- stronger than the suggested env-var approach, which would need ops to configure and rotate it). tests/test_sec13_gate_secrets_are_not_hardcoded.py (5 tests): neither secret is the old literal; each is 32 random bytes; three real subprocesses get three different secrets; mint-then-verify still agrees within one process (the control this must not break); the two secrets stay independent. Regression: test_trade04 suite (62 tests) + a 274-test safety/execution-engine/kill-switch sweep + full validation_sweep/schema_drift (480 passed, 2 failed -- same pre-existing, unrelated billing findings) all clean. Commit ca63faf.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Source _GATE_SECRET from an environment-configured, per-deployment secret via the same secrets-manager path api_key_vault.py already uses (MASTER_ENCRYPTION_KEYS), and treat it as rotatable."
+      "remaining_action": "Closed as designed: a per-process-random secret is the correct fix here specifically because neither artefact is ever persisted or verified across a restart/process boundary (confirmed by tracing every call site) -- NOT because an env-var-sourced, cross-process rotatable secret (as originally suggested) was attempted and found wanting. If a future change ever persists a LiveOrderAuthorization or a validation token across a restart (e.g. to support resuming an in-flight order after a crash), this reasoning would need revisiting before that change ships, since a restart would then invalidate an authorization minted just before it."
     },
     {
       "id": "RISK-02",
