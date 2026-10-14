@@ -415,6 +415,13 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         handler="backend_app.routers.strategy_operations:stop_deployment",
     ),
     MutatingRoute(
+        key="strategy_operations.close_deployment_position",
+        method="POST",
+        path=f"/api/deployments/{_ID}/close",
+        handler="backend_app.routers.strategy_operations:close_deployment_position",
+        body=None,
+    ),
+    MutatingRoute(
         key="strategy_operations.compare_backtests",
         method="POST",
         path="/api/backtests/compare",
