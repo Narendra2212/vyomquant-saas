@@ -1458,12 +1458,12 @@
       "severity": "Medium",
       "component": "Infrastructure / broken imports",
       "title": "position_engine's trade-history recorder imports a model module that does not exist; no trade history has ever been recorded via this path",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "5723497",
+      "evidence": "core/models/trade_history.py (new) restores TradeHistoryModel (plain SQLAlchemy ORM, matching PositionModel's own conventions) + TradeCreate (Pydantic), the exact names _record_trade's import has always reached for. Migration 040 gives the table real, append-only, service-only persistence (same shape as migration 036's order_audit_log). A write failure now also increments a new TRADE_HISTORY_RECORD_FAILURES_TOTAL Prometheus counter before the existing log line, so a persistent failure is observable rather than silently swallowed forever -- exactly how the original bug went unnoticed. tests/test_import03_trade_history_model_exists.py (3 tests, SQLite-backed): a full close persists a readable row with every field the call site builds; a position flip records both its close and its open; a write failure increments the counter and is still swallowed. Regression: targeted suite + an 89-test position/schema-drift sweep + full validation_sweep (480 passed, 2 failed -- same pre-existing, unrelated billing findings) all clean. Commit 5723497.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Locate or recreate the real trade-history model (grep elsewhere in the repo for TradeCreate/TradeHistoryModel definitions), correct the import, and add a test asserting a row is persisted after a close; keep the existing except-and-continue pattern but pair it with an alerting/metric increment so a persistent failure of this kind is observable rather than silently swallowed forever."
+      "remaining_action": "This restores a currently-DEAD code path's correctness, not a live feature: PositionEngine has no caller anywhere in the application today (grep -rn \"PositionEngine(\" backend_app/ finds only its own file -- the identical gap RT-16's ledger entry already records for this class's reconciliation side). trade_history stays empty in production until PositionEngine is wired into the live/paper order path, which is tracked there, not here. This fix's value is that whoever does that wiring inherits a working, tested audit write instead of a second silent landmine on top of the first."
     },
     {
       "id": "PAPER-07",
