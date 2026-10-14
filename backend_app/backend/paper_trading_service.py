@@ -114,6 +114,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -171,15 +172,80 @@ ACCOUNT_STATUS = "active"
 #: *measured, fresh* price or is refused; a limit order carries the caller's limit price (that is
 #: the order's own content, not a fill price). See :func:`get_fresh_market_price`.
 
+#: ``place_order`` takes a bare ``symbol`` with no exchange - a manual order on the user's
+#: default paper account was never tied to one venue the way a Paper_Session is
+#: (``paper/paper_market_feed.PaperFeedConfig.exchange_id`` is always caller-supplied; this
+#: facade has no equivalent field anywhere). "binance" is not an invented default: it is the
+#: SAME fallback ``mds/main.py::handle_commands`` already uses when a subscribe command names no
+#: exchange (``data.get("exchange", "binance")``), so a bare symbol here reads the identical
+#: venue MDS itself falls back to.
+PAPER_PRICE_SOURCE_EXCHANGE = "binance"
+
+
+def _last_price_key(exchange_id: str, symbol: str) -> str:
+    """Spelled identically to ``mds/main.py::last_price_key`` - a literal, not a shared import,
+    the same choice this codebase already made for ``TRANSPORT_WEBSOCKET``/``TRANSPORT_REST``
+    (see that file's own comment): ``mds/main.py`` is a standalone microservice process and
+    importing it into this backend package, or vice versa, would couple the two deployments.
+    ``tests/test_paper02_fresh_market_price.py`` asserts the two spellings agree."""
+    return f"mds:last_price:{str(exchange_id).strip().lower()}:{str(symbol).strip()}"
+
 
 async def get_fresh_market_price(symbol: str) -> Optional[Decimal]:
     """Return a fresh measured last price for ``symbol``, or ``None`` when there is none.
 
-    No one-shot quote source is wired into this service yet (the MDS feed is session-scoped), so
-    this returns ``None`` and market orders are refused rather than filled at an invented price.
-    Wire this to the MDS last-price read; it must never return a constant or a caller value.
+    PAPER-02. Reads ``mds/main.py::broadcast_ohlcv``'s own last-price cache - the SAME publish
+    loop that feeds every Paper_Session's validated feed, not a second market-data path. The key
+    format is spelled identically in both files (``mds/main.py`` is a standalone microservice
+    process and cannot import this backend package; see its own comment on this) and the two are
+    asserted equal by a test.
+
+    ``None`` is the honest, and the ONLY, answer for every case other than a real, unexpired
+    cached price: no subscriber has ever been active for this symbol; the one that was has gone
+    quiet past the TTL (the stream died, or the exchange stopped sending); the cached payload is
+    unreadable. None of these is a reason to fabricate a price, so none of them raises either -
+    the caller (``place_order``) already treats ``None`` as its refusal signal
+    (``PaperMarketDataUnavailable``).
+
+    THE COVERAGE GAP THIS DOES NOT CLOSE, ON PURPOSE
+    -------------------------------------------------
+    This reads a cache; it never SUBSCRIBES one. A symbol no Paper_Session (or anything else) is
+    currently streaming has nothing cached and this correctly, safely refuses the order - it does
+    not fall back to an on-demand subscribe-and-wait. That omission is deliberate, not an
+    oversight: ``watch_ohlcv`` on a 1-minute timeframe can legitimately take up to a minute to
+    yield its first candle depending on the exchange, which is not a bound this synchronous,
+    inside-an-HTTP-request call can safely wait on without real-exchange timing data this sandbox
+    has no way to measure. See the ledger for RT-04's identical reasoning about not fabricating a
+    measurement nobody made.
     """
-    return None
+    from backend_app.core.cache.redis_manager import redis_manager
+
+    try:
+        raw = await redis_manager.redis.get(
+            _last_price_key(PAPER_PRICE_SOURCE_EXCHANGE, symbol)
+        )
+    except Exception:
+        logger.warning("get_fresh_market_price: cache read failed for %s", symbol, exc_info=True)
+        return None
+
+    if raw is None:
+        return None
+
+    try:
+        payload = json.loads(raw)
+        price = payload.get("price")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("get_fresh_market_price: unreadable cached payload for %s", symbol)
+        return None
+
+    if price is None:
+        return None
+
+    try:
+        return Decimal(str(price))
+    except Exception:
+        logger.warning("get_fresh_market_price: non-numeric cached price for %s: %r", symbol, price)
+        return None
 
 
 #: Decimal places for money (USD minor units), for a price and for a quantity. The first is

@@ -30,6 +30,30 @@ exchange_instances = {}
 TRANSPORT_WEBSOCKET = "WEBSOCKET"
 TRANSPORT_REST = "REST"
 
+# PAPER-02. A durable, one-shot-readable last price, alongside the pub/sub this module always
+# had. Before this, a caller that was not an ACTIVE subscriber of ``mds:data:*`` (pub/sub has no
+# memory - a publish with no listener is simply gone) had no way to ask "what did this symbol
+# last trade at", so a manual paper market order had nothing to fill at but a caller-supplied or
+# hardcoded price. ``backend/paper_trading_service.py::get_fresh_market_price`` is the reader;
+# this is the one writer, so the key format is spelled identically in both files and the two are
+# asserted equal by a test, the same pattern this module's own TRANSPORT_* constants document
+# above - importing the backend's paper package into this standalone microservice would couple
+# the two deployments.
+#
+# The TTL is what makes a stream that silently died read as "no fresh price" instead of serving
+# a stale one forever: Requirement 18.15 (see paper_trading_service.py) says a stale figure must
+# be labelled, never substituted silently. 150s comfortably covers one quiet interval of either
+# delivery path below (a `watch_ohlcv` candle close on a 1m timeframe, or the 10s REST poll) while
+# still expiring an actually-dead stream well before a human would call it "fresh".
+LAST_PRICE_TTL_SECONDS = 150
+
+
+def last_price_key(exchange_id: str, symbol: str) -> str:
+    """The key :func:`broadcast_ohlcv` writes and ``get_fresh_market_price`` reads. Spelled
+    identically in both files on purpose - see the comment above ``LAST_PRICE_TTL_SECONDS``."""
+    return f"mds:last_price:{str(exchange_id).strip().lower()}:{str(symbol).strip()}"
+
+
 def get_exchange_instance(exchange_id: str):
     if exchange_id not in exchange_instances:
         ex_class = getattr(ccxtpro, exchange_id)
@@ -62,6 +86,14 @@ async def broadcast_ohlcv(exchange_id, symbol):
                     "transport": TRANSPORT_WEBSOCKET
                 }
                 await redis_manager.redis.publish(channel, json.dumps(payload))
+                await redis_manager.redis.setex(
+                    last_price_key(exchange_id, symbol),
+                    LAST_PRICE_TTL_SECONDS,
+                    json.dumps({
+                        "price": latest[4], "timestamp": latest[0],
+                        "transport": TRANSPORT_WEBSOCKET,
+                    }),
+                )
         except Exception as e:
             if "NotSupported" in str(type(e)):
                 logger.warning(f"WebSockets not supported for {exchange_id} {symbol}. Falling back to REST polling.")
@@ -89,6 +121,14 @@ async def broadcast_ohlcv(exchange_id, symbol):
                     "transport": TRANSPORT_REST
                 }
                 await redis_manager.redis.publish(channel, json.dumps(payload))
+                await redis_manager.redis.setex(
+                    last_price_key(exchange_id, symbol),
+                    LAST_PRICE_TTL_SECONDS,
+                    json.dumps({
+                        "price": latest[4], "timestamp": latest[0],
+                        "transport": TRANSPORT_REST,
+                    }),
+                )
             await asyncio.sleep(10) # Poll every 10s to avoid rate limit
         except Exception as e:
             logger.error(f"Error polling REST {exchange_id} {symbol}: {e}")
