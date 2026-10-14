@@ -343,19 +343,14 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         path="/api/strategies/compile",
         handler="backend_app.routers.strategy_operations:compile_strategy",
     ),
-    # `strategy_operations.clone_strategy`/`deploy_strategy`/`pause_strategy`/
-    # `resume_strategy` each declare the SAME path `strategies.py` registers, and
-    # `strategies.router` is mounted before `strategy_operations.router`
-    # (`backend_app/main.py`'s own `include_router` order) - so first-match-wins makes
-    # every one of these four `strategy_operations.py` handlers permanently unreachable at
-    # this path. Confirmed by running `test_it_is_served_by_the_handler_this_route_names`
-    # against each: all four resolve to `strategies.py`'s handler of the same name, never
-    # to `strategy_operations.py`'s. This is the exact shadowing hazard
-    # `test_cross_tenant_ownership_matrix.py`'s docstring documents for `.../clone`. They
-    # are therefore NOT distinct routes to sweep - the path is already covered by this
-    # file's `strategies.clone_strategy`/`deploy_bot`/`pause_strategy`/`resume_strategy`
-    # entries above, and are listed in `_DELIBERATELY_EXCLUDED_HANDLERS` below rather than
-    # given a body-malformation case that could never actually run.
+    # API-01: `strategy_operations.py` used to declare `list_strategies`/`get_strategy`/
+    # `update_strategy`/`delete_strategy`/`clone_strategy`/`deploy_strategy`/
+    # `pause_strategy`/`resume_strategy` at the SAME paths `strategies.py` registers -
+    # permanently unreachable (`strategies.router` is mounted first in `main.py`'s
+    # `include_router` order, and first-match-wins), confirmed one at a time by
+    # `test_it_is_served_by_the_handler_this_route_names` before they were deleted as dead
+    # code. The paths are covered by this file's `strategies.*` entries above; there is
+    # nothing left at these names in `strategy_operations.py` to list here or to exclude.
     MutatingRoute(
         key="strategy_operations.create_backtest",
         method="POST",
@@ -503,10 +498,11 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         handler="backend_app.routers.strategy_operations:cancel_training_job",
         body=None,
     ),
-    # `strategy_operations.update_strategy` and `strategy_operations.delete_strategy`
-    # (PUT/DELETE `/api/strategies/{id}`) are shadowed the same way and for the same
-    # reason - `strategies.py`'s handlers of the same names answer first. Covered by
-    # `strategies.update_strategy`/`delete_strategy` above; excluded below.
+    # API-01: `strategy_operations.update_strategy` and `strategy_operations.delete_strategy`
+    # (PUT/DELETE `/api/strategies/{id}`) used to be shadowed here the same way and for the
+    # same reason - `strategies.py`'s handlers of the same names answered first - and have
+    # been deleted as dead code. Covered by `strategies.update_strategy`/`delete_strategy`
+    # above.
     MutatingRoute(
         key="strategy_operations.update_backtest_results",
         method="PUT",
@@ -1631,24 +1627,16 @@ _DELIBERATELY_EXCLUDED_HANDLERS = frozenset(
         # `get_current_user` + Pydantic body validation - a different property.
         "backend_app.routers.billing:stripe_webhook",
         "backend_app.routers.billing:razorpay_webhook",
-        # Registered by `strategy_operations.py` at the SAME path `strategies.py`
-        # registers, and permanently unreachable there because `strategies.router` is
-        # mounted first (`backend_app/main.py`). Confirmed by
-        # `test_it_is_served_by_the_handler_this_route_names`: every one of these
-        # resolves to `strategies.py`'s handler, never to this one. The path itself IS
-        # swept, under the `strategies.*` route key that actually answers it.
-        "backend_app.routers.strategy_operations:clone_strategy",
-        "backend_app.routers.strategy_operations:deploy_strategy",
-        "backend_app.routers.strategy_operations:pause_strategy",
-        "backend_app.routers.strategy_operations:resume_strategy",
-        "backend_app.routers.strategy_operations:update_strategy",
-        "backend_app.routers.strategy_operations:delete_strategy",
-        # A SECOND registration of `POST /deployments/{id}/stop` in `strategy_operations.py`
-        # itself - `stop_deployment` (above it in the file) matches first, and this
-        # handler's own docstring says so explicitly: "this one was already unreachable
-        # ... `include_in_schema=False` keeps the duplicate out of the OpenAPI document."
-        # The path IS swept, under `strategy_operations.stop_deployment`.
-        "backend_app.routers.strategy_operations:stop_deployment_alias",
+        # API-01: `strategy_operations.py` used to declare `list_strategies`, `get_strategy`,
+        # `update_strategy`, `delete_strategy`, `clone_strategy`, `deploy_strategy`,
+        # `pause_strategy`, `resume_strategy` and `stop_deployment_alias` at paths
+        # `strategies.py` (or, for the last one, this same module) already registers -
+        # permanently unreachable because of mount/declaration order, confirmed one at a
+        # time by `test_it_is_served_by_the_handler_this_route_names` before they were
+        # deleted. They no longer exist, so this set no longer names them: an entry here
+        # for a route that is not actually registered would hide that fact rather than
+        # document it, and the point of this frozenset is that every exclusion is one this
+        # file can still verify against the live app.
     }
 )
 

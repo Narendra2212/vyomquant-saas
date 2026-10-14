@@ -365,8 +365,9 @@ ENDPOINT_MATRIX: Tuple[Probe, ...] = (
         path="/api/strategies/{strategy_id}/clone",
         handler=f"{_STRATEGIES}:clone_strategy",
         scope=(
-            "the duplicate action of Requirement 22.1's list. NOTE the shadowing: "
-            "strategy_operations.py declares this same path and is unreachable at it"
+            "the duplicate action of Requirement 22.1's list. strategy_operations.py used "
+            "to declare this same path with an unreachable handler (API-01); it has since "
+            "been deleted as dead code"
         ),
     ),
     # ══════════════════ backtests ══════════════════
@@ -866,12 +867,13 @@ class TestEveryProbedPathResolvesToTheHandlerItNames:
         )
 
     def test_the_registration_that_answers_is_the_one_this_probe_names(self, probe: Probe):
-        """Pins WHICH registration answered, where a module declares one path twice.
+        """Pins WHICH registration answered.
 
-        ``strategy_operations.py`` declares ``DELETE /backtests/{id}`` and
-        ``POST /deployments/{id}/stop`` twice each, and holds two different handlers both
-        named ``list_backtests``. The handler name alone cannot tell those apart; the
-        matched route's own ``path`` can.
+        ``strategy_operations.py`` used to declare ``DELETE /backtests/{id}`` and
+        ``POST /deployments/{id}/stop`` twice each - the shadowed second copy of both was
+        deleted as dead code (API-01) - and still holds two different handlers both named
+        ``list_backtests`` at distinct paths. The handler name alone cannot tell those
+        apart; the matched route's own ``path`` can.
         """
         matched = resolve(probe.method, url_for(probe, OWNED_IDS))
         assert matched[0].path == probe.path, (

@@ -55,7 +55,8 @@
       "via": "api.strategies.listBacktests"
     },
     {
-      "handler_count": 3,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: list_strategies). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 2,
       "handlers": [
         {
           "decorators": [
@@ -136,46 +137,6 @@
             }
           ],
           "route_path": "/api/strategies/"
-        },
-        {
-          "decorators": [
-            "router.get('/strategies')",
-            "limiter.limit('200/minute')"
-          ],
-          "handler": "list_strategies",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "environment": {
-              "annotation": "Optional",
-              "has_default": true
-            },
-            "request": {
-              "annotation": "Request"
-            },
-            "status": {
-              "annotation": "Optional",
-              "has_default": true
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGIES_LIST_FAILED",
-              "status_code": 500
-            }
-          ],
-          "returns": [
-            "computed",
-            "computed"
-          ],
-          "route_path": "/api/strategies"
         }
       ],
       "method": "GET",
@@ -234,50 +195,9 @@
       "via": "api.strategies.versions"
     },
     {
-      "handler_count": 2,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: get_strategy). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 1,
       "handlers": [
-        {
-          "decorators": [
-            "router.get('/strategies/{strategy_id}')",
-            "limiter.limit('200/minute')"
-          ],
-          "handler": "get_strategy",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "request": {
-              "annotation": "Request"
-            },
-            "strategy_id": {
-              "annotation": "str"
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_GET_FAILED",
-              "status_code": 500
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_NOT_FOUND",
-              "status_code": 404
-            }
-          ],
-          "returns": [
-            "computed"
-          ],
-          "route_path": "/api/strategies/{strategy_id}"
-        },
         {
           "decorators": [
             "router.get('/{strategy_id}')"
