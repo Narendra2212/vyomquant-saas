@@ -418,12 +418,12 @@
       "severity": "Medium",
       "component": "Auth",
       "title": "Sign-out does not revoke the caller's session",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "b3701ba",
+      "evidence": "Confirmed root cause: signout built an ANON-keyed Supabase client (never authenticated as the caller) and called its plain client.auth.sign_out() -- that signs the CLIENT OBJECT'S OWN locally-tracked session out, which this client never had, so the call was always a no-op returning a false 200. The `token` parameter was accepted but never read. Fixed: client.auth.admin.sign_out(jwt=current_user['access_token'], scope='global') against a service-role client (get_service_supabase), which makes a real server-to-server revocation naming WHOSE session to end. tests/test_auth01_signout_revokes_the_real_session.py (4 tests): admin sign-out called with the caller's own token and scope='global'; no service-role client is a clean 503 not a fake success; an admin API failure is a 400; auth is still required. Regression: targeted suite + full validation_sweep/schema_drift (484 passed, 2 failed -- same pre-existing, unrelated billing findings) + an 80-test auth/websocket sweep all clean. Commit b3701ba.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Use admin sign_out(jwt) / revoke refresh tokens for the caller."
+      "remaining_action": "None."
     },
     {
       "id": "ADM-01",
