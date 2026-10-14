@@ -1834,7 +1834,51 @@ class StrategyService:
         # without its account reference (task 8.1's obligation).
         binding_columns = await db_binding.binding_columns_supported(sb)
         db_binding.assert_binding_storable(binding, columns_available=binding_columns)
-        
+
+        # RT-02: the runtime blueprint the fleet will be started with. Built (and so
+        # validated) BEFORE quota is reserved and before any row is written, so a version the
+        # runtime cannot start is refused with a 422 and leaves nothing behind -- it used to be
+        # discovered by BotRunner AFTER the deployment row existed and the quota was spent.
+        # The id here is a placeholder: only the final one, minted below, is ever started.
+        from backend_app.backend import deployment_runtime as dep_runtime
+
+        def _runtime_blueprint(for_deployment_id: str) -> Dict[str, Any]:
+            raw_blueprint = version_data.get("blueprint")
+            is_graph = (
+                isinstance(raw_blueprint, Mapping)
+                and isinstance(raw_blueprint.get("nodes"), list)
+                and bool(raw_blueprint.get("nodes"))
+            )
+            if not is_graph:
+                # A pre-canonical (version-1) row can legitimately carry the legacy
+                # buy_logic/sell_logic/risk document. It runs on the legacy evaluator exactly as
+                # before -- but only if it is actually startable; anything else is refused now,
+                # not after the row exists.
+                try:
+                    assert_blueprint_startable(raw_blueprint, strategy_id=strategy_id)
+                except DeployBlueprintIncomplete as exc:
+                    raise db_binding.DeployRejected(
+                        "RUNTIME_BLUEPRINT_NOT_STARTABLE", str(exc), http_status=422
+                    ) from exc
+                return raw_blueprint
+            try:
+                return dep_runtime.build_runtime_blueprint(
+                    version_data,
+                    deployment_id=for_deployment_id,
+                    strategy_id=strategy_id,
+                    symbol=binding.symbol,
+                    timeframe=binding.timeframe,
+                    exchange_id=binding.exchange_id,
+                    mode=binding.mode,
+                    market_type=binding.market_type,
+                )
+            except dep_runtime.RuntimeBlueprintError as exc:
+                raise db_binding.DeployRejected(
+                    "RUNTIME_BLUEPRINT_NOT_STARTABLE", str(exc), http_status=422
+                ) from exc
+
+        _runtime_blueprint("pending")
+
         # Check quota and entitlements
         from backend_app.core.subscription_engine import SubscriptionEngine, Resource, Feature
         from backend_app.core.subscription_dependencies import get_user_plan
@@ -2057,7 +2101,7 @@ class StrategyService:
             success, message = await app_state.fleet.start_bot(
                 user_id=user["id"],
                 symbol=binding.symbol,
-                blueprint=version_data["blueprint"],
+                blueprint=_runtime_blueprint(deployment_id),
                 paper_trading=(binding.mode != db_binding.MODE_LIVE),
             )
             
@@ -3044,25 +3088,39 @@ class StrategyService:
 
         deployment = deployment_res.data[0]
 
-        # Stop via FleetManager
+        # Stop via FleetManager.
+        #
+        # RT-08. This used to pass `deployment["exchange_id"]` -- the VENUE -- as the symbol the
+        # fleet keys its bots on, so it never matched a bot, and then wrote `stopped` regardless:
+        # a bot kept trading while the row, the quota and the UI said it had stopped. It now
+        # (1) stops by the deployment's real symbol, and (2) when the bot is not in THIS process
+        # writes a durable `stopping` request that the owning process honours on its next
+        # heartbeat and confirms by writing `stopped`. `stopped` is only ever written once a
+        # runtime has actually stopped.
         from backend_app.core.state import app_state
-        if hasattr(app_state, 'fleet'):
-            success, message = await app_state.fleet.stop_bot(
+        stopped_here = False
+        if hasattr(app_state, 'fleet') and deployment.get("exchange_symbol"):
+            stopped_here, _stop_msg = await app_state.fleet.stop_bot(
                 user_id=user["id"],
-                symbol=deployment["exchange_id"]
+                symbol=deployment["exchange_symbol"],
             )
-        
-        # Update deployment status
-        q2 = sb.table("strategy_deployments").update({
+        final_status = "stopped"
+        stop_patch = {
             "status": "stopped",
             "stopped_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", deployment_id).execute()
+        }
+        if not stopped_here and deployment.get("status") in ("running", "deploying"):
+            final_status = "stopping"
+            stop_patch = {"status": "stopping"}
+
+        # Update deployment status
+        q2 = sb.table("strategy_deployments").update(stop_patch).eq("id", deployment_id).execute()
         if inspect.isawaitable(q2):
             await q2
 
         # 1.24/8.5: publish STRATEGY_STATUS immediately after the write above commits.
         await self._publish_strategy_status(
-            user, deployment["strategy_id"], "stopped",
+            user, deployment["strategy_id"], final_status,
             environment=deployment.get("environment"),
         )
 

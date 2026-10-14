@@ -175,6 +175,14 @@ class CommandWorker(WorkerBase):
     async def start(self):
         await redis_manager.connect()
         await _ensure_group(COMMAND_STREAM, CONSUMER_GROUP)
+        # RT-08: a runtime process that restarts picks its deployments back up. Safe on every
+        # worker at once -- start_bot takes the WORK-03 ownership claim, so one pod wins each bot.
+        try:
+            from backend_app.backend.deployment_runtime import \
+                resume_running_deployments
+            self._resume_task = asyncio.create_task(resume_running_deployments(app_state.fleet))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[%s] could not schedule deployment resume: %s", self.worker_id, exc)
         await super().start()
 
     # ---- durability helpers ------------------------------------------------

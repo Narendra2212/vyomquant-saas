@@ -322,13 +322,21 @@ BLUEPRINT = {
 
 def _bot(paper_trading: bool, vault: Any):
     from backend_app.backend.master_executor import BotRunner
+    from tests.fakes_market_data import (FakePublicExchange, make_closed_ohlcv,
+                                         public_factory)
 
+    # RT-01: a paper bot connects to the venue's PUBLIC market data (no credentials). The test
+    # supplies an offline stand-in for it; what these tests pin is what that connection may
+    # and may not be.
     return BotRunner(
         user_id="11111111-1111-1111-1111-111111111111",
         symbol="BTC/USDT",
         strategy_blueprint=dict(BLUEPRINT),
         global_state=_GlobalState(vault),
         paper_trading=paper_trading,
+        public_market_data_factory=public_factory(
+            FakePublicExchange(make_closed_ohlcv(40, "1m"))
+        ),
     )
 
 
@@ -363,14 +371,14 @@ def test_the_real_paper_boot_decrypts_no_credential_and_builds_no_live_adapter(m
     )
 
 
-def test_the_paper_boot_builds_no_ccxt_client(monkeypatch):
-    """``ConnectionEngine`` is constructed, but no network client is.
+def test_the_paper_boot_builds_no_credentialed_ccxt_client(monkeypatch):
+    """The paper market-data connection carries NO credential, so it cannot place an order.
 
-    ``ConnectionEngine.__init__`` only assigns attributes and sets ``self.exchange = None``;
-    the CCXT object is built in ``connect()``, which the paper branch never calls. So the
-    handle ``DataEngine`` receives is ``None`` and there is nothing that could place an
-    order. Asserted because "a ConnectionEngine was constructed" reads alarming in the
-    source and is in fact inert.
+    This used to assert ``bot.exchange is None`` ("the paper branch never calls ``connect()``"),
+    which was true only because the paper bot had no market data at all (RT-01: its loop died on
+    the first read). A paper bot now connects -- keylessly -- to the venue's public feed, so the
+    property worth pinning is the one that made ``None`` safe: the handle holds no key, and the
+    engine holds no executor.
     """
     monkeypatch.setattr(
         "backend_app.backend.exchange_executor.get_exchange_executor",
@@ -380,13 +388,15 @@ def test_the_paper_boot_builds_no_ccxt_client(monkeypatch):
     bot = _bot(paper_trading=True, vault=_ExplodingVault())
     asyncio.run(bot._recover_live_state())
 
-    assert bot.ccxt_bridge is not None, "the paper branch built no ConnectionEngine at all"
+    assert bot.ccxt_bridge is not None, "the paper branch built no market-data connection at all"
     assert bot.ccxt_bridge.api_key is None
-    assert bot.ccxt_bridge.secret_key is None
-    assert bot.exchange is None, (
-        f"paper mode produced a live CCXT exchange handle: {bot.exchange!r}. "
-        f"ConnectionEngine.connect() must not be reached on the paper branch."
-    )
+    assert getattr(bot.ccxt_bridge, "secret_key", None) is None
+    assert bot.exchange is not None, "RT-01: a paper bot must have market data"
+    for attr in ("apiKey", "secret", "password", "uid", "api_key", "api_secret"):
+        assert not getattr(bot.exchange, attr, None), (
+            f"the paper market-data handle carries a credential ({attr})"
+        )
+    assert bot.execution_engine.exchange_executor is None
 
 
 def test_the_live_boot_does_touch_the_vault(monkeypatch):

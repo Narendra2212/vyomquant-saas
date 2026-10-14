@@ -271,6 +271,8 @@ def _deployed_row(*, environment="paper"):
         "user_id": USER_ID,
         "environment": environment,
         "exchange_id": "binance",
+        # RT-08: a stop is routed by the deployment's real symbol (it used to pass the venue).
+        "exchange_symbol": "BTC/USDT",
         "status": "running",
     }
 

@@ -2000,6 +2000,59 @@ async def delete_strategy(
     return result
 
 
+async def _deploy_current_version_paper(user: dict, strategy_id: str) -> Dict[str, Any]:
+    """Deploy a strategy's current version in PAPER mode through the canonical service.
+
+    The single place the legacy ``/deploy`` and ``/resume`` routes start a runtime (RT-03).
+    Raises ``HTTPException`` for every refusal; returns the service's outcome on success.
+    """
+    from backend_app.backend.deployment_binding import (BindingRequest,
+                                                        DeployRejected)
+    from backend_app.backend.strategy_service import (DeployPrerequisiteError,
+                                                      get_strategy_service)
+
+    try:
+        service = await get_strategy_service()
+        strategy = await service.get_strategy(user, strategy_id)
+        version_row = (strategy or {}).get("version") or {}
+        version = version_row.get("version")
+        if not version:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "NO_SAVED_VERSION",
+                        "message": "This strategy has no saved version to deploy. Save a version first."},
+            )
+        outcome = await service.deploy_version(
+            user=user,
+            strategy_id=strategy_id,
+            version=str(version),
+            environment="paper",
+            binding_request=BindingRequest.from_payload({"mode": "paper"}),
+        )
+    except HTTPException:
+        raise
+    except DeployRejected as e:
+        raise HTTPException(status_code=e.http_status, detail=e.to_detail())
+    except DeployPrerequisiteError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "DEPLOY_PREREQUISITE_NOT_MET", "message": str(e),
+                    "missing_prerequisite": e.missing_prerequisite},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=403 if "Quota" in str(e) or "plan" in str(e) else 404,
+                            detail={"error": "DEPLOY_REFUSED", "message": str(e)})
+
+    if not outcome or not outcome.get("success"):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "DEPLOY_FAILED",
+                    "message": f"Deploy failed: {(outcome or {}).get('message') or 'runtime did not start'}"},
+        )
+
+    return outcome
+
+
 # ── POST /api/strategies/{id}/deploy ────────────────────────────────────
 @router.post("/{strategy_id}/deploy")
 async def deploy_bot(
@@ -2059,128 +2112,29 @@ async def deploy_bot(
     except ArchiveRejected as e:
         raise HTTPException(status_code=e.http_status, detail=e.to_detail())
 
-    blueprint = resp.data[0]
-    _lift_dag_fields(blueprint)
-    # Exchange identity is a DEPLOYMENT binding, resolved here at deploy time. It is
-    # deliberately absent from the saved strategy and from the graph (SB-06).
-    blueprint["exchange_id"] = body.get(
-        "exchange_id", blueprint.get("exchange_id", "binance")
-    )
-    
-    # SECURITY: Validate ML/DL strategies have trained models before deployment
-    _validate_ml_models_present(blueprint)
-
-    symbol = blueprint.get("symbol", "BTC/USDT")
-
-    # SECURITY & CONCURRENCY: Atomically reserve bot quota to eliminate TOCTOU races
-    plan_key = await get_user_plan(user["id"], sb)
-    allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Resource.BOTS.value)
-    if not allowed:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Quota exceeded for {Resource.BOTS.value}: {current_usage}/{limit}. Upgrade your plan to continue."
-        )
-
-    use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
-    
-    try:
-        if use_tee:
-            logger.info(f"[STRATEGIES] Delegating deployment of {strategy_id} to TEE")
-            # The mode travels WITH the command. Both consumers
-            # (`workers/command_worker.py`, `tee/main.py`) now refuse a start_bot command
-            # that does not state it, so omitting it would start nothing rather than start
-            # something in an unestablished mode.
-            #
-            # `True`, for the same reason as the local branch below: this endpoint resolves
-            # no Deployment_Binding and travels no Requirement 13 gate, so nothing here
-            # establishes that live trading was authorised.
-            # Regression: tests/test_live_deployment_mode_propagation.py
-            await publish_command(
-                "start_bot", 
-                {
-                    "user_id": user["id"],
-                    "symbol": symbol,
-                    "blueprint": blueprint,
-                    "paper_trading": True,
-                }
-            )
-        else:
-            logger.info(f"[STRATEGIES] Executing deployment of {strategy_id} locally (Legacy Mode)")
-            # FORCED PAPER, and not a placeholder.
-            #
-            # This endpoint resolves no Deployment_Binding: it binds no exchange account, no
-            # risk configuration and no mode, and it travels none of the Requirement 13
-            # gates — which is precisely why the frontend was re-pointed off it to
-            # `POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy`.
-            # With nothing establishing that live trading was authorised for this strategy,
-            # on this account, the only honest mode is paper. The gated endpoint is where a
-            # live deployment is made.
-            # Regression: tests/test_live_deployment_mode_propagation.py
-            success, message = await fleet.start_bot(
-                user["id"], symbol, blueprint, paper_trading=True
-            )
-
-            if not success:
-                await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-                logger.error(f"[STRATEGIES] Deploy failed for strategy {strategy_id}: {message}")
-                raise HTTPException(400, f"Deploy failed: {message}")
-    except PublishError as e:
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        logger.error(f"[STRATEGIES] PublishError deploying strategy {strategy_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOY_DISPATCH_FAILED", "message": str(e)}
-        )
-    except Exception as e:
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        raise
-
-    try:
-        sb = await _sb(user)
-        if sb:
-            await sb.table("strategies").update({"status": "running"}).eq(
-                "id", strategy_id
-            ).execute()
-    except Exception as e:
-        if not use_tee and hasattr(fleet, "stop_bot"):
-            try:
-                await fleet.stop_bot(user["id"], symbol)
-            except Exception:
-                pass
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
-        raise HTTPException(status_code=503, detail="Unable to update strategy status after deployment. Please try again later.")
+    # ── RT-03: THIS ROUTE NO LONGER STARTS A BOT ITSELF ─────────────────────────────
+    # It used to build a blueprint from the `strategies` row and call `fleet.start_bot` with
+    # no Deployment_Binding, no `strategy_deployments` row and no lifecycle transition. For a
+    # strategy saved by the current builder that blueprint carried a graph and none of the
+    # `buy_logic`/`sell_logic`/`risk` the legacy evaluator reads, so the bot started and could
+    # never emit an order -- while this route answered `{"status": "running"}`.
+    #
+    # It is now a thin PAPER-ONLY entry point onto the one canonical deploy
+    # (`StrategyService.deploy_version`): same gates, same quota, same row, same runtime
+    # (DAGEngine.execute_plan). The mode is fixed to paper because this route has never
+    # carried a Requirement 13 binding; a live deployment is made through
+    # POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy.
+    # Regression: tests/test_rt03_legacy_deploy_route_uses_canonical_deploy.py
+    outcome = await _deploy_current_version_paper(user, strategy_id)
 
     asyncio.create_task(
         ws_mgr.broadcast_user(
             user["id"],
-            {
-                "type": "bot_status",
-                "strategy_id": strategy_id,
-                "status": "running",
-                "symbol": symbol,
-            },
+            {"type": "bot_status", "strategy_id": strategy_id, "status": "running"},
         )
     )
-
-    try:
-        from backend_app.core.notification_dispatcher import dispatch_user_notification
-        await dispatch_user_notification(
-            user_id=user["id"],
-            event_type="strategy_deployed",
-            category="strategy",
-            severity="info",
-            title=f"Strategy Deployed: {symbol}",
-            message=f"Strategy '{blueprint.get('name', strategy_id)}' is now running live on {symbol}.",
-            strategy_id=strategy_id,
-            metadata={"symbol": symbol, "strategy_id": strategy_id, "idempotency_key": f"strat_deploy:{user['id']}:{strategy_id}"},
-            ws_manager=ws_mgr,
-        )
-    except Exception as notif_err:
-        logger.debug(f"[STRATEGIES] Notification dispatch error: {notif_err}")
-
     logger.info(f"[STRATEGIES] Strategy {strategy_id} deployed successfully")
-    return {"status": "running"}
+    return {"status": "running", "deployment_id": (outcome.get("deployment") or {}).get("id")}
 
 
 # ── POST /api/strategies/{id}/stop ───────────────────────────────────────
@@ -2214,30 +2168,16 @@ async def stop_bot(
         return {"status": "already_stopped"}
 
     symbol = resp.data[0]["symbol"]
-    
-    use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
-    
-    try:
-        if use_tee:
-            logger.info(f"[STRATEGIES] Delegating stop of {strategy_id} to TEE")
-            await publish_command(
-                "stop_bot",
-                {
-                    "user_id": user["id"],
-                    "symbol": symbol,
-                },
-            )
-        else:
-            logger.info("[STRATEGIES] Stopping bot locally (Legacy Mode)")
-            await fleet.stop_bot(user["id"], symbol)
-    except PublishError as e:
-        logger.error(f"[STRATEGIES] PublishError stopping strategy {strategy_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STOP_DISPATCH_FAILED", "message": str(e)}
-        )
 
-    logger.info(f"[STRATEGIES] Strategy {strategy_id} stopped. Order cleanup handled by BotRunner.")
+    # RT-03/RT-08: stop through the canonical service, which stops each running DEPLOYMENT of
+    # this strategy by its real symbol and writes a durable stop request when the bot is owned
+    # by another process. (This route used to call `fleet.stop_bot` directly and then mark the
+    # strategy stopped whether or not any bot had been reached.)
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    service = await get_strategy_service()
+    stopped = await service.stop_all_deployments(user, strategy_id)
+    logger.info(f"[STRATEGIES] Strategy {strategy_id}: {stopped} deployment(s) stopped.")
 
     sb = await _sb(user)
     if sb:
@@ -2245,16 +2185,13 @@ async def stop_bot(
             "id", strategy_id
         ).execute()
 
-    # Decrement bot usage only when transitioning from running -> stopped
-    await decrement_usage(Resource.BOTS.value, user)
-
     asyncio.create_task(
         ws_mgr.broadcast_user(
             user["id"],
             {"type": "bot_status", "strategy_id": strategy_id, "status": "stopped"},
         )
     )
-    
+
     try:
         from backend_app.core.notification_dispatcher import dispatch_user_notification
         await dispatch_user_notification(
@@ -3878,11 +3815,14 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
     if not rec.get("is_active") or rec.get("status") == "paused":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already paused.")
     
-    symbol = rec.get("symbol", "BTC/USDT")
-    bot_stopped = True
-    if hasattr(fleet, "stop_bot"):
-        bot_stopped, _ = await fleet.stop_bot(user["id"], symbol)
-        
+    # RT-03/RT-08: stop through the canonical service (by each deployment's real symbol, with a
+    # durable stop request when another process owns the bot) rather than `fleet.stop_bot`
+    # keyed on the strategy row's symbol, which only ever matched a bot in THIS process.
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    service = await get_strategy_service()
+    bot_stopped = (await service.stop_all_deployments(user, strategy_id)) >= 0
+
     try:
         upd = await sb.table("strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
     except Exception as e:
@@ -3919,23 +3859,12 @@ async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_use
     }
     _validate_ml_models_present(blueprint)
     
-    symbol = rec.get("symbol", "BTC/USDT")
-    dag_config = rec.get("dag_config") or {"strategy_id": strategy_id}
-    bot_started = True
+    # RT-03: resume = a fresh PAPER deployment of the current version through the canonical
+    # deploy. This handler used to hand `dag_config` (no venue) to `fleet.start_bot`, which
+    # `BotRunner.__init__` refused, so a resume could never succeed.
     msg = "Resumed successfully"
-    
-    if hasattr(fleet, "start_bot"):
-        # FORCED PAPER. This path resumes from a `strategies` row, which carries no mode
-        # column — the mode lives on `strategy_deployments` and is resolved by the binding
-        # gates, neither of which this handler consults. A resume that cannot establish the
-        # strategy was authorised to trade live must not start it live.
-        # Regression: tests/test_live_deployment_mode_propagation.py
-        bot_started, msg = await fleet.start_bot(
-            user["id"], symbol, dag_config, paper_trading=True
-        )
-        if not bot_started:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fleet failed to resume strategy bot: {msg}")
-            
+    await _deploy_current_version_paper(user, strategy_id)
+
     try:
         upd = await sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
     except Exception as e:

@@ -254,6 +254,8 @@ _runtime_service_status: dict = {}
 
 # BILL-01: handle of the plan-expiry sweep task started in lifespan
 _plan_expiry_task = None
+# RT-08: handle of the resume-after-restart task started in lifespan
+_resume_task = None
 
 
 # ── Lifespan: boot + graceful shutdown ──────────────────────────────
@@ -474,6 +476,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         service_status["plan_expiry_sweep"] = "INACTIVE"
         logger.warning(f" PlanExpirySweep: INACTIVE — {e}")
+
+    # ── RT-08: resume deployments the database says are running ────────────
+    # Runs in the background so a slow venue cannot delay readiness. Skipped when bots are
+    # delegated to a separate runtime (USE_TEE). Live deployments are only resumed when the
+    # operator opted in (RESUME_LIVE_DEPLOYMENTS); otherwise their rows are marked failed.
+    global _resume_task
+    try:
+        if os.environ.get("USE_TEE", "false").lower() != "true" and getattr(app_state, "fleet", None):
+            from backend_app.backend.deployment_runtime import \
+                resume_running_deployments
+            _resume_task = asyncio.create_task(resume_running_deployments(app_state.fleet))
+            service_status["deployment_resume"] = "ACTIVE"
+        else:
+            service_status["deployment_resume"] = "INACTIVE"
+    except Exception as e:
+        service_status["deployment_resume"] = "INACTIVE"
+        logger.warning(f" DeploymentResume: INACTIVE — {e}")
 
     # ── Runtime Service: PortfolioCacheUpdater ─────────────────────────────
     try:

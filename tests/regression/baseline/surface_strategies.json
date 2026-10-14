@@ -972,18 +972,11 @@
             {
               "detail_type": "str",
               "status_code": 503
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "DEPLOY_DISPATCH_FAILED",
-              "status_code": 500
             }
           ],
           "returns": [
             {
+              "deployment_id": "computed",
               "status": "str"
             }
           ],
@@ -1157,5 +1150,6 @@
   "supabase_auth_calls": [],
   "surface": "strategies",
   "unresolved_usages": [],
-  "_baseline_note_trading_capabilities_call": "FE-03 AUTHORISES one ADDED frontend call: GET /api/system/trading-capabilities (Strategies.jsx). The deploy modal previously offered Live unconditionally; it now asks the server whether live trading is available (public, read-only, fail-closed to paper) before offering Live."
+  "_baseline_note_trading_capabilities_call": "FE-03 AUTHORISES one ADDED frontend call: GET /api/system/trading-capabilities (Strategies.jsx). The deploy modal previously offered Live unconditionally; it now asks the server whether live trading is available (public, read-only, fail-closed to paper) before offering Live.",
+  "_baseline_note_legacy_deploy_delegates_rt03": "RT-03 AUTHORISES two changes on api_calls[13] (POST /api/strategies/{id}/deploy): (a) the response gained ONE key, `deployment_id` (additive; `status` is unchanged), and (b) the handler no longer raises the 500 `DEPLOY_DISPATCH_FAILED`. WHY. This route used to build a blueprint from the `strategies` row and call fleet.start_bot / publish a TEE command directly, with no Deployment_Binding and no strategy_deployments row; for a strategy saved by the current builder that bot could never emit an order while the route answered {status: running}. It now delegates to StrategyService.deploy_version (paper mode), the one canonical deploy, which owns dispatch and reports its own refusals (4xx via DeployRejected, 400 DEPLOY_FAILED). No existing response key was removed, renamed or retyped. Regression: tests/test_rt08_deployment_state_is_durable.py::TestLegacyRoutesDelegate."
 }

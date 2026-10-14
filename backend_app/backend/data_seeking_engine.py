@@ -61,7 +61,10 @@ class DataEngine:
                 for trade in trades:
                     yield trade
             except asyncio.CancelledError:
-                break
+                # RT-01: re-raise. This used to `break`, which made a CANCELLED stream look like
+                # one that had simply ended, so the consumer could not tell a shutdown from the
+                # venue dropping the feed.
+                raise
             except Exception as e:
                 await self._handle_stream_error("Tick Stream", e)
 

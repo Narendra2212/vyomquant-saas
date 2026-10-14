@@ -371,6 +371,19 @@ def _user() -> Dict[str, Any]:
     return {"id": USER_ID, "email": "race@example.com", "access_token": "tok_12_6"}
 
 
+# RT-02: deploy now refuses a version whose blueprint the runtime cannot start BEFORE any row
+# is written. These tests are about the lifecycle, not the blueprint, so they use the smallest
+# STARTABLE (legacy-shaped) blueprint; graph-shaped deploys are covered by
+# tests/test_rt02_builder_strategy_runs_on_deployment_runtime.py.
+_STARTABLE_BLUEPRINT = {
+    "nodes": [],
+    "edges": [],
+    "exchange_id": "binance",
+    "buy_logic": {"op": "AND", "conditions": []},
+    "sell_logic": {"op": "AND", "conditions": []},
+    "risk": {"trade_size_pct": 1.0, "stop_loss_pct": 2.0, "take_profit_pct": 4.0},
+}
+
 def _compiled_plan(dag_hash: str) -> Dict[str, Any]:
     return {
         "dag_hash": dag_hash,
@@ -419,7 +432,7 @@ def _fresh_world(*, seed_running_deployment: bool) -> _FakeSupabase:
                 "id": version_id,
                 "strategy_id": STRATEGY_ID,
                 "version": VERSION_LABEL,
-                "blueprint": {"nodes": [], "edges": []},
+                "blueprint": dict(_STARTABLE_BLUEPRINT),
                 "validation_state": "VALID",
                 "dag_hash": "d" * 16,
                 "compiled_plan": _compiled_plan("d" * 16),

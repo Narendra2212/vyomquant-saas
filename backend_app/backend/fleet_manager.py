@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import inspect
 import logging
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -25,12 +26,40 @@ class FleetManager:
     Tracks every live BotRunner asyncio Task.
     """
 
-    def __init__(self):
+    def __init__(self, state_store: Any = None):
+        # RT-08: where this fleet reports a bot's death and reads a user's stop request.
+        # ``None`` = the platform's service-role store, created on first use.
+        self._state_store = state_store
         # { "user123_BTCUSDT": {"task": Task, "bot": BotRunner, "symbol": "BTC/USDT"} }
         self._active_fleet: Dict[str, Dict[str, Any]] = {}
         self.MAX_SYSTEM_BOTS = 3000
         self.MAX_BOTS_PER_USER = 5
         self._lock = asyncio.Lock()  # FIX FM-3
+
+    def _store(self):
+        if self._state_store is None:
+            from backend_app.backend.deployment_state import DeploymentStateStore
+
+            self._state_store = DeploymentStateStore()
+        return self._state_store
+
+    @staticmethod
+    def _deployment_id_of(bot: Any) -> Optional[str]:
+        blueprint = getattr(bot, "blueprint", None)
+        if isinstance(blueprint, dict):
+            value = blueprint.get("deployment_id")
+            return str(value) if value else None
+        return None
+
+    async def _report_failure(self, bot: Any, reason: str) -> None:
+        """RT-08: a bot that died on its own must not leave its row saying 'running'."""
+        deployment_id = self._deployment_id_of(bot)
+        if not deployment_id:
+            return    # a legacy start with no deployment row: nothing durable to update
+        try:
+            await self._store().mark_failed(deployment_id, reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("could not report failure of deployment %s: %s", deployment_id, exc)
 
     def _bot_key(self, user_id: str, symbol: str) -> str:
         return f"{user_id}_{symbol.replace('/', '_')}"
@@ -256,6 +285,12 @@ class FleetManager:
                 )
                 return
 
+            # RT-08: a user's stop is a DURABLE request on the deployment row, so it reaches
+            # this bot even when the request was served by another process.
+            if await self._stop_requested(bot_key):
+                asyncio.create_task(self._honour_stop_request(bot_key))
+                return
+
     async def _boot_and_run(self, bot, bot_key: str):
         """Background task: initialize the bot then enter the trading loop.
         FIX 1: Runs outside the HTTP request so Gunicorn timeout cannot kill it."""
@@ -266,6 +301,7 @@ class FleetManager:
             logger.error(f"Bot boot failed [{bot_key}]: {e}")
             async with self._lock:
                 record = self._active_fleet.pop(bot_key, None)
+            await self._report_failure(bot, f"boot failed: {type(e).__name__}: {e}")
             # WORK-03: this branch pops the record itself, so the done-callback that
             # normally releases the claim finds nothing and the claim LEAKS -- stranding
             # the bot for a full stale interval after a boot failure. Release here.
@@ -276,6 +312,70 @@ class FleetManager:
             return
 
         await bot._run_trading_loop()
+
+    async def _stop_requested(self, bot_key: str) -> bool:
+        """Read the deployment row; apply pause/resume to the local bot; True if a stop is due.
+
+        RT-08: pause/resume used to flip the row only ("lifecycle state machine rather than the
+        in-process runtime"), so a PAUSED deployment kept trading. The owner now follows the row.
+        """
+        record = self._active_fleet.get(bot_key)
+        deployment_id = self._deployment_id_of(record.get("bot")) if record else None
+        if not deployment_id:
+            return False
+        status = await self._store().status_of(deployment_id)
+        bot = record["bot"]
+        if status == "paused":
+            bot.paused = True
+        elif status in ("running", "deploying"):
+            bot.paused = False
+        return status in ("stopping", "stopped")
+
+    async def _honour_stop_request(self, bot_key: str) -> None:
+        """Stop the local bot because its deployment row says so, then confirm it."""
+        record = self._active_fleet.get(bot_key)
+        if record is None:
+            return
+        bot, symbol = record["bot"], record["symbol"]
+        deployment_id = self._deployment_id_of(bot)
+        logger.warning("RT-08: stop requested for %s via the deployment row; stopping.", bot_key)
+        ok, _ = await self.stop_bot(getattr(bot, "user_id"), symbol)
+        if ok and deployment_id:
+            await self._store().mark_stopped(deployment_id)
+
+    async def resume_deployments(self, rebuild) -> Dict[str, int]:
+        """RT-08: after a restart, start what the database says should be running.
+
+        ``rebuild(row) -> (blueprint, paper_trading)`` or raises. Safe on every pod at once:
+        ``start_bot`` takes the WORK-03 ownership claim, so exactly one pod wins each bot and
+        the others are refused. Rows a user had asked to stop (``stopping``) are finalised to
+        ``stopped`` rather than restarted. A row that cannot be rebuilt is marked ``failed``
+        with the reason; it is never left saying ``running``.
+        """
+        outcome = {"started": 0, "refused": 0, "failed": 0, "finalised_stop": 0}
+        store = self._store()
+        for row in await store.rows_in(("stopping",)):
+            if await store.mark_stopped(str(row["id"])):
+                outcome["finalised_stop"] += 1
+        for row in await store.rows_in(("running", "deploying")):
+            deployment_id = str(row["id"])
+            try:
+                built = rebuild(row)
+                if inspect.isawaitable(built):
+                    built = await built
+                blueprint, paper = built
+            except Exception as exc:  # noqa: BLE001
+                await store.mark_failed(deployment_id, f"could not resume after restart: {exc}")
+                outcome["failed"] += 1
+                continue
+            ok, msg = await self.start_bot(
+                str(row["user_id"]), str(row.get("exchange_symbol") or blueprint["symbol"]),
+                blueprint, paper_trading=paper,
+            )
+            outcome["started" if ok else "refused"] += 1
+            if not ok:
+                logger.info("resume of deployment %s not started here: %s", deployment_id, msg)
+        return outcome
 
     async def stop_bot(self, user_id: str, symbol: str) -> Tuple[bool, str]:
         bot_key = self._bot_key(user_id, symbol)
@@ -340,13 +440,22 @@ class FleetManager:
             self._cancel_claim_heartbeat(record)
             release_bot(record.get("claim"))
 
+        bot = record.get("bot") if record else None
         try:
             task.result()
-            logger.info(f"Bot exited cleanly: {bot_key}")
+            if record is not None:
+                # `stop_bot` pops the record BEFORE it cancels, so a record still present means
+                # nobody asked this bot to stop. A return that nobody asked for is a death.
+                reason = getattr(bot, "exit_reason", None) or "runtime exited without a stop request"
+                logger.error(f"Bot exited without a stop request [{bot_key}]: {reason}")
+                await self._report_failure(bot, reason)
+            else:
+                logger.info(f"Bot exited cleanly: {bot_key}")
         except asyncio.CancelledError:
-            pass  # normal stop
+            pass  # normal stop (or ownership surrendered -- the new owner reports)
         except Exception as e:
             logger.critical(f"Bot FATAL CRASH [{bot_key}]: {e}")
+            await self._report_failure(bot, f"crashed: {type(e).__name__}: {e}")
             from backend_app.core.state import app_state
 
             asyncio.create_task(

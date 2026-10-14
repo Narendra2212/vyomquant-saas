@@ -41,6 +41,9 @@ from backend_app.backend.indicators_backend import (adx, atr,
                                                     stochastic, supertrend,
                                                     trix, vortex_indicator,
                                                     williams_r, wma)
+from backend_app.backend.deployment_runtime import (ClosedBar,
+                                                    GraphSignalEvaluator,
+                                                    is_graph_blueprint)
 from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.backend.ml_models import create_ml_block
 from backend_app.core.risk_manager import RiskVerdict, TradeRequest
@@ -112,10 +115,21 @@ class BotRunner:
         global_state,
         *,
         paper_trading: bool,
+        public_market_data_factory=None,
     ):
         self.user_id = user_id
         self.symbol = symbol
         self.blueprint = strategy_blueprint
+
+        # RT-01: how a PAPER bot obtains market data. ``None`` = the venue's public, keyless
+        # ccxt endpoints. Tests inject a fake. It is NEVER the DEV_MODE mock: that streams a
+        # constant 50,000 for every symbol.
+        self._public_market_data_factory = public_market_data_factory
+        # RT-01/RT-08: why the runtime stopped, for the fleet to write to the deployment row.
+        self.exit_reason: Optional[str] = None
+        # RT-08: set by the fleet from the deployment row. A paused bot keeps consuming market
+        # data (so indicators stay current) but opens no new orders.
+        self.paused: bool = False
 
         # ── THE MODE. REQUIRED, KEYWORD-ONLY, AND NOT READ FROM THE BLUEPRINT ──
         #
@@ -182,6 +196,15 @@ class BotRunner:
         # ── Strategy evaluation engine ───────────────────────────────────
         self.strategy_engine = StrategyEngine(self.risk_manager, self.telemetry)
 
+        # RT-02/RT-05: a deployment of a builder-saved strategy is evaluated by the canonical
+        # DAG runtime (DAGEngine.execute_plan), not by the legacy buy_logic/sell_logic engine.
+        # Constructed here so an uncompilable graph fails the START, not the first tick.
+        self.graph_eval: Optional[GraphSignalEvaluator] = (
+            GraphSignalEvaluator(strategy_blueprint)
+            if is_graph_blueprint(strategy_blueprint)
+            else None
+        )
+
         # ── Exposure tracking (coins held) ───────────────────────────────
         self.recovered_exposure_coins = Decimal("0")
 
@@ -208,21 +231,29 @@ class BotRunner:
         # the constructor for what reading it from the blueprint did.
         is_paper = self.paper_trading
 
-        # FIX 2: Paper trading fast-path — skip ALL real CCXT calls.
-        # Real exchange I/O can take 30-270s and kills the Gunicorn worker.
+        if self.ccxt_bridge is not None:   # a reconnect: release the old client first
+            try:
+                await self.ccxt_bridge.disconnect()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"previous market-data client did not close cleanly: {exc}")
+
+        # PAPER bots hold NO credentials and place NO real orders, but they need REAL market
+        # data: a paper result computed on invented prices is worse than no result.
+        #
+        # RT-01. This branch used to build a ``ConnectionEngine`` with no keys, call
+        # ``_apply_mock_interface()`` -- a no-op, because ``exchange`` is None until
+        # ``connect()`` -- and hand ``DataEngine(None)`` to the loop, which died on its first
+        # attribute read, retried five times and exited "cleanly" while the deployment row still
+        # said ``running``. Even with a client the mock streams a constant 50,000 for every
+        # symbol. It now connects KEYLESSLY to the venue's public market data, with the DEV_MODE
+        # mock disabled, so a failure to reach the venue is a failed start the fleet records
+        # rather than fabricated prices.
         if is_paper:
             logger.info(
-                f"[PAPER] Bot {self.user_id}/{self.symbol}: skipping real exchange "
-                f"connection (paper_trading=True). Using mock interface."
+                f"[PAPER] Bot {self.user_id}/{self.symbol}: connecting to PUBLIC market data "
+                f"on {self.exchange_id} (no credentials; no real orders)."
             )
-            self.ccxt_bridge = ConnectionEngine(
-                self.exchange_id,
-                api_key=None,
-                secret_key=None,
-            )
-            # Inject mock interface directly — avoids network call
-            self.ccxt_bridge._apply_mock_interface()
-            self.exchange = self.ccxt_bridge.exchange
+            self.ccxt_bridge, self.exchange = await self._connect_public_market_data()
             self.data_engine = DataEngine(self.exchange)
 
             # ── PAPER-01: THE CANONICAL PAPER LEDGER ──────────────────────
@@ -270,6 +301,7 @@ class BotRunner:
                 # tests/test_execution_engine_mode_matches_its_branch.py
                 execution_environment=ExecutionEnvironment.PAPER,
             )
+            await self._warm_up_from_history()
             logger.info(f"[PAPER] Bot {self.user_id}/{self.symbol} ready (paper mode).")
             return
 
@@ -355,17 +387,44 @@ class BotRunner:
             execution_environment=ExecutionEnvironment.LIVE,
         )
 
-        # 4. Warm up the Numba circular buffer with historical OHLCV
-        ohlcv = await self.data_engine.fetch_historical_ohlcv(
-            self.symbol, timeframe=self.blueprint.get("timeframe", "1m"), limit=1_000
-
-        )
-        self.data_processor.warm_up_history(self.symbol, self.timeframe_sec, ohlcv)
+        # 4. Warm up the Numba circular buffer (and the DAG window) with historical OHLCV
+        await self._warm_up_from_history()
 
         logger.info(
             f"Bot ready — {self.symbol} on {self.exchange_id}. "
             f"Exposure: {self.recovered_exposure_coins} {base_coin}"
         )
+
+    async def _connect_public_market_data(self):
+        """``(bridge, exchange)`` for the venue's PUBLIC data. Never carries credentials."""
+        if self._public_market_data_factory is not None:
+            return await self._public_market_data_factory(self.exchange_id)
+        from backend_app.backend.connection_engine import ConnectionEngine
+
+        bridge = ConnectionEngine(self.exchange_id, api_key=None, secret_key=None)
+        exchange = await bridge.connect(allow_mock=False)
+        return bridge, exchange
+
+    async def _warm_up_from_history(self) -> None:
+        """Fill the Numba buffer and the DAG window from CLOSED historical bars.
+
+        The newest row an exchange returns is usually the still-FORMING candle. Treating it as
+        closed would hand every indicator a partial bar and lose that bar's real close, so it is
+        dropped when its period has not ended.
+        """
+        timeframe = self.blueprint.get("timeframe", "1m")
+        ohlcv = await self.data_engine.fetch_historical_ohlcv(
+            self.symbol, timeframe=timeframe, limit=1_000
+        )
+        now_ms = int(time.time() * 1000)
+        tf_ms = self.timeframe_sec * 1000
+        closed = [row for row in (ohlcv or []) if int(row[0]) + tf_ms <= now_ms]
+        self.data_processor.warm_up_history(self.symbol, self.timeframe_sec, closed)
+        if self.graph_eval is not None and closed:
+            admitted = self.graph_eval.warm_up([ClosedBar.from_ohlcv_row(r) for r in closed])
+            logger.info(
+                f"Bot {self.user_id}/{self.symbol}: DAG window warmed with {admitted} closed bars."
+            )
 
     # ══════════════════════════════════════════════════════════════════════
     #  LIVE TRADING LOOP
@@ -391,6 +450,7 @@ class BotRunner:
 
             except Exception as e:
                 reconnect_attempts += 1
+                self._last_error = f"{type(e).__name__}: {e}"
                 wait = min(2**reconnect_attempts, 60)
                 logger.error(
                     f"Bot {self.user_id}/{self.symbol} loop crashed: {e}. "
@@ -411,6 +471,10 @@ class BotRunner:
                     logger.critical(f"Reconnection failed: {reconnect_err}")
 
         if reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
+            self.exit_reason = (
+                f"gave up after {MAX_RECONNECT_ATTEMPTS} reconnection attempts"
+                + (f": {self._last_error}" if getattr(self, "_last_error", None) else "")
+            )
             logger.critical(
                 f"Bot {self.user_id}/{self.symbol} gave up after "
                 f"{MAX_RECONNECT_ATTEMPTS} reconnection attempts."
@@ -446,55 +510,56 @@ class BotRunner:
                 if not new_candles:
                     continue  # no closed candle yet — keep accumulating ticks
 
-                # ── Get historical matrix ─────────────────────────────────
-                matrix = self.data_processor.get_historical_matrix_for_ml(
-                    self.symbol, self.timeframe_sec
-                )
-                if len(matrix) < 30:
-                    continue  # not enough history for indicators
-
-                close = matrix[:, 4].astype("float64")
-                high = matrix[:, 2].astype("float64")
-                low = matrix[:, 3].astype("float64")
-                volume_arr = matrix[:, 5].astype("float64")
-
-                # ── FIX ME-1: Compute ALL indicator values ─────────────────
-                live_state = self._build_live_state(price, close, high, low, volume_arr)
-
-                # ── ML inference (FIX ME-6: timeout guard) ───────────────
-                if self.ml_block:
-                    try:
-                        confidence = await asyncio.wait_for(
-                            asyncio.to_thread(self.ml_block.live_inference, matrix),
-                            timeout=ML_INFERENCE_TIMEOUT,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            f"ML inference timeout on {self.symbol}. Skipping tick."
-                        )
+                # ── Per-tick state for the strategy engine in use ─────────
+                if self.graph_eval is None:
+                    live_state = await self._legacy_live_state(price)
+                    if live_state is None:
                         continue
-                    live_state["ML_Prediction"] = float(confidence)
                 else:
-                    live_state["ML_Prediction"] = 1.0  # no ML: trust technicals only
+                    # The DAG window carries its own history and indicators; this dict only
+                    # feeds the signal-trace audit record below.
+                    live_state = {"Close": price, "ML_Prediction": 1.0}
 
                 # ── Fetch live USDT balance for position sizing ───────────
                 # Cache this every N seconds instead of every tick in production
-                try:
-                    wallet = await self.data_engine.fetch_wallet_balance_snapshot()
-                    bal_usdt = float(wallet.get("USDT", {}).get("free", 0.0))
-                except Exception:
-                    bal_usdt = 0.0
+                if self.paper_trading:
+                    # A paper bot's capital is its ledger cash. Its market-data connection is
+                    # keyless, so there is no wallet to read (and a read would only fail).
+                    bal_usdt = float(self.execution_engine.cash)
+                else:
+                    try:
+                        wallet = await self.data_engine.fetch_wallet_balance_snapshot()
+                        bal_usdt = float(wallet.get("USDT", {}).get("free", 0.0))
+                    except Exception:
+                        bal_usdt = 0.0
 
                 # ── Evaluate strategy ─────────────────────────────────────
-                order_payload = await self.strategy_engine.run_logic(
-                    user_id=self.user_id,
-                    symbol=self.symbol,
-                    strategy_blueprint=self.blueprint,
-                    current_state=live_state,
-                    live_balance_usdt=bal_usdt,  # FIX SB-1 in strategy_builder
-                )
+                if self.graph_eval is not None:
+                    # RT-02/RT-05: the canonical DAG evaluator (DAGEngine.execute_plan).
+                    order_payload = await asyncio.to_thread(
+                        self.graph_eval.on_closed_bars,
+                        [ClosedBar.from_candle(c) for c in new_candles],
+                        price=price,
+                        equity=float(self.execution_engine.current_equity),
+                        free_quote=bal_usdt,
+                        position_base=float(self.recovered_exposure_coins),
+                    )
+                    if order_payload:
+                        order_payload["user_id"] = self.user_id
+                else:
+                    order_payload = await self.strategy_engine.run_logic(
+                        user_id=self.user_id,
+                        symbol=self.symbol,
+                        strategy_blueprint=self.blueprint,
+                        current_state=live_state,
+                        live_balance_usdt=bal_usdt,  # FIX SB-1 in strategy_builder
+                    )
 
                 if not order_payload:
+                    continue
+
+                if self.paused:
+                    logger.info(f"Bot {self.user_id}/{self.symbol} is paused; signal not executed.")
                     continue
 
                 # ── FIX ME-3: is_reduce_only from explicit payload field ──
@@ -514,7 +579,7 @@ class BotRunner:
                         side=order_payload["side"],
                         amount=order_payload["qty"],
                         current_price=price,
-                        current_exposure=self.recovered_exposure_coins * price,
+                        current_exposure=float(self.recovered_exposure_coins) * price,  # Decimal * float is a TypeError
                         current_drawdown_pct=current_drawdown_pct,
                         daily_pnl_pct=daily_pnl_pct,
                         is_reduce_only=is_reduce,
@@ -710,10 +775,12 @@ class BotRunner:
                     # ── Record execution result ─────────────────────────────
                     # RT-06: see `settle_exposure` - only a `completed` result is a fill.
                     _status = result.get("status") if result else None
-                    if _status == "completed":
-                        _tr = result.get("result", {})
-                        if _tr:
-                            self.data_processor.record_execution(_tr)
+                    # (This block used to call `self.data_processor.record_execution(_tr)`.
+                    # No such method exists on DataProcessorEngine -- or anywhere -- so every
+                    # COMPLETED order raised AttributeError here, the except below "rolled back"
+                    # the exposure the fill had just created, and the bot believed it held
+                    # nothing after buying: it could never size a sell and would buy again.
+                    # Found by tests/test_rt02_*; the exposure is settled by `settle_exposure`.)
                     filled_qty, self.recovered_exposure_coins = settle_exposure(
                         side=side,
                         qty=qty,
@@ -764,6 +831,45 @@ class BotRunner:
                     # ── Release Redis lock ────────────────────────────────
                     await redis_client.delete(lock_key)
                     logger.debug(f"🔓 Released execution lock for {execution_id}")
+
+        # RT-01: `stream_live_ticks` RETURNS (it does not raise) when the venue offers no
+        # watchTrades. Falling off the end used to be reported upstream as a clean exit: the
+        # bot was gone, the deployment row still said running, and nothing was logged. A market
+        # data stream that ends is a failure the reconnect/give-up logic must see.
+        raise RuntimeError(
+            f"market data stream for {self.symbol} on {self.exchange_id} ended unexpectedly"
+        )
+
+    async def _legacy_live_state(self, price: float):
+        """The legacy engine's per-tick indicator state, or ``None`` to skip the tick."""
+        matrix = self.data_processor.get_historical_matrix_for_ml(
+            self.symbol, self.timeframe_sec
+        )
+        if len(matrix) < 30:
+            return None  # not enough history for indicators
+
+        close = matrix[:, 4].astype("float64")
+        high = matrix[:, 2].astype("float64")
+        low = matrix[:, 3].astype("float64")
+        volume_arr = matrix[:, 5].astype("float64")
+
+        # ── FIX ME-1: Compute ALL indicator values ─────────────────
+        live_state = self._build_live_state(price, close, high, low, volume_arr)
+
+        # ── ML inference (FIX ME-6: timeout guard) ───────────────
+        if self.ml_block:
+            try:
+                confidence = await asyncio.wait_for(
+                    asyncio.to_thread(self.ml_block.live_inference, matrix),
+                    timeout=ML_INFERENCE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"ML inference timeout on {self.symbol}. Skipping tick.")
+                return None
+            live_state["ML_Prediction"] = float(confidence)
+        else:
+            live_state["ML_Prediction"] = 1.0  # no ML: trust technicals only
+        return live_state
 
     # ══════════════════════════════════════════════════════════════════════
     #  FIX ME-1: BUILD COMPLETE live_state WITH ALL INDICATORS
