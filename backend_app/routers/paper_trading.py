@@ -777,27 +777,36 @@ def _resolve_listing_key(supabase: Any, body: PaperSessionStartRequest) -> str:
     return listing_id or strategy_key
 
 
-def _recorded_measurements() -> Optional[Mapping[str, Any]]:
+async def _recorded_measurements() -> Optional[Mapping[str, Any]]:
     """The market-data measurements the source selection decides on, or ``None``.
 
-    ``None`` today, and that is a measurement result rather than a stub. Requirement 14.4's
-    correctness floor is applied by ``market_data_latency.choose_market_data_source`` over
-    RECORDED measurements of the two candidates, and the platform records them in exactly one
-    place: ``reports/market_data_latency_decision.md``, written by
-    ``tests/perf/test_market_data_latency.py``. That document is prose for an operator, not a
-    machine-readable store, and the run on disk reports **BLOCKED** - neither candidate was
-    measurable in this environment.
+    RT-04: now reads ``market_data_measurement_store.latest_measurements()`` -- the newest
+    recorded ``SourceMeasurement`` per candidate, persisted by migration 039 and
+    ``scripts/record_market_data_measurement.py`` -- rather than a hardcoded ``None``.
 
-    So there is nothing to return, and nothing is invented to fill the gap: an unmeasured
-    candidate fails the floor, ``start_session`` refuses BEFORE it creates anything, and the
-    caller gets 409 ``PAPER_MARKET_DATA_UNAVAILABLE``. That is the honest answer -
-    ``paper_market_feed``'s own words are that substituting a plausible measurement "would
-    defeat the entire mechanism from the one place nothing downstream could detect it" - and a
-    paper session in this deployment starts once the experiment has run against a real feed and
-    a measured, floor-clean source exists. This function is the one seam where that record is
-    read, so wiring it later changes one function and no route.
+    This still returns ``None``/an empty mapping, honestly, until an operator runs that real
+    measurement: nothing here can produce one. Requirement 14.4's correctness floor needs
+    >= 99.99% completeness over >= 10,000 bars of a REAL feed
+    (``CorrectnessFloor.min_completeness_sample_bars``) -- roughly a week of continuous
+    measurement at a 1-minute timeframe -- and the platform had, until this change, nowhere
+    to persist that even if one were run (only ``reports/market_data_latency_decision.md``,
+    prose for a human, not a value this function could read).
+
+    A store read that FAILS (not "nothing recorded yet", but an actual error) is not
+    silently treated as unmeasured: it is logged and still returns ``None``, because
+    ``start_session`` refusing with 409 ``PAPER_MARKET_DATA_UNAVAILABLE`` is the correct
+    answer either way -- a paper session must not start on a feed this call could not even
+    ask about.
     """
-    return None
+    from backend_app.backend.market_data_measurement_store import (
+        MeasurementStoreUnavailable, latest_measurements)
+
+    try:
+        measurements = await latest_measurements()
+    except MeasurementStoreUnavailable as exc:
+        logger.error("[paper-session] the measurement store could not be read: %s", exc)
+        return None
+    return measurements or None
 
 
 def _paper_venue() -> str:
@@ -955,7 +964,7 @@ async def start_paper_session(
             timeframe=body.timeframe,
             initial_capital_minor=body.initial_capital_minor,
             currency=body.currency,
-            measurements=_recorded_measurements(),
+            measurements=await _recorded_measurements(),
             # The strategy runtime, the plan and the Signal_Trace recorder, installed by the layer
             # that owns them. Without it the session would be ``RUNNING`` with nothing draining its
             # feed - no bar, no signal, no order, no equity point - and every figure it served

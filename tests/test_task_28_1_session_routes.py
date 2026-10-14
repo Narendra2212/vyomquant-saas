@@ -914,13 +914,23 @@ class TestTheStartWiring:
     def test_the_measurements_come_from_the_recorded_seam(
         self, monkeypatch: Any
     ) -> None:
-        """``None`` today, and reported as ``None`` rather than as an invented measurement.
+        """``None`` while nothing is recorded, reported as ``None`` rather than invented.
 
-        The recorded latency experiment is BLOCKED in this deployment, so there is nothing to
-        return - and passing a plausible pair instead is the substitution
-        ``paper_market_feed`` refuses by name.
+        RT-04: the seam now reads a real, persisted store
+        (``market_data_measurement_store.latest_measurements``) instead of a hardcoded
+        ``None`` -- but no measurement exists in this (or any) test environment, so the
+        honest answer is still nothing to return, and passing a plausible pair instead is
+        the substitution ``paper_market_feed`` refuses by name. Mocked here to an empty
+        store rather than hitting a real client, so this test is about the WIRING, not
+        about whatever ``get_service_supabase()`` happens to do when nothing is configured.
         """
-        assert paper_trading._recorded_measurements() is None
+        from unittest.mock import AsyncMock
+
+        import backend_app.backend.market_data_measurement_store as store_mod
+
+        monkeypatch.setattr(store_mod, "latest_measurements", AsyncMock(return_value={}))
+        assert _run_coroutine(paper_trading._recorded_measurements()) is None
+
         monkeypatch.setenv("DEFAULT_EXCHANGE", EXCHANGE)
         calls = _patch_start(monkeypatch)
         client = _client(_double())
