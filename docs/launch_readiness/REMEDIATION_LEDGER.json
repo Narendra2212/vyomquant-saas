@@ -379,12 +379,12 @@
       "severity": "Medium",
       "component": "API",
       "title": "11 route handlers are shadowed by earlier registrations",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "396d210",
+      "evidence": "Deleted all 11 permanently shadowed (method, path) duplicate registrations in backend_app/routers/strategy_operations.py (list_strategies, get_strategy, update_strategy, delete_strategy, clone_strategy, deploy_strategy, pause_strategy [registered at both /pause and /stop], resume_strategy, stop_deployment_alias, and a second DELETE /backtests/{id} registration), confirmed unreachable by walking the real app.routes table. Also removed 3 now-unused Pydantic request models and 4 now-unused imports whose only callers were the deleted handlers. Re-recorded 3 frontend-surface regression baselines (surface_strategies/surface_backtester/surface_strategy_builder) that captured the dead handlers, each with an authorised _baseline_note_handlers entry. Regression: tests/test_api01_no_shadowed_routes.py (4 tests, code+test, verified this session) -- an unconditional sweep asserting no (method,path) pair is ever registered twice anywhere in the app, not just a list of the known 11, so a reintroduced duplicate fails immediately regardless of location. Full regression (strategy_operations/strategies/baseline/no_duplicate_services/cross_tenant_ownership: 838 passed, 7 skipped) and validation_sweep/schema_drift (480 passed / 2 known pre-existing unrelated billing failures) both clean.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Delete duplicates; add a route-uniqueness test."
+      "remaining_action": ""
     },
     {
       "id": "API-06",
