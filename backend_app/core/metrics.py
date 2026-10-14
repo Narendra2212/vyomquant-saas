@@ -53,6 +53,16 @@ DUPLICATE_EXECUTION_SKIPPED_TOTAL = Counter(
     ["tenant_id"]
 )
 
+#: IMPORT-03. PositionEngine._record_trade swallows a trade-history write failure (it must
+#: not fail a position update over an audit write), so without this a persistent failure --
+#: a schema drift, a broken import reintroduced the same way, a full disk -- was invisible
+#: forever. Incremented in the except branch alongside the existing log line.
+TRADE_HISTORY_RECORD_FAILURES_TOTAL = Counter(
+    "aerora_trade_history_record_failures_total",
+    "Total trade-history rows that failed to persist after a position close/reduce",
+    ["tenant_id", "close_reason"]
+)
+
 # Infrastructure Health Gauges
 REDIS_CONNECTED = Gauge(
     "aerora_redis_connected",

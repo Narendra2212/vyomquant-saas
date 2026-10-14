@@ -503,8 +503,19 @@ class PositionEngine:
             )
             
         except Exception as e:
-            # Don't fail position update if trade recording fails
-            # But log error for investigation
+            # IMPORT-03: must not fail position update over an audit write -- but a
+            # swallowed failure must be OBSERVABLE, not merely logged where nobody is
+            # watching. This is the exact failure mode that let the broken import behind
+            # this except clause go unnoticed since the method was written: nothing here
+            # ever counted how many times this branch ran.
+            from backend_app.core.metrics import \
+                TRADE_HISTORY_RECORD_FAILURES_TOTAL
+            try:
+                TRADE_HISTORY_RECORD_FAILURES_TOTAL.labels(
+                    tenant_id=str(position.tenant_id), close_reason=close_reason,
+                ).inc()
+            except Exception:
+                pass  # a metrics-library failure must not mask the original error below
             logger.error(f"Failed to record trade for position {position.position_id}: {e}")
     
     async def update_unrealized_pnl(
