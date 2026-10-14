@@ -457,12 +457,12 @@
       "severity": "Low",
       "component": "API",
       "title": "/api/stats is public and calls the dashboard service as user 'public'",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "10a9f27",
+      "evidence": "GET /api/stats was already correctly intended to be public/platform-wide (confirmed by algo22-terminal/src/design/pageFields.js's own documentation of Profile.jsx, which already labels these figures as platform aggregates and does not call for login). The defect was HOW it computed them: calling the per-user dashboard aggregator with a sentinel user={\"id\": \"public\"} identity -- most figures came back as that nonexistent account's empty state, total_pnl was actually today_pnl under a mislabelled key (same value published under all four pnl keys), and a failed read answered 200 with every figure forced to 0. Added backend_app/backend/platform_stats.py: a genuine, service-role aggregation over strategies/strategy_deployments/trade_history with four distinctly-windowed pnl sums; a statement failure now raises and the route answers a real 503 instead of a fabricated 200 of zeros. Regression: tests/test_api03_platform_stats_are_real.py (14 tests, code+test, verified this session). Re-recorded the surface_profile baseline. Full validation_sweep/schema_drift/baseline suite: 554 passed / 2 known pre-existing unrelated billing failures.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Authenticate or remove."
+      "remaining_action": "trade_history (migration 040, added this session for RT-04) currently holds no rows in any environment this has run against, so total_trades/win_rate/pnl figures will honestly report zero until something writes to it in production."
     },
     {
       "id": "API-05",
