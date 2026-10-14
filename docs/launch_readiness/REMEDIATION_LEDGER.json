@@ -1341,12 +1341,12 @@
       "severity": "Medium",
       "component": "Support",
       "title": "Support tickets are created with a non-UUID id against a UUID column; inserts fail silently and tickets are lost on worker restart",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "9311a37",
+      "evidence": "Confirmed support_tickets.id / ticket_comments.id are both `UUID PRIMARY KEY` (migrations/add_support_tables.sql). The router generated non-UUID ids (f\"tkt_{uuid4().hex[:12]}\" etc.) at three sites (create_ticket, add_comment, staff reply) -- every real Supabase insert raised, caught by an except-and-log that silently rerouted to a per-process in-memory dict while still returning 200 to the caller. Changed all three to str(uuid4()) -- a real UUID the column accepts. tests/test_sup01_ticket_ids_are_real_uuids.py (3 tests): a fake Supabase double that validates UUID format on insert/eq the way real Postgres would -- the generated id is a real UUID and lands in the \"real\" table, not the in-memory fallback; a created ticket is readable back by id from a separate query (round-trip persistence); a comment's generated id is a real UUID too. test_support_feature_e2e.py's two stale \"tkt_\" prefix assertions updated to assert a real UUID. Regression: 15-test support suite + full validation_sweep (394 passed, 2 failed -- same pre-existing, unrelated billing findings) both clean. Commit 9311a37.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Generate a real UUID for ticket/comment ids; add an integration test that creates a ticket and reads it back from the database, not from memory."
+      "remaining_action": "None."
     },
     {
       "id": "CLAIM-01",
