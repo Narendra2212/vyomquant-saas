@@ -708,18 +708,42 @@ async def test_strategy_lifecycle_generates_notifications():
             assert res_create.status_code == 200, res_create.text
 
             # 2. Strategy deployment
+            #
+            # RT-03: /api/strategies/{id}/deploy no longer starts a bot off a raw
+            # `strategies` row itself; it is a thin paper-only entry point onto
+            # StrategyService.deploy_version (the same canonical deploy RT-02's own
+            # 30-test suite exercises in full: prerequisite gate, binding gates, quota,
+            # the deployment INSERT). Re-deriving all of that through raw `mock_sb`
+            # table-call mocks here would duplicate that coverage for no benefit to
+            # THIS test, whose actual subject is notification dispatch across the
+            # lifecycle. So the service call itself is mocked at its own boundary,
+            # the same way `mock_fleet`/`mock_ws` already stand in for their
+            # dependencies below.
             mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock(
                 data=[{"id": "strat_alpha_123", "name": "Alpha Trend Rider", "symbol": "BTC/USDT", "status": "stopped"}]
             ))
             mock_sb.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock(data=[{"status": "running"}]))
 
-            with patch("backend_app.routers.strategies.SubscriptionEngine.reserve_quota", return_value=(True, 1, 5)):
-                with patch("backend_app.routers.strategies.require_live_trading", return_value=True):
-                    res_deploy = client.post(
-                        "/api/strategies/strat_alpha_123/deploy",
-                        json={"symbol": "BTC/USDT"}
-                    )
-                    assert res_deploy.status_code == 200
+            with patch(
+                "backend_app.backend.strategy_service.StrategyService.get_strategy",
+                AsyncMock(return_value={
+                    "strategy": {"id": "strat_alpha_123", "status": "stopped"},
+                    "version": {"version": "1.0"},
+                }),
+            ), patch(
+                "backend_app.backend.strategy_service.StrategyService.deploy_version",
+                AsyncMock(return_value={
+                    "success": True,
+                    "message": "deployed",
+                    "deployment": {"id": "dep_alpha_123"},
+                    "binding": {"binding_stored": True},
+                }),
+            ):
+                res_deploy = client.post(
+                    "/api/strategies/strat_alpha_123/deploy",
+                    json={"symbol": "BTC/USDT"}
+                )
+                assert res_deploy.status_code == 200
 
             # 3. Strategy stop
             mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock(

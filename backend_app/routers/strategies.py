@@ -2133,6 +2133,39 @@ async def deploy_bot(
             {"type": "bot_status", "strategy_id": strategy_id, "status": "running"},
         )
     )
+
+    # The old body of this route dispatched this notification inline when it built the
+    # blueprint and called `fleet.start_bot` itself; that call was dropped along with the
+    # rest of the old body when this route became a thin entry point onto the canonical
+    # deploy (RT-03), with nothing in `_deploy_current_version_paper` taking its place. A
+    # user whose strategy deploys successfully got no notification of it. Restored here,
+    # after the canonical deploy actually succeeds, naming the paper mode this route
+    # always deploys in (it never carries a live binding).
+    strategy_row = resp.data[0]
+    try:
+        from backend_app.core.notification_dispatcher import dispatch_user_notification
+        await dispatch_user_notification(
+            user_id=user["id"],
+            event_type="strategy_deployed",
+            category="strategy",
+            severity="info",
+            title=f"Strategy Deployed: {strategy_row.get('symbol', strategy_id)}",
+            message=(
+                f"Strategy '{strategy_row.get('name', strategy_id)}' is now running "
+                f"in paper mode on {strategy_row.get('symbol', strategy_id)}."
+            ),
+            strategy_id=strategy_id,
+            metadata={
+                "symbol": strategy_row.get("symbol"),
+                "strategy_id": strategy_id,
+                "deployment_id": (outcome.get("deployment") or {}).get("id"),
+                "idempotency_key": f"strat_deploy:{user['id']}:{strategy_id}",
+            },
+            ws_manager=ws_mgr,
+        )
+    except Exception as notif_err:  # noqa: BLE001 - a notification failure must never undo a deploy
+        logger.debug(f"[STRATEGIES] Deploy notification dispatch error: {notif_err}")
+
     logger.info(f"[STRATEGIES] Strategy {strategy_id} deployed successfully")
     return {"status": "running", "deployment_id": (outcome.get("deployment") or {}).get("id")}
 
