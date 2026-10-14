@@ -2318,17 +2318,21 @@ async def run_optimization(request: Request,
             validation_window_days=body.validation_window_days,
             test_window_days=body.test_window_days,
             initial_capital=body.initial_capital,
-            commission=body.commission,
+            # OPT-01: OptimizationConfig's field is `fees`, not `commission` -- the request
+            # body's public field name stays `commission` (unchanged API shape); only the
+            # keyword passed to the dataclass was wrong, and TypeError on every call was the
+            # result, since this dataclass takes no **kwargs to swallow an unknown one.
+            fees=body.commission,
             slippage=body.slippage,
             risk_per_trade=body.risk_per_trade,
             max_drawdown=body.max_drawdown,
             daily_loss_limit=body.daily_loss_limit
         )
-        
+
         # Add date range to parameters
         config.parameters["start_date"] = body.start_date
         config.parameters["end_date"] = body.end_date
-        
+
         # Generate research report
         research_report = await optimization_engine.generate_research_report(
             strategy_package=strategy_package,
