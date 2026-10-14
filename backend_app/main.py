@@ -78,6 +78,8 @@ from backend_app.core.config import print_config_status, settings
 # ── Runtime Services ────────────────────────────────────────────────
 from backend_app.core.consistency_checker import (PositionConsistencyChecker,
                                                   get_consistency_checker)
+from backend_app.backend.paper_limit_order_sweeper import (
+    PaperLimitOrderSweeper, get_paper_limit_order_sweeper)
 # Database imports — ALL SQLAlchemy models must be imported here so that
 # Base.metadata.create_all() registers their tables at startup.
 from backend_app.core.database import Base, SessionLocal, engine
@@ -424,6 +426,17 @@ async def lifespan(app: FastAPI):
         service_status["consistency_checker"] = "INACTIVE"
         logger.warning(f" ConsistencyChecker: INACTIVE — {e}")
 
+    # ── Runtime Service: PaperLimitOrderSweeper (PAPER-07) ───────────
+    _paper_limit_sweeper: Optional[PaperLimitOrderSweeper] = None
+    try:
+        _paper_limit_sweeper = get_paper_limit_order_sweeper()
+        await _paper_limit_sweeper.start()
+        service_status["paper_limit_order_sweeper"] = "ACTIVE"
+        logger.info(" PaperLimitOrderSweeper: started (interval=30s)")
+    except Exception as e:
+        service_status["paper_limit_order_sweeper"] = "INACTIVE"
+        logger.warning(f" PaperLimitOrderSweeper: INACTIVE — {e}")
+
     # ── Runtime Service: OrderWatchdog ───────────────────────────────
     _order_watchdog: Optional[OrderWatchdog] = None
     _watchdog_db = None
@@ -552,6 +565,14 @@ async def lifespan(app: FastAPI):
             logger.info(" ConsistencyChecker: stopped")
     except Exception as e:
         logger.warning(f" ConsistencyChecker shutdown error: {e}")
+
+    # Runtime Service: PaperLimitOrderSweeper — stop background sweep loop
+    try:
+        if _paper_limit_sweeper is not None:
+            await _paper_limit_sweeper.stop()
+            logger.info(" PaperLimitOrderSweeper: stopped")
+    except Exception as e:
+        logger.warning(f" PaperLimitOrderSweeper shutdown error: {e}")
 
     # Runtime Service: OrderWatchdog — cancel background monitoring task
     try:

@@ -1654,6 +1654,57 @@ def get_orders(
     return [row for row in rows if str(row.get("user_id")) == uid]
 
 
+def get_open_legacy_limit_order_pairs(supabase: Any) -> List[Tuple[str, str]]:
+    """PAPER-07. Every distinct ``(user_id, symbol)`` with an OPEN, default-account (``session_id
+    IS NULL``) resting LIMIT order -- across every tenant.
+
+    THE ONE SANCTIONED CROSS-TENANT READ IN THIS MODULE, AND WHY IT EXISTS
+    ------------------------------------------------------------------------
+    Every other function here takes ``user_id`` and scopes every statement to it
+    (:func:`_scoped`); that is correct for a request handler, which only ever acts for the
+    caller who holds the JWT. ``check_limit_orders`` itself says so in its own docstring: "row-
+    level security is scoped to one identity, and a cross-tenant scan would need an unscoped
+    read... that paper_repository deliberately does not offer."
+
+    That function had NO CALLER anywhere in the application -- a resting legacy limit order
+    could never fill, regardless of price, because nothing ever asked "whose orders need
+    checking?" across the whole book. Answering that question is a SYSTEM operation (a
+    scheduled sweep, never a per-request one), which is exactly the same distinction
+    ``get_service_supabase`` draws for operator actions: this function must be called with a
+    SERVICE-ROLE client, obtained the same way, and never with a request-scoped one -- there is
+    no caller identity here to check it against.
+
+    ``check_limit_orders`` is still called once per ``(user_id, symbol)`` pair this returns,
+    and it is THAT call which is scoped to one identity and does the actual fill -- this
+    function only answers which pairs exist to check.
+    """
+    require_persistence(supabase)
+    rows = _execute(
+        supabase.table(ORDERS_TABLE)
+        .select("user_id,symbol")
+        # Literal "OPEN", not backend.paper_trading_service.PaperOrderStatus.OPEN.value:
+        # that module imports THIS one as `repo`, so importing it back here would cycle.
+        # PaperOrderStatus is a (str, Enum) and .OPEN.value is exactly this literal.
+        .eq("legacy_status", "OPEN")
+        .eq("order_type", "limit")
+        .is_("session_id", "null"),
+        f"{ORDERS_TABLE} open-limit-pairs read",
+    )
+    seen: set = set()
+    pairs: List[Tuple[str, str]] = []
+    for row in rows:
+        uid = row.get("user_id")
+        sym = row.get("symbol")
+        if not uid or not sym:
+            continue
+        key = (str(uid), str(sym))
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(key)
+    return pairs
+
+
 def get_trades(
     supabase: Any,
     user_id: Any,
