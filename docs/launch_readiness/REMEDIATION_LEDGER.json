@@ -626,12 +626,12 @@
       "severity": "Low",
       "component": "Logging",
       "title": "Global exception handler prints full tracebacks to stdout",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "69cedf2",
+      "evidence": "backend_app/main.py::global_exception_handler now calls logger.exception(...) (the module's own \"Algo22\" logger) instead of three bare print()/traceback.print_exc() calls, which bypassed the application's logging configuration and wrote raw tracebacks directly to stdout. The response body was already a generic \"Internal server error\" and is unchanged. Regression: tests/test_api04_global_exception_handler_uses_logging.py (3 tests, code+test, verified this session) -- an AST-level pin that no print/print_exc call remains, a real exception reaching the logger at ERROR with exc_info attached, and a negative control proving both the response body and stdout still withhold the exception detail. validation_sweep/schema_drift: 480 passed / 2 known pre-existing unrelated billing failures.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Structured logging with redaction; no print."
+      "remaining_action": "LOG-01 (separate finding) notes the secret-redacting log filter is installed on only 13 marketplace/paper logger names; this logger (\"Algo22\") is not among them, so this fix moves unhandled-exception reporting onto the structured logging path but does not itself add redaction. That is LOG-01's scope, not this one's."
     },
     {
       "id": "HY-01",
