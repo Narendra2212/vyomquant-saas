@@ -195,34 +195,25 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_returns_raises": "AUTHORISED RE-RECORD (API-03): GET /api/stats no longer computes its figures from the per-user dashboard aggregator fed a sentinel public identity (which mostly returned that non-existent accounts empty state, published todays PnL under a key spelled total, and swallowed a failed read into a 200 of all zeros). It now calls backend_app.backend.platform_stats.get_platform_stats, a genuine service-role aggregation, and the handler raises a REAL 503 PLATFORM_STATS_UNAVAILABLE when a statement does not complete instead of returning a fabricated zero response. returns collapses to computed because the response is now built by a called function rather than a literal dict in this module; the real response shape is pinned by tests/test_api03_platform_stats_are_real.py. Regression: tests/test_api03_platform_stats_are_real.py.",
           "decorators": [
             "app.get('/api/stats', tags=['Stats'])"
           ],
           "handler": "get_stats",
           "module": "backend_app.main",
           "parameters": {},
-          "raises": [],
-          "returns": [
+          "raises": [
             {
-              "active_bots": "int",
-              "daily_pnl": "float",
-              "monthly_pnl": "float",
-              "total_pnl": "float",
-              "total_strategies": "int",
-              "total_trades": "computed",
-              "weekly_pnl": "float",
-              "win_rate": "float"
-            },
-            {
-              "active_bots": "int",
-              "daily_pnl": "float",
-              "monthly_pnl": "float",
-              "total_pnl": "float",
-              "total_strategies": "int",
-              "total_trades": "int",
-              "weekly_pnl": "float",
-              "win_rate": "float"
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "PLATFORM_STATS_UNAVAILABLE",
+              "status_code": 503
             }
+          ],
+          "returns": [
+            "computed"
           ],
           "route_path": "/api/stats"
         }

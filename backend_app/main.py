@@ -1346,38 +1346,39 @@ async def system_exchanges():
     return get_exchange_certification_registry().get_certification_matrix()
 
 
-#  Stats endpoint 
+#  Stats endpoint
 @app.get("/api/stats", tags=["Stats"])
 async def get_stats():
-    """Get system trading statistics calculated from live database records."""
+    """Platform-wide trading statistics. Public and unauthenticated BY DESIGN -- this is
+    not any one account's data (see ``algo22-terminal/src/design/pageFields.js``'s
+    documentation of ``pages/Profile.jsx``'s *Automation Account Context* card, which
+    already labels these four figures as the platform's aggregate, not the caller's).
+
+    API-03. This used to call the PER-USER dashboard aggregator with a sentinel
+    ``user={"id": "public"}`` identity that owns nothing -- most figures came back as
+    that non-existent account's empty state, ``total_pnl`` was actually today's P&L
+    under a mislabelled key, and a failed read answered 200 with every figure forced to
+    0, indistinguishable from a genuinely idle platform. See
+    ``backend_app.backend.platform_stats`` for the real, service-role aggregation this
+    now calls instead, and why a failure here is a 503, not a false "all zero".
+    """
+    from backend_app.backend.platform_stats import (
+        PlatformStatsUnavailable,
+        get_platform_stats,
+    )
+    from backend_app.core.dependencies import get_service_supabase
+
     try:
-        from backend_app.backend.dashboard_aggregation_service import get_dashboard_service
-        svc = await get_dashboard_service()
-        data = await svc.get_dashboard_data(user={"id": "public"}, equity_days=30)
-        overview = data.get("overview", {})
-        bots = data.get("bots", {})
-        return {
-            "total_trades": overview.get("total_trades", 0),
-            "total_pnl": float(overview.get("today_pnl", 0.0)),
-            "win_rate": float(overview.get("win_rate", 0.0)),
-            "active_bots": int(bots.get("running", 0)),
-            "total_strategies": int(bots.get("total", 0)),
-            "daily_pnl": float(overview.get("today_pnl", 0.0)),
-            "weekly_pnl": float(overview.get("today_pnl", 0.0)),
-            "monthly_pnl": float(overview.get("today_pnl", 0.0)),
-        }
-    except Exception as e:
-        logger.warning(f"Error fetching stats from dashboard service: {e}")
-        return {
-            "total_trades": 0,
-            "total_pnl": 0.0,
-            "win_rate": 0.0,
-            "active_bots": 0,
-            "total_strategies": 0,
-            "daily_pnl": 0.0,
-            "weekly_pnl": 0.0,
-            "monthly_pnl": 0.0,
-        }
+        return await get_platform_stats(get_service_supabase())
+    except PlatformStatsUnavailable as exc:
+        logger.error(f"Platform stats unavailable: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "PLATFORM_STATS_UNAVAILABLE",
+                "message": "Platform-wide statistics could not be computed.",
+            },
+        )
 
 
 # NOTE: Auth routes (/api/auth/register, /api/auth/login) are registered via
