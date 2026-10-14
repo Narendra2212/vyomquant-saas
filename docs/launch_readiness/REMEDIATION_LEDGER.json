@@ -93,12 +93,12 @@
       "severity": "Critical",
       "component": "Order safety (live) / reconciliation",
       "title": "No venue reconciliation: fills, partial fills and ambiguous submissions are never resolved against the exchange",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "a1e2ee1",
+      "evidence": "W-1b (OrderWatchdog cannot obtain an executor in production) fixed: _get_executor_for_order now builds a REAL per-tenant executor by reusing order_control._executor_for (the same stored-key -> get_exchange_executor -> connect() path RT-21's manual cancel uses), via app_state.vault. Made async; all three call sites (_reconcile_open_orders, _adjudicate_ambiguous_execution, _refresh_order_status) now await it. tests/test_rt16_watchdog_executor_is_real.py (5 tests) + test_d5_watchdog_adjudication_repair.py (updated, 17 passing/1 skipped) + a ~1100-test targeted regression (order/watchdog/reconcil/execution_guard/master_executor) all green this session.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Per-account executor factory for watchdog/reconciler; consume private order/fill streams (or poll fetch_order by clientOrderId); write mismatches; drive position/P&L only from venue fills; real heartbeats in /health/services."
+      "remaining_action": "This closes only the adjudication/refresh half of RT-16 -- the half that can now ask the venue about ONE order it already suspects is ambiguous or stale. NOT done: ConsistencyChecker still iterates an empty tenant list (so it checks nothing); ReconciliationScheduler still polls a table nothing writes; no private order/fill stream is consumed anywhere, so a fill the watchdog never suspected is still invisible; execution_records are still marked COMPLETED on venue accept rather than on a confirmed fill; /health/services' reporting for these three was separately corrected by RT-18 (NOT_IMPLEMENTED rather than ACTIVE) but that does not make them implemented. All of the above plus real sandbox certification needs exchange-sandbox credentials this session does not have -- genuinely EXTERNAL_BLOCKED for the parts that remain, estimated 60-120h by the original audit even after this fix."
     },
     {
       "id": "RT-21",
