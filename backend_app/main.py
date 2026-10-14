@@ -80,9 +80,11 @@ from backend_app.core.consistency_checker import (PositionConsistencyChecker,
                                                   get_consistency_checker)
 from backend_app.backend.paper_limit_order_sweeper import (
     PaperLimitOrderSweeper, get_paper_limit_order_sweeper)
-# Database imports — ALL SQLAlchemy models must be imported here so that
-# Base.metadata.create_all() registers their tables at startup.
-from backend_app.core.database import Base, SessionLocal, engine
+# Database imports. The SQLAlchemy model imports below this line are kept for the
+# modules that actually use them (routers, Alembic's own `env.py` target_metadata) -
+# API-05 removed only the `Base.metadata.create_all(bind=engine)` DDL call this comment
+# used to justify; see that removal's own note, further down, for why.
+from backend_app.core.database import SessionLocal
 from backend_app.core.http_metrics import \
     MarketplacePaperHttpMetricsMiddleware
 from backend_app.core.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
@@ -856,12 +858,27 @@ if CorrelationIdMiddleware:
 
     app.add_middleware(CorrelationIdMiddleware, validator=_is_acceptable_request_id)
 
-# Create database tables (skip if database not available)
-try:
-    Base.metadata.create_all(bind=engine)
-except Exception as e:
-    logger.warning(f"Database not available at startup: {e}")
-    logger.warning("Backend will start without database connection")
+# API-05: `Base.metadata.create_all(bind=engine)` used to run here, unconditionally, at
+# IMPORT time. Removed. Two reasons, not one:
+#
+# 1. This is a THIRD schema-management mechanism alongside the hand-written numbered SQL
+#    migrations (`backend_app/migrations/*.sql`, which declare RLS policies, triggers,
+#    check constraints and explicit grants this ORM layer knows nothing about) and
+#    Alembic (`backend_app/alembic/`, whose own `env.py` already targets this same
+#    `Base.metadata`). `create_all` only creates a table that does not already exist, so
+#    in any environment where the real migrations have not yet been applied - a fresh
+#    database, a developer machine, a broken deploy - it would silently materialise
+#    whatever a SQLAlchemy model class here declares: no RLS, no triggers, no grants, no
+#    check constraints. A caller that later checks "does this table exist" would get a
+#    truthful yes for a table missing every safety property the real migration gives it.
+# 2. It ran at IMPORT, inside `main.py`'s own module body - every process that imports
+#    this module (the web server, a worker, a test collection run) attempted a
+#    schema-mutating DDL statement against whatever `DATABASE_URL` it happened to
+#    resolve, merely by being imported. A test suite or a short-lived worker has no
+#    business issuing DDL as a side effect of `import backend_app.main`.
+#
+# The migrations are the only source of truth for schema now; nothing here replaces
+# that, because nothing here should.
 
 #  CORS — origins are strictly env-var driven; no hardcoded fallbacks to prevent domain-hijack vulnerability.
 _cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:1420,http://localhost:3000,http://127.0.0.1:1420,http://127.0.0.1:3000")
