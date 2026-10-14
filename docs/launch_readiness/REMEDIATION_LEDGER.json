@@ -730,12 +730,12 @@
       "severity": "High",
       "component": "Paper trading / runtime",
       "title": "Paper session loops run in the web process on the caller's one-hour JWT and die silently",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "ebacbd0",
+      "evidence": "Root cause fixed: backend_app/routers/paper_trading.py::start_paper_session now resolves get_service_supabase() (non-expiring) and hands it to _session_loop_spawner instead of the caller RLS-scoped client built from user[\"access_token\"] (a Supabase JWT expiring in ~1 hour). Every statement the loop reaches already carries an explicit user_id/session_id predicate re-checked against the returned row (paper_repository.read_session and siblings), so the service-role swap does not weaken tenant isolation on this path. A missing service-role credential now refuses the start (503 PAPER_PERSISTENCE_UNAVAILABLE) instead of silently falling back to the expiring client. Regression: tests/test_paper04_session_loop_outlives_the_callers_jwt.py (4 tests, code+test, verified this session) + tests/test_task_28_1_session_routes.py updated (service-role identity assertions, version-row seeding on the service double). Full paper-trading suite (1584 passed, 50 skipped) and validation_sweep/schema_drift (480 passed / 2 known pre-existing unrelated billing failures) clean.",
+      "verification_level": "code+test (verified this session); partial fix",
       "production_verified": false,
-      "remaining_action": "Run session loops in the runtime worker service under a service identity scoped per session (RT-08); persist desired state; resume RUNNING sessions on boot; mark failed on exit."
+      "remaining_action": "The universal, time-bounded root cause (every session died within an hour, not just an unlucky one) is closed. NOT closed: the loop still runs as an asyncio.Task inside the web process, so a worker restart/redeploy still ends every in-flight loop with no attempt to resume it, and there is no terminal state to mark an orphaned RUNNING session with (migration 009 chk_paper_session_state admits only CREATED/RUNNING/PAUSED/STOPPED). Needs: (1) RT-23's dedicated runtime worker service (or equivalent) to run session loops outside the web process; (2) a FAILED or similar terminal state + migration, and a boot-time reconciliation pass that resumes or fails a RUNNING session whose task is gone."
     },
     {
       "id": "RT-22",
