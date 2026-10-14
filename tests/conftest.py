@@ -441,3 +441,51 @@ def _rate_limit_counts_are_per_test():
         yield
     finally:
         _reset_bound_rate_limiters()
+
+
+
+# ── RT-15 helper ──────────────────────────────────────────────────────────────────────
+# The live-execution gate now also requires the PLATFORM to be in live mode (mode=live,
+# live trading enabled, tenant allowlisted). Tests that deliberately mint and present live
+# authorisations opt in with ``@pytest.mark.usefixtures("live_platform_enabled")`` (or
+# ``pytestmark``). It patches only the environment, per test, and restores it.
+import pytest as _pytest_rt15  # noqa: E402
+
+
+@_pytest_rt15.fixture()
+def live_platform_enabled(monkeypatch):
+    monkeypatch.setenv("VYOMQUANT_MODE", "live")
+    monkeypatch.setenv("VYOMQUANT_ENABLE_LIVE_TRADING", "true")
+    monkeypatch.setenv("VYOMQUANT_LIVE_TENANT_ALLOWLIST", "*")
+    yield
+
+
+@pytest.fixture
+def fresh_paper_quote(monkeypatch):
+    """PAPER-02: market orders fill only at a measured quote. Tests that exercise the
+    fill path supply one through the provider hook (the production default is None)."""
+    from decimal import Decimal
+
+    from backend_app.backend import paper_trading_service as pts
+
+    quotes = {"BTC-USDT": "65000", "BTC-USD": "65000", "ETH-USDT": "3500",
+              "ETH-USD": "3500", "SOL-USDT": "150", "SOL-USD": "150"}
+
+    async def _quote(symbol):
+        return Decimal(quotes.get(symbol, "100"))
+
+    monkeypatch.setattr(pts, "get_fresh_market_price", _quote)
+
+    # Scripted-market tests used to move the fill by passing ``price`` on a market order -
+    # the PAPER-02 defect. The scripted quote is now set explicitly; production ignores
+    # the client price for market orders (see test_paper02_*).
+    orig = pts.PaperTradingService.place_order
+
+    async def _place_order(self, user_id, symbol, side, order_type="market", quantity=0.01,
+                           price=None, *a, **kw):
+        if str(order_type).lower() == "market" and price:
+            quotes[self._clean_symbol(symbol)] = str(price)
+        return await orig(self, user_id, symbol, side, order_type, quantity, price, *a, **kw)
+
+    monkeypatch.setattr(pts.PaperTradingService, "place_order", _place_order)
+    return quotes

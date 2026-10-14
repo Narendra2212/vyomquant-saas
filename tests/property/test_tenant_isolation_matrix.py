@@ -5302,3 +5302,8 @@ def test_p46_every_listed_row_is_owned_by_the_caller(request: Any) -> None:
             repo.reset_persistence_probe()
 
     recorder.assert_not_vacuous()
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

@@ -647,6 +647,29 @@ class ExecutionRecordRepository:
                     return (execution_id, "skip_failed_no_retry", existing.result)
             raise e
     
+    @staticmethod
+    def _norm_symbol(symbol: str) -> str:
+        return str(symbol or "").replace("-", "").replace("/", "").replace("_", "").upper()
+
+    def has_unresolved_submission(self, tenant_id: UUID, symbol: str) -> bool:
+        """RT-17: does this tenant hold an UNKNOWN submission for *symbol*?
+
+        An UNKNOWN row means the venue may hold an order the platform cannot see. Until it
+        is adjudicated (``resolve_stale_execution`` / OrderWatchdog) a new order for the same
+        symbol must not be sent. Symbols are compared normalised (BTC/USDT == BTC-USDT ==
+        BTCUSDT). Raises on a database error; the caller fails closed.
+        """
+        rows = (
+            self.db.query(ExecutionRecordModel.symbol)
+            .filter(
+                ExecutionRecordModel.tenant_id == tenant_id,
+                ExecutionRecordModel.status == ExecutionStatus.UNKNOWN,
+            )
+            .all()
+        )
+        want = self._norm_symbol(symbol)
+        return any(self._norm_symbol(r[0]) == want for r in rows)
+
     def get_by_id(self, execution_id: str, tenant_id: UUID) -> Optional[ExecutionRecordModel]:
         """Get execution record by ID and tenant."""
         return self.db.query(ExecutionRecordModel).filter(

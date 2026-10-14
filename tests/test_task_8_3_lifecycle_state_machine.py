@@ -1178,11 +1178,24 @@ async def _deploy(sb, *, start_succeeds=True):
         )
 
 
+# RT-02: deploy now refuses a version whose blueprint the runtime cannot start BEFORE any row
+# is written. These tests are about the lifecycle, not the blueprint, so they use the smallest
+# STARTABLE (legacy-shaped) blueprint; graph-shaped deploys are covered by
+# tests/test_rt02_builder_strategy_runs_on_deployment_runtime.py.
+_STARTABLE_BLUEPRINT = {
+    "nodes": [],
+    "edges": [],
+    "exchange_id": "binance",
+    "buy_logic": {"op": "AND", "conditions": []},
+    "sell_logic": {"op": "AND", "conditions": []},
+    "risk": {"trade_size_pct": 1.0, "stop_loss_pct": 2.0, "take_profit_pct": 4.0},
+}
+
 def _deploy_rows():
     return {
         "strategies": [{"id": STRATEGY_ID, "user_id": USER_ID}],
         "strategy_versions": [
-            _version_row(LIFECYCLE_READY, blueprint={"nodes": [], "edges": []})
+            _version_row(LIFECYCLE_READY, blueprint=dict(_STARTABLE_BLUEPRINT))
         ],
         "strategy_deployments": [],
     }

@@ -137,6 +137,15 @@ const KILL_SWITCHES = Object.freeze([
   ['capital', 'Capital Utilization Limit', false],
 ]);
 
+/*
+ * RISK-02: only the daily loss limit is enforced by any runtime code. The other three guards
+ * are stored and displayed but nothing evaluates them, so the page renders them disabled,
+ * reading "off", and labelled "Not enforced yet". Their stored value still rides along in the
+ * request body unchanged - the page must not rewrite what the server holds.
+ */
+const ENFORCED = KILL_SWITCHES.filter(([key]) => key === 'loss');
+const UNENFORCED = KILL_SWITCHES.filter(([key]) => key !== 'loss');
+
 const mountPage = () =>
   render(
     <MemoryRouter>
@@ -170,8 +179,10 @@ const mountLoaded = async () => {
   const utils = mountPage();
   await waitFor(
     () => {
-      expect(checkedState(KILL_SWITCHES[1][1])).toBe('false');
-      expect(checkedState(KILL_SWITCHES[2][1])).toBe('true');
+      // `loss` is the one operable switch and the fixture turns it on; the label on the
+      // unenforced guards only renders once the page has applied the server's answer.
+      expect(checkedState(KILL_SWITCHES[0][1])).toBe('true');
+      expect(screen.queryByTestId('guard-unenforced-streak')).not.toBeNull();
     },
     { timeout: 5000 },
   );
@@ -223,10 +234,14 @@ describe('RiskSettings kill switches: every control is named and in the tab orde
 
       // The state is programmatic, not a colour. Requirement 20.5's rule applied to the one
       // control where "looks green" is not a substitute for "reports on".
-      expect(control.getAttribute('aria-checked')).toBe(String(activeInFixture));
-      expect(control.getAttribute('aria-checked')).toBe(
-        String(RISK_CONFIG.kill_switches[_key]),
-      );
+      if (_key === 'loss') {
+        expect(control.getAttribute('aria-checked')).toBe(String(activeInFixture));
+        expect(control.getAttribute('aria-checked')).toBe(String(RISK_CONFIG.kill_switches[_key]));
+      } else {
+        // Unenforced: never claims to be armed, and says it is disabled.
+        expect(control.getAttribute('aria-checked')).toBe('false');
+        expect(control.getAttribute('aria-disabled')).toBe('true');
+      }
 
       // A tab stop. Without this the control is named, stateful and unreachable.
       control.focus();
@@ -240,7 +255,7 @@ describe('RiskSettings kill switches: every control is named and in the tab orde
 // ---------------------------------------------------------------------------
 
 describe('RiskSettings kill switches: the keyboard operates them', () => {
-  it.each(KILL_SWITCHES)('%s toggles on Enter, by keyDown and not by click', async (_key, name, activeInFixture) => {
+  it.each(ENFORCED)('%s toggles on Enter, by keyDown and not by click', async (_key, name, activeInFixture) => {
     await mountLoaded();
     const control = screen.getByRole('switch', { name });
 
@@ -250,7 +265,7 @@ describe('RiskSettings kill switches: the keyboard operates them', () => {
     expect(risk.updateConfig).toHaveBeenCalledTimes(1);
   });
 
-  it.each(KILL_SWITCHES)('%s toggles on Space, and Space does not scroll the page', async (_key, name, activeInFixture) => {
+  it.each(ENFORCED)('%s toggles on Space, and Space does not scroll the page', async (_key, name, activeInFixture) => {
     await mountLoaded();
     const control = screen.getByRole('switch', { name });
 
@@ -268,7 +283,8 @@ describe('RiskSettings kill switches: the keyboard operates them', () => {
     await waitFor(() => expect(risk.updateConfig).toHaveBeenCalledTimes(1));
 
     for (const [key, name, activeInFixture] of KILL_SWITCHES.slice(1)) {
-      expect(checkedState(name)).toBe(String(activeInFixture));
+      // Displayed off (not enforced), but the stored value is carried through untouched.
+      expect(checkedState(name)).toBe('false');
       expect(risk.updateConfig.mock.calls[0][0].kill_switches[key]).toBe(activeInFixture);
     }
   });
@@ -279,7 +295,7 @@ describe('RiskSettings kill switches: the keyboard operates them', () => {
 // ---------------------------------------------------------------------------
 
 describe('RiskSettings kill switches: one request, two input devices', () => {
-  it.each(KILL_SWITCHES)(
+  it.each(ENFORCED)(
     '%s issues an identical request body on Enter and on click',
     async (_key, name) => {
       // Two fresh mounts from the same fixture, so both runs start from the same state and
@@ -300,7 +316,7 @@ describe('RiskSettings kill switches: one request, two input devices', () => {
   );
 
   it('issues the same request body on Space as on click', async () => {
-    const [, name] = KILL_SWITCHES[3];
+    const [, name] = KILL_SWITCHES[0];
 
     await mountLoaded();
     fireEvent.click(screen.getByRole('switch', { name }));
@@ -322,7 +338,7 @@ describe('RiskSettings kill switches: one request, two input devices', () => {
 describe('RiskSettings: the request a kill switch issues', () => {
   it('sends all four switch states, the three limits the server reported, and the breaker', async () => {
     await mountLoaded();
-    fireEvent.keyDown(screen.getByRole('switch', { name: KILL_SWITCHES[1][1] }), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByRole('switch', { name: KILL_SWITCHES[0][1] }), { key: 'Enter' });
 
     const body = await soleUpdateBody();
 
@@ -332,8 +348,8 @@ describe('RiskSettings: the request a kill switch issues', () => {
       KILL_SWITCHES.map(([key]) => key).sort(),
     );
     expect(body.kill_switches).toEqual({
-      loss: true,
-      blackswan: true, // the one that moved
+      loss: false, // the one that moved
+      blackswan: false,
       streak: true,
       capital: false,
     });
@@ -350,7 +366,7 @@ describe('RiskSettings: the request a kill switch issues', () => {
 
   it('issues exactly one write, and touches no other risk endpoint', async () => {
     await mountLoaded();
-    fireEvent.keyDown(screen.getByRole('switch', { name: KILL_SWITCHES[2][1] }), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByRole('switch', { name: KILL_SWITCHES[0][1] }), { key: 'Enter' });
     await waitFor(() => expect(risk.updateConfig).toHaveBeenCalledTimes(1));
 
     expect(risk.updateStrategyLimit).not.toHaveBeenCalled();
@@ -384,5 +400,34 @@ describe('RiskSettings: the controls around the switches survive', () => {
     // The strategy the limits read returned, by its own name. A page that dropped the read
     // would render an empty allocations region and look fine.
     expect(screen.getByText('Aurora Momentum')).toBeTruthy();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// 5. RISK-02: guards nothing evaluates must not look armed or be operable
+// ---------------------------------------------------------------------------
+
+describe('RiskSettings: unenforced guards are disabled and labelled', () => {
+  it.each(UNENFORCED)('%s says it is not enforced and does nothing when operated', async (key, name) => {
+    await mountLoaded();
+    const control = screen.getByRole('switch', { name });
+
+    expect(screen.getByTestId(`guard-unenforced-${key}`).textContent).toMatch(/not enforced yet/i);
+    expect(control.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(control);
+    fireEvent.keyDown(control, { key: 'Enter' });
+    fireEvent.keyDown(control, { key: ' ' });
+
+    // give any (wrongly) scheduled save a chance to fire
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(risk.updateConfig).not.toHaveBeenCalled();
+    expect(control.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('does not label the daily loss limit, which IS enforced', async () => {
+    await mountLoaded();
+    expect(screen.queryByTestId('guard-unenforced-loss')).toBeNull();
   });
 });

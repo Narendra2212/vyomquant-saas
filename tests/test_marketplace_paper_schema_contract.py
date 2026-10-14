@@ -893,8 +893,20 @@ _DESTRUCTIVE = {
     "DROP COLUMN": re.compile(r"\bdrop\s+column\b", re.IGNORECASE),
     "RENAME": re.compile(r"\brename\b", re.IGNORECASE),
     "DELETE FROM": re.compile(r"\bdelete\s+from\b", re.IGNORECASE),
-    "TRUNCATE": re.compile(r"\btruncate\b", re.IGNORECASE),
+    # `BEFORE TRUNCATE ON <table>` is the EVENT NAME in a trigger that REFUSES truncation
+    # (036_order_audit_log_durable.sql); it is protective, not a statement that truncates.
+    # The statement forms (`TRUNCATE TABLE x`, `TRUNCATE x`, `TRUNCATE ONLY x`) are still
+    # flagged -- see test_truncate_statement_forms_are_still_flagged.
+    "TRUNCATE": re.compile(r"\btruncate\b(?!\s+on\s)", re.IGNORECASE),
 }
+
+
+def test_truncate_statement_forms_are_still_flagged() -> None:
+    pattern = _DESTRUCTIVE["TRUNCATE"]
+    for statement in ("TRUNCATE TABLE public.t", "truncate public.t", "TRUNCATE ONLY public.t",
+                      "TRUNCATE\n  public.t RESTART IDENTITY"):
+        assert pattern.search(statement), statement
+    assert not pattern.search("BEFORE TRUNCATE ON public.order_audit_log")
 
 
 def test_no_destructive_statements() -> None:

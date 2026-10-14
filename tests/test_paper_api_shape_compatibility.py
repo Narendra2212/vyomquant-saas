@@ -648,3 +648,8 @@ def test_a_read_that_did_not_complete_is_not_an_empty_answer() -> None:
     assert "migration" not in (body["error"].get("details") or {}), (
         "a transient read failure must not name a migration: there is no file to apply"
     )
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

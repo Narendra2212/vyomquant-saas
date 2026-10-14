@@ -4,15 +4,15 @@
 # =======================================================================
 
 # --- FastAPI + ASGI server -----------------------------------------------
-fastapi==0.115.3
+fastapi==0.124.4
 uvicorn[standard]==0.30.6
 websockets==12.0
 # CVE-2024-53981, CVE-2026-24486, CVE-2026-42561, CVE-2026-53539 (all fixed by 0.0.30)
 # have no reachable call site in this codebase - see
 # .kiro/specs/production-launch-hardening/dependency-triage.md - but the bump is free
 # (no FastAPI version ceiling on this package) and is the correct action regardless.
-python-multipart==0.0.30
-starlette==0.41.0
+python-multipart==0.0.31
+starlette==0.49.3
 gunicorn==23.0.0
 rq==1.16.2
 
@@ -31,7 +31,7 @@ postgrest==0.16.8
 # backend_app/core/credential_vault.py, and the smaller jump is the smaller behavioural
 # risk. See .kiro/specs/production-launch-hardening/tasks.md task 13.24.
 # (python-jose was named in this list too, and is no longer installed - see below.)
-cryptography==49.0.0
+cryptography==50.0.0
 # python-jose IS REMOVED, NOT PINNED, and this is the follow-up
 # .kiro/specs/production-launch-hardening/dependency-triage.md section 1 named and
 # deferred: "the stronger fix is to drop the `python-jose[cryptography]` pin entirely,
@@ -58,7 +58,7 @@ cryptography==49.0.0
 # If python-jose is ever genuinely needed, delete that test file along with re-adding the
 # pin. Leaving an import-audit that no longer audits anything is worse than neither.
 passlib[bcrypt]==1.7.4
-PyJWT==2.14.0
+PyJWT==2.15.0
 sqlalchemy==2.0.35
 alembic==1.13.3
 psycopg2-binary==2.9.9
@@ -146,9 +146,9 @@ opentelemetry-instrumentation-redis==0.46b0
 opentelemetry-instrumentation-sqlalchemy==0.46b0
 wrapt==1.16.0
 elasticsearch==8.14.0
-aiosmtplib==3.0.1
+aiosmtplib==5.1.2
 asgi-correlation-id==4.3.1
-requests==2.32.3
+requests==2.33.0
 sse-starlette==2.1.3
 tiktoken==0.7.0
 opentelemetry-exporter-otlp-proto-grpc==1.25.0

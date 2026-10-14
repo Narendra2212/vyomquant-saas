@@ -89,6 +89,9 @@ from backend_app.core.global_safety import (  # noqa: E402
     ExecutionBlocked, GlobalKillSwitch, KillSwitchResetRefused,
     RedisUnavailable, enforce_kill_switch)
 
+pytestmark = pytest.mark.usefixtures("live_platform_enabled")  # RT-15
+
+
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 TENANT = uuid.uuid4()

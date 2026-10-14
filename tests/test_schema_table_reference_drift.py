@@ -2446,6 +2446,8 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
 #:   at all, and ``POST /{signal_id}/replay`` was the one capability with no
 #:   equivalent, so it survived and now reads ``signals`` only. See
 #:   :data:`FIXED_SIGNAL_TRACE_SUPERSESSION`.
+# BILL-01/BILL-05: profiles.cancel_at_period_end / next_billing_date / subscription_status /
+# trial_end_date are now declared by migration 037 and removed from this (shrink-only) register.
 KNOWN_UNDECLARED_COLUMN_DEFECTS = {
     "billing_invoices.amount_inr": ("routers/billing.py", "parallel workstream"),
     "billing_invoices.amount_usd": ("routers/billing.py", "parallel workstream"),
@@ -2454,15 +2456,9 @@ KNOWN_UNDECLARED_COLUMN_DEFECTS = {
     "billing_invoices.provider_payment_id": (
         "routers/billing.py", "parallel workstream",
     ),
-    "profiles.cancel_at_period_end": ("routers/billing.py", "parallel workstream"),
-    "profiles.next_billing_date": ("core/billing_lifecycle.py", "parallel workstream"),
     "profiles.pending_downgrade_tier": (
         "core/billing_lifecycle.py", "parallel workstream",
     ),
-    "profiles.subscription_status": (
-        "core/billing_lifecycle.py", "parallel workstream",
-    ),
-    "profiles.trial_end_date": ("core/billing_lifecycle.py", "parallel workstream"),
 }
 
 #: The column reference `routers/library.py` used to carry and no longer does:

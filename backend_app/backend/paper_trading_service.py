@@ -167,21 +167,20 @@ PAPER_EXECUTION_ENVIRONMENT = "PAPER"
 ACCOUNT_NAME = "VyomQuant Paper Trading Account"
 ACCOUNT_STATUS = "active"
 
-#: The reference prices the existing service falls back to when a caller names no price. Kept
-#: verbatim - changing them would change what an order fills at - and used only on the path
-#: where the caller supplied none. Task 24.x replaces this with the measured feed; until then
-#: it is a *configured* reference, and ``paper_market_feed`` is what will make it a measurement.
-REFERENCE_PRICES: Mapping[str, Decimal] = {
-    "BTC-USDT": Decimal("65000.00"),
-    "BTC-USD": Decimal("65000.00"),
-    "ETH-USDT": Decimal("3500.00"),
-    "ETH-USD": Decimal("3500.00"),
-    "SOL-USDT": Decimal("150.00"),
-    "SOL-USD": Decimal("150.00"),
-}
+#: PAPER-02: there is deliberately NO reference-price table. A manual market order fills at a
+#: *measured, fresh* price or is refused; a limit order carries the caller's limit price (that is
+#: the order's own content, not a fill price). See :func:`get_fresh_market_price`.
 
-#: What an unlisted symbol falls back to, as before.
-REFERENCE_PRICE_DEFAULT = Decimal("100.00")
+
+async def get_fresh_market_price(symbol: str) -> Optional[Decimal]:
+    """Return a fresh measured last price for ``symbol``, or ``None`` when there is none.
+
+    No one-shot quote source is wired into this service yet (the MDS feed is session-scoped), so
+    this returns ``None`` and market orders are refused rather than filled at an invented price.
+    Wire this to the MDS last-price read; it must never return a constant or a caller value.
+    """
+    return None
+
 
 #: Decimal places for money (USD minor units), for a price and for a quantity. The first is
 #: what every balance the old implementation reported was quantized to (``Decimal("0.01")``),
@@ -1304,15 +1303,25 @@ class PaperTradingService:
                 account_row.get("available_balance"), "available_balance"
             )
 
-            # Resolve the execution price. A caller-supplied price wins; otherwise the retained
-            # reference table answers, which is what makes this path usable while task 24.x's
-            # measured feed does not exist yet.
-            if price is not None and self._exact(price, "price") > Decimal("0"):
-                exec_price = self.config.price(self._exact(price, "price"))
+            # PAPER-02: resolve the execution price from evidence, never from a constant.
+            #  - market: the client's ``price`` is IGNORED; fill only at a fresh measured quote.
+            #  - limit : the caller's price is the limit itself and is required.
+            if clean_type == "market":
+                measured = await get_fresh_market_price(clean_sym)
+                if measured is None or self._exact(measured, "price") <= Decimal("0"):
+                    from backend_app.backend.paper.paper_market_feed import (
+                        PaperMarketDataUnavailable,
+                    )
+
+                    raise PaperMarketDataUnavailable(
+                        "NO_FRESH_PRICE",
+                        "no fresh measured price is available for this symbol",
+                    )
+                exec_price = self.config.price(self._exact(measured, "price"))
             else:
-                exec_price = self.config.price(
-                    REFERENCE_PRICES.get(clean_sym, REFERENCE_PRICE_DEFAULT)
-                )
+                if price is None or self._exact(price, "price") <= Decimal("0"):
+                    raise ValueError("A limit order requires a positive price")
+                exec_price = self.config.price(self._exact(price, "price"))
 
             # Strategy-Level Limits Enforcement - thresholds and messages unchanged.
             from backend_app.routers.risk import _user_strategy_limits

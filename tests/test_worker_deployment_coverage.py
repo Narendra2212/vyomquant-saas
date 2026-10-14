@@ -64,13 +64,6 @@ DEPLOYMENT_MANIFESTS = (
 #: excused by the regression guard's accounting - they are its baseline, so a third
 #: unhosted worker still fails. Remove an entry when the worker is genuinely deployed.
 KNOWN_UNHOSTED = {
-    "MarketplaceExpiryWorker": (
-        "Built to spec (marketplace-subscriptions-paper-trading task 20.1) and never "
-        "wired up. Absent from local.worker_definitions in terraform/ecs.tf, from "
-        "docker-compose.yml, and from every Dockerfile and workflow. Subscriptions "
-        "past period_expiry are therefore never expired. This is a live billing "
-        "defect, not dead code."
-    ),
     "ReconciliationWorker": (
         "Instantiated as a module-level singleton (reconciliation_worker.py line 779) "
         "and exposed via get_reconciliation_worker(), but that accessor is never "
@@ -261,8 +254,8 @@ def test_no_new_unhosted_workers():
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "MarketplaceExpiryWorker and ReconciliationWorker are both defined but "
-        "unhosted. strict=True means fixing them turns this into an unexpected pass, "
+        "ReconciliationWorker is defined but unhosted (MarketplaceExpiryWorker was "
+        "wired into terraform/ecs.tf by INF-03). strict=True means fixing it turns this into an unexpected pass, "
         "which fails the run and forces KNOWN_UNHOSTED to be updated - so the ledger "
         "cannot quietly outlive the gap it documents."
     ),
@@ -290,21 +283,11 @@ def test_known_unhosted_ledger_has_no_stale_entries():
     )
 
 
-def test_expiry_worker_is_the_documented_billing_gap():
-    """Pin the specific finding, so a refactor cannot quietly lose it.
+def test_expiry_worker_is_now_hosted_inf03():
+    """INF-03: the marketplace subscription expiry sweep has a deployment entry.
 
-    Named explicitly rather than left to the general guard because the consequence is
-    not a dormant feature: subscriptions are never expired, so paid access persists
-    after the paid period.
+    It used to be the documented billing gap (paid access never ended). Pinned so removing
+    the terraform entry brings the gap back loudly.
     """
-    unhosted = _unhosted_workers()
-
-    if "MarketplaceExpiryWorker" not in unhosted:
-        pytest.skip(
-            "MarketplaceExpiryWorker now has a deployment entry. Remove it from "
-            "KNOWN_UNHOSTED and delete this test."
-        )
-
-    assert unhosted["MarketplaceExpiryWorker"] == (
-        "backend_app.workers.marketplace_expiry_worker"
-    )
+    assert "MarketplaceExpiryWorker" not in _unhosted_workers()
+    assert "backend_app.workers.marketplace_expiry_worker" in _deployed_modules()

@@ -220,3 +220,8 @@ def test_anti_bypass_validation_token_verification():
         assert dummy_exec._current_validation_token is None
 
     asyncio.run(_run())
+
+
+import pytest as _pytest_rt15
+
+pytestmark = _pytest_rt15.mark.usefixtures("live_platform_enabled")  # RT-15

@@ -259,6 +259,14 @@ const DEFAULT_KILL_SWITCHES = Object.freeze([
 ]);
 
 /**
+ * RISK-02: these three guards are stored and shown but NO runtime code evaluates them (only
+ * the daily loss limit is consulted, and only on the manual paper-order path). A switch that
+ * reads "on" while nothing watches the condition is a false safety claim, so they render
+ * disabled and labelled until the runtime risk gate implements them with tests.
+ */
+const UNENFORCED_GUARDS = Object.freeze(['blackswan', 'streak', 'capital']);
+
+/**
  * What the per-strategy list IS, stated rather than implied.
  *
  * `_user_strategy_limits` is an in-memory per-process dict, so this list reports what one
@@ -714,7 +722,9 @@ export default function RiskSettings() {
           unauthorised={{ error: config.error }}
         >
           <div className="flex flex-col gap-3">
-            {killSwitches.map((ks) => (
+            {killSwitches.map((ks) => {
+              const unenforced = UNENFORCED_GUARDS.includes(ks.key);
+              return (
               <div
                 key={ks.key}
                 className="flex items-center justify-between gap-3 rounded-lg border border-line-default bg-surface-inset px-3 py-2.5"
@@ -724,7 +734,7 @@ export default function RiskSettings() {
                     size={18}
                     aria-hidden="true"
                     style={{
-                      color: ks.active ? token.status.live.fg : token.content.muted,
+                      color: ks.active && !unenforced ? token.status.live.fg : token.content.muted,
                       flexShrink: 0,
                     }}
                   />
@@ -736,15 +746,22 @@ export default function RiskSettings() {
                     {/* fontSize: 10 → --text-body (sentence, +30%). It explains what the
                         guard does, which is the one thing a trader needs before arming it. */}
                     <div className="mt-0.5 text-body text-content-secondary">{ks.description}</div>
+                    {unenforced && (
+                      <div className="mt-1 text-body font-semibold text-content-secondary" data-testid={`guard-unenforced-${ks.key}`}>
+                        Not enforced yet — this guard is not active and will not halt trading.
+                      </div>
+                    )}
                   </div>
                 </div>
                 <Toggle
-                  active={ks.active}
+                  active={unenforced ? false : ks.active}
                   label={ks.label}
+                  disabled={unenforced}
                   onClick={() => handleToggleSwitch(ks.key)}
                 />
               </div>
-            ))}
+              );
+            })}
           </div>
         </Panel>
       </div>

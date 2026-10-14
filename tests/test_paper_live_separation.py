@@ -530,3 +530,8 @@ def test_master_executor_paper_branch_source_contains_no_reference_to_the_live_f
     assert "from backend_app.backend.exchange_executor import get_exchange_executor" in source
     assert "from backend_app.backend.exchange_executor import get_exchange_executor" not in paper_branch
     assert "get_exchange_executor(" in source[paper_branch_end:]
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

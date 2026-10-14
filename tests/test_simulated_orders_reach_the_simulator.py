@@ -100,6 +100,9 @@ from backend_app.backend.execution_environment import (
     ExecutionEnvironmentMismatch, UnresolvedExecutionEnvironment)
 from backend_app.core.execution_engine import ExecutionEngine
 
+pytestmark = pytest.mark.usefixtures("live_platform_enabled")  # RT-15
+
+
 PORTFOLIO = {"total_equity": "10000", "available_balance": "10000", "total_exposure": "0"}
 
 PAPER = ExecutionEnvironment.PAPER

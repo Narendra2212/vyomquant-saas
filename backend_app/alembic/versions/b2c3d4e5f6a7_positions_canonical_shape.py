@@ -221,7 +221,7 @@ def upgrade() -> None:
             # exists to break even when the value happens to come from a constant.
             op.execute(
                 sa.text(
-                    f"UPDATE public.positions SET {name} = :v WHERE {name} IS NULL"
+                    f"UPDATE public.positions SET {name} = :v WHERE {name} IS NULL"  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
                 ).bindparams(v=default.strip("'"))
             )
             op.execute(
@@ -259,7 +259,7 @@ def upgrade() -> None:
             f"ALTER TABLE public.positions ALTER COLUMN {column} SET DEFAULT now()"
         )
         op.execute(
-            f"UPDATE public.positions SET {column} = now() WHERE {column} IS NULL"
+            f"UPDATE public.positions SET {column} = now() WHERE {column} IS NULL"  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
         )
         op.execute(f"ALTER TABLE public.positions ALTER COLUMN {column} SET NOT NULL")
 

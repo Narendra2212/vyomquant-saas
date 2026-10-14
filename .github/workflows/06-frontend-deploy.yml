@@ -8,6 +8,13 @@ on:
       - 'algo22-terminal/**'
       - '.github/workflows/06-frontend-deploy.yml'
   workflow_dispatch:
+    inputs:
+      allow_untested:
+        description: >-
+          Deploy a commit that has no passing 01 PR Check run. Only for dispatching an
+          older commit; a missing test run is otherwise treated as a failed gate.
+        type: boolean
+        default: false
 
 env:
   AWS_REGION: ap-southeast-1
@@ -22,10 +29,24 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      actions: read   # CI-03: read the 01 PR Check run for this SHA
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # CI-03: THE FRONTEND NO LONGER DEPLOYS UNTESTED.
+      #
+      # This workflow used to publish on every push touching algo22-terminal/, with no test
+      # gate, while the backend (03 Deploy) was gated and could sit red for days -- so users
+      # ran a newer UI against an older API. The newest `01 PR Check` run for this exact SHA
+      # must now have concluded `success` (same gate as 03 Deploy; a missing run refuses).
+      - name: Require the test workflow to have passed for this commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_SHA: ${{ github.sha }}
+          ALLOW_UNTESTED: ${{ inputs.allow_untested }}
+        run: python3 scripts/require_tests_passed.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -88,6 +109,15 @@ jobs:
           VITE_API_BASE_URL: ${{ secrets.VITE_API_URL }}
           VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+
+      # CI-03: release provenance. The deployed UI states which commit built it, so "which
+      # frontend runs against which backend" is answerable from the running system
+      # (compare with the backend image tag, which is the commit SHA too).
+      - name: Stamp the build with the commit it was built from
+        working-directory: ./algo22-terminal
+        run: |
+          printf '{"sha":"%s","built_at":"%s"}\n' "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/release.json
+          cat dist/release.json
 
       - name: Reject implausible release artifacts in dist/
         working-directory: ./algo22-terminal

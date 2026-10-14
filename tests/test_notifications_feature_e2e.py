@@ -745,3 +745,8 @@ async def test_strategy_lifecycle_generates_notifications():
         app.dependency_overrides.clear()
 
 
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

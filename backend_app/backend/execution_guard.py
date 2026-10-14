@@ -114,6 +114,11 @@ class TradeValidationReport:
         }
 
 
+#: RT-21: risk-reducing control actions. Honoured by ExecutionGuard.validate_trade only
+#: when the caller also passes reduce_only=True.
+CONTROL_SIDES = frozenset({"cancel", "cancel_all", "close_all"})
+
+
 class ExecutionGuard:
     """
     STEP 7.1: CENTRAL EXECUTION GUARD (MANDATORY)
@@ -248,7 +253,26 @@ class ExecutionGuard:
             self._validate_risk_engine_status(),
         ]
 
-        if not reduce_only:
+        # RT-21: CONTROL ACTIONS (cancel / cancel_all / close_all) ARE NOT ORDERS.
+        # Their signal carries side='cancel'..., size 0, price 0. `_validate_signal_basic`
+        # accepts only buy/sell/long/short and `_validate_order_size` blocks size <= 0, so
+        # the guard itself refused every cancel ("Invalid side: 'cancel'") before any route
+        # logic ran -- and the circuit breakers (which include the kill switch) would have
+        # refused it during a halt, the one time a user most needs to cancel. A control
+        # action only REDUCES risk, so it gets exactly one check -- its own shape -- and is
+        # still recorded in the audit trail below. It is honoured ONLY together with
+        # reduce_only=True: a caller that did not assert reduce-only gets the full
+        # order checks, which reject these sides.
+        is_control = bool(reduce_only) and str(side).lower().strip() in CONTROL_SIDES
+        if is_control:
+            for coro in capital_dependent + checks:
+                coro.close()
+            checks = [self._validate_control_signal(signal)]
+            logger.info(
+                "Control action %s on %s: validated for shape only (risk-reducing; "
+                "allowed during a halt).", side, symbol,
+            )
+        elif not reduce_only:
             checks.extend(capital_dependent)
         else:
             for coro in capital_dependent:
@@ -928,6 +952,34 @@ class ExecutionGuard:
                 message=f"Failed to check for duplicates: {e}",
                 details={"client_order_id": client_order_id, "error": str(e)},
             )
+
+    async def _validate_control_signal(self, signal: Dict[str, Any]) -> ValidationResult:
+        """RT-21: shape check for cancel / cancel_all / close_all. Nothing else applies."""
+        side = str(signal.get("side", "")).lower().strip()
+        symbol = str(signal.get("symbol", "")).strip()
+        if side not in CONTROL_SIDES:
+            return ValidationResult(
+                check_name="control_signal",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message=f"Invalid control action: '{side}'. Must be one of: {sorted(CONTROL_SIDES)}",
+                details={"side": side},
+            )
+        if not symbol:
+            return ValidationResult(
+                check_name="control_signal",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message="Control action requires a symbol (or 'ALL')",
+                details={"side": side},
+            )
+        return ValidationResult(
+            check_name="control_signal",
+            passed=True,
+            severity=ValidationSeverity.PASS,
+            message=f"Control action valid: {side} {symbol}",
+            details={"side": side, "symbol": symbol},
+        )
 
     async def _validate_signal_basic(self, signal: Dict[str, Any]) -> ValidationResult:
         """

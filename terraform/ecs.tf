@@ -458,6 +458,9 @@ locals {
     backtest = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.worker"] }
     dag      = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.backend.dag_worker"] }
     command  = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.command_worker"] }
+    # INF-03 / marketplace Requirement 11.8: the subscription expiry sweep (30s). It was built
+    # and tested but had no deployment entry, so paid marketplace access never ended.
+    marketplace_expiry = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.marketplace_expiry_worker"] }
   }
 }
 

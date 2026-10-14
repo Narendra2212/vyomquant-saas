@@ -45,6 +45,9 @@ from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.core.execution_engine import ExecutionEngine
 
 
+pytestmark = pytest.mark.usefixtures("live_platform_enabled")  # RT-15
+
+
 class _StubOrderResult:
     """The shape ``_execute_trade_internal`` reads off a placement result."""
 

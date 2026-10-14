@@ -17,6 +17,7 @@ PREVIOUS FIXES:
   N4:     Cache invalidated immediately after successful payment.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -1286,7 +1287,61 @@ async def _settle_marketplace_reversal(
     )
 
 
-async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: Optional[dict] = None) -> None:
+def _record_plan_period(sb: Any, user_id: str, item_key: str, previous_plan: Optional[str],
+                        billing_interval: Optional[str], provider: Optional[str]) -> None:
+    """BILL-01: record WHEN a purchased plan ends, so it can actually end.
+
+    Razorpay plan purchases are one-time orders. The grant wrote only ``subscription_tier``,
+    so a month's payment bought the plan forever. For Razorpay the end of the paid period
+    (now + 1 month/year, extended from the current end when the same plan is renewed early) is
+    stored in ``next_billing_date``; ``get_plan_context`` stops honouring the tier after it
+    and ``core.plan_expiry`` persists the downgrade. For Stripe only the provider is recorded
+    (renewals and cancellation arrive as Stripe webhooks, which own the period) - recording it
+    is what lets cancel/resume find the right gateway.
+
+    Best effort by design: the tier is already granted and the customer already charged, so a
+    deploy that has not applied migration 037 must not turn a captured payment into a failed
+    webhook. The gap is logged CRITICAL because without the column the plan does not expire.
+    """
+    if provider not in ("razorpay", "stripe") or item_key in ("free", "ml_addon"):
+        return
+    from backend_app.core.billing_lifecycle import BillingLifecycle
+
+    # Literal payloads (not a mutated dict) so tests/test_schema_table_reference_drift.py can
+    # check every column against the declared schema.
+    try:
+        if provider == "razorpay":
+            now = datetime.now(timezone.utc)
+            start = now
+            if previous_plan == item_key:
+                try:
+                    row = sb.table("profiles").select("next_billing_date").eq("id", user_id).execute().data or []
+                    current_end = (row[0].get("next_billing_date") if row else None)
+                    if current_end:
+                        parsed = datetime.fromisoformat(str(current_end).replace("Z", "+00:00"))
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=timezone.utc)
+                        start = max(now, parsed)
+                except Exception:  # noqa: BLE001 - extend from now; never grant LESS time than paid for
+                    start = now
+            period_end = BillingLifecycle.add_billing_period(start, billing_interval).isoformat()
+            sb.table("profiles").update({
+                "payment_provider": provider,
+                "next_billing_date": period_end,
+                "subscription_status": "active",
+                "cancel_at_period_end": False,
+            }).eq("id", user_id).execute()
+        else:
+            sb.table("profiles").update({"payment_provider": provider}).eq("id", user_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.critical(
+            "[BILLING] BILL-01: plan granted to %s but its period/provider could not be recorded "
+            "(%s). Apply migration 037_profiles_billing_period_columns.sql; until then this "
+            "plan will NOT expire.", user_id, type(exc).__name__,
+        )
+
+
+async def _apply_billing_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: Optional[dict] = None, provider: Optional[str] = None) -> None:
     """
     F-20: Writes billing state ONLY to Supabase profiles table.
     SQLite SubscriptionModel / InvoiceModel storage is retired.
@@ -1396,6 +1451,7 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
                 f"Subscription tier updated for user {user_id}: tier={item_key} "
                 f"interval={billing_interval or 'unchanged'}"
             )
+            _record_plan_period(sb, user_id, item_key, previous_plan, billing_interval, provider)
 
     except Exception as e:
         logger.error(f"Failed to update Supabase profile for user {user_id}: {e}")
@@ -1445,12 +1501,112 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
 
 
 async def _process_stripe_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
-    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {})
+    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {}, provider="stripe")
     logger.info(f"Stripe: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
+class RazorpayOrderMismatch(Exception):
+    """The captured payment does not match the server-created order it claims to pay for."""
+
+
+async def _fetch_razorpay_order(order_id: str) -> dict:
+    """Fetch an order from Razorpay with the server's API credentials (patchable seam)."""
+    import asyncio
+
+    import razorpay
+
+    rzp = razorpay.Client(
+        auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"])
+    )
+    return await asyncio.to_thread(rzp.order.fetch, order_id)
+
+
+async def _fetch_razorpay_payment(payment_id: str) -> dict:
+    """Fetch a payment from Razorpay with the server's API credentials (patchable seam)."""
+    import razorpay
+
+    rzp = razorpay.Client(
+        auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"])
+    )
+    return await asyncio.to_thread(rzp.payment.fetch, payment_id)
+
+
+async def _revoke_plan_for_refunded_razorpay_payment(payment_id: str) -> bool:
+    """BILL-01: a FULLY refunded plan purchase no longer entitles the buyer.
+
+    The purchase is found through the invoice row the capture wrote (not through refund-event
+    metadata, which Razorpay does not reliably carry), the refund is confirmed against the
+    gateway (status ``refunded`` / ``amount_refunded >= amount`` - a partial refund keeps the
+    plan), and the downgrade is conditional on the buyer still being on the plan that payment
+    bought, so a later upgrade is never undone by an old refund. Marketplace payments are
+    handled by the settlement ledger and skipped here. Returns True when a plan was revoked.
+    A gateway fetch failure propagates so the webhook is redelivered.
+    """
+    sb = _background_sb()
+    rows = (sb.table("billing_invoices").select("user_id,plan")
+            .eq("provider", "razorpay").eq("provider_payment_id", payment_id)
+            .limit(1).execute().data or [])
+    if not rows:
+        return False
+    user_id, plan = rows[0].get("user_id"), rows[0].get("plan")
+    if not user_id or not plan or str(plan).startswith("marketplace_") or plan in ("free", "ml_addon"):
+        return False
+    payment = await _fetch_razorpay_payment(payment_id)
+    amount, refunded = int(payment.get("amount") or 0), int(payment.get("amount_refunded") or 0)
+    if not (payment.get("status") == "refunded" or (amount > 0 and refunded >= amount)):
+        logger.info("[BILLING] BILL-01: refund of %s is partial (%s of %s); plan kept", payment_id, refunded, amount)
+        return False
+    res = (sb.table("profiles")
+           .update({"subscription_tier": "free", "subscription_status": "expired", "cancel_at_period_end": False})
+           .eq("id", user_id).eq("subscription_tier", plan).execute())
+    if not res.data:
+        return False
+    await invalidate_profile_cache(user_id)
+    try:
+        from backend_app.core.subscription_dependencies import invalidate_plan_cache
+        await invalidate_plan_cache(user_id)
+    except Exception:  # noqa: BLE001
+        pass
+    logger.warning("[BILLING] BILL-01: plan %s revoked for user %s after full refund of %s", plan, user_id, payment_id)
+    return True
+
+
+async def _reconcile_razorpay_payment_with_order(payment: dict, claimed_notes: dict) -> dict:
+    """SEC-02: take authorisation facts from the SERVER-CREATED order, never from payment notes.
+
+    Standard Checkout lets the browser add or override ``notes`` on a payment, so
+    ``payment.notes`` (user, item) is attacker-influenced. The order, by contrast, was created
+    by ``create_checkout_session`` with the server's credentials. This returns the ORDER's notes
+    after checking that the payment is for that order, in the same amount and currency, and that
+    any notes the payment claims agree with the order's. Raises :class:`RazorpayOrderMismatch`
+    when they do not (grant nothing). A failure to FETCH the order propagates so the webhook
+    is retried rather than granting on unverified data.
+    """
+    order_id = payment.get("order_id")
+    if not order_id:
+        raise RazorpayOrderMismatch("payment carries no order_id")
+    order = await _fetch_razorpay_order(str(order_id))
+    if str(order.get("id") or order_id) != str(order_id):
+        raise RazorpayOrderMismatch("fetched order id differs from the payment's order_id")
+    if int(order.get("amount") or -1) != int(payment.get("amount") or -2):
+        raise RazorpayOrderMismatch(
+            f"payment amount {payment.get('amount')} != order amount {order.get('amount')}"
+        )
+    if str(order.get("currency") or "").upper() != str(payment.get("currency") or "").upper():
+        raise RazorpayOrderMismatch("payment currency differs from the order's")
+    order_notes = dict(order.get("notes") or {})
+    order_user = order_notes.get("user_id")
+    order_item = order_notes.get("item") or order_notes.get("item_key")
+    if not order_user or not order_item:
+        raise RazorpayOrderMismatch("order carries no user_id/item to authorise against")
+    claimed_item = (claimed_notes or {}).get("item") or (claimed_notes or {}).get("item_key")
+    if str((claimed_notes or {}).get("user_id")) != str(order_user) or str(claimed_item) != str(order_item):
+        raise RazorpayOrderMismatch("payment notes disagree with the server-created order")
+    return order_notes
+
+
 async def _process_razorpay_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
-    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {})
+    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {}, provider="razorpay")
     logger.info(f"Razorpay: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
@@ -2882,6 +3038,17 @@ async def razorpay_webhook(
         if payload.get("event") == "payment.captured":
             payment = payload["payload"]["payment"]["entity"]
             notes = payment.get("notes", {})
+            try:
+                # SEC-02: authorisation comes from the server-created order, not payment notes.
+                notes = await _reconcile_razorpay_payment_with_order(payment, notes)
+            except RazorpayOrderMismatch as mismatch:
+                logger.critical(
+                    "[BILLING] SEC-02: Razorpay payment %s NOT applied - %s. No entitlement granted.",
+                    payment.get("id"), mismatch,
+                )
+                if idempotency_key:
+                    await redis_manager.set(idempotency_key, "completed", ex=86400)
+                return {"status": "ignored", "reason": "order_mismatch"}
             user_id = notes.get("user_id")
             item_key = notes.get("item") or notes.get("item_key")  # Support both keys for compatibility
 
@@ -3143,6 +3310,8 @@ async def razorpay_webhook(
                         currency=refund.get("currency"),
                         event_name=payload.get("event"),
                     )
+                    # BILL-01: and the plan half - a fully refunded plan purchase stops entitling.
+                    await _revoke_plan_for_refunded_razorpay_payment(payment_id)
 
         # Successfully completed — store completed status with 24h TTL
         if idempotency_key:
@@ -3358,6 +3527,71 @@ async def create_portal_session(
         raise HTTPException(500, f"Billing portal error: {str(e)}")
 
 
+# ── BILL-05: cancel/resume must act on the PROVIDER, not just the local row ──
+class StripeSubscriptionUpdateFailed(Exception):
+    """Stripe refused or could not be reached; local state must NOT be changed."""
+
+
+_STRIPE_LIVE_SUB_STATES = ("active", "trialing", "past_due", "unpaid")
+
+
+def _set_stripe_cancel_at_period_end(user_id: str, email: Optional[str], value: bool) -> int:
+    """Flip ``cancel_at_period_end`` on every live Stripe subscription owned by *user_id*.
+
+    Before this existed ``/cancel`` only wrote ``profiles.cancel_at_period_end``; Stripe was
+    never told, so the card kept being charged every period while the UI said "cancelled".
+    A subscription is only touched when its own metadata (or its customer's) names this
+    user, so a shared e-mail address cannot cancel somebody else's plan.
+
+    Returns the number of subscriptions updated (0 = nothing live at Stripe, i.e. nothing is
+    being charged). Raises :class:`StripeSubscriptionUpdateFailed` on any provider error -
+    the caller must then leave local state untouched and surface the failure.
+    """
+    import stripe
+
+    stripe.api_key = _validate_keys("stripe")
+    updated = 0
+    try:
+        customers = stripe.Customer.list(email=email, limit=10) if email else None
+        for customer in (getattr(customers, "data", None) or []):
+            cust_owner = (getattr(customer, "metadata", None) or {}).get("user_id")
+            subs = stripe.Subscription.list(customer=customer.id, status="all", limit=20)
+            for sub in (getattr(subs, "data", None) or []):
+                if sub.get("status") not in _STRIPE_LIVE_SUB_STATES:
+                    continue
+                owner = (sub.get("metadata") or {}).get("user_id") or cust_owner
+                if owner != user_id:
+                    continue
+                stripe.Subscription.modify(sub["id"], cancel_at_period_end=value)
+                updated += 1
+    except Exception as exc:  # noqa: BLE001 - any provider failure must fail the request
+        logger.error("[BILLING] Stripe cancel_at_period_end=%s failed for user %s: %s",
+                     value, user_id, type(exc).__name__)
+        raise StripeSubscriptionUpdateFailed(type(exc).__name__) from exc
+    return updated
+
+
+def _should_cancel_at_stripe(provider: Optional[str]) -> bool:
+    """True unless the account is known to pay through Razorpay (one-time orders, nothing recurs).
+
+    ``profiles.payment_provider`` was never written by the checkout paths, so an unknown
+    provider is the NORMAL state of a real Stripe customer; treating "unknown" as "not Stripe"
+    would skip the very call BILL-05 exists to make. If this deployment has no Stripe key there
+    cannot be a Stripe subscription to cancel.
+    """
+    if provider == "razorpay":
+        return False
+    return bool(os.environ.get("STRIPE_SECRET_KEY", "").strip())
+
+
+def _profile_payment_provider(sb: Any, user_id: str) -> Optional[str]:
+    try:
+        rows = sb.table("profiles").select("payment_provider").eq("id", user_id).execute().data or []
+        return (rows[0].get("payment_provider") or None) if rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── POST /api/billing/cancel ─────────────────────────────────────────────────
 @router.post("/cancel")
 @limiter.limit("5/minute")
@@ -3375,6 +3609,17 @@ async def cancel_subscription(
     try:
         from backend_app.core.billing_lifecycle import BillingLifecycle
         sb = _background_sb()
+        # BILL-05: tell the provider FIRST. If Stripe cannot be updated, local state stays
+        # as it was - never show "cancelled" while the card is still being charged.
+        if _should_cancel_at_stripe(_profile_payment_provider(sb, user_id)):
+            try:
+                await asyncio.to_thread(_set_stripe_cancel_at_period_end, user_id, user.get("email"), True)
+            except StripeSubscriptionUpdateFailed:
+                raise HTTPException(502, {
+                    "error": "PROVIDER_CANCEL_FAILED",
+                    "message": "We could not cancel your subscription with the payment provider, "
+                               "so nothing was changed. Please retry; you have not been cancelled.",
+                })
         result = await BillingLifecycle.cancel_subscription(
             user_id=user_id,
             cancel_at_period_end=True,
@@ -3401,6 +3646,8 @@ async def cancel_subscription(
         except Exception as notif_err:
             logger.debug(f"[BILLING] cancellation notification error: {notif_err}")
         return {"status": "ok", "detail": result.get("message", "Cancellation scheduled"), "cancel_at_period_end": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to cancel subscription for user {user_id}: {e}")
         raise HTTPException(500, f"Cancellation failed: {str(e)}")
@@ -3421,6 +3668,15 @@ async def resume_subscription(
     user_id = user["id"]
     try:
         sb = _background_sb()
+        if _should_cancel_at_stripe(_profile_payment_provider(sb, user_id)):
+            try:
+                await asyncio.to_thread(_set_stripe_cancel_at_period_end, user_id, user.get("email"), False)
+            except StripeSubscriptionUpdateFailed:
+                raise HTTPException(502, {
+                    "error": "PROVIDER_RESUME_FAILED",
+                    "message": "We could not resume your subscription with the payment provider, "
+                               "so nothing was changed. Please retry.",
+                })
         sb.table("profiles").update({
             "cancel_at_period_end": False,
             "subscription_status": "active",
@@ -3446,6 +3702,8 @@ async def resume_subscription(
         except Exception as notif_err:
             logger.debug(f"[BILLING] resume notification error: {notif_err}")
         return {"status": "ok", "detail": "Subscription cancellation reversed. Plan is now active.", "cancel_at_period_end": False}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to resume subscription for user {user_id}: {e}")
         raise HTTPException(500, f"Resume failed: {str(e)}")

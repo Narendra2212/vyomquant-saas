@@ -285,9 +285,14 @@ class ConnectionEngine:
         self.proxies = proxies
         self.exchange: Optional[ccxt.Exchange] = None
 
-    async def connect(self, max_retries: int = 3) -> ccxt.Exchange:
+    async def connect(self, max_retries: int = 3, *, allow_mock: bool = True) -> ccxt.Exchange:
         """
         Creates and configures the CCXT exchange object, loads markets.
+
+        ``allow_mock`` (RT-01): in ``DEV_MODE`` a failed market load used to be answered with
+        ``_apply_mock_interface`` -- a two-market map and a CONSTANT 50,000 price stream. That is
+        acceptable for a developer's laptop and wrong for anything that reports results to a user,
+        so a caller that feeds a deployed bot passes ``allow_mock=False`` and gets the real error.
         FIX CE-1: load_markets() now retries with exponential backoff.
         FIX CE-2: apiKey/secret only added to config when they are not None.
         """
@@ -388,7 +393,7 @@ class ConnectionEngine:
                     f"not retried: {e}",
                     exc_info=True,
                 )
-                if DEV_MODE:
+                if DEV_MODE and allow_mock:
                     logger.warning(
                         f"[{self.exchange_id.upper()}] DEV_MODE is active, injecting "
                         f"mock interface."
@@ -401,7 +406,7 @@ class ConnectionEngine:
             except Exception as e:
                 if attempt == max_retries - 1:
                     from backend_app.core.dependencies import DEV_MODE
-                    if DEV_MODE:
+                    if DEV_MODE and allow_mock:
                         logger.warning(
                             f"[{self.exchange_id.upper()}] Connection failed: {e}. DEV_MODE is active, injecting mock interface."
                         )

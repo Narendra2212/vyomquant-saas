@@ -190,12 +190,12 @@ def _refuse_if_unconvertible(conn, raw_table: str, raw_column: str) -> int:
     column = _validate_table_name(raw_column)
 
     total = conn.execute(
-        sa.text(f'SELECT count(*) FROM public."{table}" WHERE "{column}" IS NOT NULL')
+        sa.text(f'SELECT count(*) FROM public."{table}" WHERE "{column}" IS NOT NULL')  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
     ).scalar()
 
     bad = conn.execute(
         sa.text(
-            f'SELECT count(*) FROM public."{table}" '
+            f'SELECT count(*) FROM public."{table}" '  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
             f'WHERE "{column}" IS NOT NULL AND "{column}"::text !~* :re'
         ),
         {"re": UUID_REGEX},
@@ -206,7 +206,7 @@ def _refuse_if_unconvertible(conn, raw_table: str, raw_column: str) -> int:
 
     sample = conn.execute(
         sa.text(
-            f'SELECT DISTINCT "{column}"::text FROM public."{table}" '
+            f'SELECT DISTINCT "{column}"::text FROM public."{table}" '  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
             f'WHERE "{column}" IS NOT NULL AND "{column}"::text !~* :re LIMIT 5'
         ),
         {"re": UUID_REGEX},
@@ -464,7 +464,7 @@ def upgrade() -> None:
         # PostgreSQL's own error be the only explanation, and rather than deleting them.
         orphans = conn.execute(
             sa.text(
-                f'SELECT count(*) FROM public."{table}" t '
+                f'SELECT count(*) FROM public."{table}" t '  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
                 f'WHERE t."{column}" IS NOT NULL AND NOT EXISTS '
                 f'      (SELECT 1 FROM public.profiles p WHERE p.id = t."{column}")'
             )
@@ -472,7 +472,7 @@ def upgrade() -> None:
         if orphans:
             sample = conn.execute(
                 sa.text(
-                    f'SELECT DISTINCT t."{column}"::text FROM public."{table}" t '
+                    f'SELECT DISTINCT t."{column}"::text FROM public."{table}" t '  # nosec B608 - identifiers only, each passed through _validate_table_name (^[A-Za-z0-9_]{1,64}$) or taken from a module constant; values are bound params
                     f'WHERE t."{column}" IS NOT NULL AND NOT EXISTS '
                     f'      (SELECT 1 FROM public.profiles p WHERE p.id = t."{column}") '
                     f'LIMIT 5'

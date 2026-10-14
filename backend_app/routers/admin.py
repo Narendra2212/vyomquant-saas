@@ -9,6 +9,7 @@ FIXES:
 """
 
 import asyncio
+import inspect
 import logging
 
 import json
@@ -18,8 +19,8 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend_app.core.dependencies import (get_admin_user, get_operator_user, get_alert,
-                                           get_fleet, get_request_supabase,
+from backend_app.core.dependencies import (require_aal2, get_admin_user, get_operator_user, get_alert,
+                                           get_fleet, get_service_supabase,
                                            get_telemetry, get_ws_manager,
                                            invalidate_profile_cache)
 from backend_app.core.background_tasks import fire_and_forget_task
@@ -109,8 +110,10 @@ async def list_users(
     search: str = Query(""),
     limit: int = Query(50, ge=1, le=200),
     admin: dict = Depends(get_admin_user),
-    supabase: SupabaseClient = Depends(get_request_supabase),
+    supabase: SupabaseClient = Depends(get_service_supabase),
 ):
+    # SEC-08: runs under the service-role client (after get_admin_user), otherwise RLS
+    # restricts the listing to the admin's own row.
     # ADMIN-3: Require at least 2 chars to prevent full enumeration with empty string
     if search and len(search) < 2:
         raise HTTPException(400, "Search query must be at least 2 characters.")
@@ -141,9 +144,10 @@ async def set_user_status(
     user_id: str,
     body: UserStatusRequest,
     admin: dict = Depends(get_operator_user),
+    _mfa: dict = Depends(require_aal2),  # SEC-15: freeze/unfreeze any account needs MFA
     fleet=Depends(get_fleet),
     alert=Depends(get_alert),
-    supabase: SupabaseClient = Depends(get_request_supabase),
+    supabase: SupabaseClient = Depends(get_service_supabase),
 ):
     reason = body.reason.strip()
     if not reason:
@@ -160,9 +164,17 @@ async def set_user_status(
             if len(parts) == 2:
                 await fleet.stop_bot(parts[0], parts[1])
 
-    supabase.table("profiles").update({"is_frozen": is_frozen}).eq(
+    # SEC-08: service-role client + verify the row was actually changed. Under the
+    # operator's own RLS identity this updated 0 rows and still reported success.
+    if supabase is None:
+        raise HTTPException(503, "Platform database is unavailable; user status not changed.")
+    update_res = supabase.table("profiles").update({"is_frozen": is_frozen}).eq(
         "id", user_id
     ).execute()
+    if inspect.isawaitable(update_res):
+        update_res = await update_res
+    if not getattr(update_res, "data", None):
+        raise HTTPException(404, "User not found; no status change was applied.")
     await invalidate_profile_cache(user_id)
     action = "FROZEN" if is_frozen else "RESTORED"
 
@@ -186,6 +198,7 @@ async def set_user_status(
 async def global_kill_switch(
     body: GlobalKillRequest,
     admin: dict = Depends(get_operator_user),
+    _mfa: dict = Depends(require_aal2),  # SEC-15: platform-wide halt needs MFA
     fleet=Depends(get_fleet),
     alert=Depends(get_alert),
     ws_mgr=Depends(get_ws_manager),
@@ -336,6 +349,7 @@ async def kill_switch_status(
 @router.post("/reinitialize")
 async def reinitialize_platform(
     admin: dict = Depends(get_admin_user),
+    _mfa: dict = Depends(require_aal2),  # SEC-15
     alert=Depends(get_alert),
 ):
     fire_and_forget_task(

@@ -101,6 +101,16 @@ LOCAL_RECEIVERS = frozenset(
 #:       ``AttributeError`` -- the PORT-01 shape.
 UNREACHABLE_RECEIVERS = frozenset({"execution_engine"})
 
+#: Receivers that DELEGATE to one of the four pinned venue boundaries rather than being one.
+#:
+#:   ``executor``  backend/order_control.py (RT-21) - ``executor.cancel_order`` /
+#:       ``cancel_all_open_orders`` on a ``CCXTExchangeExecutor``, whose ``cancel_order`` is the
+#:       ``exchange_executor`` boundary already counted below. It is a reduce-only CANCEL (never
+#:       an order placement) and is the user's way to remove resting orders during an incident.
+#:       ``test_order_control_only_cancels`` pins that the module contains no ``create_order``
+#:       and no cancel on any other receiver.
+DELEGATING_RECEIVERS = frozenset({"executor"})
+
 VENUE_METHODS = frozenset({"create_order", "cancel_order"})
 
 
@@ -153,13 +163,20 @@ def test_every_venue_write_site_is_classified():
     This is the tripwire: a NEW call site on an unrecognised receiver fails here, and
     whoever added it has to say whether it reaches a venue.
     """
-    known = VENUE_RECEIVERS | LOCAL_RECEIVERS | UNREACHABLE_RECEIVERS
+    known = VENUE_RECEIVERS | LOCAL_RECEIVERS | UNREACHABLE_RECEIVERS | DELEGATING_RECEIVERS
     unclassified = [site for site in venue_write_sites() if site[3] not in known]
     assert not unclassified, (
         "these create_order/cancel_order call sites are on receivers this inventory does "
         "not know about, so it cannot say whether they reach a real exchange:\n"
         + "\n".join(f"  {p}:{line} {method} on {recv!r}" for p, line, method, recv in unclassified)
     )
+
+
+def test_order_control_only_cancels():
+    """RT-21: the delegating module may cancel, and may do nothing else at the venue."""
+    sites = [s for s in venue_write_sites() if s[0] == "backend_app/backend/order_control.py"]
+    assert sites, "expected the cancel call sites to exist (inventory is stale otherwise)"
+    assert {(m, r) for _p, _l, m, r in sites} == {("cancel_order", "executor")}
 
 
 def test_the_real_venue_boundaries_are_exactly_the_four_already_gated():
@@ -305,13 +322,21 @@ BLUEPRINT = {
 
 def _bot(paper_trading: bool, vault: Any):
     from backend_app.backend.master_executor import BotRunner
+    from tests.fakes_market_data import (FakePublicExchange, make_closed_ohlcv,
+                                         public_factory)
 
+    # RT-01: a paper bot connects to the venue's PUBLIC market data (no credentials). The test
+    # supplies an offline stand-in for it; what these tests pin is what that connection may
+    # and may not be.
     return BotRunner(
         user_id="11111111-1111-1111-1111-111111111111",
         symbol="BTC/USDT",
         strategy_blueprint=dict(BLUEPRINT),
         global_state=_GlobalState(vault),
         paper_trading=paper_trading,
+        public_market_data_factory=public_factory(
+            FakePublicExchange(make_closed_ohlcv(40, "1m"))
+        ),
     )
 
 
@@ -346,14 +371,14 @@ def test_the_real_paper_boot_decrypts_no_credential_and_builds_no_live_adapter(m
     )
 
 
-def test_the_paper_boot_builds_no_ccxt_client(monkeypatch):
-    """``ConnectionEngine`` is constructed, but no network client is.
+def test_the_paper_boot_builds_no_credentialed_ccxt_client(monkeypatch):
+    """The paper market-data connection carries NO credential, so it cannot place an order.
 
-    ``ConnectionEngine.__init__`` only assigns attributes and sets ``self.exchange = None``;
-    the CCXT object is built in ``connect()``, which the paper branch never calls. So the
-    handle ``DataEngine`` receives is ``None`` and there is nothing that could place an
-    order. Asserted because "a ConnectionEngine was constructed" reads alarming in the
-    source and is in fact inert.
+    This used to assert ``bot.exchange is None`` ("the paper branch never calls ``connect()``"),
+    which was true only because the paper bot had no market data at all (RT-01: its loop died on
+    the first read). A paper bot now connects -- keylessly -- to the venue's public feed, so the
+    property worth pinning is the one that made ``None`` safe: the handle holds no key, and the
+    engine holds no executor.
     """
     monkeypatch.setattr(
         "backend_app.backend.exchange_executor.get_exchange_executor",
@@ -363,13 +388,15 @@ def test_the_paper_boot_builds_no_ccxt_client(monkeypatch):
     bot = _bot(paper_trading=True, vault=_ExplodingVault())
     asyncio.run(bot._recover_live_state())
 
-    assert bot.ccxt_bridge is not None, "the paper branch built no ConnectionEngine at all"
+    assert bot.ccxt_bridge is not None, "the paper branch built no market-data connection at all"
     assert bot.ccxt_bridge.api_key is None
-    assert bot.ccxt_bridge.secret_key is None
-    assert bot.exchange is None, (
-        f"paper mode produced a live CCXT exchange handle: {bot.exchange!r}. "
-        f"ConnectionEngine.connect() must not be reached on the paper branch."
-    )
+    assert getattr(bot.ccxt_bridge, "secret_key", None) is None
+    assert bot.exchange is not None, "RT-01: a paper bot must have market data"
+    for attr in ("apiKey", "secret", "password", "uid", "api_key", "api_secret"):
+        assert not getattr(bot.exchange, attr, None), (
+            f"the paper market-data handle carries a credential ({attr})"
+        )
+    assert bot.execution_engine.exchange_executor is None
 
 
 def test_the_live_boot_does_touch_the_vault(monkeypatch):

@@ -789,7 +789,6 @@ async def get_open_orders(
     keys = vault.load_decrypted_keys(
         user["id"],
         exchange_id,
-        access_token=user.get("access_token"),
     )
     exchange = await get_or_create_exchange(
         user_id=user["id"],
@@ -822,17 +821,10 @@ async def cancel_order(
     # ═══════════════════════════════════════════════════════════════════
     # STEP 2: SAFETY CHECKS
     # ═══════════════════════════════════════════════════════════════════
-    safety_check = SafetyMonitor.check_execution_allowed("cancel")
-    if safety_check:
-        logger.critical(f"🚫 BLOCKED CANCEL: {safety_check}")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "SYSTEM_FREEZE",
-                "message": "Order cancellation is disabled during safety fixes",
-                "reason": safety_check,
-            }
-        )
+    # RT-21: NO PLATFORM-MODE GATE ON A CANCEL. `SafetyMonitor.check_execution_allowed` blocks
+    # in `safe` mode (the default) and when live trading is off -- both are about OPENING
+    # risk. A cancel only removes it, and must stay available in every mode, during a tenant
+    # halt (RT-19) and while the global kill switch is on.
     
     # ═══════════════════════════════════════════════════════════════════
     # STEP 3: EXECUTION GUARD VALIDATION
@@ -853,12 +845,11 @@ async def cancel_order(
         validation_report = await guard.validate_trade(
             tenant_id=str(tenant_id),
             signal=signal,
-            portfolio_state=await get_portfolio_state(user["id"], exchange_id, vault),
-            market_state={
-                "spread_bps": "10",
-                "volatility": "0.02",
-                "status": "open",
-            },
+            # RT-21: a control action reads neither the portfolio nor the market. The guard
+            # validates only its shape, so no cache-freshness failure or fabricated market
+            # figure can block (or rubber-stamp) a cancel.
+            portfolio_state={},
+            market_state={},
                 # reduce_only: a cancel does not ask whether the account can AFFORD a
                 # position, so the six capital checks are skipped. Idempotency, the
                 # symbol allow-list and the circuit breakers still apply. Without this,
@@ -889,16 +880,16 @@ async def cancel_order(
     # ═══════════════════════════════════════════════════════════════════
     # STEP 4: EXECUTE CANCEL THROUGH UNIFIED ENGINE WITH IDEMPOTENCY
     # ═══════════════════════════════════════════════════════════════════
-    execution_engine = await _build_execution_engine(user["id"], vault, exchange_id)
-    
-    # Generate execution_id from idempotency_key or create new one
+    # RT-21: the cancel goes straight to the venue through the single gated cancel boundary
+    # in exchange_executor (see backend/order_control.py). `_build_execution_engine` stays
+    # blocked: it is the OPENING path.
     execution_id = idempotency_key or f"cancel_{tenant_id}_{order_id}_{datetime.utcnow().timestamp()}"
-    
-    # STEP 4a: ACQUIRE REDIS DISTRIBUTED LOCK (prevents duplicate cancels)
+
+    # STEP 4a: ACQUIRE REDIS DISTRIBUTED LOCK (prevents duplicate concurrent cancels)
     redis_client = await redis_manager.get_client()
-    cancel_lock_key = f"cancel_lock:{order_id}"
+    cancel_lock_key = f"cancel_lock:{tenant_id}:{order_id}"
     cancel_lock_acquired = await redis_client.set(cancel_lock_key, "1", nx=True, ex=30)
-    
+
     if not cancel_lock_acquired:
         logger.warning(f"🔒 CANCEL LOCK DENIED: order_id={order_id} already being cancelled")
         raise HTTPException(
@@ -909,15 +900,28 @@ async def cancel_order(
                 "order_id": order_id
             }
         )
-    
+
     try:
-        # Execute cancel through unified engine with idempotency
-        result = await execution_engine.cancel_order(
-            order_id=order_id,
-            symbol=body.symbol.replace("-", "/"),
-            execution_id=execution_id
+        from backend_app.backend.order_control import cancel_order_for_user
+        outcome = await cancel_order_for_user(
+            user_id=user["id"], exchange_id=exchange_id, vault=vault,
+            order_id=order_id, symbol=body.symbol.replace("-", "/"),
+            execution_id=execution_id, idempotency_key=idempotency_key,
+            redis_client=redis_client,
         )
-        return result
+        if not outcome.get("success"):
+            # Never report a cancel that did not happen (or may not have) as a success.
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": ("CANCEL_OUTCOME_UNKNOWN" if outcome.get("status") == "unknown"
+                              else "CANCEL_FAILED"),
+                    "message": outcome.get("error") or "The exchange did not confirm the cancel",
+                    "order_id": order_id,
+                    "retryable": True,
+                },
+            )
+        return outcome
     finally:
         # STEP 4b: RELEASE LOCK (cleanup - TTL will also expire it)
         await redis_client.delete(cancel_lock_key)
@@ -943,17 +947,10 @@ async def cancel_all(
     # ═══════════════════════════════════════════════════════════════════
     # STEP 2: SAFETY CHECKS
     # ═══════════════════════════════════════════════════════════════════
-    safety_check = SafetyMonitor.check_execution_allowed("cancel_all")
-    if safety_check:
-        logger.critical(f"🚫 BLOCKED CANCEL-ALL: {safety_check}")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "SYSTEM_FREEZE",
-                "message": "Cancel-all is disabled during safety fixes",
-                "reason": safety_check,
-            }
-        )
+    # RT-21: NO PLATFORM-MODE GATE ON A CANCEL. `SafetyMonitor.check_execution_allowed` blocks
+    # in `safe` mode (the default) and when live trading is off -- both are about OPENING
+    # risk. A cancel only removes it, and must stay available in every mode, during a tenant
+    # halt (RT-19) and while the global kill switch is on.
     
     # ═══════════════════════════════════════════════════════════════════
     # STEP 3: EXECUTION GUARD VALIDATION
@@ -974,12 +971,11 @@ async def cancel_all(
         validation_report = await guard.validate_trade(
             tenant_id=str(tenant_id),
             signal=signal,
-            portfolio_state=await get_portfolio_state(user["id"], exchange_id, vault),
-            market_state={
-                "spread_bps": "10",
-                "volatility": "0.02",
-                "status": "open",
-            },
+            # RT-21: a control action reads neither the portfolio nor the market. The guard
+            # validates only its shape, so no cache-freshness failure or fabricated market
+            # figure can block (or rubber-stamp) a cancel.
+            portfolio_state={},
+            market_state={},
                 # reduce_only: a cancel does not ask whether the account can AFFORD a
                 # position, so the six capital checks are skipped. Idempotency, the
                 # symbol allow-list and the circuit breakers still apply. Without this,
@@ -1010,14 +1006,18 @@ async def cancel_all(
     # ═══════════════════════════════════════════════════════════════════
     # STEP 4: EXECUTE CANCEL-ALL THROUGH UNIFIED ENGINE WITH IDEMPOTENCY
     # ═══════════════════════════════════════════════════════════════════
-    execution_engine = await _build_execution_engine(user["id"], vault, exchange_id)
-    
-    symbol = body.symbol.replace("-", "/") if body.symbol else None
-    
+    symbol = body.symbol.replace("-", "/") if body.symbol and body.symbol.upper() != "ALL" else None
+
     # Generate execution_id from idempotency_key or create new one
     execution_id = idempotency_key or f"cancelall_{tenant_id}_{datetime.utcnow().timestamp()}"
-    
-    result = await execution_engine.cancel_all(symbol, execution_id=execution_id)
+
+    # RT-21: see cancel_order above - reduce-only, through the single cancel boundary.
+    from backend_app.backend.order_control import cancel_all_for_user
+    result = await cancel_all_for_user(
+        user_id=user["id"], exchange_id=exchange_id, vault=vault, symbol=symbol,
+        execution_id=execution_id, idempotency_key=idempotency_key,
+        redis_client=await redis_manager.get_client(),
+    )
     
     # Broadcast cancellation event
     fire_and_forget_task(
@@ -1031,7 +1031,7 @@ async def cancel_all(
         ),
         name=f"orders_ws_cancel_all_{user['id']}"
     )
-    return {"status": "ok", "cancelled": result}
+    return {"status": "ok" if result.get("success") else "partial", "cancelled": result}
 
 
 # ── GET /api/orders/history ───────────────────────────────────────────
@@ -1095,7 +1095,6 @@ async def get_history(
         keys = vault.load_decrypted_keys(
             user["id"],
             exchange_id,
-            access_token=user.get("access_token"),
         )
         exchange = await get_or_create_exchange(
             user_id=user["id"],

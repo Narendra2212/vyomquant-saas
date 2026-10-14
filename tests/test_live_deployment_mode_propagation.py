@@ -200,13 +200,20 @@ BLUEPRINT: Dict[str, Any] = {
 
 def _runner(paper_trading: bool, vault: Any):
     from backend_app.backend.master_executor import BotRunner
+    from tests.fakes_market_data import (FakePublicExchange, make_closed_ohlcv,
+                                         public_factory)
 
+    # RT-01: the paper boot path connects to REAL public market data (the DEV_MODE mock is no
+    # longer used for it), so the test supplies an offline stand-in instead of the network.
     return BotRunner(
         user_id="11111111-1111-4111-8111-111111111111",
         symbol="BTC/USDT",
         strategy_blueprint=dict(BLUEPRINT),
         global_state=_State(vault),
         paper_trading=paper_trading,
+        public_market_data_factory=public_factory(
+            FakePublicExchange(make_closed_ohlcv(60, "1m"))
+        ),
     )
 
 
@@ -280,7 +287,12 @@ COMMAND_WORKER = REPO_ROOT / "backend_app" / "workers" / "command_worker.py"
 #: `deploy_strategy`, and the TEE path (`tee/main.py`) and the Redis command consumer
 #: (`workers/command_worker.py`) both start bots from a published command. Any of them
 #: defaulting the mode would have reproduced the defect on its own path.
-CALL_SITE_FILES = (STRATEGY_SERVICE, STRATEGIES_ROUTER, TEE_MAIN, COMMAND_WORKER)
+#
+#: RT-03: `routers/strategies.py` is no longer in this list because it no longer starts a bot --
+#: its deploy and resume handlers delegate to `StrategyService.deploy_version`, whose own call
+#: site is covered here. tests/test_rt03_legacy_deploy_route_uses_canonical_deploy.py pins that
+#: it stays that way.
+CALL_SITE_FILES = (STRATEGY_SERVICE, TEE_MAIN, COMMAND_WORKER)
 
 
 @pytest.mark.parametrize("path", CALL_SITE_FILES, ids=lambda p: p.name)
@@ -396,11 +408,10 @@ def test_the_ungated_legacy_deploy_and_resume_force_paper():
     that reason. The resume path reads a ``strategies`` row, which carries no mode column at
     all. A path that cannot establish that live was authorised must not run live.
     """
+    # RT-03: the legacy deploy and resume handlers no longer call `fleet.start_bot` themselves;
+    # they delegate to the canonical paper deploy (tests/test_rt03_*). Whatever call sites
+    # REMAIN in this router must still force paper, which is what the loop below enforces.
     calls = _start_bot_calls(STRATEGIES_ROUTER)
-    assert len(calls) >= 2, (
-        f"expected the legacy deploy and resume call sites in "
-        f"{STRATEGIES_ROUTER.name}, found {len(calls)}"
-    )
     for call in calls:
         keyword = next(kw for kw in call.keywords if kw.arg == FLAG)
         rendered = ast.unparse(keyword.value)

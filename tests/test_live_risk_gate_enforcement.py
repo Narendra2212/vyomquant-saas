@@ -458,3 +458,8 @@ async def test_direct_execution_source_bypass_rejected():
     assert result["status"] == "blocked"
     assert "source must be \"bot_runner\"" in result["message"]
     assert mock_ccxt.place_order_mock.call_count == 0
+
+
+import pytest as _pytest_rt15
+
+pytestmark = _pytest_rt15.mark.usefixtures("live_platform_enabled")  # RT-15

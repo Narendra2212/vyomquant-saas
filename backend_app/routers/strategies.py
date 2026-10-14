@@ -2000,6 +2000,59 @@ async def delete_strategy(
     return result
 
 
+async def _deploy_current_version_paper(user: dict, strategy_id: str) -> Dict[str, Any]:
+    """Deploy a strategy's current version in PAPER mode through the canonical service.
+
+    The single place the legacy ``/deploy`` and ``/resume`` routes start a runtime (RT-03).
+    Raises ``HTTPException`` for every refusal; returns the service's outcome on success.
+    """
+    from backend_app.backend.deployment_binding import (BindingRequest,
+                                                        DeployRejected)
+    from backend_app.backend.strategy_service import (DeployPrerequisiteError,
+                                                      get_strategy_service)
+
+    try:
+        service = await get_strategy_service()
+        strategy = await service.get_strategy(user, strategy_id)
+        version_row = (strategy or {}).get("version") or {}
+        version = version_row.get("version")
+        if not version:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "NO_SAVED_VERSION",
+                        "message": "This strategy has no saved version to deploy. Save a version first."},
+            )
+        outcome = await service.deploy_version(
+            user=user,
+            strategy_id=strategy_id,
+            version=str(version),
+            environment="paper",
+            binding_request=BindingRequest.from_payload({"mode": "paper"}),
+        )
+    except HTTPException:
+        raise
+    except DeployRejected as e:
+        raise HTTPException(status_code=e.http_status, detail=e.to_detail())
+    except DeployPrerequisiteError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "DEPLOY_PREREQUISITE_NOT_MET", "message": str(e),
+                    "missing_prerequisite": e.missing_prerequisite},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=403 if "Quota" in str(e) or "plan" in str(e) else 404,
+                            detail={"error": "DEPLOY_REFUSED", "message": str(e)})
+
+    if not outcome or not outcome.get("success"):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "DEPLOY_FAILED",
+                    "message": f"Deploy failed: {(outcome or {}).get('message') or 'runtime did not start'}"},
+        )
+
+    return outcome
+
+
 # ── POST /api/strategies/{id}/deploy ────────────────────────────────────
 @router.post("/{strategy_id}/deploy")
 async def deploy_bot(
@@ -2059,128 +2112,29 @@ async def deploy_bot(
     except ArchiveRejected as e:
         raise HTTPException(status_code=e.http_status, detail=e.to_detail())
 
-    blueprint = resp.data[0]
-    _lift_dag_fields(blueprint)
-    # Exchange identity is a DEPLOYMENT binding, resolved here at deploy time. It is
-    # deliberately absent from the saved strategy and from the graph (SB-06).
-    blueprint["exchange_id"] = body.get(
-        "exchange_id", blueprint.get("exchange_id", "binance")
-    )
-    
-    # SECURITY: Validate ML/DL strategies have trained models before deployment
-    _validate_ml_models_present(blueprint)
-
-    symbol = blueprint.get("symbol", "BTC/USDT")
-
-    # SECURITY & CONCURRENCY: Atomically reserve bot quota to eliminate TOCTOU races
-    plan_key = await get_user_plan(user["id"], sb)
-    allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(user["id"], plan_key, Resource.BOTS.value)
-    if not allowed:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Quota exceeded for {Resource.BOTS.value}: {current_usage}/{limit}. Upgrade your plan to continue."
-        )
-
-    use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
-    
-    try:
-        if use_tee:
-            logger.info(f"[STRATEGIES] Delegating deployment of {strategy_id} to TEE")
-            # The mode travels WITH the command. Both consumers
-            # (`workers/command_worker.py`, `tee/main.py`) now refuse a start_bot command
-            # that does not state it, so omitting it would start nothing rather than start
-            # something in an unestablished mode.
-            #
-            # `True`, for the same reason as the local branch below: this endpoint resolves
-            # no Deployment_Binding and travels no Requirement 13 gate, so nothing here
-            # establishes that live trading was authorised.
-            # Regression: tests/test_live_deployment_mode_propagation.py
-            await publish_command(
-                "start_bot", 
-                {
-                    "user_id": user["id"],
-                    "symbol": symbol,
-                    "blueprint": blueprint,
-                    "paper_trading": True,
-                }
-            )
-        else:
-            logger.info(f"[STRATEGIES] Executing deployment of {strategy_id} locally (Legacy Mode)")
-            # FORCED PAPER, and not a placeholder.
-            #
-            # This endpoint resolves no Deployment_Binding: it binds no exchange account, no
-            # risk configuration and no mode, and it travels none of the Requirement 13
-            # gates — which is precisely why the frontend was re-pointed off it to
-            # `POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy`.
-            # With nothing establishing that live trading was authorised for this strategy,
-            # on this account, the only honest mode is paper. The gated endpoint is where a
-            # live deployment is made.
-            # Regression: tests/test_live_deployment_mode_propagation.py
-            success, message = await fleet.start_bot(
-                user["id"], symbol, blueprint, paper_trading=True
-            )
-
-            if not success:
-                await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-                logger.error(f"[STRATEGIES] Deploy failed for strategy {strategy_id}: {message}")
-                raise HTTPException(400, f"Deploy failed: {message}")
-    except PublishError as e:
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        logger.error(f"[STRATEGIES] PublishError deploying strategy {strategy_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOY_DISPATCH_FAILED", "message": str(e)}
-        )
-    except Exception as e:
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        raise
-
-    try:
-        sb = await _sb(user)
-        if sb:
-            await sb.table("strategies").update({"status": "running"}).eq(
-                "id", strategy_id
-            ).execute()
-    except Exception as e:
-        if not use_tee and hasattr(fleet, "stop_bot"):
-            try:
-                await fleet.stop_bot(user["id"], symbol)
-            except Exception:
-                pass
-        await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
-        logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
-        raise HTTPException(status_code=503, detail="Unable to update strategy status after deployment. Please try again later.")
+    # ── RT-03: THIS ROUTE NO LONGER STARTS A BOT ITSELF ─────────────────────────────
+    # It used to build a blueprint from the `strategies` row and call `fleet.start_bot` with
+    # no Deployment_Binding, no `strategy_deployments` row and no lifecycle transition. For a
+    # strategy saved by the current builder that blueprint carried a graph and none of the
+    # `buy_logic`/`sell_logic`/`risk` the legacy evaluator reads, so the bot started and could
+    # never emit an order -- while this route answered `{"status": "running"}`.
+    #
+    # It is now a thin PAPER-ONLY entry point onto the one canonical deploy
+    # (`StrategyService.deploy_version`): same gates, same quota, same row, same runtime
+    # (DAGEngine.execute_plan). The mode is fixed to paper because this route has never
+    # carried a Requirement 13 binding; a live deployment is made through
+    # POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy.
+    # Regression: tests/test_rt03_legacy_deploy_route_uses_canonical_deploy.py
+    outcome = await _deploy_current_version_paper(user, strategy_id)
 
     asyncio.create_task(
         ws_mgr.broadcast_user(
             user["id"],
-            {
-                "type": "bot_status",
-                "strategy_id": strategy_id,
-                "status": "running",
-                "symbol": symbol,
-            },
+            {"type": "bot_status", "strategy_id": strategy_id, "status": "running"},
         )
     )
-
-    try:
-        from backend_app.core.notification_dispatcher import dispatch_user_notification
-        await dispatch_user_notification(
-            user_id=user["id"],
-            event_type="strategy_deployed",
-            category="strategy",
-            severity="info",
-            title=f"Strategy Deployed: {symbol}",
-            message=f"Strategy '{blueprint.get('name', strategy_id)}' is now running live on {symbol}.",
-            strategy_id=strategy_id,
-            metadata={"symbol": symbol, "strategy_id": strategy_id, "idempotency_key": f"strat_deploy:{user['id']}:{strategy_id}"},
-            ws_manager=ws_mgr,
-        )
-    except Exception as notif_err:
-        logger.debug(f"[STRATEGIES] Notification dispatch error: {notif_err}")
-
     logger.info(f"[STRATEGIES] Strategy {strategy_id} deployed successfully")
-    return {"status": "running"}
+    return {"status": "running", "deployment_id": (outcome.get("deployment") or {}).get("id")}
 
 
 # ── POST /api/strategies/{id}/stop ───────────────────────────────────────
@@ -2214,30 +2168,16 @@ async def stop_bot(
         return {"status": "already_stopped"}
 
     symbol = resp.data[0]["symbol"]
-    
-    use_tee = os.environ.get("USE_TEE", "false").lower() == "true"
-    
-    try:
-        if use_tee:
-            logger.info(f"[STRATEGIES] Delegating stop of {strategy_id} to TEE")
-            await publish_command(
-                "stop_bot",
-                {
-                    "user_id": user["id"],
-                    "symbol": symbol,
-                },
-            )
-        else:
-            logger.info("[STRATEGIES] Stopping bot locally (Legacy Mode)")
-            await fleet.stop_bot(user["id"], symbol)
-    except PublishError as e:
-        logger.error(f"[STRATEGIES] PublishError stopping strategy {strategy_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STOP_DISPATCH_FAILED", "message": str(e)}
-        )
 
-    logger.info(f"[STRATEGIES] Strategy {strategy_id} stopped. Order cleanup handled by BotRunner.")
+    # RT-03/RT-08: stop through the canonical service, which stops each running DEPLOYMENT of
+    # this strategy by its real symbol and writes a durable stop request when the bot is owned
+    # by another process. (This route used to call `fleet.stop_bot` directly and then mark the
+    # strategy stopped whether or not any bot had been reached.)
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    service = await get_strategy_service()
+    stopped = await service.stop_all_deployments(user, strategy_id)
+    logger.info(f"[STRATEGIES] Strategy {strategy_id}: {stopped} deployment(s) stopped.")
 
     sb = await _sb(user)
     if sb:
@@ -2245,16 +2185,13 @@ async def stop_bot(
             "id", strategy_id
         ).execute()
 
-    # Decrement bot usage only when transitioning from running -> stopped
-    await decrement_usage(Resource.BOTS.value, user)
-
     asyncio.create_task(
         ws_mgr.broadcast_user(
             user["id"],
             {"type": "bot_status", "strategy_id": strategy_id, "status": "stopped"},
         )
     )
-    
+
     try:
         from backend_app.core.notification_dispatcher import dispatch_user_notification
         await dispatch_user_notification(
@@ -2959,6 +2896,61 @@ async def get_backtest_status(job_id: str, user: dict = Depends(get_current_user
     return response
 
 
+class MarketDataUnavailable(RuntimeError):
+    """BT-01: the exchange history needed for a backtest could not be fetched."""
+
+
+_TIMEFRAME_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "M": 2592000}
+
+
+def _periods_per_year(timeframe: str) -> float:
+    """Bars per year for a ccxt-style timeframe such as ``15m``, ``1h``, ``1d``."""
+    try:
+        unit = timeframe[-1]
+        seconds = int(timeframe[:-1]) * _TIMEFRAME_SECONDS[unit]
+        return (365.0 * 86400.0) / seconds
+    except Exception:  # noqa: BLE001 - unknown timeframe: say so via None metrics upstream
+        return 0.0
+
+
+def _equity_curve_metrics(equity_history, timeframe: str) -> dict:
+    """BT-01: Sharpe / Sortino / Calmar from the REAL per-bar equity curve.
+
+    These used to be invented: ``sharpe = win_rate*avg_win / ((1-win_rate)*avg_loss)``,
+    ``sortino = sharpe * 1.2`` and a Calmar from a two-point curve. Every figure here is
+    derived from ``equity_history`` or is ``None`` (never 0, never a guess) when the curve
+    cannot support it.
+    """
+    import math
+
+    import numpy as np
+
+    out = {"sharpe_ratio": None, "sortino_ratio": None, "calmar_ratio": None}
+    eq = np.asarray([float(x) for x in equity_history], dtype=float)
+    ppy = _periods_per_year(timeframe)
+    if len(eq) < 3 or ppy <= 0 or not np.all(np.isfinite(eq)) or np.any(eq <= 0):
+        return out
+
+    returns = np.diff(eq) / eq[:-1]
+    std = float(np.std(returns))
+    mean = float(np.mean(returns))
+    if std > 0:
+        out["sharpe_ratio"] = round(mean / std * math.sqrt(ppy), 2)
+
+    downside = returns[returns < 0]
+    dstd = float(np.sqrt(np.mean(downside ** 2))) if len(downside) else 0.0
+    if dstd > 0:
+        out["sortino_ratio"] = round(mean / dstd * math.sqrt(ppy), 2)
+
+    peak = np.maximum.accumulate(eq)
+    max_dd = float(np.max((peak - eq) / peak))
+    years = (len(eq) - 1) / ppy
+    if max_dd > 0 and years > 0:
+        annualised = (eq[-1] / eq[0]) ** (1.0 / years) - 1.0
+        out["calmar_ratio"] = round(annualised / max_dd, 2)
+    return out
+
+
 def backtest_internal(payload: dict):
     """
     Run full DAG-based backtest.
@@ -3078,29 +3070,20 @@ def backtest_internal(payload: dict):
                 df.set_index("timestamp", inplace=True)
                 
                 logger.info(f"[Backtest] {symbol}: {len(df)} candles")
+                if len(df) == 0:
+                    raise ValueError("exchange returned no candles")
                 return df
                 
             except Exception as e:
-                logger.info(f"[Backtest] Data fallback for {symbol}: {e}")
-                
-                # Synthetic data fallback
-                np.random.seed(hash(symbol) % 2**32)
-                returns = np.random.normal(0, 0.01, limit)
-                price = 100 * np.exp(np.cumsum(returns))
-                
-                df = pd.DataFrame({
-                    "open": price,
-                    "high": price * 1.005,
-                    "low": price * 0.995,
-                    "close": price,
-                    "volume": np.random.uniform(100, 1000, limit)
-                })
-                
-                df.index = pd.date_range(start="2024-01-01", periods=limit, freq=timeframe)
-                df.index.name = "timestamp"
-                
-                return df
-        
+                # BT-01: NEVER substitute synthetic data. This used to seed numpy with the
+                # symbol's hash and return a random walk as if it were market history, so a
+                # network failure produced a confident-looking, entirely fabricated result.
+                logger.error(f"[Backtest] market data unavailable for {symbol}: {e}")
+                raise MarketDataUnavailable(
+                    f"Could not fetch market data for {symbol} ({type(e).__name__}); "
+                    "no backtest was run and no result was fabricated."
+                ) from e
+
         # Fetch data for all symbols
         market_data = {}
         for symbol in symbols:
@@ -3191,6 +3174,10 @@ def backtest_internal(payload: dict):
         min_length = min(len(df) for df in market_data.values())
         logger.info(f"[Backtest] Running simulation for {min_length} steps...")
         
+        # BT-01: the equity curve is MEASURED, one point per bar, marked to market. The
+        # headline ratios below are computed from it (they used to be invented).
+        equity_history = [float(initial_capital)]
+
         # Execute trades based on signals
         for i in range(min_length):
             for symbol, signals in all_signals.items():
@@ -3223,6 +3210,12 @@ def backtest_internal(payload: dict):
                     portfolio.close_position(symbol)
                     risk.update_equity(float(pnl))
                     logger.info(f"  [t={i}] SELL {symbol} @ {current_price:.2f} (PnL: {pnl:.2f})")
+
+            # End of bar: mark every open position at this bar's close, record equity.
+            for _sym, _df in market_data.items():
+                if _sym in execution.get_positions() and i < len(_df):
+                    execution.mark_to_market(_sym, Decimal(str(_df["close"].iloc[i])))
+            equity_history.append(float(execution.current_equity))
         
         # Close remaining positions
         for symbol in list(execution.get_positions().keys()):
@@ -3231,6 +3224,7 @@ def backtest_internal(payload: dict):
                 pnl, msg = execution.close_position(symbol, final_price)
                 risk.update_equity(float(pnl))
                 logger.info(f"  [FINAL] CLOSE {symbol} @ {final_price:.2f}")
+        equity_history.append(float(execution.current_equity))
 
         # -----------------------------
         # RESULTS
@@ -3247,29 +3241,16 @@ def backtest_internal(payload: dict):
         total_return_pct = float((current_equity / initial_capital - 1) * 100)
         max_drawdown_pct = float(stats.get('drawdown_pct', 0.0) * 100)
         
-        # Sharpe ratio
-        sharpe_ratio = 0.0
-        if stats['total_trades'] > 0:
-            avg_win = stats.get('avg_win', 0)
-            avg_loss = stats.get('avg_loss', 0)
-            if avg_loss > 0:
-                sharpe_ratio = (stats['win_rate'] * avg_win) / ((1 - stats['win_rate']) * avg_loss)
-        
-        calmar_ratio = abs(total_return_pct / max_drawdown_pct) if max_drawdown_pct > 0 else 0
-        
-        # Build equity curve
-        equity_curve = []
-        if 'equity_history' in stats:
-            equity_curve = [
-                {"timestamp": i, "time": i, "equity": float(eq), "value": float(eq)}
-                for i, eq in enumerate(stats['equity_history'])
-            ]
-        else:
-            equity_curve = [
-                {"timestamp": 0, "time": 0, "equity": float(initial_capital), "value": float(initial_capital)},
-                {"timestamp": 1, "time": 1, "equity": current_equity, "value": current_equity}
-            ]
-        
+        # BT-01: ratios from the measured equity curve (None when it cannot support one).
+        ratios = _equity_curve_metrics(equity_history, timeframe)
+
+        # The measured per-bar curve. There is no two-point fallback: a backtest that
+        # produced no bars has no curve, and says so with an empty list.
+        equity_curve = [
+            {"timestamp": i, "time": i, "equity": float(eq), "value": float(eq)}
+            for i, eq in enumerate(equity_history)
+        ] if len(equity_history) >= 2 else []
+
         # DAG results mapping
         dag_results = None
         if use_dag:
@@ -3301,9 +3282,9 @@ def backtest_internal(payload: dict):
             
             # Extended metrics
             "profit_factor": float(stats.get('profit_factor', 1.0)),
-            "sharpe_ratio": round(sharpe_ratio, 2),
-            "sortino_ratio": round(sharpe_ratio * 1.2, 2),
-            "calmar_ratio": round(calmar_ratio, 2),
+            "sharpe_ratio": ratios["sharpe_ratio"],
+            "sortino_ratio": ratios["sortino_ratio"],
+            "calmar_ratio": ratios["calmar_ratio"],
             
             # Equity curve
             "equity": equity_curve,
@@ -3317,13 +3298,20 @@ def backtest_internal(payload: dict):
             "initial_capital": float(initial_capital),
         }
 
+    except MarketDataUnavailable as e:
+        logger.error("BACKTEST ABORTED: %s", e)
+        return {
+            "error": str(e),
+            "error_type": "MarketDataUnavailable",
+            "fabricated_data_used": False,
+        }
     except Exception as e:
         logger.error("BACKTEST ERROR")
         logger.error(traceback.format_exc())
-        
+
+        # The traceback stays in the server log; it is not returned to the caller.
         return {
             "error": str(e),
-            "traceback": traceback.format_exc(),
             "error_type": type(e).__name__
         }
 
@@ -3827,11 +3815,14 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
     if not rec.get("is_active") or rec.get("status") == "paused":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already paused.")
     
-    symbol = rec.get("symbol", "BTC/USDT")
-    bot_stopped = True
-    if hasattr(fleet, "stop_bot"):
-        bot_stopped, _ = await fleet.stop_bot(user["id"], symbol)
-        
+    # RT-03/RT-08: stop through the canonical service (by each deployment's real symbol, with a
+    # durable stop request when another process owns the bot) rather than `fleet.stop_bot`
+    # keyed on the strategy row's symbol, which only ever matched a bot in THIS process.
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    service = await get_strategy_service()
+    bot_stopped = (await service.stop_all_deployments(user, strategy_id)) >= 0
+
     try:
         upd = await sb.table("strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
     except Exception as e:
@@ -3868,23 +3859,12 @@ async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_use
     }
     _validate_ml_models_present(blueprint)
     
-    symbol = rec.get("symbol", "BTC/USDT")
-    dag_config = rec.get("dag_config") or {"strategy_id": strategy_id}
-    bot_started = True
+    # RT-03: resume = a fresh PAPER deployment of the current version through the canonical
+    # deploy. This handler used to hand `dag_config` (no venue) to `fleet.start_bot`, which
+    # `BotRunner.__init__` refused, so a resume could never succeed.
     msg = "Resumed successfully"
-    
-    if hasattr(fleet, "start_bot"):
-        # FORCED PAPER. This path resumes from a `strategies` row, which carries no mode
-        # column — the mode lives on `strategy_deployments` and is resolved by the binding
-        # gates, neither of which this handler consults. A resume that cannot establish the
-        # strategy was authorised to trade live must not start it live.
-        # Regression: tests/test_live_deployment_mode_propagation.py
-        bot_started, msg = await fleet.start_bot(
-            user["id"], symbol, dag_config, paper_trading=True
-        )
-        if not bot_started:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fleet failed to resume strategy bot: {msg}")
-            
+    await _deploy_current_version_paper(user, strategy_id)
+
     try:
         upd = await sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
     except Exception as e:

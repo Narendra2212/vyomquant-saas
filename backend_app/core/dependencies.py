@@ -280,6 +280,50 @@ async def create_request_supabase_async(access_token: str) -> Optional[_PooledAs
         raise RuntimeError(f"Failed to initialize async request Supabase client: {e}")
 
 
+_service_supabase_client = None
+_service_supabase_lock = threading.Lock()
+
+
+def get_service_supabase():
+    """Process-wide **service-role** Supabase client for operator/platform actions.
+
+    SEC-08: operator endpoints (freeze a user, list users) used the *operator's own* JWT
+    identity, so row-level security limited them to the operator's own ``profiles`` row:
+    freezing another user updated 0 rows yet reported success. Platform actions that must
+    act on *other* tenants run under this client, and only AFTER the route's own
+    ``get_operator_user`` / ``get_admin_user`` check has passed.
+
+    Fails closed: if the service-role credentials are missing the caller gets a 503, never
+    a silent fallback to an identity that cannot do the job. (Local/test runs that cannot
+    construct a client get ``None``; route code treats that as "no database".)
+    """
+    global _service_supabase_client
+    if _service_supabase_client is None:
+        with _service_supabase_lock:
+            if _service_supabase_client is None:
+                url = os.environ.get("SUPABASE_URL")
+                key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+                if not url or not key:
+                    if DEV_MODE:
+                        logger.warning("SUPABASE_SERVICE_ROLE_KEY missing in DEV_MODE, using None")
+                        return None
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Platform database credentials are not configured.",
+                    )
+                from supabase import create_client
+
+                try:
+                    _service_supabase_client = create_client(url, key)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Failed to construct service-role Supabase client: %s", exc)
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Platform database is unavailable.",
+                    ) from exc
+    return _service_supabase_client
+
+
 async def get_request_supabase(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):

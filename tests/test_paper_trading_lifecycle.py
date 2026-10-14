@@ -467,3 +467,8 @@ def test_paper_api_endpoints_end_to_end(test_client):
     res_reset = test_client.post("/api/paper/account/reset", json={"capital": 150000.0}, headers=headers)
     assert res_reset.status_code == 200
     assert res_reset.json()["status"] == "success"
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

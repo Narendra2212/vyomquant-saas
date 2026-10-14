@@ -52,7 +52,7 @@ from backend_app.core.live_execution_gate import REQUIRED_CHECKS, authorize_live
 from tests.exchange_sandbox.harness import (SANDBOX_ROUTABLE,
                                              require_sandbox_credentials)
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("live_platform_enabled")]  # RT-15
 
 #: The venue under certification. One at a time, chosen by the operator, because each
 #: needs its own credential and its own sandbox account funding.

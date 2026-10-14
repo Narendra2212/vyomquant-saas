@@ -952,3 +952,8 @@ def test_reduce_only_is_declared_and_on():
         "a behaviour change the pre-fix engine refused. If that is intended, it needs a "
         "decision recorded, not a flipped default."
     )
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

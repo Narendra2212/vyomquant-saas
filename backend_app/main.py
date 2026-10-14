@@ -27,6 +27,7 @@
 """
 
 
+import asyncio
 from datetime import datetime, timezone
 import logging
 import os
@@ -251,6 +252,11 @@ except ImportError:
 # Shared runtime service status — populated during lifespan startup, read by /health/services
 _runtime_service_status: dict = {}
 
+# BILL-01: handle of the plan-expiry sweep task started in lifespan
+_plan_expiry_task = None
+# RT-08: handle of the resume-after-restart task started in lifespan
+_resume_task = None
+
 
 # ── Lifespan: boot + graceful shutdown ──────────────────────────────
 @asynccontextmanager
@@ -413,7 +419,7 @@ async def lifespan(app: FastAPI):
         _consistency_checker = get_consistency_checker()
         await _consistency_checker.start()
         service_status["consistency_checker"] = "ACTIVE"
-        logger.info(" ConsistencyChecker: ACTIVE (interval=10s, kill-switch armed)")
+        logger.info(" ConsistencyChecker: started (interval=10s) - NOT a working safety net yet (RT-18)")
     except Exception as e:
         service_status["consistency_checker"] = "INACTIVE"
         logger.warning(f" ConsistencyChecker: INACTIVE — {e}")
@@ -455,10 +461,38 @@ async def lifespan(app: FastAPI):
     try:
         await start_reconciliation_scheduler()
         service_status["reconciliation_scheduler"] = "ACTIVE"
-        logger.info(" ReconciliationScheduler: ACTIVE (poll=30s, kill-switch armed)")
+        logger.info(" ReconciliationScheduler: started (poll=30s) - NOT a working safety net yet (RT-18)")
     except Exception as e:
         service_status["reconciliation_scheduler"] = "INACTIVE"
         logger.warning(f" ReconciliationScheduler: INACTIVE — {e}")
+
+    # ── BILL-01: expire lapsed one-time (Razorpay) plan purchases ───────────
+    global _plan_expiry_task
+    try:
+        from backend_app.core.dependencies import get_service_supabase
+        from backend_app.core.plan_expiry import run_plan_expiry_loop
+        _plan_expiry_task = asyncio.create_task(run_plan_expiry_loop(get_service_supabase))
+        service_status["plan_expiry_sweep"] = "ACTIVE"
+    except Exception as e:
+        service_status["plan_expiry_sweep"] = "INACTIVE"
+        logger.warning(f" PlanExpirySweep: INACTIVE — {e}")
+
+    # ── RT-08: resume deployments the database says are running ────────────
+    # Runs in the background so a slow venue cannot delay readiness. Skipped when bots are
+    # delegated to a separate runtime (USE_TEE). Live deployments are only resumed when the
+    # operator opted in (RESUME_LIVE_DEPLOYMENTS); otherwise their rows are marked failed.
+    global _resume_task
+    try:
+        if os.environ.get("USE_TEE", "false").lower() != "true" and getattr(app_state, "fleet", None):
+            from backend_app.backend.deployment_runtime import \
+                resume_running_deployments
+            _resume_task = asyncio.create_task(resume_running_deployments(app_state.fleet))
+            service_status["deployment_resume"] = "ACTIVE"
+        else:
+            service_status["deployment_resume"] = "INACTIVE"
+    except Exception as e:
+        service_status["deployment_resume"] = "INACTIVE"
+        logger.warning(f" DeploymentResume: INACTIVE — {e}")
 
     # ── Runtime Service: PortfolioCacheUpdater ─────────────────────────────
     try:
@@ -543,6 +577,17 @@ async def lifespan(app: FastAPI):
         logger.info(" ReconciliationScheduler: stopped")
     except Exception as e:
         logger.warning(f" ReconciliationScheduler shutdown error: {e}")
+
+    # BILL-01: stop the plan-expiry sweep
+    try:
+        if _plan_expiry_task is not None:
+            _plan_expiry_task.cancel()
+            try:
+                await _plan_expiry_task
+            except asyncio.CancelledError:
+                pass
+    except Exception as e:
+        logger.warning(f" PlanExpirySweep shutdown error: {e}")
 
     # Runtime Service: PortfolioCacheUpdater — stop background update loop
     try:
@@ -1081,11 +1126,20 @@ async def health_services():
         "pnl_engine":                _classify(runtime.get("pnl_engine", "")),
         "reconciliation_scheduler": _classify(runtime.get("reconciliation_scheduler", "")),
     }
+    # RT-18: these two start and loop but do no work today (the checker iterates an empty
+    # list of positions; the scheduler reads a table nothing writes). Reporting ACTIVE, with a
+    # claim of an armed halt, told operators a reconciliation safety net existed. Until RT-16
+    # implements real venue reconciliation they are reported for what they are.
+    for _noop in ("consistency_checker", "reconciliation_scheduler"):
+        if services[_noop] == "ACTIVE":
+            services[_noop] = "NOT_IMPLEMENTED"
+
     active_count   = sum(1 for s in services.values() if s == "ACTIVE")
     inactive_count = sum(1 for s in services.values() if s == "INACTIVE")
     failed_count   = sum(1 for s in services.values() if s == "FAILED")
+    not_implemented_count = sum(1 for s in services.values() if s == "NOT_IMPLEMENTED")
 
-    overall = "ok" if failed_count == 0 and inactive_count == 0 else (
+    overall = "ok" if failed_count == 0 and inactive_count == 0 and not_implemented_count == 0 else (
               "degraded" if failed_count == 0 else "failed")
 
     # OBS-01: this snapshot is written ONCE, during lifespan startup, and never
@@ -1115,6 +1169,7 @@ async def health_services():
             "active":   active_count,
             "inactive": inactive_count,
             "failed":   failed_count,
+            "not_implemented": not_implemented_count,
         },
         "services": services,
         "raw": {k: v for k, v in runtime.items() if not k.startswith("_")},
@@ -1163,6 +1218,29 @@ async def health_ready():
 
     report = await evaluate_readiness()
     return JSONResponse(status_code=report.http_status, content=report.to_dict())
+
+
+@app.get("/api/system/trading-capabilities", tags=["System"])
+async def system_trading_capabilities():
+    """FE-03 / RT-15: tell the UI whether LIVE execution is available on this platform.
+
+    ``live_trading_available`` is true only when the platform is in live mode AND live
+    trading is explicitly enabled - the same two conditions the order gate enforces
+    (``core.live_execution_gate.assert_platform_live_trading_enabled``). The gate also
+    applies a per-tenant allowlist, which is deliberately not reported here: this is a
+    public, unauthenticated probe and says nothing about any account. The UI uses it to
+    avoid offering Live when the server would refuse it; the server remains the authority.
+    """
+    from backend_app.core.safety_config import (get_live_trading_confirmation,
+                                                get_vyomquant_mode)
+
+    mode = str(get_vyomquant_mode("safe") or "").strip().lower()
+    enabled = str(get_live_trading_confirmation("false") or "").strip().lower() == "true"
+    live_mode = mode in ("live", "live_trading")
+    return {
+        "mode": mode if mode in ("safe", "paper", "live", "live_trading") else "safe",
+        "live_trading_available": bool(live_mode and enabled),
+    }
 
 
 @app.get("/api/system/readiness", tags=["System"])

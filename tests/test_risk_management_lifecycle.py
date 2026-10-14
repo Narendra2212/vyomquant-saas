@@ -315,3 +315,8 @@ def test_risk_violations_audit_log(client):
     violations = res_v.json()["violations"]
     assert len(violations) >= 1
     assert violations[0]["rule"] == "KILL_SWITCH_MANUAL_ACTIVATION"
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

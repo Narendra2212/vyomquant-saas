@@ -79,10 +79,12 @@
             {
               "kill_switch_active": "bool",
               "message": "str",
+              "persisted": "computed",
               "status": "str"
             }
           ],
-          "route_path": "/api/risk/kill-switch"
+          "route_path": "/api/risk/kill-switch",
+          "_baseline_note_returns_persisted": "RT-19 AUTHORISES one ADDED response key on POST /api/risk/kill-switch: `persisted` (bool) reports whether the halt reached the shared store, because the halt is now durable across workers and a failed shared write must be visible to the caller."
         }
       ],
       "method": "POST",

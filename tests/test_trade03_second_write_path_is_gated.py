@@ -41,6 +41,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from backend_app.core.live_execution_gate import (  # noqa: E402
     REQUIRED_CHECKS, LiveExecutionRefused, authorize_live_order)
 
+pytestmark = pytest.mark.usefixtures("live_platform_enabled")  # RT-15
+
+
 TENANT = uuid.uuid4()
 
 
@@ -289,6 +292,11 @@ def test_every_venue_write_in_the_repository_is_accounted_for():
         "backend_app/backend/exchange_reconciliation.py": "read-only reconciler",
         "backend_app/backend/order_watchdog.py": "read-only watchdog",
         "backend_app/routers/orders.py": "HTTP handlers; execution hard-blocked",
+        # RT-21: reduce-only CANCEL / cancel-all for the user. It delegates to
+        # CCXTExchangeExecutor.cancel_order (the boundary above) and contains no order
+        # placement; a cancel deliberately needs no LiveOrderAuthorization because it only
+        # removes risk. Pinned by test_paper01...::test_order_control_only_cancels.
+        "backend_app/backend/order_control.py": "RT-21 reduce-only cancel; no order placement",
         "backend_app/routers/paper_trading.py": "paper service, no exchange",
         "backend_app/backend/paper_trading_service.py": "paper service, no exchange",
         "backend_app/core/execution_engine.py": "the gateway; calls place_order only",

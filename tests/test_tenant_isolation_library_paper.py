@@ -822,3 +822,8 @@ def test_no_case_in_this_file_weakens_a_pinned_gap_into_an_equality() -> None:
                 f"gap would be asserted as an equality it does not satisfy - or an unpinned cell "
                 f"would be excused from the equality it does."
             )
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02

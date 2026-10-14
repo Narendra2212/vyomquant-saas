@@ -1058,6 +1058,14 @@ def capture_live_order_path() -> Dict[str, Any]:
             self._log.record("ExecutionRecordRepository.claim_execution", returns="tuple[bool, record]")
             return True, {"execution_id": execution_id}
 
+        def has_unresolved_submission(self, tenant_id: Any, symbol: str) -> bool:
+            """RT-17: the live path asks whether the symbol is frozen by an UNKNOWN
+            submission before it claims. The baseline models a clean account."""
+            self._log.record(
+                "ExecutionRecordRepository.has_unresolved_submission", returns="bool"
+            )
+            return False
+
         def claim_execution_within_capacity(
             self, execution_id: str, tenant_id: Any, **kwargs: Any
         ) -> Tuple[bool, Any, Any]:

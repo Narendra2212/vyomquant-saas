@@ -48,6 +48,9 @@ from backend_app.core.live_execution_gate import (  # noqa: E402
     REQUIRED_CHECKS, LiveExecutionRefused, LiveOrderAuthorization,
     authorize_live_order, require_live_authorization)
 
+pytestmark = pytest.mark.usefixtures("live_platform_enabled")  # RT-15
+
+
 TENANT = uuid.uuid4()
 STRATEGY = "strategy-under-test"
 SYMBOL = "BTC/USDT"
@@ -143,6 +146,11 @@ class _Repo:
 
     def claim_execution(self, execution_id, tenant_id):
         return True, object()
+
+    def has_unresolved_submission(self, tenant_id, symbol):
+        """RT-17: the live path asks whether the symbol is frozen by an UNKNOWN
+        submission. These doubles model a clean account."""
+        return False
 
     def claim_execution_within_capacity(self, execution_id, tenant_id, **kwargs):
         """ADDED BY TRADE-01. The live path now reserves capacity as it claims.

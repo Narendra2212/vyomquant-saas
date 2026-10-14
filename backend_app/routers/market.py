@@ -50,7 +50,6 @@ async def _get_data_engine(user, vault, exchange_id: str) -> DataEngine:
         keys = vault.load_decrypted_keys(
             user["id"],
             exchange_id,
-            access_token=user.get("access_token"),
         )
         # FIX: Guard against None or incomplete dict from vault
         if not keys or not isinstance(keys, dict):

@@ -406,6 +406,7 @@ def test_the_wiring_assertion_is_not_neutralised_by_a_reload(monkeypatch):
     import backend_app.core.rate_limit as before
 
     stale_config_class = before.RateLimitConfig
+    original_module = before
 
     sys.modules.pop("backend_app.core.rate_limit", None)
     try:
@@ -428,8 +429,14 @@ def test_the_wiring_assertion_is_not_neutralised_by_a_reload(monkeypatch):
         # Leave a working module bound for the rest of the session, as section 5's
         # production-import test does. The conftest leak guard resets the orphaned
         # Limiter this re-import strands.
-        sys.modules.pop("backend_app.core.rate_limit", None)
-        importlib.import_module("backend_app.core.rate_limit")
+        # Rebind the ORIGINAL module object, not a fresh import: routers were decorated with
+        # the original `limiter`, and a fresh module would leave the app holding one limiter
+        # while the module exports another (breaks every later test that calls a decorated
+        # handler directly).
+        sys.modules["backend_app.core.rate_limit"] = original_module
+        import backend_app.core as _core_pkg
+
+        _core_pkg.rate_limit = original_module
 
 
 def test_importing_under_a_production_environment_without_redis_raises(monkeypatch):
@@ -442,6 +449,9 @@ def test_importing_under_a_production_environment_without_redis_raises(monkeypat
     monkeypatch.setenv("ENV", "production")
     monkeypatch.delenv("DEV_MODE", raising=False)
     monkeypatch.setenv("REDIS_URL", "")
+    import backend_app.core.rate_limit as _orig_rl
+
+    original_module = _orig_rl
     monkeypatch.setitem(sys.modules, "backend_app.core.rate_limit", None)
     sys.modules.pop("backend_app.core.rate_limit", None)
 
@@ -452,7 +462,10 @@ def test_importing_under_a_production_environment_without_redis_raises(monkeypat
         # Restore a working module for the rest of the session.
         sys.modules.pop("backend_app.core.rate_limit", None)
         monkeypatch.undo()
-        importlib.import_module("backend_app.core.rate_limit")
+        sys.modules["backend_app.core.rate_limit"] = original_module
+        import backend_app.core as _core_pkg
+
+        _core_pkg.rate_limit = original_module
 
 
 # ── 6. negative control ────────────────────────────────────────────────────

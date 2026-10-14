@@ -67,6 +67,7 @@ from backend_app.core.dependencies import (  # noqa: E402
     get_admin_user,
     get_current_user,
     get_request_supabase,
+    get_service_supabase,
 )
 from backend_app.main import app  # noqa: E402
 from tests.test_schema_table_reference_drift import (  # noqa: E402
@@ -316,6 +317,7 @@ class TestAdminUserListCanAnswer:
         db = _profiles_db()
         app.dependency_overrides[get_admin_user] = _admin
         app.dependency_overrides[get_request_supabase] = lambda: db
+        app.dependency_overrides[get_service_supabase] = lambda: db
 
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/api/admin/users")
@@ -334,6 +336,7 @@ class TestAdminUserListCanAnswer:
         """
         app.dependency_overrides[get_admin_user] = _admin
         app.dependency_overrides[get_request_supabase] = lambda: _profiles_db()
+        app.dependency_overrides[get_service_supabase] = lambda: _profiles_db()
 
         client = TestClient(app, raise_server_exceptions=False)
         body = client.get("/api/admin/users").json()
@@ -348,12 +351,14 @@ class TestAdminUserListCanAnswer:
         """
         app.dependency_overrides[get_admin_user] = _admin
         app.dependency_overrides[get_request_supabase] = lambda: None
+        app.dependency_overrides[get_service_supabase] = lambda: None
         client = TestClient(app, raise_server_exceptions=False)
         fallback = client.get("/api/admin/users").json()
         assert len(fallback) == 1, fallback
         fallback_keys = set(fallback[0])
 
         app.dependency_overrides[get_request_supabase] = lambda: _profiles_db()
+        app.dependency_overrides[get_service_supabase] = lambda: _profiles_db()
         live = client.get("/api/admin/users").json()
         live_keys = set(live[0])
 

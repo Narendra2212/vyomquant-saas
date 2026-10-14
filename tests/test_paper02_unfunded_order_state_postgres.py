@@ -730,3 +730,8 @@ def test_the_paper04_residue_is_bounded_and_never_a_settled_fill(user, oracle):
     # And the invariant that makes the residue harmless when it does occur: every fill row
     # the ledger references moved money exactly once.
     assert oracle.count("paper_fills") - oracle.unsettled_fills() == 1
+
+
+import pytest as _pytest_p02
+
+pytestmark = _pytest_p02.mark.usefixtures("fresh_paper_quote")  # PAPER-02
