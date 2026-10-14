@@ -430,7 +430,32 @@ async def _idle_loop() -> int:
     return 0
 
 
-def _patch_start(monkeypatch: Any, feed: Optional[_Feed] = None) -> List[Dict[str, Any]]:
+def _patch_service_supabase(monkeypatch: Any, double: Optional[Any] = None) -> Any:
+    """The ``get_service_supabase()`` handle ``_session_loop_spawner`` now resolves (PAPER-04).
+
+    Before PAPER-04's fix, the loop's long-lived ``asyncio.Task`` closed over the CALLER's
+    RLS-scoped handle - the one ``_client`` binds through ``bind_persistence`` - which carries a
+    JWT that expires in about an hour. The fix is that the loop now runs on this SEPARATE,
+    non-expiring service-role handle instead, so every test below must give the route one or
+    the 503 ``PAPER_PERSISTENCE_UNAVAILABLE`` this module's own refusal (mirroring
+    ``PaperTradingService.persistence_client``'s own 503 for "no handle at all") is correct and
+    expected, not a test bug.
+
+    A FRESH double by default - never ``_client``'s own persistence double - so an assertion
+    that checks identity against this double is pinned to the real seam
+    (``get_service_supabase()``) rather than passing because the two objects happen to be the
+    same one.
+    """
+    svc = double if double is not None else FakeSupabase(sessions=[])
+    monkeypatch.setattr(paper_trading, "get_service_supabase", lambda: svc)
+    return svc
+
+
+def _patch_start(
+    monkeypatch: Any,
+    feed: Optional[_Feed] = None,
+    service_supabase: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
     """Replace ``start_session`` with a recorder that STILL DRIVES the loop seam.
 
     The recorder stands in for the PIPELINE, not for the seam. It calls whatever ``spawn_loop`` the
@@ -485,6 +510,7 @@ def _patch_start(monkeypatch: Any, feed: Optional[_Feed] = None) -> List[Dict[st
 
     monkeypatch.setattr(service, "session_loop", _fake_session_loop)
     monkeypatch.setattr(service, "start_session", _fake)
+    _patch_service_supabase(monkeypatch, service_supabase)
     return calls
 
 
@@ -1063,7 +1089,8 @@ class TestTheStartWiring:
         session stores - and an equal-but-not-identical object is what that would look like.
         """
         monkeypatch.setenv("DEFAULT_EXCHANGE", EXCHANGE)
-        calls = _patch_start(monkeypatch)
+        svc = _double()
+        calls = _patch_start(monkeypatch, service_supabase=svc)
         supabase = _double()
         client = _client(supabase)
 
@@ -1073,9 +1100,11 @@ class TestTheStartWiring:
         assert loop["config"] is PIPELINE_CONFIG
         assert loop["account_id"] == ACCOUNT
         assert loop["session"]["id"] == SESSION
-        # The caller's RLS-scoped handle, so the loop's own statements run under the identity that
-        # started the session rather than under some fourth resolution of a client.
-        assert loop["supabase"] is supabase
+        # PAPER-04: the loop's own statements run on the service-role handle, not the caller's
+        # RLS-scoped one - the one object that does not carry a Supabase JWT and so does not die
+        # within the hour that JWT is valid for. `supabase` (the caller's handle, still bound
+        # through `_client`) is deliberately absent from this assertion.
+        assert loop["supabase"] is svc
 
     def test_the_loop_is_driven_by_the_platforms_runtime_and_its_signal_recorder(
         self, monkeypatch: Any
@@ -1092,11 +1121,15 @@ class TestTheStartWiring:
         from backend_app.backend import paper_session_runtime as runtime
 
         monkeypatch.setenv("DEFAULT_EXCHANGE", EXCHANGE)
-        calls = _patch_start(monkeypatch)
-        supabase = _double()
-        supabase.strategy_versions.append(
+        # PAPER-04: the version read ``_session_loop_spawner`` does at spawn time now runs on the
+        # service-role handle too (the same one the loop itself keeps running on), so the row it
+        # must resolve is seeded there rather than on the caller's RLS-scoped double.
+        svc = _double()
+        svc.strategy_versions.append(
             {"id": VERSION, "lifecycle_state": "PUBLISHED", "compiled_plan": {}}
         )
+        calls = _patch_start(monkeypatch, service_supabase=svc)
+        supabase = _double()
         built: List[Dict[str, Any]] = []
 
         def _evaluator(
