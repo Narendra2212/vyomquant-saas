@@ -425,7 +425,14 @@ async def create_ticket(
     if body.attachment:
         _check_attachment(body.attachment)
 
-    ticket_id = f"tkt_{uuid4().hex[:12]}"
+    # SUP-01: support_tickets.id is `UUID PRIMARY KEY` (migrations/add_support_tables.sql).
+    # A "tkt_"-prefixed id is not a UUID, so the insert below always raised against Supabase
+    # (invalid input syntax for type uuid), caught by the except and silently rerouted to
+    # the in-memory fallback dict -- which answers this one request but is lost on the next
+    # worker restart and invisible to every OTHER worker process in the meantime. A real
+    # UUID lets the real insert succeed, which is the actual fix; the in-memory path below
+    # is now the genuine degraded-Supabase fallback it was always meant to be.
+    ticket_id = str(uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
     user_id = user["id"]
 
@@ -623,7 +630,8 @@ async def add_comment(
 
     user_id = user["id"]
     now_iso = datetime.now(timezone.utc).isoformat()
-    comment_id = f"cmt_{uuid4().hex[:12]}"
+    # SUP-01: ticket_comments.id is `UUID PRIMARY KEY` too - see create_ticket's own comment.
+    comment_id = str(uuid4())
 
     ticket = None
     if supabase:
@@ -871,7 +879,8 @@ async def staff_reply_ticket(
     """Support staff reply to user ticket with status transition and notification dispatch."""
     _scan_for_secrets(body.message)
     now_iso = datetime.now(timezone.utc).isoformat()
-    comment_id = f"cmt_staff_{uuid4().hex[:10]}"
+    # SUP-01: ticket_comments.id is `UUID PRIMARY KEY` - see create_ticket's own comment.
+    comment_id = str(uuid4())
 
     ticket = None
     if supabase:
