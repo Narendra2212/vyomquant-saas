@@ -82,9 +82,23 @@ REQUIRED_CHECKS: FrozenSet[str] = frozenset({
     "safety_config",
 })
 
-#: Separate secret from the bypass token's. The two artefacts answer different questions,
+#: SEC-13. Generated fresh per process, never a literal in source.
+#:
+#: A hardcoded secret is knowable to anyone with repository read access, which makes this
+#: "signature" no stronger than an unsigned flag against that reader. ``authorize_live_order``
+#: (mint) and ``require_live_authorization`` (verify) are always called from the SAME
+#: synchronous order-placement call stack, in the SAME process -- see this module's own
+#: docstring for the call graph, and neither a :class:`LiveOrderAuthorization` nor this
+#: secret is ever persisted or read back by a different process or after a restart. A
+#: per-process random key therefore loses nothing a fixed one provided (mint and verify
+#: still agree, because they run in the same process with the same ``_GATE_SECRET``) while
+#: closing the actual gap: it cannot be read from source, and it rotates on every restart
+#: without any operator action or deployment config.
+#:
+#: Separate secret from the bypass token's (``core/global_safety._VALIDATION_SECRET``,
+#: fixed the same way for the same reason). The two artefacts answer different questions,
 #: and a single secret would let a holder of one mint the other.
-_GATE_SECRET: bytes = b"aerora_quant_live_execution_gate_v1"
+_GATE_SECRET: bytes = os.urandom(32)
 
 
 class LiveExecutionRefused(Exception):
