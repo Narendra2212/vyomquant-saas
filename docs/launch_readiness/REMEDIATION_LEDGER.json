@@ -1471,12 +1471,12 @@
       "severity": "Medium",
       "component": "Paper trading (legacy)",
       "title": "Legacy paper resting limit orders never fill; the check function that would fill them has no caller",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "3dbcdc2",
+      "evidence": "check_limit_orders had no caller anywhere, confirmed by its own docstring. PaperLimitOrderSweeper (new, backend/paper_limit_order_sweeper.py): a periodic sweep following the same start()/stop()/loop shape as ConsistencyChecker/OrderWatchdog/ReconciliationScheduler. Each cycle: paper_repository.get_open_legacy_limit_order_pairs (new, the ONE deliberately cross-tenant read in that module, service-role only) finds every (user_id, symbol) with a resting OPEN/limit/default-account order; one get_fresh_market_price read per distinct symbol (the same real last-price cache PAPER-02 wired this session); check_limit_orders per pair, scoped to one identity. A symbol with no fresh price is honestly skipped, never filled at an invented price. Wired into main.py's lifespan (30s interval). tests/test_paper07_limit_order_sweeper.py (6 tests): a pair with a fresh price is checked and counted; no-price is skipped; one tenant's failure doesn't stop the others; a missing service-role client is a clean no-op; distinct symbols each get one price read; the new repo read matches only the right rows and de-duplicates pairs. Regression: targeted suite (10 passed, incl. main.py's own import-resolution test) + an 89-test paper-trading sweep + full validation_sweep/schema_drift (480 passed, 2 failed -- same pre-existing, unrelated billing findings) all clean. Commit 3dbcdc2.",
+      "verification_level": "code+test (verified this session); real exchange tick EXTERNAL_BLOCKED",
       "production_verified": false,
-      "remaining_action": "Call check_limit_orders on a scheduled interval (or on each price tick) for the legacy paper path, or deprecate the legacy limit-order feature explicitly."
+      "remaining_action": "A legacy limit order fills ONLY for a symbol some active Paper_Session (or other MDS subscriber) is currently streaming -- the same bounded, honest limitation PAPER-02's own last-price cache already carries; a symbol nobody is watching has no measured price and is correctly, honestly skipped rather than filled at an invented one. No production/sandbox verification of a real exchange tick driving a real fill exists yet (same EXTERNAL_BLOCKED constraint as RT-04/RT-16/PAPER-02 this session)."
     },
     {
       "id": "RED-01",
