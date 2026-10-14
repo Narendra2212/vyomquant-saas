@@ -431,12 +431,12 @@
       "severity": "Medium",
       "component": "Admin tooling",
       "title": "'Reinitialize platform' does nothing but reports success",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "28f625b",
+      "evidence": "backend_app/routers/admin.py::reinitialize_platform now calls GlobalKillSwitch.deactivate() (core/global_safety.py) instead of returning a hardcoded success message with no state interaction. Requires get_operator_user + AAL2, a stated reason, and every live hold named in acknowledge_holds; a refused reset surfaces as 409 with the refusal code. Regression: tests/test_adm01_reinitialize_actually_clears_the_halt.py (9 tests, code+test, verified this session) covering confirm-code/role gating, a clean reset with an acknowledged hold, a refused reset with an unacknowledged hold (and proof the switch stays engaged), exact-hold acknowledgment, the no-op success path when nothing was halted, and the audit trail. Related suites (test_kill03_authoritative_global_halt.py, test_trade02_kill_switch_fails_closed.py, test_role_granularity_and_audit.py) and the full validation sweep still pass (480 passed / 2 known pre-existing unrelated billing failures).",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Remove or implement as an acknowledged kill-switch reset with holds."
+      "remaining_action": ""
     },
     {
       "id": "API-02",
