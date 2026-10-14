@@ -1172,12 +1172,12 @@
       "severity": "Medium",
       "component": "Strategy research",
       "title": "The optimization/research-report endpoint crashes on every call due to a dataclass field-name mismatch",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "6260fb4",
+      "evidence": "Root cause confirmed: OptimizationConfig is a plain @dataclass whose field is `fees`, not `commission`, and takes no **kwargs -- run_optimization's OptimizationConfig(..., commission=body.commission, ...) raised TypeError on every call. Changed to fees=body.commission (the request's own public field name stays `commission`, unchanged API shape). The sibling OptimizationConfig(...) call site in strategies.py (walk-forward) already used fees= correctly -- confirmed, not assumed. tests/test_opt01_optimize_config_field_name.py (5 tests): the dataclass has no `commission` field and no catch-all kwargs; the exact keyword set this route now passes, built from a real OptimizationRequest, succeeds and the value flows through; the route source no longer contains the broken keyword; the sibling call site is pinned too. Regression: 547-test strategy_operations/strategies/optimization sweep + full validation_sweep (394 passed, 2 failed -- same pre-existing, unrelated billing findings) both clean. Commit 6260fb4.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Pass `fees=body.commission` (or rename the dataclass field back to `commission` if that is the intended public name) and add a smoke test for this endpoint."
+      "remaining_action": "None."
     },
     {
       "id": "OPT-02",
