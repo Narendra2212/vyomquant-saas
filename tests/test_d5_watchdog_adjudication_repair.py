@@ -62,6 +62,7 @@ import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -128,24 +129,34 @@ def _awaited_self_methods() -> Dict[str, List[int]]:
     return found
 
 
-def test_the_executor_lookup_is_synchronous_and_no_call_site_awaits_it():
-    """W-1, the exact defect. Both halves are asserted, so neither can drift alone."""
+def test_the_executor_lookup_is_asynchronous_and_every_call_site_awaits_it():
+    """RT-16 (W-1b, closed): a real executor factory exists, so this is a coroutine now.
+
+    W-1's ORIGINAL assertion (and the defect it caught) was the mirror of this one: a
+    synchronous `_get_executor_for_order` with three `await self._get_executor_for_order(...)`
+    call sites, where `await` on a non-awaitable raised `TypeError` that a surrounding
+    `except Exception` swallowed into `executor = None`. That shape -- declaration and call
+    sites disagreeing -- is still exactly the defect this test exists to catch; only the
+    required direction changed, because `_get_executor_for_order` now genuinely does I/O
+    (it awaits `order_control._executor_for`, which can `await executor.connect()`). Both
+    halves are asserted together so neither can drift from the other again.
+    """
     method = OrderWatchdog._get_executor_for_order
     is_async = inspect.iscoroutinefunction(method)
     awaited = _awaited_self_methods().get("_get_executor_for_order", [])
 
-    assert not is_async, (
-        "_get_executor_for_order became a coroutine function. That is allowed ONLY "
-        "together with restoring `await` at all three call sites -- see its docstring "
-        "(W-1b): if an executor factory is ever wired and is async, the declaration and "
-        "the call sites must change in ONE commit."
+    assert is_async, (
+        "_get_executor_for_order is a plain `def` again. RT-16 made it async because it "
+        "now awaits a real executor factory (order_control._executor_for); reverting it "
+        "to sync while a call site still awaits it raises TypeError at every call, "
+        "exactly as W-1 did."
     )
-    assert awaited == [], (
-        f"_get_executor_for_order is a plain `def` and is awaited at line(s) {awaited}. "
-        f"`await` on a non-awaitable raises TypeError, which at "
-        f"`_adjudicate_ambiguous_execution`'s call site is swallowed and leaves "
-        f"executor=None -- the W-1 defect, where no ambiguous row ever reaches the "
-        f"venue lookup."
+    assert len(awaited) == 3, (
+        f"_get_executor_for_order is awaited at {len(awaited)} site(s) "
+        f"({awaited}), not the 3 in _reconcile_open_orders, "
+        f"_adjudicate_ambiguous_execution and _refresh_order_status. A call site that "
+        f"stopped awaiting it would get a coroutine object where it expects an executor "
+        f"(or None), which is truthy and would be used as one."
     )
 
 
@@ -272,13 +283,18 @@ def _row(classification: str = "ambiguous_submission") -> Dict[str, Any]:
 def watchdog_with(monkeypatch):
     """Build a watchdog whose executor lookup returns *executor*, and record its alerts.
 
-    The lookup is replaced with a SYNCHRONOUS callable deliberately: if a future change
-    re-adds `await` at the call site, these behaviour tests fail too, not only the
-    structural ones.
+    The lookup is replaced with an ASYNC callable deliberately (RT-16: the real one now
+    does I/O and every call site awaits it): if a future change drops `await` at a call
+    site, these behaviour tests fail too (the coroutine itself is then never awaited,
+    rather than its result being used), not only the structural ones.
     """
     def _build(executor, db=None):
         w = OrderWatchdog(db, WatchdogConfig())
-        w._get_executor_for_order = lambda order: executor  # sync, as the real one is
+
+        async def _lookup(order):
+            return executor
+
+        w._get_executor_for_order = _lookup
         alerts: List[str] = []
 
         async def _record_alert(*args, **kwargs):
@@ -556,7 +572,7 @@ def test_the_no_executor_branch_persists_unknown_and_its_reason(sqlite_db, monke
     row = _seed(session)
 
     w = OrderWatchdog(session, WatchdogConfig())
-    w._get_executor_for_order = lambda order: None
+    w._get_executor_for_order = AsyncMock(return_value=None)
     alerts: List[str] = []
 
     async def _record(order, reason):
@@ -588,7 +604,7 @@ def test_a_failed_persist_is_surfaced_in_the_alert_not_reported_as_recovery(
     row = _seed(session)
 
     w = OrderWatchdog(session, WatchdogConfig())
-    w._get_executor_for_order = lambda order: None
+    w._get_executor_for_order = AsyncMock(return_value=None)
     alerts: List[str] = []
 
     async def _record(order, reason):
@@ -626,7 +642,7 @@ def test_the_retries_exhausted_branch_also_persists(sqlite_db, monkeypatch):
     monkeypatch.setattr(wd.asyncio, "sleep", _no_sleep)
 
     w = OrderWatchdog(session, WatchdogConfig())
-    w._get_executor_for_order = lambda order: _AlwaysFails()
+    w._get_executor_for_order = AsyncMock(return_value=_AlwaysFails())
 
     async def _record(order, reason):
         return None
