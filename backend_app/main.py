@@ -1036,11 +1036,25 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch all unhandled exceptions and return a normalized 500 error response."""
-    import traceback
-    print(f"GLOBAL EXCEPTION HANDLER: {type(exc).__name__}: {exc}")
-    print(f"TRACEBACK: {traceback.format_exc()}")
-    traceback.print_exc()
+    """Catch all unhandled exceptions and return a normalized 500 error response.
+
+    API-04. This used to write the exception type, message and full traceback to stdout
+    via three separate bare ``print()``/``traceback.print_exc()`` calls -- bypassing the
+    application's own logging configuration entirely (no level, no handler routing, no
+    structured format for whatever ingests this process's logs) and, in many deployments,
+    landing in the SAME raw, unredacted stream any other stdout write would. Routed
+    through this module's own ``logger`` instead: ``logger.exception`` logs at ERROR and
+    attaches the current exception's traceback the same way ``traceback.format_exc()``
+    did, through the one path every other error in this codebase already reports through.
+    The response body is unchanged -- it already said only "Internal server error" and
+    never echoed ``exc`` to the caller.
+    """
+    logger.exception(
+        "Unhandled exception on %s: %s: %s",
+        request.scope.get("path"),
+        type(exc).__name__,
+        exc,
+    )
     from backend_app.core.schemas import create_api_error_response
     body = create_api_error_response(
         status_code=500,
