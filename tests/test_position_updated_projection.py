@@ -448,13 +448,17 @@ class TestRequirement19_1NothingExistingMoved:
     def test_every_event_the_timeline_can_emit_is_in_the_declared_vocabulary(self):
         assert set(events_of(timeline_of())) <= set(SIGNAL_TIMELINE_EVENTS)
 
-    def test_the_execution_request_contract_gained_no_field(self):
-        """Task 12.6's constraint: `PUT /signals/{id}/execution` keeps its request shape."""
-        from backend_app.routers.signal_trace import ExecutionUpdateRequest
+    def test_the_execution_request_contract_is_gone_with_the_route_aud01(self):
+        """Task 12.6's constraint used to be "PUT /signals/{id}/execution keeps its request
+        shape". AUD-01 deleted that route (and its sibling create/risk/order writes): any
+        authenticated trader could call it to write fabricated order/fill/fee/risk data into
+        their own execution audit trail, with no connection to anything the platform's own
+        risk engine or exchange actually reported. `SignalService.update_execution` itself -
+        asserted by the next test - is unaffected; only the HTTP write surface is gone.
+        """
+        import backend_app.routers.signal_trace as signal_trace_router
 
-        fields = ExecutionUpdateRequest.model_fields
-        assert set(fields) == {"trade_id", "pnl", "realized_pnl"}
-        assert {name for name, f in fields.items() if f.is_required()} == {"trade_id", "pnl"}
+        assert not hasattr(signal_trace_router, "ExecutionUpdateRequest")
 
     def test_the_service_write_signature_gained_no_parameter(self):
         parameters = inspect.signature(SignalService.update_execution).parameters

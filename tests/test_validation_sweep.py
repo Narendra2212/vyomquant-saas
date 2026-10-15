@@ -752,38 +752,12 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         body=None,
     ),
     # ══════════════════ signal_trace.py (prefix /api/signal-trace) ══════════════════
-    MutatingRoute(
-        key="signal_trace.create_signal",
-        method="POST",
-        path="/api/signal-trace/signals",
-        handler="backend_app.routers.signal_trace:create_signal",
-        # `strategy_id` required.
-        body={"strategy_id": 123},
-    ),
-    MutatingRoute(
-        key="signal_trace.update_risk_decision",
-        method="PUT",
-        path=f"/api/signal-trace/signals/{_ID}/risk",
-        handler="backend_app.routers.signal_trace:update_risk_decision",
-        # `risk_passed` required bool.
-        body={"risk_passed": "not-a-bool"},
-    ),
-    MutatingRoute(
-        key="signal_trace.update_order",
-        method="PUT",
-        path=f"/api/signal-trace/signals/{_ID}/order",
-        handler="backend_app.routers.signal_trace:update_order",
-        # `order_id` required str.
-        body={"order_id": 123},
-    ),
-    MutatingRoute(
-        key="signal_trace.update_execution",
-        method="PUT",
-        path=f"/api/signal-trace/signals/{_ID}/execution",
-        handler="backend_app.routers.signal_trace:update_execution",
-        # `trade_id` required str.
-        body={"trade_id": 123},
-    ),
+    # AUD-01: `create_signal`/`update_risk_decision`/`update_order`/`update_execution`
+    # were deleted as routes - any authenticated trader could call them to write
+    # fabricated order/fill/fee/risk data into their own execution audit trail. The
+    # underlying `SignalService` methods are unaffected and keep serving
+    # `backend/master_executor.py`'s direct, in-process calls; there is no longer an
+    # HTTP mutating route here to sweep.
     # ══════════════════ signals.py (prefix /api/signals) ══════════════════
     MutatingRoute(
         key="signals.replay_signal_trace",
