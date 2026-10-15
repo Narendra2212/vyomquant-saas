@@ -237,6 +237,17 @@ async def update_risk_settings(
     except Exception as e:
         logger.debug(f"Redis cache delete skipped: {e}")
 
+    # PERF-01: also invalidate risk_manager.py's own cache (a different key/shape --
+    # see that module's _risk_settings_cache_key), so a tightened or relaxed limit is
+    # visible to the NEXT TRADE immediately rather than staying stale for up to
+    # RISK_SETTINGS_CACHE_TTL seconds.
+    try:
+        from backend_app.core.risk_manager import invalidate_user_risk_settings_cache
+
+        await invalidate_user_risk_settings_cache(uid)
+    except Exception as e:
+        logger.debug(f"risk_manager trade-settings cache invalidation skipped: {e}")
+
     # Emit real-time WebSocket event
     try:
         fire_and_forget_task(
