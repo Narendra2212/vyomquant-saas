@@ -19,10 +19,16 @@
  *
  * EVERY ITEM'S SOURCE
  * -------------------
- *   Binance          `backend_app/core/exchange_certification.py` — the ONLY venue registered at
- *                    LEVEL_5_PRODUCTION_READY. Stated as one certified exchange rather than the
- *                    "50+ exchanges" the old page claimed three times over: CCXT.pro can reach
- *                    many, one is production-certified, and those are different sentences.
+ *   Binance          `backend_app/core/exchange_certification.py` — CLAIM-02 corrected this
+ *                    registry: no venue is LEVEL_5_PRODUCTION_READY today, because no sandbox or
+ *                    live order has ever been placed against any of them
+ *                    (staging/EXCHANGE_SANDBOX_CERTIFICATION.md). Binance is one of the three
+ *                    venues (with Bybit and OKX) whose sandbox routing is actually measured —
+ *                    arming it really does move the client off the production endpoint — so this
+ *                    item names that, not a production certification nobody has earned yet.
+ *                    Stated as one verified venue rather than the "50+ exchanges" the old page
+ *                    claimed three times over: CCXT.pro can reach many, one has measured sandbox
+ *                    routing, and those are different sentences.
  *   CCXT.pro         `backend_app/backend/connection_engine.py` — `import ccxt.pro`, one pooled
  *                    authenticated instance per (user, exchange).
  *   VectorBT         `backend_app/backend/backtesting_engine.py` — `vbt.Portfolio.from_signals`,
@@ -50,7 +56,7 @@ import React from 'react'
 import { Activity, Fingerprint, KeyRound, Plug, ScrollText, Sigma } from 'lucide-react'
 
 const PROOF = [
-  { icon: Fingerprint, label: 'Binance', detail: 'Production-certified venue', tone: 'text-brand' },
+  { icon: Fingerprint, label: 'Binance', detail: 'Sandbox-verified routing', tone: 'text-brand' },
   { icon: Plug, label: 'CCXT.pro', detail: 'Unified exchange connectivity', tone: 'text-brand' },
   { icon: Activity, label: 'VectorBT', detail: 'Vectorised backtest engine', tone: 'text-status-warning' },
   { icon: Sigma, label: 'Monte Carlo', detail: 'Walk-forward & sensitivity', tone: 'text-status-warning' },
