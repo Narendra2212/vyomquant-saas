@@ -925,11 +925,6 @@ app.include_router(user.router, prefix="/api", tags=["User"])
 app.include_router(referral.router, prefix="/api", tags=["Referral"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin / God Mode"])
-# Test endpoint to verify basic routing works - must be before router includes
-@app.get("/api/test-basic")
-async def test_basic():
-    return {"status": "ok", "message": "Basic routing works"}
-
 app.include_router(risk.router, prefix="/api/risk", tags=["Risk Management"])
 app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])

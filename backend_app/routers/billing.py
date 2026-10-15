@@ -1685,13 +1685,6 @@ async def get_plans(
     
     return await PricingService.get_localized_plans(pricing_context)
 
-# ── GET /api/billing/test ───────────────────────────────────────────────
-@router.get("/test")
-async def test_endpoint():
-    """Test endpoint to verify billing router is loaded."""
-    return {"status": "ok", "router": "billing"}
-
-
 # ── GET /api/billing/entitlements ───────────────────────────────────────────
 @router.get("/entitlements")
 @limiter.limit("60/minute")
