@@ -932,6 +932,15 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         path="/api/referral/payouts",
         handler="backend_app.routers.referral:create_payout_request",
     ),
+    # REF-01: admin-gated (get_admin_user), so this sweep's ordinary non-admin caller
+    # is refused with 403 before the body is ever inspected -- same shape as the
+    # admin.* entries below.
+    MutatingRoute(
+        key="referral.settle_payout",
+        method="PUT",
+        path=f"/api/referral/payouts/{_ID}/settle",
+        handler="backend_app.routers.referral:settle_payout",
+    ),
     # ══════════════════ admin.py (prefix /api/admin) ══════════════════
     MutatingRoute(
         key="admin.set_user_status",

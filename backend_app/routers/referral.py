@@ -32,7 +32,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, validator
 
-from backend_app.core.dependencies import get_current_user, get_request_supabase
+from backend_app.core.dependencies import get_admin_user, get_current_user, get_request_supabase, get_service_supabase
 from backend_app.core.rate_limit import limiter
 from backend_app.core.runtime_env import local_fallbacks_are_acceptable
 from supabase import Client as SupabaseClient
@@ -743,12 +743,27 @@ async def create_payout_request(
     lock_acquired = False
     
     try:
-        # Acquire short distributed lock (30s) to prevent concurrent double-spend
+        # Acquire short distributed lock (30s) to prevent concurrent double-spend.
+        #
+        # REF-01: this used to do `lock_acquired = True` on a caught exception --
+        # fail OPEN on a lock-acquisition error. core/cache/redis_manager.py's own
+        # `set()` is deliberately fail-soft (it swallows every exception itself and
+        # returns False), so this except clause can never actually fire today and the
+        # fail-open branch is currently dead code -- but it is a landmine: if
+        # redis_manager is ever changed to raise on error instead of returning a
+        # neutral value (RED-01's own remaining_action proposes exactly that, for
+        # safety-gate callers like this one), this clause would silently reintroduce
+        # the double-spend race it exists to prevent. Changed to fail CLOSED so this
+        # stays correct under either implementation. The wallet UPDATE below
+        # (`.gte("approved_balance_usd", ...)`) is an atomic conditional write and is
+        # the real correctness backstop regardless of this lock; failing closed here
+        # only costs a confusing-but-safe "please wait" on a genuine Redis outage,
+        # never a double-spend.
         try:
             lock_acquired = await redis_manager.set(payout_lock_key, "1", nx=True, ex=30)
         except Exception as lock_err:
             logger.warning(f"Redis lock attempt failed for payout {user_id}: {lock_err}")
-            lock_acquired = True  # Proceed if Redis is unavailable, fallback to DB check
+            lock_acquired = False
         
         if not lock_acquired:
             raise HTTPException(
@@ -899,3 +914,141 @@ async def create_payout_request(
                 await redis_manager.delete(payout_lock_key)
             except Exception:
                 pass
+
+
+class SettlePayoutRequest(BaseModel):
+    """REF-01: the pending -> completed/rejected settlement step."""
+    status: str = Field(..., pattern="^(completed|rejected)$")
+    reference: Optional[str] = Field(
+        None, max_length=200,
+        description="For 'completed': the external transfer reference (bank/UPI/PayPal "
+                    "transaction id) proving the operator actually sent the money."
+    )
+    reason: Optional[str] = Field(
+        None, max_length=500,
+        description="For 'rejected': why (e.g. invalid payout details, failed KYC)."
+    )
+
+
+@router.put("/referral/payouts/{payout_id}/settle")
+@limiter.limit("30/minute")
+async def settle_payout(
+    request: Request,
+    payout_id: str,
+    body: SettlePayoutRequest,
+    admin: dict = Depends(get_admin_user),
+    sb: SupabaseClient = Depends(get_service_supabase),
+):
+    """Operator-only: settle a pending/processing payout as completed or rejected.
+
+    REF-01: this is the "pending -> completed" step the finding's own title names as
+    unimplemented -- before this, a `referral_payouts` row could be created and then
+    never transition out of 'pending' through any code path in this file.
+
+    WHAT THIS DOES NOT DO. There is no outbound payment-rail integration anywhere in
+    this codebase for referral payouts -- Stripe/Razorpay are wired for INCOMING
+    subscription payments only. 'completed' therefore records that a human operator
+    performed the transfer manually (bank transfer, UPI, PayPal) and is attesting to
+    it with `reference`; this endpoint never itself moves money. 'rejected' re-credits
+    the wallet balance this payout's own request had already debited -- the balance
+    was taken out of the user's "pending payout" bucket at request time
+    (`create_payout_request`'s own debit), and a rejection must give it back, or the
+    money simply vanishes.
+
+    Runs under the service-role client (not the admin's own JWT): `referral_payouts`
+    and `referral_wallets` both carry an owner-only RLS policy
+    (`user_id = auth.uid()`), so an admin's own token cannot read or write a payout
+    or wallet belonging to the user it is settling -- exactly the SEC-08 pattern this
+    codebase already uses for platform actions on another tenant's rows, applied only
+    AFTER `get_admin_user`'s own check has passed.
+    """
+    if sb is None:
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
+
+    payout_resp = sb.table("referral_payouts").select("*").eq("id", payout_id).execute()
+    if inspect.isawaitable(payout_resp):
+        payout_resp = await payout_resp
+    rows = getattr(payout_resp, "data", None) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Payout request not found")
+    payout = rows[0]
+
+    if payout.get("status") not in ("pending", "processing"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Payout {payout_id} is already '{payout.get('status')}' and cannot be settled again.",
+        )
+
+    now_iso = datetime.utcnow().isoformat()
+    payout_user_id = payout["user_id"]
+
+    if body.status == "completed":
+        if not body.reference:
+            raise HTTPException(
+                status_code=400,
+                detail="A 'reference' (the external transfer id) is required to mark a payout completed.",
+            )
+        updated_details = dict(payout.get("payout_details") or {})
+        updated_details["settlement_reference"] = body.reference
+        update_resp = sb.table("referral_payouts").update({
+            "status": "completed",
+            "processed_at": now_iso,
+            "payout_details": updated_details,
+        }).eq("id", payout_id).eq("status", payout["status"]).execute()
+    else:
+        updated_details = dict(payout.get("payout_details") or {})
+        updated_details["rejection_reason"] = body.reason or "Not specified"
+        update_resp = sb.table("referral_payouts").update({
+            "status": "rejected",
+            "processed_at": now_iso,
+            "payout_details": updated_details,
+        }).eq("id", payout_id).eq("status", payout["status"]).execute()
+
+    if inspect.isawaitable(update_resp):
+        update_resp = await update_resp
+    if not getattr(update_resp, "data", None):
+        raise HTTPException(
+            status_code=409,
+            detail="Payout was modified concurrently; settlement aborted. Re-check its status and retry.",
+        )
+
+    if body.status == "rejected":
+        # Re-credit the balance create_payout_request debited at request time --
+        # otherwise a rejected payout leaves the money unaccounted for, debited from
+        # the wallet and never returned.
+        wallet_resp = sb.table("referral_wallets").select("approved_balance_usd").eq(
+            "user_id", payout_user_id
+        ).execute()
+        if inspect.isawaitable(wallet_resp):
+            wallet_resp = await wallet_resp
+        wallet_rows = getattr(wallet_resp, "data", None) or []
+        if not wallet_rows:
+            logger.critical(
+                "REFERRAL PAYOUT REJECTION NOT RE-CREDITED. payout=%s user=%s amount=%.2f "
+                "— referral_wallets row not found; this balance needs manual reconciliation.",
+                payout_id, payout_user_id, float(payout["amount_usd"]),
+            )
+        else:
+            current_balance = float(wallet_rows[0].get("approved_balance_usd", 0))
+            recredit_resp = sb.table("referral_wallets").update({
+                "approved_balance_usd": current_balance + float(payout["amount_usd"]),
+                "updated_at": now_iso,
+            }).eq("user_id", payout_user_id).execute()
+            if inspect.isawaitable(recredit_resp):
+                recredit_resp = await recredit_resp
+            if not getattr(recredit_resp, "data", None):
+                logger.critical(
+                    "REFERRAL PAYOUT REJECTION NOT RE-CREDITED. payout=%s user=%s "
+                    "amount=%.2f — the wallet update matched no row; this balance "
+                    "needs manual reconciliation.",
+                    payout_id, payout_user_id, float(payout["amount_usd"]),
+                )
+
+    logger.info(
+        "Payout %s settled as %s by admin %s", payout_id, body.status, admin.get("id"),
+    )
+    return {
+        "status": "success",
+        "payout_id": payout_id,
+        "settled_as": body.status,
+    }
