@@ -132,8 +132,20 @@ LIVE_STATUS_SPELLINGS: Tuple[str, ...] = tuple(
     )
 )
 
-#: The index 021 declares. Named here once so every assertion agrees.
+#: The index 021 declares, historically -- read only by the test against 021's own
+#: file text below. 044_mkt04_rekey_live_deployment_uniqueness.sql DROPs this exact
+#: index (MKT-04: it blocked every marketplace subscriber after the first from
+#: deploying a Listing, since deploy_marketplace_strategy writes every subscriber's
+#: row under the OWNER's shared strategy_id). It is not the index any scratch world
+#: below builds any more -- see LIVE_UNIQUE_INDEX_PER_USER.
 LIVE_UNIQUE_INDEX = "uq_strategy_deployments_one_live"
+
+#: The index 044 re-keys 021's index to. Same predicate (the same nine live status
+#: spellings), wider key: (user_id, strategy_id) instead of (strategy_id) alone. This
+#: is what every scratch world below actually builds, because it is what production
+#: carries once 044 is applied -- the scratch harness is meant to emulate the live
+#: schema, not 021's now-superseded one.
+LIVE_UNIQUE_INDEX_PER_USER = "uq_strategy_deployments_one_live_per_user"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -270,6 +282,47 @@ def test_the_index_predicate_covers_every_live_status_spelling() -> None:
     )
 
 
+def test_044_rekeys_to_user_and_strategy_with_the_same_predicate() -> None:
+    """MKT-04: 044 drops 021's index and recreates it on (user_id, strategy_id),
+    naming all nine live spellings -- a composite key is pointless protection if its
+    own predicate narrows under the rename."""
+    sql = (
+        MIGRATIONS / "044_mkt04_rekey_live_deployment_uniqueness.sql"
+    ).read_text(encoding="utf-8")
+
+    assert re.search(
+        r"DROP\s+INDEX\s+IF\s+EXISTS\s+" + LIVE_UNIQUE_INDEX + r"\s*;",
+        sql,
+        re.IGNORECASE,
+    ), f"044 does not drop 021's superseded {LIVE_UNIQUE_INDEX}"
+
+    match = re.search(
+        r"CREATE\s+UNIQUE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+"
+        + LIVE_UNIQUE_INDEX_PER_USER
+        + r"\s+ON\s+public\.strategy_deployments\s*\(\s*user_id\s*,\s*strategy_id\s*\)"
+        + r".*?WHERE\s+status\s+IN\s*\((.*?)\)\s*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert match, (
+        f"044 does not declare {LIVE_UNIQUE_INDEX_PER_USER} on (user_id, strategy_id) "
+        f"with a status predicate"
+    )
+    predicate = set(re.findall(r"'([a-z_]+)'", match.group(1)))
+
+    missing = set(LIVE_STATUS_SPELLINGS) - predicate
+    assert not missing, (
+        f"044's re-keyed index predicate omits live status spelling(s) "
+        f"{sorted(missing)} that 021's original index covered. Predicate has "
+        f"{sorted(predicate)}."
+    )
+    extra = predicate - set(LIVE_STATUS_SPELLINGS)
+    assert not extra, (
+        f"044's re-keyed index predicate names {sorted(extra)}, which "
+        f"strategy_lifecycle does NOT map to a live state."
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # THE REAL-DATABASE HARNESS
 # ══════════════════════════════════════════════════════════════════════════
@@ -313,6 +366,10 @@ class _ScratchWorld:
         self.schema = "vq_1323_" + uuid.uuid4().hex[:10]
         self.strategy_id = str(uuid.uuid4())
         self.user_id = str(uuid.uuid4())
+        #: MKT-04: a second, distinct user -- a marketplace subscriber deploying the
+        #: same owner strategy_id as self.user_id's own (or a first subscriber's)
+        #: deployment.
+        self.other_user_id = str(uuid.uuid4())
 
     def connect(self):
         return psycopg2.connect(_DSN, connect_timeout=30)
@@ -357,12 +414,15 @@ class _ScratchWorld:
             with conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {self.schema}.strategy_deployments")
                 cur.execute(f"DELETE FROM {self.schema}.strategies")
-                cur.execute(f"DROP INDEX IF EXISTS {self.schema}.{LIVE_UNIQUE_INDEX}")
+                cur.execute(
+                    f"DROP INDEX IF EXISTS {self.schema}.{LIVE_UNIQUE_INDEX_PER_USER}"
+                )
                 if with_live_unique_index:
-                    # 021's index, verbatim in shape, against the scratch table.
+                    # 044's re-keyed index, verbatim in shape, against the scratch
+                    # table -- what production actually carries once 044 is applied.
                     cur.execute(
-                        f"CREATE UNIQUE INDEX {LIVE_UNIQUE_INDEX} "
-                        f"ON {self.schema}.strategy_deployments (strategy_id) "
+                        f"CREATE UNIQUE INDEX {LIVE_UNIQUE_INDEX_PER_USER} "
+                        f"ON {self.schema}.strategy_deployments (user_id, strategy_id) "
                         f"WHERE status IN ({LIVE_SQL_LIST})"
                     )
                 cur.execute(
@@ -850,3 +910,79 @@ def test_the_index_also_refuses_a_second_live_deployment_sequentially(world) -> 
         "a strategy must be able to carry finished deployments alongside one live "
         f"one: {deployments}"
     )
+
+
+@requires_postgres
+def test_mkt04_a_second_subscriber_can_deploy_while_the_first_is_still_live(
+    world,
+) -> None:
+    """MKT-04: 044's re-keyed index lets a second marketplace subscriber deploy a
+    Listing while a first subscriber's deployment of the SAME owner strategy_id is
+    still live.
+
+    `backend_app/routers/library.py::deploy_marketplace_strategy` writes
+    `strategy_id = owner_strategy_id` (shared across every subscriber) and
+    `user_id = the subscriber`. Before 044, `uq_strategy_deployments_one_live`'s key
+    was `strategy_id` alone, so the first subscriber's live row occupied the only
+    slot that `strategy_id` could ever have, and `INSERT`s for every other
+    subscriber of the same Listing failed with `23505` for as long as that row
+    stayed live -- a Listing with more than one concurrent subscriber was unusable
+    by all but the first. This is the regression proof that it no longer is.
+    """
+    world.seed(with_live_unique_index=True)
+    conn = world.connect()
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET search_path TO {world.schema}")
+            # First subscriber deploys the shared owner strategy_id.
+            cur.execute(
+                "INSERT INTO strategy_deployments (id, strategy_id, user_id, status) "
+                "VALUES (%s, %s, %s, 'running')",
+                (str(uuid.uuid4()), world.strategy_id, world.user_id),
+            )
+            # A second, DIFFERENT subscriber deploys the SAME strategy_id while the
+            # first is still live. Before 044 this raised 23505; now it must not.
+            cur.execute(
+                "INSERT INTO strategy_deployments (id, strategy_id, user_id, status) "
+                "VALUES (%s, %s, %s, 'deploying')",
+                (str(uuid.uuid4()), world.strategy_id, world.other_user_id),
+            )
+    finally:
+        conn.close()
+
+    _, deployments = world.observe()
+    live = [d for d in deployments if d[1] in LIVE_STATUS_SPELLINGS]
+    assert len(deployments) == 2 and len(live) == 2, (
+        f"both subscribers' deployments of the same strategy_id must coexist live: "
+        f"{deployments}"
+    )
+
+
+@requires_postgres
+def test_mkt04_the_same_user_still_cannot_double_deploy_the_same_strategy(
+    world,
+) -> None:
+    """Negative control: re-keying to (user_id, strategy_id) narrows the race 021
+    was built for, it does not remove it. The SAME user (the owner deploying their
+    own strategy twice, or one subscriber deploying the same Listing twice) is still
+    refused."""
+    world.seed(with_live_unique_index=True)
+    conn = world.connect()
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET search_path TO {world.schema}")
+            cur.execute(
+                "INSERT INTO strategy_deployments (id, strategy_id, user_id, status) "
+                "VALUES (%s, %s, %s, 'running')",
+                (str(uuid.uuid4()), world.strategy_id, world.user_id),
+            )
+            with pytest.raises(psycopg2.errors.UniqueViolation):
+                cur.execute(
+                    "INSERT INTO strategy_deployments "
+                    "(id, strategy_id, user_id, status) VALUES (%s, %s, %s, 'deploying')",
+                    (str(uuid.uuid4()), world.strategy_id, world.user_id),
+                )
+    finally:
+        conn.close()

@@ -51,8 +51,11 @@ WHAT IS *NOT* CLOSED BY THIS CHANGE
 Reclaiming an entry across processes reintroduces the possibility of running a command
 twice: ``FleetManager.start_bot`` refuses a duplicate via ``if bot_key in
 self._active_fleet``, but ``_active_fleet`` is per-process in-memory, so two pods cannot
-see each other's bots. ``uq_strategy_deployments_one_live`` constrains the *deployment*
-row, not this worker's path. The window is narrow -- it needs a crash after the bot
+see each other's bots. ``uq_strategy_deployments_one_live_per_user`` (MKT-04 re-keyed
+021's original ``uq_strategy_deployments_one_live`` to ``(user_id, strategy_id)``, so a
+second marketplace subscriber's deployment of another user's strategy_id is no longer
+blocked) constrains the *deployment* row, not this worker's path. The window is narrow
+-- it needs a crash after the bot
 starts but before the ACK, plus a reclaim onto a different pod -- and it is strictly
 smaller than the unconditional loss it replaces, but it is real.
 
