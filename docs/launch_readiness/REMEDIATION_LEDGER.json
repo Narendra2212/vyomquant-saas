@@ -1380,12 +1380,12 @@
       "severity": "Medium",
       "component": "Frontend / auth",
       "title": "The sign-in page advertises two-factor authentication, but the OTP step is never server-enforced",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "PENDING",
+      "evidence": "Confirmed the defect precisely in algo22-terminal/src/pages/AuthPage.jsx: supabase.auth.signInWithPassword succeeding is a COMPLETE Supabase sign-in, not merely a password check -- src/supabase.js configures the client with persistSession: true, so the SDK immediately writes a live, fully-privileged session into its own storage the instant that call resolves. The handler's own pre-existing comment ('DO NOT grant application access or persist session to sessionStorage yet') only ever controlled this APP's OWN sessionStorage bookkeeping; it never touched the session Supabase itself had already established. The 6-digit email-OTP step that followed (handleVerifyOtp, calling supabase.auth.verifyOtp) was therefore decorative for general account access: the password alone already granted a fully live session before the OTP screen was even shown. (require_aal2-gated routes, SEC-05/SEC-15 this same session, were never affected -- this flow never touches supabase.auth.mfa.*, so AAL stays 1 regardless; the exposure is to everything NOT behind require_aal2.) Fixed per this finding's third offered option: supabase.auth.signOut() is now called immediately after a successful signInWithPassword (and after signUp, for the identical reason if this project's email-confirmation requirement happens to be off), before the OTP screen is shown. New tests/unit/authOtpFe04.test.jsx (3 tests, vitest): signOut is called once the password check succeeds; signOut fires BEFORE signInWithOtp is dispatched (ordering, not just presence); the full flow still ends in a real session once verifyOtp actually succeeds -- this fix tears down the interim session, not the feature. Pre-existing auth_otp.test.jsx (23 tests across both auth suites) and the FE-01 suites still pass unchanged (59 tests total, vitest).",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Either drop the 'two-factor' claim, or enforce real MFA (Supabase TOTP/phone MFA with require_aal2 on sensitive routes), or sign the user out after the password check and sign in only via the verified OTP step."
+      "remaining_action": "This closes the gap for general account access via the password+email-OTP flow specifically. It does not and cannot make this a real, Supabase-tracked MFA factor (AAL2) -- that would require migrating to supabase.auth.mfa.enroll/challenge/verify (TOTP or phone), a materially larger change (new enrollment UI, recovery-code handling, a live Supabase project to test against) not attempted here. The sign-in page's 'two-factor authentication' copy is now true in the sense that a password alone no longer grants a live session -- it was not re-examined word-for-word against the stricter claim that this is AAL2-grade MFA, which it still is not."
     },
     {
       "id": "FE-05",
