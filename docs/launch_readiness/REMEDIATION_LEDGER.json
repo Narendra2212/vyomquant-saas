@@ -717,12 +717,12 @@
       "severity": "Low",
       "component": "API / information exposure",
       "title": "Operational endpoints are public: /metrics, /health/services, /api/system/* (workers, dependencies, exchange certification)",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "e1548de",
+      "evidence": "Confirmed via grep that 7 endpoints in backend_app/main.py had zero auth: /health/services, /api/system/trading-capabilities, /api/system/readiness, /api/system/health, /api/system/dependencies, /api/system/workers, /api/system/exchanges -- each leaking internal service names, dependency topology, worker counts, or exchange credential status to any unauthenticated caller. Verified /api/system/trading-capabilities is deliberately public per its own docstring (pre-login UI need) -- left untouched. Verified via deploy-archive/k8s/ingress.yaml (alb.ingress.kubernetes.io/healthcheck-path: /health) and healthcheck.sh (curl http://localhost:8000/health/live) that neither /api/system/* nor /health/services are used by any infra health-check mechanism -- safe to gate without breaking orchestration. Added dependencies=[Depends(get_admin_user)] to the other 6 route decorators (/health/services, /api/system/readiness, /api/system/health, /api/system/dependencies, /api/system/workers, /api/system/exchanges). Found and fixed a correctness gap while doing so: /api/system/workers calls health_services() directly in its own body, so gating /health/services's own decorator alone would NOT have protected it -- each of the 6 routes needed its own explicit gate. Fixed 4 pre-existing tests that asserted these endpoints answered without auth (3 in test_obs01_readiness_reflects_dependencies.py via a new admin_client fixture, 1 in test_rt18_noop_safety_services_are_not_reported_active.py via an inline dependency_overrides block) plus test_end_to_end_api_suite.py's test_health_services_endpoint (now sends admin auth headers, plus a new sibling asserting the unauthenticated case is rejected). New tests/test_api07_operational_endpoints_require_admin.py (5 tests): each gated endpoint rejects an unauthenticated caller and a non-admin authenticated caller, accepts an admin caller; the deliberately-public endpoints (trading-capabilities, /health, /health/live, /health/ready) stay reachable with no auth; /metrics is explicitly documented and asserted as still public. Full regression: the 5 directly-affected test files (66 passed) plus tests/test_validation_sweep.py (373 passed; 2 pre-existing unrelated billing test failures confirmed via git-stash comparison to predate this change).",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Restrict to the VPC / scrape role or require an operator token at the ALB/CloudFront layer."
+      "remaining_action": "/metrics (backend_app/routers/metrics.py, the Prometheus scrape endpoint) is deliberately NOT gated by this change. Restricting it correctly is a network/infra decision -- VPC-only ingress, an ALB/CloudFront rule, or a scrape bearer-token shared with the Prometheus server's own config -- not something this backend process can safely decide or verify from this sandbox: gating it in-app risks breaking the real production scraper with no way to test that here. Left as the explicit remaining action for whoever controls the ALB/VPC network policy."
     },
     {
       "id": "PAPER-04",
