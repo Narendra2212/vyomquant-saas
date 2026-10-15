@@ -1,5 +1,5 @@
 """
-backend_app/core/exchange_certification.py — Authoritative Exchange Certification & Capability Registry.
+backend_app/core/exchange_certification.py — legacy exchange capability registry.
 
 Classifies CCXT exchanges into explicit Certification Levels:
   - LEVEL 0: CCXT library support only (Metadata only)
@@ -10,6 +10,35 @@ Classifies CCXT exchanges into explicit Certification Levels:
   - LEVEL 5: Production-ready certification (Fully certified for live trading)
 
 Enforces capability-aware preflight checks for Live deployments.
+
+CLAIM-02: every entry below used to assert LEVEL_2 through LEVEL_5 ("read-only account
+operations verified" through "fully certified for live trading") for venues that have
+never had a single authenticated request, sandbox order, or live order placed against
+them by this platform. The actual, measured ground truth — produced by a real
+(offline, credential-free) probe, not by reading this file — is
+``staging/EXCHANGE_SANDBOX_CERTIFICATION.md`` (Phase 10, 2026-10-10) and its companion
+``staging/phase10_exchange_sandbox_matrix.json``. Its verdict, verbatim:
+
+    EXCHANGE SANDBOX CERTIFICATION:  NOT ACHIEVED — NO SANDBOX CREDENTIAL EXISTS
+    SANDBOX ORDERS PLACED:            0
+    LIVE TRADING:                     OFF throughout
+
+No venue has reached LEVEL_2 (requires a real authenticated account call) or LEVEL_3
+(requires an actual sandbox/testnet order). The ceiling any venue can honestly claim
+today is LEVEL_1 — "market metadata verified" — which this file reads directly from
+ccxt's own declared ``exchange.has`` map, a real (if purely declarative) fact ccxt
+reports about itself, not something this platform measured. Every entry below is set
+to that ceiling; `last_verified_at` is `None` by default rather than an
+auto-generated "now", because nothing is continuously re-verified.
+
+This module is also one of the "two registries [that] are wrong" the Phase 10 document
+refers to for EXCH-04 (the other was this same file's `sandbox` booleans, already
+corrected). `backend_app/core/exchange_capability_registry.py` is the newer, evidence-
+ladder registry built specifically to replace this one (see its own module docstring,
+which names this file as a source of the problem) and should be preferred by any new
+caller; this file is kept because `routers/exchange.py` and `main.py`'s
+`/api/system/readiness` still read it, and migrating those call sites is a separate,
+larger change than correcting this file's fabricated claims.
 """
 
 from dataclasses import asdict, dataclass, field
@@ -68,7 +97,11 @@ class ExchangeCapabilities:
     known_limitations: List[str] = field(default_factory=list)
     certification_version: int = 3
     adapter_version: str = "2.1.0"
-    last_verified_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # CLAIM-02: this used to default to `datetime.now(...)` on every construction, so a
+    # capability record claimed to have "just been verified" simply by being read. Nothing
+    # here is continuously re-verified, so the honest default is "unknown" -- set to a real
+    # value only where a dated, cited measurement exists.
+    last_verified_at: Optional[str] = None
 
     @property
     def is_production_certified(self) -> bool:
@@ -90,65 +123,82 @@ class ExchangeCertificationRegistry:
         self._health_status: Dict[str, RuntimeExchangeHealth] = {}
         self._register_default_certifications()
 
+    #: CLAIM-02: a single, reusable limitation note for every venue, instead of each
+    #: hand-written record inventing its own wording for the same underlying fact. See the
+    #: module docstring; evidence is staging/EXCHANGE_SANDBOX_CERTIFICATION.md (Phase 10,
+    #: 2026-10-10) and staging/phase10_exchange_sandbox_matrix.json.
+    _UNVERIFIED_NOTE = (
+        "Level 1 ceiling: order_type/post_only/reduce_only flags below are ccxt's own "
+        "declared exchange.has map, not a platform-verified execution capability. No "
+        "authenticated account call, sandbox order, or live order has ever been placed "
+        "against this venue by this platform (0 sandbox orders placed, measured "
+        "2026-10-10 -- staging/EXCHANGE_SANDBOX_CERTIFICATION.md)."
+    )
+
+    #: CLAIM-02 / GUARD-01 / RT-21: this platform has no margin, leverage, futures, swap,
+    #: or hedge-mode order path anywhere in the execution pipeline (GUARD-01's own finding).
+    #: Claiming any venue supports them here was never true of THIS platform, independent
+    #: of what the venue itself offers, so every entry below is spot-only.
     def _register_default_certifications(self):
-        # 1. Binance (Level 5 Production Certified)
+        # 1. Binance -- ccxt declares a real, routable sandbox (EXCH-04/Phase 10: url
+        # swaps to urls['test']). No account or order-level verification exists.
         self._registry["binance"] = ExchangeCapabilities(
             exchange_id="binance",
             display_name="Binance",
-            certification_level=CertificationLevel.LEVEL_5_PRODUCTION_READY,
-            spot=True,
-            margin=True,
-            futures=True,
-            swap=True,
-            market_order=True,
-            limit_order=True,
-            stop_market=True,
-            stop_limit=True,
-            fetch_positions=True,
-            reduce_only=True,
-            post_only=True,
-            leverage=True,
-            hedge_mode=True,
-            sandbox=True,
-            known_limitations=[]
-        )
-        self._health_status["binance"] = RuntimeExchangeHealth.HEALTHY
-
-        # 2. Bybit (Level 5 Production Certified)
-        self._registry["bybit"] = ExchangeCapabilities(
-            exchange_id="bybit",
-            display_name="Bybit",
-            certification_level=CertificationLevel.LEVEL_5_PRODUCTION_READY,
-            spot=True,
-            margin=True,
-            futures=True,
-            swap=True,
-            market_order=True,
-            limit_order=True,
-            stop_market=True,
-            stop_limit=True,
-            fetch_positions=True,
-            reduce_only=True,
-            post_only=True,
-            leverage=True,
-            hedge_mode=True,
-            sandbox=True,
-            known_limitations=[]
-        )
-        self._health_status["bybit"] = RuntimeExchangeHealth.HEALTHY
-
-        # 3. Coinbase (Level 5 Spot Production Certified)
-        self._registry["coinbase"] = ExchangeCapabilities(
-            exchange_id="coinbase",
-            display_name="Coinbase Advanced",
-            certification_level=CertificationLevel.LEVEL_5_PRODUCTION_READY,
+            certification_level=CertificationLevel.LEVEL_1_MARKET_METADATA_VERIFIED,
             spot=True,
             margin=False,
             futures=False,
             swap=False,
             market_order=True,
             limit_order=True,
-            stop_market=False,
+            stop_market=True,
+            stop_limit=True,
+            fetch_positions=False,
+            reduce_only=True,
+            post_only=True,
+            leverage=False,
+            hedge_mode=False,
+            sandbox=True,
+            known_limitations=[self._UNVERIFIED_NOTE]
+        )
+        self._health_status["binance"] = RuntimeExchangeHealth.HEALTHY
+
+        # 2. Bybit -- same measured sandbox routing as binance (url swap).
+        self._registry["bybit"] = ExchangeCapabilities(
+            exchange_id="bybit",
+            display_name="Bybit",
+            certification_level=CertificationLevel.LEVEL_1_MARKET_METADATA_VERIFIED,
+            spot=True,
+            margin=False,
+            futures=False,
+            swap=False,
+            market_order=True,
+            limit_order=True,
+            stop_market=True,
+            stop_limit=True,
+            fetch_positions=False,
+            reduce_only=True,
+            post_only=True,
+            leverage=False,
+            hedge_mode=False,
+            sandbox=True,
+            known_limitations=[self._UNVERIFIED_NOTE]
+        )
+        self._health_status["bybit"] = RuntimeExchangeHealth.HEALTHY
+
+        # 3. Coinbase
+        self._registry["coinbase"] = ExchangeCapabilities(
+            exchange_id="coinbase",
+            display_name="Coinbase Advanced",
+            certification_level=CertificationLevel.LEVEL_1_MARKET_METADATA_VERIFIED,
+            spot=True,
+            margin=False,
+            futures=False,
+            swap=False,
+            market_order=True,
+            limit_order=True,
+            stop_market=True,
             stop_limit=True,
             fetch_positions=False,
             reduce_only=False,
@@ -163,109 +213,122 @@ class ExchangeCertificationRegistry:
             # live-deployment preflight gates on is_production_certified, not sandbox), so
             # this correction removes an overclaim without changing any routing or gating.
             sandbox=False,
-            known_limitations=["Spot trading only", "Futures and derivatives not supported on standard CCXT coinbase adapter", "No public CCXT sandbox endpoint (sandbox mode raises NotSupported on ccxt 4.3.92)"]
+            known_limitations=[self._UNVERIFIED_NOTE, "Futures and derivatives not supported on standard CCXT coinbase adapter", "No public CCXT sandbox endpoint (sandbox mode raises NotSupported on ccxt 4.3.92)"]
         )
         self._health_status["coinbase"] = RuntimeExchangeHealth.HEALTHY
 
-        # 4. Kraken (Level 5 Production Certified)
+        # 4. Kraken
         self._registry["kraken"] = ExchangeCapabilities(
             exchange_id="kraken",
             display_name="Kraken",
-            certification_level=CertificationLevel.LEVEL_5_PRODUCTION_READY,
+            certification_level=CertificationLevel.LEVEL_1_MARKET_METADATA_VERIFIED,
             spot=True,
-            margin=True,
-            futures=True,
-            swap=True,
+            margin=False,
+            futures=False,
+            swap=False,
             market_order=True,
             limit_order=True,
             stop_market=True,
             stop_limit=True,
-            fetch_positions=True,
-            reduce_only=True,
-            post_only=True,
-            leverage=True,
+            fetch_positions=False,
+            reduce_only=False,
+            post_only=False,
+            leverage=False,
             sandbox=False,
-            known_limitations=["No public CCXT sandbox endpoint"]
+            known_limitations=[self._UNVERIFIED_NOTE, "No public CCXT sandbox endpoint (sandbox mode raises NotSupported on ccxt 4.3.92)"]
         )
         self._health_status["kraken"] = RuntimeExchangeHealth.HEALTHY
 
-        # 5. OKX (Level 5 Production Certified)
+        # 5. OKX -- sandbox is real but routed via the x-simulated-trading header, not a
+        # URL swap (EXCH-04/Phase 10); base URL is unchanged, which is correct for OKX.
         self._registry["okx"] = ExchangeCapabilities(
             exchange_id="okx",
             display_name="OKX",
-            certification_level=CertificationLevel.LEVEL_5_PRODUCTION_READY,
+            certification_level=CertificationLevel.LEVEL_1_MARKET_METADATA_VERIFIED,
             spot=True,
-            margin=True,
-            futures=True,
-            swap=True,
+            margin=False,
+            futures=False,
+            swap=False,
             market_order=True,
             limit_order=True,
             stop_market=True,
             stop_limit=True,
-            fetch_positions=True,
+            fetch_positions=False,
             reduce_only=True,
             post_only=True,
-            leverage=True,
-            hedge_mode=True,
+            leverage=False,
+            hedge_mode=False,
             sandbox=True,
-            known_limitations=["Requires API Passphrase"]
+            known_limitations=[self._UNVERIFIED_NOTE, "Requires API Passphrase"]
         )
         self._health_status["okx"] = RuntimeExchangeHealth.HEALTHY
 
-        # 6. KuCoin (Level 4 Simulated Order Lifecycle Verified)
+        # 6. KuCoin
         self._registry["kucoin"] = ExchangeCapabilities(
             exchange_id="kucoin",
             display_name="KuCoin",
-            certification_level=CertificationLevel.LEVEL_4_SIMULATED_ORDER_LIFECYCLE_VERIFIED,
+            certification_level=CertificationLevel.LEVEL_1_MARKET_METADATA_VERIFIED,
             spot=True,
-            margin=True,
-            futures=True,
-            swap=True,
+            margin=False,
+            futures=False,
+            swap=False,
             market_order=True,
             limit_order=True,
             stop_market=True,
             stop_limit=True,
-            fetch_positions=True,
-            reduce_only=True,
+            fetch_positions=False,
+            reduce_only=False,
             post_only=True,
-            leverage=True,
+            leverage=False,
             # EXCH-04 (Phase 11A): corrected False. ccxt 4.3.92's kucoin raises
             # NotSupported("kucoin does not have a sandbox URL") when sandbox mode is
             # armed -- measured, same as coinbase above. The hand-written True was a false
             # capability claim; no runtime path consumes this field.
             sandbox=False,
-            known_limitations=["Level 4: Undergoing final live latency certification", "No public CCXT sandbox endpoint (sandbox mode raises NotSupported on ccxt 4.3.92)"]
+            known_limitations=[self._UNVERIFIED_NOTE, "No public CCXT sandbox endpoint (sandbox mode raises NotSupported on ccxt 4.3.92)"]
         )
         self._health_status["kucoin"] = RuntimeExchangeHealth.DEGRADED
 
-        # 7. Gate.io (Level 3 Sandbox Verified)
+        # 7. Gate.io -- not in this platform's order-routing allowlist at all
+        # (exchange_executor.ExchangeExecutorFactory.SUPPORTED_EXCHANGES); ccxt's sandbox
+        # URL swap is real (measured), but operationally moot since no order is ever
+        # routed here.
         self._registry["gateio"] = ExchangeCapabilities(
             exchange_id="gateio",
             display_name="Gate.io",
-            certification_level=CertificationLevel.LEVEL_3_SANDBOX_VERIFIED,
+            certification_level=CertificationLevel.LEVEL_1_MARKET_METADATA_VERIFIED,
             spot=True,
-            margin=True,
-            futures=True,
-            swap=True,
+            margin=False,
+            futures=False,
+            swap=False,
             market_order=True,
             limit_order=True,
-            fetch_positions=True,
+            stop_market=True,
+            stop_limit=True,
+            fetch_positions=False,
+            reduce_only=True,
+            post_only=True,
+            leverage=False,
             sandbox=True,
-            known_limitations=["Level 3: Sandbox verified, awaiting full order lifecycle certification"]
+            known_limitations=[self._UNVERIFIED_NOTE, "Not in this platform's order-routing allowlist"]
         )
         self._health_status["gateio"] = RuntimeExchangeHealth.DEGRADED
 
-        # 8. Bitfinex (Level 2 Read-Only Verified)
+        # 8. Bitfinex -- not in this platform's order-routing allowlist either.
         self._registry["bitfinex"] = ExchangeCapabilities(
             exchange_id="bitfinex",
             display_name="Bitfinex",
-            certification_level=CertificationLevel.LEVEL_2_READ_ONLY_VERIFIED,
+            certification_level=CertificationLevel.LEVEL_1_MARKET_METADATA_VERIFIED,
             spot=True,
-            margin=True,
+            margin=False,
             market_order=True,
             limit_order=True,
+            stop_market=False,
+            stop_limit=False,
+            reduce_only=False,
+            post_only=False,
             sandbox=False,
-            known_limitations=["Level 2: Read-only operations verified, execution disabled"]
+            known_limitations=[self._UNVERIFIED_NOTE, "No public CCXT sandbox endpoint", "Not in this platform's order-routing allowlist"]
         )
         self._health_status["bitfinex"] = RuntimeExchangeHealth.DEGRADED
 

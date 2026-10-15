@@ -1302,8 +1302,15 @@ async def system_readiness():
     OBS-01: this returned the literal string "HEALTHY" for database, redis, risk_engine,
     execution_engine and reconciliation, and `"status": "READY"` always. Nothing was
     probed. It now reports the same measured dependency set as `/health/ready` and
-    carries the same 503, with the exchange-certification matrix retained because that
-    part was always real.
+    carries the same 503.
+
+    CLAIM-02: `certified_exchanges` below is NOT a measured fact either -- it is
+    `exchange_certification.py`'s own count of venues it marks LEVEL_5, and that file's
+    levels were themselves hardcoded overclaims until this finding corrected them (see
+    its module docstring). This count is included for backwards compatibility with
+    whatever reads this endpoint today; as of the correction it reads 0, honestly,
+    because no venue has ever had a sandbox or live order placed against it
+    (staging/EXCHANGE_SANDBOX_CERTIFICATION.md, Phase 10, 2026-10-10).
     """
     from backend_app.core.exchange_certification import \
         get_exchange_certification_registry
