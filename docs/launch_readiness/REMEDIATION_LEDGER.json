@@ -1446,7 +1446,7 @@
       "component": "Infrastructure / hygiene",
       "title": "Five terraform *.tf.disabled files are stale or duplicate copies that could mislead an incident responder",
       "status": "VERIFIED_FIXED",
-      "fix_commit": "PENDING",
+      "fix_commit": "af11ff5",
       "evidence": "Confirmed all 5: terraform/vpc.tf.disabled, alb.tf.disabled, cloudfront.tf.disabled, ecs.tf.disabled, waf.tf.disabled each have an ACTIVE, identically- or near-identically-sized counterpart already present (vpc.tf, alb.tf, cloudfront.tf, ecs.tf, waf.tf) -- Terraform only ever loads .tf files, never .tf.disabled, so these were already inert, stale duplicates. staging/PHASE18_AUTHORIZATION_AWARE_RELEASE_GATE_AND_CRITICAL_CLOSURE.md (the staging audit this finding traces to) names exactly this pair (\"ecs.tf and an identically-sized ecs.tf.disabled are tracked, which adds to the ambiguity\"). Two other docs (.kiro/security-template.md, docs/security-reviews/ALGO22_Quant_Platform_Review_10032026.md) both EXCLUDE *.tf.disabled from their own scan globs, confirming the files are already treated as noise by this repo's own tooling, not a documented, intentional rollback snapshot. Deleted all 5 (git history preserves them, per the remediation note's own first option). No test references any of the five filenames.",
       "verification_level": "code (verified this session)",
       "production_verified": false,
