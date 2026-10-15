@@ -1575,12 +1575,12 @@
       "severity": "Low",
       "component": "Database / migrations",
       "title": "Alembic's baseline migration DROPs core trading tables; running it against an existing, unstamped production database would destroy data",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "03b601a",
+      "evidence": "Confirmed by reading backend_app/alembic/versions/4ef23035a692_baseline.py: it has no down_revision -- the first thing alembic upgrade head runs against an unstamped database -- and its upgrade() unconditionally DROP TABLE ... CASCADEs orders, positions, fills, transaction_records, transaction_checkpoints, transaction_rollbacks and idempotency_keys. On a fresh database this is a no-op; against an EXISTING, unstamped production database (this platform's own parallel raw-SQL migration system, backend_app/migrations/*.sql, already creates orders/positions/fills independently of Alembic, with real rows), running it would silently destroy every one of them. Added _refuse_if_any_target_table_has_rows(bind), called as the FIRST statement in upgrade() before any DROP: checks all seven target tables for even one row (EXISTS(SELECT 1 FROM ... LIMIT 1), not a full COUNT) and raises, having altered nothing, naming every populated table and pointing the operator at alembic stamp 4ef23035a692 as the actual next step, per the remediation note. A table that does not exist yet (the fresh-database case this revision was written for) is skipped, not flagged. New tests/test_db_alm01_baseline_refuses_on_populated_tables.py (5 tests, real SQLite engine, loaded by path same as scripts/-style files): a populated table trips the guard and leaves its row in place; an EMPTY existing table does not (negative control -- not \"refuse if the table exists\"); a nonexistent table does not (negative control -- the fresh-database case); multiple populated tables are all named, not just the first; and a source-inspection check proves the guard call is literally the first statement in upgrade(), ahead of every op.execute DROP -- not merely defined and never called. tests/test_bug049_sql_and_alembic_agree.py (15 tests, pre-existing, also inspects this versions/ directory) still passes.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Make the baseline a no-op / convert it to an `alembic stamp` procedure; add a guard that refuses to proceed when the target tables already contain rows."
+      "remaining_action": "None."
     },
     {
       "id": "PAPER-06",
