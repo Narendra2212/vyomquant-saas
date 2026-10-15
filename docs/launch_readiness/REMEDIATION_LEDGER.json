@@ -704,12 +704,12 @@
       "severity": "Low",
       "component": "Secrets hygiene",
       "title": "Weak-JWT-secret warning logs the first 10 characters of JWT_SECRET",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "91fe1a0",
+      "evidence": "Confirmed by reading backend_app/core/config.py::validate_production_config: its weak-JWT-secret warning logged f\"Current value contains: {jwt_secret[:10]}...\" -- ten real characters of whatever JWT_SECRET the triggering environment had set, into any log sink this process ships to. (The function is itself dead code -- nothing calls it; tests/test_env03_placeholder_secrets_are_invalid.py already pins that as its own invariant, with Settings.assert_credentials_are_production_grade documented as the real check. Still fixed: a function that logs secret material is a landmine for whoever eventually wires a call to it.) Replaced the slice with the name of whichever weak_secrets pattern matched (e.g. 'dummy'/'test'/'secret'/'dev-secret-change-in-production'), which identifies the problem exactly as precisely without ever putting a character sliced from the real secret value into the log line. New tests/test_sec11_jwt_secret_never_logged.py (5 tests): a weak secret deliberately NOT prefixed by its own matched pattern proves no slice of the real value appears in the log; three more weak-pattern variants confirmed the same; a strong secret is confirmed to trigger no weak-secret warning at all (negative control). tests/test_env03_placeholder_secrets_are_invalid.py (138 tests, pre-existing) still passes.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Never log secret material."
+      "remaining_action": "validate_production_config remains uncalled, unchanged from before this fix -- that is SEC-11's own separately-tracked context (test_env03 pins it), not this finding's remaining action. The length-only warning two lines below (\"JWT_SECRET is only N characters\") was left as-is: it logs a character count, never a secret character, so it was not part of this finding."
     },
     {
       "id": "API-07",
