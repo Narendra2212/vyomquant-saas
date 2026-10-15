@@ -438,3 +438,63 @@ async def fleet_status(
     fleet=Depends(get_fleet),
 ):
     return fleet.get_status()
+
+
+@router.get("/paper/sessions/{session_id}/reconcile")
+async def reconcile_paper_session(
+    session_id: str,
+    user_id: str = Query(..., description="The id of the Paper_Session's owner."),
+    admin: dict = Depends(get_admin_user),
+):
+    """PAPER-05's repair half: compare one Paper_Session's live rows to its replayed log.
+
+    ``paper_simulator.apply_fill`` applies a fill through seven separate, deliberately
+    resumable PostgREST writes rather than one transaction (its own docstring, "THE
+    WRITES, AND THE ORDERING THE MISSING TRANSACTION FORCES", explains why at length). A
+    crash past the point of no return is reported to the one HTTP caller of the one
+    request that hit it as ``PaperConcurrencyExhausted(partial_write=True)`` and nothing
+    durable records it, so nobody could previously find an affected session again. This
+    endpoint is that durable check, on demand: it replays the session from its
+    append-only event and order log (``paper_replay.replay``, which writes nothing) and
+    reports whether the live rows agree with it.
+
+    `get_admin_user` rather than `get_operator_user`, matching `/kill-switch` above:
+    reading whether a session's books agree with its own log is a strictly weaker
+    capability than anything that could change them, which this endpoint does not do
+    either — see `backend/paper/paper_reconciliation.py`'s own docstring.
+
+    Runs under the service-role client, after this route's own `get_admin_user` check,
+    so an admin can reconcile any user's session rather than only their own — `user_id`
+    is the predicate every read underneath is still scoped by, exactly as
+    `paper_repository` requires of every caller (Requirements 21.2, 21.5), so this still
+    cannot read more of the account than the one named.
+
+    404 for "no such session" and "not this user's session" alike — the same
+    non-disclosure `paper_replay.replay` itself already gives, carried through unchanged
+    rather than re-decided here.
+    """
+    from backend_app.backend.paper import paper_reconciliation as recon
+    from backend_app.backend.paper import paper_replay as replay
+    from backend_app.backend.paper.paper_repository import PaperRepositoryError
+
+    supabase = get_service_supabase()
+    if supabase is None:
+        raise HTTPException(503, "Service-role Supabase client is not configured.")
+
+    try:
+        report = recon.reconcile_session(supabase, user_id, session_id)
+    except replay.ReplayRefused as exc:
+        raise HTTPException(
+            503,
+            {
+                "error": "PAPER_REPLAY_REFUSED",
+                "reason": exc.reason,
+                "detail": exc.detail,
+            },
+        )
+    except PaperRepositoryError as exc:
+        raise HTTPException(503, f"Paper trading read did not complete: {exc}")
+
+    if report is None:
+        raise HTTPException(404, "No such Paper_Session for this user.")
+    return report.as_dict()
