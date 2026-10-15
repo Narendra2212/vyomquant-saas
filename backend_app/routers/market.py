@@ -15,8 +15,7 @@ from urllib.parse import unquote
 from fastapi import (APIRouter, Depends, HTTPException, Query, Request,
                      Response)
 
-from backend_app.backend.connection_engine import (ConnectionEngine,
-                                                   get_or_create_exchange)
+from backend_app.backend.connection_engine import get_or_create_exchange
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import get_current_user, get_vault
 from backend_app.core.rate_limit import limiter  # BE-CRITICAL-003 FIX
@@ -41,10 +40,28 @@ SYMBOLS_WHOLE_SET = 1_000_000
 SYMBOLS_REQUESTED_LIMIT_CEILING = 5000
 
 
+#: API-11: the pool key `get_or_create_exchange` builds every credential-less market-data
+#: request under, so every caller with no stored keys shares ONE pooled client per exchange
+#: instead of each opening its own. There is no per-user identity to preserve on this
+#: branch -- no credential is ever supplied here -- so sharing the pool key across every
+#: caller is strictly a resource-usage improvement, not an isolation change: `_pool_key`
+#: still only ever pools a credentialed client under the real `user_id` that built it.
+_PUBLIC_MARKET_DATA_POOL_IDENTITY = "__public_market_data__"
+
+
 async def _get_data_engine(user, vault, exchange_id: str) -> DataEngine:
     """
     SCALE FIX: Shares one CCXT instance per user via the exchange pool.
     Falls back to a public unauthenticated connection if keys not available.
+
+    API-11: that fallback used to open a brand-new `ConnectionEngine` -- and therefore a
+    fresh `load_markets()` handshake against the real venue -- on EVERY request from every
+    caller with no stored exchange keys (free-tier signups, chiefly), with no pooling and
+    no route-specific rate limit on the callers above. That made this platform's own
+    outbound IP a free, unthrottled proxy for probing a real exchange's public market data.
+    It now goes through the same `get_or_create_exchange` pool the authenticated branch
+    already uses, under the shared pseudo-identity above, so repeated public requests for
+    the same exchange reuse one client instead of opening a new one each time.
     """
     try:
         keys = vault.load_decrypted_keys(
@@ -54,7 +71,7 @@ async def _get_data_engine(user, vault, exchange_id: str) -> DataEngine:
         # FIX: Guard against None or incomplete dict from vault
         if not keys or not isinstance(keys, dict):
             raise ValueError("Invalid or missing keys from vault")
-        
+
         exchange = await get_or_create_exchange(
             user_id=user["id"],
             exchange_id=exchange_id,
@@ -64,14 +81,18 @@ async def _get_data_engine(user, vault, exchange_id: str) -> DataEngine:
         )
         return DataEngine(exchange)
     except Exception:
-        # Public fallback — market data doesn't need auth
-        bridge = ConnectionEngine(exchange_id=exchange_id)
-        exchange = await bridge.connect()
+        # Public fallback — market data doesn't need auth. Pooled, not opened fresh.
+        exchange = await get_or_create_exchange(
+            user_id=_PUBLIC_MARKET_DATA_POOL_IDENTITY,
+            exchange_id=exchange_id,
+        )
         return DataEngine(exchange)
 
 
 @router.get("/candles/{symbol}/{timeframe}")
+@limiter.limit("60/minute")  # API-11: previously unlimited
 async def get_candles(
+    request: Request,
     symbol: str,
     timeframe: str = "5m",
     limit: int = Query(200, ge=1, le=1000),
@@ -85,7 +106,9 @@ async def get_candles(
 
 
 @router.get("/orderbook/{symbol}")
+@limiter.limit("60/minute")  # API-11: previously unlimited
 async def get_orderbook(
+    request: Request,
     symbol: str,
     limit: int = Query(20, ge=1, le=100),
     exchange: str = Query("binance"),
@@ -99,7 +122,9 @@ async def get_orderbook(
 
 
 @router.get("/ticker/{symbol}")
+@limiter.limit("60/minute")  # API-11: previously unlimited
 async def get_ticker(
+    request: Request,
     symbol: str,
     exchange: str = Query("binance"),
     user: dict = Depends(get_current_user),
@@ -111,7 +136,9 @@ async def get_ticker(
 
 
 @router.get("/funding/{symbol}")
+@limiter.limit("60/minute")  # API-11: previously unlimited
 async def get_funding_rate(
+    request: Request,
     symbol: str,
     exchange: str = Query("binance"),
     user: dict = Depends(get_current_user),
@@ -271,7 +298,9 @@ async def get_symbols(  # BE-CRITICAL-003 FIX: Require authentication
 
 
 @router.get("/data/{symbol}/{timeframe}")
+@limiter.limit("60/minute")  # API-11: previously unlimited
 async def get_market_data(
+    request: Request,
     symbol: str,
     timeframe: str = "5m",
     limit: int = Query(200, ge=1, le=1000),
@@ -280,10 +309,12 @@ async def get_market_data(
     vault=Depends(get_vault),
 ):
     """Alias for /candles endpoint for frontend compatibility"""
-    return await get_candles(symbol, timeframe, limit, exchange, user, vault)
+    return await get_candles(request, symbol, timeframe, limit, exchange, user, vault)
 
 @router.get("/data/historical")
+@limiter.limit("60/minute")  # API-11: previously unlimited
 async def get_historical_data(
+    request: Request,
     symbol: str,
     timeframe: str = "5m",
     start_date: str = None,
