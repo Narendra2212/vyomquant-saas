@@ -6,10 +6,14 @@
  * 1. "Which exchanges are supported?" previously answered "50+ exchanges via CCXT.pro
  *    integration, including Binance, Bybit, OKX, Kraken, and Coinbase."
  *    `backend_app/core/exchange_certification.py` grades venues from LEVEL 0 (CCXT metadata
- *    only) to LEVEL 5 (production certified) and registers exactly ONE at
- *    LEVEL_5_PRODUCTION_READY: Binance. Named rate-limit configurations exist for Coinbase,
- *    Kraken and OKX; Kraken has no public CCXT sandbox at all. Listing five venues as
- *    "supported" flattened a real distinction that matters to anyone about to route an order.
+ *    only) to LEVEL 5 (production certified). CLAIM-02 corrected that registry: it used to
+ *    hand-write Binance (and others) as LEVEL_5_PRODUCTION_READY with no measurement behind
+ *    it; the real evidence (staging/EXCHANGE_SANDBOX_CERTIFICATION.md, Phase 10) is that zero
+ *    sandbox or live orders have ever been placed against any venue, so nothing is LEVEL 5
+ *    today. Binance, Bybit and OKX have a real, measured sandbox; Coinbase, Kraken and KuCoin
+ *    have none on this CCXT version. Listing five venues as "supported" flattened a real
+ *    distinction that matters to anyone about to route an order, and so would overstating any
+ *    one of them as "production-ready" without an actual order run to back it.
  *
  * 2. "Is there a free trial for Pro or Elite features?" named tiers that do not exist. The five
  *    published plans in `Pricing.jsx` are Free, Trader, Pro Quant, Business and Enterprise.
@@ -90,7 +94,7 @@ const platformAndRisk = [
   {
     question: 'Which exchanges can I connect?',
     answer:
-      'Connectivity runs through CCXT.pro, which reaches a large set of venues through one interface. We certify venues individually rather than claiming them all: Binance is currently the only exchange certified production-ready end to end. Others can be connected and tested in the Exchange Manager, and the certification level is shown before you route anything.',
+      'Connectivity runs through CCXT.pro, which reaches a large set of venues through one interface. We certify venues individually rather than claiming them all: no venue has completed full production certification yet, since that requires a real account and order run that has not been performed against any of them. Binance, Bybit and OKX have a working sandbox you can practise against today. Any exchange can be connected and tested in the Exchange Manager, where the real certification level is shown before you route anything.',
   },
   {
     question: 'How is a backtest different from what most bots show me?',

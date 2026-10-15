@@ -237,13 +237,17 @@ describe('Landing_Surface — each rendered section carries its own content', ()
       );
     });
 
-    it('claims one certified exchange rather than a count of many', () => {
-      // `core/exchange_certification.py` registers exactly one venue at
-      // LEVEL_5_PRODUCTION_READY. The old page said "50+ exchanges" in three places.
+    it('claims one measured venue rather than a count of many, and never claims production certification', () => {
+      // CLAIM-02 corrected `core/exchange_certification.py`: no venue is
+      // LEVEL_5_PRODUCTION_READY, since none has ever had a sandbox or live order placed
+      // against it. This strip names Binance's measured sandbox routing instead of a
+      // production certification nobody has earned -- still one venue, not the
+      // "50+ exchanges" the old page said three times over.
       mountBare(<ProofStrip />);
 
-      expect(screen.getByText('Production-certified venue')).toBeTruthy();
+      expect(screen.getByText('Sandbox-verified routing')).toBeTruthy();
       expect(screen.queryByText(/50\+/)).toBeNull();
+      expect(screen.queryByText(/Production-certified/i)).toBeNull();
     });
   });
 

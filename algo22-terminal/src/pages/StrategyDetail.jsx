@@ -800,10 +800,13 @@ function OverviewTab({ strategy }) {
              * `status.neutral.fg`, the same `#8B95A5` — so the source becomes honest without
              * the hue moving.
              */
-            { l: "Total P&L", v: perf.today_pnl || 0, c: pnlToken(perf.today_pnl).fg },
-            { l: "ROI", v: perf.roi_pct || 0, c: pnlToken(perf.roi_pct).fg },
-            { l: "Win Rate", v: perf.win_rate || 0, c: token.brand.base },
-            { l: "Sharpe", v: perf.sharpe_ratio || 0, c: token.content.secondary },
+            // FE-06: `?? null` rather than `|| 0` -- the server not reporting a figure is
+            // not the same fact as the figure being genuinely zero, and `NotAvailableMarker`
+            // below renders the difference instead of a plausible-looking 0.
+            { l: "Total P&L", v: perf.today_pnl ?? null, c: pnlToken(perf.today_pnl).fg },
+            { l: "ROI", v: perf.roi_pct ?? null, c: pnlToken(perf.roi_pct).fg },
+            { l: "Win Rate", v: perf.win_rate ?? null, c: token.brand.base },
+            { l: "Sharpe", v: perf.sharpe_ratio ?? null, c: token.content.secondary },
           ].map(m => (
             <div key={m.l} style={{ background: token.surface.inset, borderRadius: 6, padding: 8 }}>
               <div style={{
@@ -818,7 +821,9 @@ function OverviewTab({ strategy }) {
                   as a tie-break of last resort, ties up. 14px IS `--text-title` exactly, and
                   the tile is a panel inside a panel, so it cannot be the tier-1 hero the
                   Metrics and Risk tabs' figures are. Same rendered size, now reader-relative. */}
-              <div style={{ color: m.c, fontSize: token.text.title, fontWeight: 900 }}>{m.v}</div>
+              <div style={{ color: m.c, fontSize: token.text.title, fontWeight: 900 }}>
+                {m.v == null ? <NotAvailableMarker label={m.l} reason="The server did not report this figure." /> : m.v}
+              </div>
             </div>
           ))}
         </div>
@@ -843,10 +848,19 @@ function OverviewTab({ strategy }) {
         <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Status</h3>
         {/* fontSize: 10 → DECLARATION REMOVED; see {@link MetaRow}. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8, color: token.content.secondary }}>
+          {/* FE-06: these three used to default an ABSENT field to a reassuring "healthy" /
+              "active" / "connected" -- a trader reading an unreachable or stale response saw
+              a strategy reported as fine. An unreported field now says so. */}
           <MetaRow label="Status:">{strat.status}</MetaRow>
-          <MetaRow label="Health:">{strategy.health || "healthy"}</MetaRow>
-          <MetaRow label="Worker:">{strategy.worker_status || "active"}</MetaRow>
-          <MetaRow label="Exchange:">{strategy.exchange_status || "connected"}</MetaRow>
+          <MetaRow label="Health:">
+            {strategy.health != null ? strategy.health : <NotAvailableMarker label="Health" reason="The server did not report this strategy's health." />}
+          </MetaRow>
+          <MetaRow label="Worker:">
+            {strategy.worker_status != null ? strategy.worker_status : <NotAvailableMarker label="Worker" reason="The server did not report the worker's status." />}
+          </MetaRow>
+          <MetaRow label="Exchange:">
+            {strategy.exchange_status != null ? strategy.exchange_status : <NotAvailableMarker label="Exchange" reason="The server did not report the exchange connection status." />}
+          </MetaRow>
         </div>
       </Card>
     </div>
@@ -1342,17 +1356,18 @@ function MetricsTab({ strategyId }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 12 }}>
         {[
           // Same `pnlToken` correction as the Overview grid above, for the same reason.
-          { l: "Total P&L", v: metrics.today_pnl || 0, c: pnlToken(metrics.today_pnl).fg },
-          { l: "ROI", v: metrics.roi_pct || 0, c: pnlToken(metrics.roi_pct).fg },
-          { l: "Win Rate", v: metrics.win_rate || 0, c: token.brand.base },
-          { l: "Sharpe", v: metrics.sharpe_ratio || 0, c: token.content.secondary },
-          { l: "Sortino", v: metrics.sortino_ratio || 0, c: token.content.secondary },
-          { l: "Profit Factor", v: metrics.profit_factor || 0, c: token.brand.base },
+          // FE-06: `?? null`, not `|| 0` -- see the Overview grid's comment above for why.
+          { l: "Total P&L", v: metrics.today_pnl ?? null, c: pnlToken(metrics.today_pnl).fg },
+          { l: "ROI", v: metrics.roi_pct ?? null, c: pnlToken(metrics.roi_pct).fg },
+          { l: "Win Rate", v: metrics.win_rate ?? null, c: token.brand.base },
+          { l: "Sharpe", v: metrics.sharpe_ratio ?? null, c: token.content.secondary },
+          { l: "Sortino", v: metrics.sortino_ratio ?? null, c: token.content.secondary },
+          { l: "Profit Factor", v: metrics.profit_factor ?? null, c: token.brand.base },
           // A drawdown is reported as a magnitude, so `pnlToken` would call a positive one a
           // profit. `status.loss.fg` names what the figure is about instead — the same
           // `#EF5350` the `C.red` here resolved to.
-          { l: "Max Drawdown", v: metrics.max_drawdown || 0, c: token.status.loss.fg },
-          { l: "Total Trades", v: metrics.total_trades || 0, c: token.content.primary },
+          { l: "Max Drawdown", v: metrics.max_drawdown ?? null, c: token.status.loss.fg },
+          { l: "Total Trades", v: metrics.total_trades ?? null, c: token.content.primary },
         ].map(m => (
           <Card key={m.l} cls="p-4">
             <div style={{
@@ -1370,7 +1385,9 @@ function MetricsTab({ strategyId }) {
                 meet these would be a shrink chosen to avoid a layout change (§2.5 forbids that).
                 Each tab is its own view and its figure grid is that view's tier-1 region, so the
                 `figure` step is not being spent twice on one screen. */}
-            <div style={{ color: m.c, fontSize: token.text.figure, fontWeight: 900 }}>{m.v}</div>
+            <div style={{ color: m.c, fontSize: token.text.figure, fontWeight: 900 }}>
+              {m.v == null ? <NotAvailableMarker label={m.l} reason="The server did not report this figure." /> : m.v}
+            </div>
           </Card>
         ))}
       </div>
@@ -1411,17 +1428,29 @@ function RiskTab({ strategyId }) {
             and the largest text this page rendered. Nothing here declares a tier, so §2.2's
             tie-break resolves it inside Q7's three outcomes — `figure` at 28px against `title` at
             14px — and up. A genuine `0` still renders `0`; the `|| 0` is untouched. */}
-        <div style={{ color: token.status.loss.fg, fontSize: token.text.figure, fontWeight: 900 }}>{risk.max_drawdown || 0}%</div>
+        {/* FE-06: `?? null` -- a trader reading an unreported drawdown as "0%" believes the
+            account is flat when the server simply did not answer. */}
+        <div style={{ color: token.status.loss.fg, fontSize: token.text.figure, fontWeight: 900 }}>
+          {risk.max_drawdown == null ? <NotAvailableMarker label="Drawdown" reason="The server did not report this figure." /> : `${risk.max_drawdown}%`}
+        </div>
       </Card>
       <Card className="p-4">
         {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}
         <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Exposure</h3>
-        {/* fontSize: 24 → --text-figure (value). As Drawdown above. */}
-        <div style={{ color: token.content.primary, fontSize: token.text.figure, fontWeight: 900 }}>{risk.current_exposure || 0}%</div>
+        {/* fontSize: 24 → --text-figure (value). As Drawdown above. FE-06: same `?? null` fix. */}
+        <div style={{ color: token.content.primary, fontSize: token.text.figure, fontWeight: 900 }}>
+          {risk.current_exposure == null ? <NotAvailableMarker label="Exposure" reason="The server did not report this figure." /> : `${risk.current_exposure}%`}
+        </div>
         {/* fontSize: 10 → DECLARATION REMOVED; see {@link MetaRow}. The limit is the twelfth
             `Label: value` row and the one that most needed splitting: it sat under a figure it
-            qualifies, at one step for both halves. */}
-        <div style={{ color: token.content.muted }}><MetaRow label="Limit:">{risk.exposure_limit || 100}%</MetaRow></div>
+            qualifies, at one step for both halves. FE-06: `exposure_limit || 100` used to tell a
+            trader they had full room to trade whenever the server reported nothing -- the
+            opposite of what an unknown limit should imply. */}
+        <div style={{ color: token.content.muted }}>
+          <MetaRow label="Limit:">
+            {risk.exposure_limit == null ? <NotAvailableMarker label="Limit" reason="The server did not report this limit." /> : `${risk.exposure_limit}%`}
+          </MetaRow>
+        </div>
       </Card>
       <Card className="p-4">
         {/* fontSize: 12 → --text-title (heading). Q8, panel depth. */}

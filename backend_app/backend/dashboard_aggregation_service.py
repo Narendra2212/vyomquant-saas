@@ -16,7 +16,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend_app.core.dependencies import get_telemetry, create_request_supabase
@@ -1136,7 +1136,6 @@ class DashboardAggregationService:
         - today_pnl (today_realized + unrealized delta)
         - cumulative_pnl (lifetime total)
         """
-        from datetime import timezone
         now_utc = datetime.now(timezone.utc)
         today_utc_cutoff = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         
@@ -1398,7 +1397,6 @@ class DashboardAggregationService:
             response catch it and attach :func:`positions_degradation`; callers that cannot let
             it reach their route's 503. What no caller gets any more is ``[]``.
         """
-        from datetime import timezone
         now_iso = datetime.now(timezone.utc).isoformat()
         
         if environment == "paper":
@@ -1835,7 +1833,6 @@ class DashboardAggregationService:
         if environment == "paper":
             try:
                 from backend_app.backend.paper_trading_service import get_paper_trading_service
-                from datetime import timezone
                 paper_svc = get_paper_trading_service()
                 trades = paper_svc.get_trades(uid)
                 today_cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -1958,7 +1955,6 @@ class DashboardAggregationService:
             ``null`` ``risk.open_positions_count`` say the same thing from inside the risk
             section, for a consumer that reads only that.
         """
-        from datetime import timezone
         norm_env = environment.lower() if environment in ("live", "paper") else "live"
         dashboard_start = time.perf_counter()
         

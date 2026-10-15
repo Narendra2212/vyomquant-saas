@@ -182,19 +182,23 @@ WHAT WAS ADDED (both go through machinery already proven above)
 
 **traces** needed no addition. ``signal_trace.*`` already covers list, get, timeline and
 export (read and export both count as reads of the same resource) with six probes. Three
-further WRITE routes exist and were considered - ``PUT /signals/{id}/risk``,
-``PUT /signals/{id}/order``, ``PUT /signals/{id}/execution`` - and their DATABASE-scoped
-path is correctly filtered (``.eq("id", ...).eq("user_id", ...)``, unlike the
-``backtest_service`` finding this task generalises). But
-``SignalService.update_risk_decision`` (and its two siblings) fall back to a PROCESS-WIDE,
-identity-unscoped in-memory dict (``self._local_signals``) keyed only by ``signal_id`` when
-the scoped database write matches no row - and ``get_signal_service()`` hands out that
-dict as a SINGLETON that outlives any one test. A probe here would be exercising whichever
-prior test happened to run first in the same process, not tenancy, so none was added; the
-in-memory fallback is a real defect (a stranger's update could land on that dict for a
-signal the OWNER'S OWN prior process activity populated it with) but it is not one this
-sweep's deterministic-per-test design can assert without becoming order-dependent itself,
-and is recorded here rather than smuggled in as a flaky probe.
+further WRITE routes used to exist here and were considered for a probe -
+``PUT /signals/{id}/risk``, ``PUT /signals/{id}/order``, ``PUT /signals/{id}/execution``
+(plus ``POST /signals``) - and their DATABASE-scoped path was correctly filtered
+(``.eq("id", ...).eq("user_id", ...)``, unlike the ``backtest_service`` finding this task
+generalises), so no CROSS-tenant probe was added for them. AUD-01 found the real problem
+one level up from cross-tenant isolation: ANY authenticated trader - using only their
+OWN identity, which this ownership-matrix sweep does not model - could call these four
+routes to write WHATEVER order/fill/fee/risk data they chose directly into the execution
+audit trail, no different from how the platform's own runtime records a real one. All
+four routes are now deleted; ``SignalService``'s underlying methods, in-memory fallback
+included, are otherwise unaffected and keep serving ``backend/master_executor.py``'s
+direct, in-process calls. The PROCESS-WIDE, identity-unscoped in-memory fallback
+(``self._local_signals``) this paragraph used to record as a separate defect still
+exists in that code, but is no longer reachable by an arbitrary external caller
+supplying their own ``signal_id`` over HTTP - only the trusted runtime's own calls reach
+it now, which is a materially smaller exposure than before, though not a fix to the
+fallback itself.
 """
 
 from __future__ import annotations
@@ -365,8 +369,9 @@ ENDPOINT_MATRIX: Tuple[Probe, ...] = (
         path="/api/strategies/{strategy_id}/clone",
         handler=f"{_STRATEGIES}:clone_strategy",
         scope=(
-            "the duplicate action of Requirement 22.1's list. NOTE the shadowing: "
-            "strategy_operations.py declares this same path and is unreachable at it"
+            "the duplicate action of Requirement 22.1's list. strategy_operations.py used "
+            "to declare this same path with an unreachable handler (API-01); it has since "
+            "been deleted as dead code"
         ),
     ),
     # ══════════════════ backtests ══════════════════
@@ -866,12 +871,13 @@ class TestEveryProbedPathResolvesToTheHandlerItNames:
         )
 
     def test_the_registration_that_answers_is_the_one_this_probe_names(self, probe: Probe):
-        """Pins WHICH registration answered, where a module declares one path twice.
+        """Pins WHICH registration answered.
 
-        ``strategy_operations.py`` declares ``DELETE /backtests/{id}`` and
-        ``POST /deployments/{id}/stop`` twice each, and holds two different handlers both
-        named ``list_backtests``. The handler name alone cannot tell those apart; the
-        matched route's own ``path`` can.
+        ``strategy_operations.py`` used to declare ``DELETE /backtests/{id}`` and
+        ``POST /deployments/{id}/stop`` twice each - the shadowed second copy of both was
+        deleted as dead code (API-01) - and still holds two different handlers both named
+        ``list_backtests`` at distinct paths. The handler name alone cannot tell those
+        apart; the matched route's own ``path`` can.
         """
         matched = resolve(probe.method, url_for(probe, OWNED_IDS))
         assert matched[0].path == probe.path, (

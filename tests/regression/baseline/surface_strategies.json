@@ -1,56 +1,14 @@
 {
   "_baseline_note_api_call_count": "AUTHORISED RE-RECORD of `api_call_count` \u2014 12 to 15 (task 32.7; Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8). This figure is `len(api_calls)` and nothing else, so it moves by exactly the number of entries that were added and by no other cause. The three are `api.library.myStrategies` (GET /api/library/my-strategies), `api.library.cancelSubscription` (POST /api/library/subscriptions/{expr}/cancel) and `api.library.renewSubscription` (POST /api/library/subscriptions/{expr}/renew); each carries its own `_baseline_note_entry` beside itself naming the requirement that puts it on this surface. NO CALL WAS REMOVED: all twelve the pre-change baseline recorded are still recorded here, and 12 + 3 = 15. This note covers the count only. It authorises no fourth call: a sixteenth entry appearing here is a failure whether or not this figure is updated with it, because the added entry would be reported in its own right.",
   "_baseline_note_environment_filter": "Re-recorded for tasks 29.3 and 29.4 (Requirements 23.2, 23.3, 23.4, 23.6). ONE ADDITION in this file: the `environment` query parameter on GET /api/signal-trace/signals (`list_signals`, api_calls[5]) \u2014 Requirement 23.4's Execution_Environment filter, declared as a repeatable list like every other Requirement 17.2 filter category, with no default so Requirement 23.6's default (the caller's own signals across all environments) is unchanged. Nothing on that entry was removed, renamed or retyped: no path, method, rate limit or existing filter changed, no response key was removed, and its `raises` \u2014 which already recorded {detail_type: computed, status_code: e.http_status} before this change \u2014 is untouched. The detail handler GET /api/signal-trace/signals/{signal_id} is NOT recorded in this file; the 400/404 that task 29.3 added to it is annotated in `surface_signal_trace.json`, where that handler lives.\nCORRECTION (2026-06, task 30 checkpoint). An earlier version of this note said of the whole file \"Two ADDITIONS, nothing removed, renamed or retyped\". That was FALSE. This file also records four changes that ARE removals, renames and re-recorded shapes, none of them belonging to task 29.3/29.4 and none of them annotated at the time: api_calls[2] `creator_analytics` (decorator renamed, `returns` collapsed), api_calls[3] `my_library` (decorator renamed, `raises` emptied) and api_calls[7] `publish_strategy` (decorator renamed, two `returns` keys removed). Each is authorised by a task in this spec and each now carries its own `_baseline_note_*` member beside the entry it changed \u2014 read them there. The general point, which is why the wording mattered: under Requirements 25.7 and 25.8 the scope of an authorisation is the ENTRY it names, never the file it happens to sit in, so a file-level \"nothing was removed\" claim can only ever be read as covering changes it was never written about.",
+  "_baseline_note_legacy_deploy_delegates_rt03": "RT-03 AUTHORISES two changes on api_calls[13] (POST /api/strategies/{id}/deploy): (a) the response gained ONE key, `deployment_id` (additive; `status` is unchanged), and (b) the handler no longer raises the 500 `DEPLOY_DISPATCH_FAILED`. WHY. This route used to build a blueprint from the `strategies` row and call fleet.start_bot / publish a TEE command directly, with no Deployment_Binding and no strategy_deployments row; for a strategy saved by the current builder that bot could never emit an order while the route answered {status: running}. It now delegates to StrategyService.deploy_version (paper mode), the one canonical deploy, which owns dispatch and reports its own refusals (4xx via DeployRejected, 400 DEPLOY_FAILED). No existing response key was removed, renamed or retyped. Regression: tests/test_rt08_deployment_state_is_durable.py::TestLegacyRoutesDelegate.",
+  "_baseline_note_trading_capabilities_call": "FE-03 AUTHORISES one ADDED frontend call: GET /api/system/trading-capabilities (Strategies.jsx). The deploy modal previously offered Live unconditionally; it now asks the server whether live trading is available (public, read-only, fail-closed to paper) before offering Live.",
   "api_call_count": 16,
   "api_calls": [
     {
-      "handler_count": 2,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: delete_strategy). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 1,
       "handlers": [
-        {
-          "decorators": [
-            "router.delete('/strategies/{strategy_id}')",
-            "limiter.limit('50/minute')"
-          ],
-          "handler": "delete_strategy",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "request": {
-              "annotation": "Request"
-            },
-            "strategy_id": {
-              "annotation": "str"
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_DELETE_FAILED",
-              "status_code": 404
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_DELETE_FAILED",
-              "status_code": 500
-            }
-          ],
-          "returns": [
-            {
-              "status": "str",
-              "strategy_id": "computed"
-            }
-          ],
-          "route_path": "/api/strategies/{strategy_id}"
-        },
         {
           "decorators": [
             "router.delete('/{strategy_id}')"
@@ -465,7 +423,8 @@
       "via": "apiClient direct"
     },
     {
-      "handler_count": 3,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: list_strategies). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 2,
       "handlers": [
         {
           "decorators": [
@@ -546,46 +505,6 @@
             }
           ],
           "route_path": "/api/strategies/"
-        },
-        {
-          "decorators": [
-            "router.get('/strategies')",
-            "limiter.limit('200/minute')"
-          ],
-          "handler": "list_strategies",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "environment": {
-              "annotation": "Optional",
-              "has_default": true
-            },
-            "request": {
-              "annotation": "Request"
-            },
-            "status": {
-              "annotation": "Optional",
-              "has_default": true
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGIES_LIST_FAILED",
-              "status_code": 500
-            }
-          ],
-          "returns": [
-            "computed",
-            "computed"
-          ],
-          "route_path": "/api/strategies"
         }
       ],
       "method": "GET",
@@ -595,20 +514,16 @@
       "via": "api.strategies.list"
     },
     {
-      "via": "apiClient direct",
-      "path_template": "/api/system/trading-capabilities",
-      "method": "GET",
-      "path": "/api/system/trading-capabilities",
-      "resolved": true,
+      "handler_count": 1,
       "handlers": [
         {
-          "route_path": "/api/system/trading-capabilities",
-          "handler": "system_trading_capabilities",
-          "module": "backend_app.main",
           "decorators": [
             "app.get('/api/system/trading-capabilities', tags=['System'])"
           ],
+          "handler": "system_trading_capabilities",
+          "module": "backend_app.main",
           "parameters": {},
+          "raises": [],
           "returns": [
             {
               "live_trading_available": "bool",
@@ -620,10 +535,14 @@
               }
             }
           ],
-          "raises": []
+          "route_path": "/api/system/trading-capabilities"
         }
       ],
-      "handler_count": 1
+      "method": "GET",
+      "path": "/api/system/trading-capabilities",
+      "path_template": "/api/system/trading-capabilities",
+      "resolved": true,
+      "via": "apiClient direct"
     },
     {
       "handler_count": 1,
@@ -851,81 +770,9 @@
       "via": "api.strategies.deployVersion"
     },
     {
-      "handler_count": 2,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: deploy_strategy). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 1,
       "handlers": [
-        {
-          "_baseline_note_raises": "RE-RECORDED, additively, by the change that made POST /api/strategies/{id}/deploy refuse what it cannot apply. TWO ADDITIONS, NOTHING REMOVED, RENAMED, RETYPED OR RE-STATUSED; the three recorded entries keep their values and their order. (1) 422 DEPLOY_PARAMETER_NOT_APPLICABLE. The route accepted four request parameters and applied none of them - they were read off the body, never passed to `deploy_strategy`, and the deployment proceeded as though they had been honoured. A caller that set a risk parameter was told the deploy succeeded and got a bot running on different settings, which is the worst available outcome for a parameter that sizes a position. Refusing the request names the dropped keys in `not_applied` instead. (2) 409 DEPLOY_BLUEPRINT_INCOMPLETE. `version_data['blueprint']` carries no `exchange_id` - measured against StrategyGraph.to_dict(), whose keys are edges, metadata, name, nodes, schema_version, strategy_id, validation_state, version - so the route could write a deployment row for a bot that can never start. It now refuses and names the missing keys in `required_blueprint_keys`. WHY THIS IS NOT A REGRESSION: a caller that sent only applicable parameters and a complete blueprint sees no change whatsoever. The two new statuses are reachable only by a request that previously got a silent misapplication or an unstartable deployment. Pinned by tests/test_deploy_strategy_accepts_only_what_it_applies.py.",
-          "decorators": [
-            "router.post('/strategies/{strategy_id}/deploy')",
-            "limiter.limit('50/minute')"
-          ],
-          "handler": "deploy_strategy",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "body": {
-              "annotation": "StrategyDeployRequest"
-            },
-            "request": {
-              "annotation": "Request"
-            },
-            "strategy_id": {
-              "annotation": "str"
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "computed"
-              },
-              "error_code": "STRATEGY_DEPLOY_FAILED",
-              "status_code": "status_code"
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str",
-                "missing_prerequisite": "computed"
-              },
-              "error_code": "DEPLOY_PREREQUISITE_NOT_MET",
-              "status_code": 409
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str",
-                "not_applied": "list"
-              },
-              "error_code": "DEPLOY_PARAMETER_NOT_APPLICABLE",
-              "status_code": 422
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str",
-                "required_blueprint_keys": "list"
-              },
-              "error_code": "DEPLOY_BLUEPRINT_INCOMPLETE",
-              "status_code": 409
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_DEPLOY_FAILED",
-              "status_code": 500
-            }
-          ],
-          "returns": [
-            "computed"
-          ],
-          "route_path": "/api/strategies/{strategy_id}/deploy"
-        },
         {
           "decorators": [
             "router.post('/{strategy_id}/deploy')"
@@ -990,54 +837,9 @@
       "via": "api.strategies.deploy"
     },
     {
-      "handler_count": 2,
+      "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: pause_strategy). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
+      "handler_count": 1,
       "handlers": [
-        {
-          "decorators": [
-            "router.post('/strategies/{strategy_id}/pause')",
-            "router.post('/strategies/{strategy_id}/stop')",
-            "limiter.limit('50/minute')"
-          ],
-          "handler": "pause_strategy",
-          "module": "backend_app.routers.strategy_operations",
-          "parameters": {
-            "request": {
-              "annotation": "Request"
-            },
-            "strategy_id": {
-              "annotation": "str"
-            },
-            "user": {
-              "annotation": "dict",
-              "depends_on": "get_current_user"
-            }
-          },
-          "raises": [
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_PAUSE_FAILED",
-              "status_code": 404
-            },
-            {
-              "detail_type": {
-                "error": "str",
-                "message": "str"
-              },
-              "error_code": "STRATEGY_PAUSE_FAILED",
-              "status_code": 500
-            }
-          ],
-          "returns": [
-            {
-              "status": "str",
-              "strategy_id": "computed"
-            }
-          ],
-          "route_path": "/api/strategies/{strategy_id}/pause"
-        },
         {
           "decorators": [
             "router.post('/{strategy_id}/pause')"
@@ -1149,7 +951,5 @@
   ],
   "supabase_auth_calls": [],
   "surface": "strategies",
-  "unresolved_usages": [],
-  "_baseline_note_trading_capabilities_call": "FE-03 AUTHORISES one ADDED frontend call: GET /api/system/trading-capabilities (Strategies.jsx). The deploy modal previously offered Live unconditionally; it now asks the server whether live trading is available (public, read-only, fail-closed to paper) before offering Live.",
-  "_baseline_note_legacy_deploy_delegates_rt03": "RT-03 AUTHORISES two changes on api_calls[13] (POST /api/strategies/{id}/deploy): (a) the response gained ONE key, `deployment_id` (additive; `status` is unchanged), and (b) the handler no longer raises the 500 `DEPLOY_DISPATCH_FAILED`. WHY. This route used to build a blueprint from the `strategies` row and call fleet.start_bot / publish a TEE command directly, with no Deployment_Binding and no strategy_deployments row; for a strategy saved by the current builder that bot could never emit an order while the route answered {status: running}. It now delegates to StrategyService.deploy_version (paper mode), the one canonical deploy, which owns dispatch and reports its own refusals (4xx via DeployRejected, 400 DEPLOY_FAILED). No existing response key was removed, renamed or retyped. Regression: tests/test_rt08_deployment_state_is_durable.py::TestLegacyRoutesDelegate."
+  "unresolved_usages": []
 }

@@ -28,6 +28,7 @@ from backend_app.backend.paper import paper_session_service as paper_sessions
 from backend_app.backend.paper.errors import (
     NOT_FOUND,
     PAPER_MARKET_DATA_UNAVAILABLE,
+    PAPER_PERSISTENCE_UNAVAILABLE,
     PaperError,
     paper_read_failed,
 )
@@ -36,7 +37,7 @@ from backend_app.backend.paper_trading_service import (
     PAPER_EXECUTION_ENVIRONMENT,
     get_paper_trading_service,
 )
-from backend_app.core.dependencies import get_current_user
+from backend_app.core.dependencies import get_current_user, get_service_supabase
 from backend_app.core.rate_limit import limiter
 
 # The router-facing UUID guard, imported rather than re-written: it is the one that answers 422
@@ -511,8 +512,52 @@ def _session_loop_spawner(supabase: Any) -> paper_sessions.SessionLoopSpawner:
     17.8, step 3).
 
     Args:
-        supabase: the caller's RLS-scoped handle. The loop's own statements, the version read and
-            the Signal_Trace INSERT all run under the identity that started the session.
+        supabase: the handle the LOOP runs on for as long as it lives - every statement
+            ``session_loop``/``step_session`` issue on every bar, and the version read and the
+            Signal_Trace INSERT below, which also run on every bar through
+            ``build_session_signal_recorder``.
+
+    PAPER-04. WHY THIS IS NO LONGER THE CALLER'S RLS-SCOPED HANDLE
+    ----------------------------------------------------------------
+    It used to be: the caller's own Supabase client, built from ``user["access_token"]`` - a
+    Supabase JWT that expires in about an hour (``get_current_user``'s own token, not a refresh
+    token this process holds). ``spawn_session_loop`` closes over it, and the resulting
+    ``asyncio.Task`` can run for the life of the session - hours or days. Once that JWT expired,
+    every PostgREST call the loop made started failing. The loop's own `except Exception` around
+    ``step_session`` (session_loop's containment for Requirement 14.7, "one bad bar must not halt
+    the runtime") swallowed exactly that failure the same as it swallows a transient one, so the
+    session kept "running" with every bar silently producing nothing; the ONE call outside that
+    try (``repo.read_session`` at the top of each iteration) raising it instead let the exception
+    escape the loop body entirely, killing the ``asyncio.Task`` with nothing awaiting it -
+    "Task exception was never retrieved" on stderr and nothing else. Either way: ``session_state``
+    stayed ``RUNNING`` forever, for a session that had already died.
+
+    The caller's own callers (``start_paper_session`` below) now pass this function the
+    **service-role** client instead, which carries no per-caller expiry at all. That is not a
+    weaker scope for this one caller-less task: every statement the loop issues already carries
+    an explicit ``user_id``/``session_id`` predicate AND re-checks it against the returned row -
+    ``paper_repository.read_session``'s own docstring states this is true of every read in that
+    module, and the writes the loop reaches (``read_account``, ``get_positions``,
+    ``lock_account_for_update``, ``bump_version``, ``insert_equity_snapshot``, ...) all take the
+    session's owner as a parameter the same way. The service-role client cannot broaden what this
+    SPECIFIC, already-spawned loop acts on, because the session_id/user_id it closes over are
+    fixed at spawn time from the row this session already created - never from a later caller's
+    input - and the application-level predicate above is what enforces tenant isolation on this
+    path, not RLS. ``read_strategy_version``'s own docstring independently states its read is
+    deliberately UNSCOPED already (the version belongs to the strategy's author, not the
+    subscriber), so nothing changes for it either way.
+
+    WHAT THIS DOES NOT FIX, AND WHY THAT IS STATED RATHER THAN CLAIMED
+    --------------------------------------------------------------------
+    The loop still runs as an ``asyncio.Task`` inside this web process (RT-23's dedicated runtime
+    worker service does not exist to run it in instead), so a worker restart or redeploy still
+    ends every in-flight loop with no attempt to resume it, and there is still no reconciliation
+    pass that notices a ``RUNNING`` session whose task is gone and marks it anything else - there
+    is no terminal state to mark it with: ``chk_paper_session_state`` (migration 009) admits only
+    ``CREATED``, ``RUNNING``, ``PAUSED``, ``STOPPED``, and none of those means "it died". This
+    change closes the ONE root cause that was universal and time-bounded - every session, not just
+    an unlucky one, died within the hour regardless of load or deploys - so a session now runs for
+    as long as its process does, which it did not before at all.
     """
 
     def spawn(
@@ -777,27 +822,36 @@ def _resolve_listing_key(supabase: Any, body: PaperSessionStartRequest) -> str:
     return listing_id or strategy_key
 
 
-def _recorded_measurements() -> Optional[Mapping[str, Any]]:
+async def _recorded_measurements() -> Optional[Mapping[str, Any]]:
     """The market-data measurements the source selection decides on, or ``None``.
 
-    ``None`` today, and that is a measurement result rather than a stub. Requirement 14.4's
-    correctness floor is applied by ``market_data_latency.choose_market_data_source`` over
-    RECORDED measurements of the two candidates, and the platform records them in exactly one
-    place: ``reports/market_data_latency_decision.md``, written by
-    ``tests/perf/test_market_data_latency.py``. That document is prose for an operator, not a
-    machine-readable store, and the run on disk reports **BLOCKED** - neither candidate was
-    measurable in this environment.
+    RT-04: now reads ``market_data_measurement_store.latest_measurements()`` -- the newest
+    recorded ``SourceMeasurement`` per candidate, persisted by migration 039 and
+    ``scripts/record_market_data_measurement.py`` -- rather than a hardcoded ``None``.
 
-    So there is nothing to return, and nothing is invented to fill the gap: an unmeasured
-    candidate fails the floor, ``start_session`` refuses BEFORE it creates anything, and the
-    caller gets 409 ``PAPER_MARKET_DATA_UNAVAILABLE``. That is the honest answer -
-    ``paper_market_feed``'s own words are that substituting a plausible measurement "would
-    defeat the entire mechanism from the one place nothing downstream could detect it" - and a
-    paper session in this deployment starts once the experiment has run against a real feed and
-    a measured, floor-clean source exists. This function is the one seam where that record is
-    read, so wiring it later changes one function and no route.
+    This still returns ``None``/an empty mapping, honestly, until an operator runs that real
+    measurement: nothing here can produce one. Requirement 14.4's correctness floor needs
+    >= 99.99% completeness over >= 10,000 bars of a REAL feed
+    (``CorrectnessFloor.min_completeness_sample_bars``) -- roughly a week of continuous
+    measurement at a 1-minute timeframe -- and the platform had, until this change, nowhere
+    to persist that even if one were run (only ``reports/market_data_latency_decision.md``,
+    prose for a human, not a value this function could read).
+
+    A store read that FAILS (not "nothing recorded yet", but an actual error) is not
+    silently treated as unmeasured: it is logged and still returns ``None``, because
+    ``start_session`` refusing with 409 ``PAPER_MARKET_DATA_UNAVAILABLE`` is the correct
+    answer either way -- a paper session must not start on a feed this call could not even
+    ask about.
     """
-    return None
+    from backend_app.backend.market_data_measurement_store import (
+        MeasurementStoreUnavailable, latest_measurements)
+
+    try:
+        measurements = await latest_measurements()
+    except MeasurementStoreUnavailable as exc:
+        logger.error("[paper-session] the measurement store could not be read: %s", exc)
+        return None
+    return measurements or None
 
 
 def _paper_venue() -> str:
@@ -945,6 +999,21 @@ async def start_paper_session(
     key = body.idempotency_key or idempotency_key
     listing_key = _resolve_listing_key(supabase, body)
 
+    # PAPER-04: the LOOP's handle, not this request's. See `_session_loop_spawner`'s docstring
+    # for why the caller's RLS-scoped `supabase` above must never be the one a long-lived
+    # `asyncio.Task` closes over - that is exactly what made every session die silently within
+    # the hour its starting JWT was valid for. Resolved only after the request shape itself has
+    # been accepted (a malformed body is a 422 regardless of what this server's persistence
+    # looks like), but still before anything is created, so a missing service-role credential
+    # refuses the start cleanly instead of spawning a loop already doomed to the PAPER-04
+    # failure mode this is fixing.
+    loop_supabase = get_service_supabase()
+    if loop_supabase is None:
+        raise PaperError(
+            PAPER_PERSISTENCE_UNAVAILABLE,
+            details={"reason": "SERVICE_ROLE_CLIENT_UNAVAILABLE"},
+        )
+
     try:
         started = await paper_sessions.start_session(
             supabase,
@@ -955,13 +1024,13 @@ async def start_paper_session(
             timeframe=body.timeframe,
             initial_capital_minor=body.initial_capital_minor,
             currency=body.currency,
-            measurements=_recorded_measurements(),
+            measurements=await _recorded_measurements(),
             # The strategy runtime, the plan and the Signal_Trace recorder, installed by the layer
             # that owns them. Without it the session would be ``RUNNING`` with nothing draining its
             # feed - no bar, no signal, no order, no equity point - and every figure it served
             # would be a truthful zero (Requirement 17.10, and Requirement 28.5's distinction
             # between "no trades" and "not measured").
-            spawn_loop=_session_loop_spawner(supabase),
+            spawn_loop=_session_loop_spawner(loop_supabase),
         )
     except PaperError:
         raise

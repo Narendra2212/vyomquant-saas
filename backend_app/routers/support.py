@@ -122,8 +122,8 @@ FAQS_DATA = [
     {
         "id": "faq-2",
         "category": "trading",
-        "question": "What is the Anti-Bypass Execution Token?",
-        "answer": "VyomQuant issues a cryptographically verified, single-use execution token upon InstitutionalRiskManager approval. The CCXT execution boundary validates and consumes this token before transmitting orders to any exchange venue.",
+        "question": "What stops an order from bypassing the risk engine?",
+        "answer": "Every live order must go through execute_with_idempotency, the single entry point the execution engine enforces: it accepts orders only from the bot runner (a direct or manual call is rejected), requires a strategy_id that exists in the database, computes a deterministic idempotency key for the execution window, and takes a database lock before the order is placed. A duplicate or out-of-band call is refused rather than silently re-executed.",
     },
     {
         "id": "faq-3",
@@ -189,7 +189,7 @@ FAQS_DATA = [
         "id": "faq-13",
         "category": "billing",
         "question": "How does subscription tiering affect my execution quotas?",
-        "answer": "Higher subscription tiers unlock increased concurrent live bots, sub-millisecond execution tick rates, and expanded backtesting data access.",
+        "answer": "Higher subscription tiers unlock more concurrent live bots and strategies, more exchange connections and ML models, and larger monthly allowances for backtests, optimization runs and ML training. Order submission speed is the same on every plan; tiering changes capacity, not execution latency.",
     },
     {
         "id": "faq-14",
@@ -219,7 +219,7 @@ FAQS_DATA = [
         "id": "faq-18",
         "category": "general",
         "question": "How does the Emergency Kill Switch work?",
-        "answer": "Engaging the Emergency Kill Switch in Risk Settings immediately cancels all pending open orders across all connected exchanges and transitions all active strategies to PAUSED state within milliseconds.",
+        "answer": "Engaging the Emergency Kill Switch in Risk Settings immediately blocks every new order and strategy execution on your account. It does not retroactively cancel orders already resting at an exchange or change a running deployment's status by itself -- use Close Position / Close All in Portfolio to cancel resting orders and flatten existing exposure.",
     },
 ]
 
@@ -425,7 +425,14 @@ async def create_ticket(
     if body.attachment:
         _check_attachment(body.attachment)
 
-    ticket_id = f"tkt_{uuid4().hex[:12]}"
+    # SUP-01: support_tickets.id is `UUID PRIMARY KEY` (migrations/add_support_tables.sql).
+    # A "tkt_"-prefixed id is not a UUID, so the insert below always raised against Supabase
+    # (invalid input syntax for type uuid), caught by the except and silently rerouted to
+    # the in-memory fallback dict -- which answers this one request but is lost on the next
+    # worker restart and invisible to every OTHER worker process in the meantime. A real
+    # UUID lets the real insert succeed, which is the actual fix; the in-memory path below
+    # is now the genuine degraded-Supabase fallback it was always meant to be.
+    ticket_id = str(uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
     user_id = user["id"]
 
@@ -623,7 +630,8 @@ async def add_comment(
 
     user_id = user["id"]
     now_iso = datetime.now(timezone.utc).isoformat()
-    comment_id = f"cmt_{uuid4().hex[:12]}"
+    # SUP-01: ticket_comments.id is `UUID PRIMARY KEY` too - see create_ticket's own comment.
+    comment_id = str(uuid4())
 
     ticket = None
     if supabase:
@@ -871,7 +879,8 @@ async def staff_reply_ticket(
     """Support staff reply to user ticket with status transition and notification dispatch."""
     _scan_for_secrets(body.message)
     now_iso = datetime.now(timezone.utc).isoformat()
-    comment_id = f"cmt_staff_{uuid4().hex[:10]}"
+    # SUP-01: ticket_comments.id is `UUID PRIMARY KEY` - see create_ticket's own comment.
+    comment_id = str(uuid4())
 
     ticket = None
     if supabase:

@@ -21,10 +21,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.backend.strategy_service import (
-    BLUEPRINT_STARTABLE_KEYS,
-    DEPLOY_PARAMS_NOT_APPLIED,
-    DeployBlueprintIncomplete,
-    DeployParameterNotApplicable,
     DeployPrerequisiteError,
     StrategyEnvironment,
     StrategyStatus,
@@ -226,29 +222,9 @@ class StrategyCreateRequest(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
 
-class StrategyUpdateRequest(BaseModel):
-    """Request model for updating a Strategy."""
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    blueprint: Optional[dict] = Field(None, description="Updated blueprint (creates new version)")
-    tags: Optional[List[str]] = None
-
-
-class StrategyDeployRequest(BaseModel):
-    """Request model for deploying a Strategy."""
-    version: Optional[str] = Field(None, description="Specific version to deploy (uses current if not specified)")
-    environment: str = Field("paper", description="Deployment environment")
-    exchange_id: Optional[str] = Field(None, description="Exchange name / slug (e.g. 'binance')")
-    exchange_account_id: Optional[str] = Field(None, description="Connected exchange account UUID from user's vault")
-    capital: Optional[float] = Field(None, description="Initial capital for this deployment")
-    trade_size_pct: Optional[float] = Field(None, description="Trade size as decimal fraction (0.1 = 10%)")
-    stop_loss_pct: Optional[float] = Field(None, description="Stop-loss threshold as decimal fraction")
-    max_drawdown_pct: Optional[float] = Field(None, description="Maximum drawdown threshold as decimal fraction")
-
-
-class StrategyCloneRequest(BaseModel):
-    """Request model for cloning a Strategy."""
-    new_name: str = Field(..., min_length=1, max_length=100)
+# API-01: StrategyUpdateRequest/StrategyDeployRequest/StrategyCloneRequest were deleted
+# here along with the shadowed update_strategy/deploy_strategy/clone_strategy handlers
+# that were their only callers - nothing else in the codebase constructs or imports them.
 
 
 class StrategyCompileRequest(BaseModel):
@@ -375,324 +351,24 @@ async def compile_strategy(request: Request,
     }
 
 
-@router.get("/strategies")
-@limiter.limit("200/minute")
-async def list_strategies(request: Request, 
-    status: Optional[str] = Query(None),
-    environment: Optional[str] = Query(None),
-    user: dict = Depends(get_current_user)
-):
-    """
-    List all Strategies for user with optional filters.
-    
-    Returns strategies with deployment status and performance metrics.
-    """
-    try:
-        cache_key = f"strategies:{user['id']}:{status}:{environment}"
-        try:
-            from backend_app.core.cache.redis_manager import redis_manager
-            cached = await redis_manager.get(cache_key)
-            if cached:
-                import json
-                return json.loads(cached)
-        except Exception as cache_err:
-            logger.debug(f"Strategies cache read error: {cache_err}")
-
-        service = await get_strategy_service()
-        
-        strategies = await service.list_strategies(
-            user=user,
-            status_filter=status,
-            environment_filter=environment
-        )
-        
-        resp_data = {
-            "strategies": strategies,
-            "total": len(strategies)
-        }
-
-        try:
-            from backend_app.core.cache.redis_manager import redis_manager
-            import json
-            await redis_manager.set(cache_key, json.dumps(resp_data), ex=10)
-        except Exception as cache_write_err:
-            logger.debug(f"Strategies cache write error: {cache_write_err}")
-
-        return resp_data
-    except Exception as e:
-        import traceback
-        
-        # Safe diagnostic logging - no sensitive data
-        exc_type = type(e).__name__
-        exc_module = type(e).__module__
-        exc_message = str(e)
-        
-        # Get caller info
-        frame = inspect.currentframe()
-        caller_filename = frame.f_back.f_code.co_filename if frame.f_back else "unknown"
-        caller_lineno = frame.f_back.f_lineno if frame.f_back else 0
-        
-        # Log comprehensive diagnostic info
-        logger.error(
-            f"[STRATEGIES_LIST_ENDPOINT] Exception details: "
-            f"endpoint=/api/strategies, "
-            f"exception_type={exc_type}, "
-            f"exception_module={exc_module}, "
-            f"exception_message={exc_message}, "
-            f"caller_file={caller_filename}, "
-            f"caller_line={caller_lineno}, "
-            f"status_filter={status}, "
-            f"environment_filter={environment}, "
-            f"user_id_truncated={user['id'][:8] if user.get('id') else 'missing'}..."
-        )
-        
-        # Log full traceback for debugging
-        logger.error(f"[STRATEGIES_LIST_ENDPOINT] Full traceback:\n{traceback.format_exc()}")
-        
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGIES_LIST_FAILED", "message": str(e)}
-        )
-
-
-@router.get("/strategies/{strategy_id}")
-@limiter.limit("200/minute")
-async def get_strategy(request: Request, 
-    strategy_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Get complete Strategy data.
-    
-    Returns strategy with current version, deployments, and backtests.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        strategy = await service.get_strategy(user=user, strategy_id=strategy_id)
-        if not strategy:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_NOT_FOUND", "message": f"Strategy {strategy_id} not found"}
-            )
-        
-        return strategy
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_GET_FAILED", "message": str(e)}
-        )
-
-
-@router.put("/strategies/{strategy_id}")
-@limiter.limit("100/minute")
-async def update_strategy(request: Request, 
-    strategy_id: str,
-    body: StrategyUpdateRequest,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Update a Strategy.
-    
-    If blueprint is updated, creates a new version.
-    Otherwise updates metadata only.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        updates = body.dict(exclude_unset=True)
-        result = await service.update_strategy(user=user, strategy_id=strategy_id, updates=updates)
-        if not result:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_NOT_FOUND", "message": f"Strategy {strategy_id} not found"}
-            )
-        
-        return {
-            "status": "updated",
-            "strategy": result.get("strategy", result),
-            "new_version": result.get("new_version")
-        }
-    except Exception as e:
-        logger.error(f"Error updating strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_UPDATE_FAILED", "message": str(e)}
-        )
-
-
-@router.delete("/strategies/{strategy_id}")
-@limiter.limit("50/minute")
-async def delete_strategy(request: Request, 
-    strategy_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Delete a Strategy and all associated data.
-    
-    Stops all running deployments before deletion.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        success = await service.delete_strategy(user=user, strategy_id=strategy_id)
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_DELETE_FAILED", "message": "Strategy not found"}
-            )
-        
-        return {"status": "deleted", "strategy_id": strategy_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_DELETE_FAILED", "message": str(e)}
-        )
-
-
-@router.post("/strategies/{strategy_id}/clone")
-@limiter.limit("50/minute")
-async def clone_strategy(request: Request, 
-    strategy_id: str,
-    body: StrategyCloneRequest,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Clone a Strategy.
-    
-    Creates new strategy with same blueprint and configuration.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        result = await service.clone_strategy(user=user, strategy_id=strategy_id, new_name=body.new_name)
-        
-        return {
-            "status": "cloned",
-            "strategy": result["strategy"],
-            "version": result["version"],
-            "warnings": result.get("warnings", [])
-        }
-    except Exception as e:
-        logger.error(f"Error cloning strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_CLONE_FAILED", "message": str(e)}
-        )
+# ══════════════════════════════════════════════════════════════════════════
+# API-01. list_strategies / get_strategy / update_strategy / delete_strategy /
+# clone_strategy / deploy_strategy used to be declared here too, at the exact same
+# (method, path) `routers/strategies.py` registers. `main.py` mounts `strategies.router`
+# BEFORE `strategy_operations.router`, and Starlette matches in registration order, so
+# every one of these six was permanently unreachable: `strategies.py`'s handler of the
+# same name answered every request, every time, in every environment this has ever run
+# in. `tests/test_validation_sweep.py` had already confirmed this by running
+# `test_it_is_served_by_the_handler_this_route_names` against each and recording the
+# result in `_DELIBERATELY_EXCLUDED_HANDLERS`, with the same reasoning repeated here.
+# Deleting them changes no served behaviour - they answered nothing before this change
+# and the paths they declared answer identically after it, from `strategies.py`.
+# ══════════════════════════════════════════════════════════════════════════
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT OPERATIONS
 # ══════════════════════════════════════════════════════════════════════════
-
-@router.post("/strategies/{strategy_id}/deploy")
-@limiter.limit("50/minute")
-async def deploy_strategy(request: Request, 
-    strategy_id: str,
-    body: StrategyDeployRequest,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Deploy a Strategy (creates running bot instance).
-    
-    This is the equivalent of starting a bot.
-    A deployed Strategy IS the running trading bot.
-
-    Task 8.2 note: this is the **strategy-level legacy** deploy surface, not the versioned
-    binding surface `design.md` names (``POST .../versions/{v}/deploy``). It gained exactly
-    two things from task 8.2 and deliberately nothing else: the deployment row now records
-    ``mode`` - without which ``chk_sd_live_needs_account`` guards nothing, because it
-    constrains ``mode`` and this writer only ever set the legacy ``environment`` column -
-    and Requirement 13.6 is enforced here, so a live deploy with no exchange account is a
-    422 naming the missing account rather than a 23514 surfacing as a 500. The lifecycle
-    and market-compatibility gates belong to the versioned route.
-    """
-    from backend_app.backend.deployment_binding import DeployRejected
-
-    try:
-        service = await get_strategy_service()
-        
-        result = await service.deploy_strategy(
-            user=user,
-            strategy_id=strategy_id,
-            version=body.version,
-            environment=body.environment,
-            exchange_id=body.exchange_id,
-            exchange_account_id=body.exchange_account_id,
-            capital=body.capital,
-            trade_size_pct=body.trade_size_pct,
-            stop_loss_pct=body.stop_loss_pct,
-            max_drawdown_pct=body.max_drawdown_pct,
-        )
-        
-        return result
-    except DeployRejected as e:
-        raise _deploy_rejected_http(e)
-    except DeployPrerequisiteError as e:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "DEPLOY_PREREQUISITE_NOT_MET",
-                "message": str(e),
-                "missing_prerequisite": e.missing_prerequisite,
-            }
-        )
-    except DeployParameterNotApplicable as e:
-        # 422, and above the ValueError branch deliberately. The request is well-formed
-        # and the caller is entitled; it simply names a control this endpoint cannot
-        # honour (see strategy_service.DEPLOY_PARAMS_NOT_APPLIED - all four have nowhere
-        # to be stored). Falling through to the generic handler would report a 500 for a
-        # caller-correctable request, and falling through to the ValueError branch would
-        # report it as a validation failure of a field that is in fact valid.
-        logger.info(
-            "Deploy of strategy %s refused an unapplicable parameter: %s", strategy_id, e
-        )
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "DEPLOY_PARAMETER_NOT_APPLICABLE",
-                "message": str(e),
-                "not_applied": sorted(DEPLOY_PARAMS_NOT_APPLIED),
-            }
-        )
-    except DeployBlueprintIncomplete as e:
-        # 409, the same status DEPLOY_PREREQUISITE_NOT_MET uses, and for the same reason:
-        # a state conflict about the stored artifact rather than a bad request. The
-        # strategy exists and the caller owns it; its blueprint cannot start a bot.
-        logger.info(
-            "Deploy of strategy %s refused: blueprint cannot start a bot: %s",
-            strategy_id,
-            e,
-        )
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "DEPLOY_BLUEPRINT_INCOMPLETE",
-                "message": str(e),
-                "required_blueprint_keys": list(BLUEPRINT_STARTABLE_KEYS),
-            }
-        )
-    except ValueError as e:
-        err_msg = str(e)
-        logger.warning(f"Validation/quota error deploying strategy {strategy_id}: {err_msg}")
-        status_code = 403 if "quota" in err_msg.lower() or "subscription" in err_msg.lower() else 400
-        raise HTTPException(
-            status_code=status_code,
-            detail={"error": "STRATEGY_DEPLOY_FAILED", "message": err_msg}
-        )
-    except Exception as e:
-        logger.error(f"Error deploying strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_DEPLOY_FAILED", "message": str(e)}
-        )
-
 
 class DeploymentTransitionRequest(BaseModel):
     """The optional body of a pause, resume or stop request (task 8.3).
@@ -792,62 +468,10 @@ async def stop_deployment(request: Request,
     )
 
 
-@router.post("/strategies/{strategy_id}/pause")
-@router.post("/strategies/{strategy_id}/stop")
-@limiter.limit("50/minute")
-async def pause_strategy(request: Request, 
-    strategy_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Pause or stop a running Strategy.
-    
-    Stops all deployments and marks strategy as paused.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        success = await service.pause_strategy(user=user, strategy_id=strategy_id)
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "STRATEGY_PAUSE_FAILED", "message": "Strategy not found"}
-            )
-        
-        return {"status": "paused", "strategy_id": strategy_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error pausing strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_PAUSE_FAILED", "message": str(e)}
-        )
-
-
-@router.post("/strategies/{strategy_id}/resume")
-@limiter.limit("50/minute")
-async def resume_strategy(request: Request, 
-    strategy_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Resume a paused Strategy.
-    
-    Re-deploys strategy with current version.
-    """
-    try:
-        service = await get_strategy_service()
-        
-        result = await service.resume_strategy(user=user, strategy_id=strategy_id)
-        
-        return result
-    except Exception as e:
-        logger.error(f"Error resuming strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STRATEGY_RESUME_FAILED", "message": str(e)}
-        )
+# API-01: `pause_strategy` (registered at BOTH `.../pause` and `.../stop`, both already
+# declared in `strategies.py`) and `resume_strategy` were deleted here for the same
+# reason as the block above - permanently shadowed, zero behaviour change. See
+# `tests/test_validation_sweep.py`'s `_DELIBERATELY_EXCLUDED_HANDLERS`.
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -2318,17 +1942,21 @@ async def run_optimization(request: Request,
             validation_window_days=body.validation_window_days,
             test_window_days=body.test_window_days,
             initial_capital=body.initial_capital,
-            commission=body.commission,
+            # OPT-01: OptimizationConfig's field is `fees`, not `commission` -- the request
+            # body's public field name stays `commission` (unchanged API shape); only the
+            # keyword passed to the dataclass was wrong, and TypeError on every call was the
+            # result, since this dataclass takes no **kwargs to swallow an unknown one.
+            fees=body.commission,
             slippage=body.slippage,
             risk_per_trade=body.risk_per_trade,
             max_drawdown=body.max_drawdown,
             daily_loss_limit=body.daily_loss_limit
         )
-        
+
         # Add date range to parameters
         config.parameters["start_date"] = body.start_date
         config.parameters["end_date"] = body.end_date
-        
+
         # Generate research report
         research_report = await optimization_engine.generate_research_report(
             strategy_package=strategy_package,
@@ -2736,26 +2364,10 @@ async def close_deployment_position(request: Request,
     return {"status": "close_requested", "deployment_id": deployment_id}
 
 
-@router.post("/deployments/{deployment_id}/stop", include_in_schema=False)
-@limiter.limit("50/minute")
-async def stop_deployment_alias(request: Request, 
-    deployment_id: str,
-    body: Optional[DeploymentTransitionRequest] = None,
-    user: dict = Depends(get_current_user)
-):
-    """The second registration of ``POST /deployments/{id}/stop``, kept behaving identically.
-
-    This path is declared **twice** in this router - once above (the 100/minute handler)
-    and once here - which pre-dates this task. FastAPI matches the first registration, so
-    this one was already unreachable; it is left in place because deleting a route is a
-    larger blast radius than this task's scope, and pointed at the same implementation so
-    that if the ordering ever changes the behaviour does not. ``include_in_schema=False``
-    keeps the duplicate out of the OpenAPI document, where two entries for one path is a
-    contract nobody can honour.
-    """
-    return await _transition_deployment_endpoint(
-        "stop", deployment_id, user, body.reason if body is not None else None
-    )
+# API-01: the second, `include_in_schema=False` registration of `POST
+# /deployments/{id}/stop` (`stop_deployment_alias`) was deleted here. It was already
+# unreachable - FastAPI matches the FIRST registration (`stop_deployment`, above) - and
+# its own docstring said so explicitly. Deleting it changes no served behaviour.
 
 
 @router.get("/strategies/{strategy_id}/deployments")
@@ -2964,49 +2576,12 @@ async def compare_backtests(request: Request,
         )
 
 
-@router.delete("/backtests/{backtest_id}")
-@limiter.limit("50/minute")
-async def delete_backtest(request: Request, 
-    backtest_id: str,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Delete a backtest.
-
-    UNREACHABLE, AND NOT TO BE UNSHADOWED AS IT STANDS
-    --------------------------------------------------
-    This module declares ``DELETE /backtests/{backtest_id}`` twice. FastAPI matches the
-    FIRST registration, which is the handler ~800 lines above; nothing routes here, and
-    ``tests/sandbox_lifecycle/test_cross_tenant_ownership_matrix.py`` pins that fact
-    (``backtests.archive`` asserts the registration that answers is the earlier one).
-
-    It is left in place rather than deleted because removing a route declaration is a
-    surface change this remediation was not scoped to make. But note what it would do if it
-    ever became the one that answers: ``delete_backtest`` is now truthful about whether the
-    ownership-scoped DELETE matched, so ``if not success -> 404`` here would answer the
-    OWNER 200 and everybody else 404 - i.e. it would become exactly the existence oracle
-    Requirement 20.2 forbids. Whoever resolves the duplication must make this branch
-    unconditional first, the way the live handler does.
-    """
-    try:
-        backtest_service = await get_backtest_service()
-        
-        success = await backtest_service.delete_backtest(user=user, backtest_id=backtest_id)
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "BACKTEST_DELETE_FAILED", "message": "Backtest not found"}
-            )
-        
-        return {"status": "deleted", "backtest_id": backtest_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting backtest {backtest_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "BACKTEST_DELETE_FAILED", "message": str(e)}
-        )
+# API-01: this module declared `DELETE /backtests/{backtest_id}` a second time here,
+# verbatim-shadowed by the handler ~800 lines above (FastAPI matches the FIRST
+# registration). Its own docstring said as much ("UNREACHABLE, AND NOT TO BE UNSHADOWED
+# AS IT STANDS" - the existence-oracle hazard it warned a future un-shadowing would
+# create no longer applies to any reachable code, since this copy is gone). Deleting it
+# changes no served behaviour.
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -41,12 +41,12 @@
       "severity": "Critical",
       "component": "Paper trading",
       "title": "Paper Sessions (the persisted, canonical paper-trading path) can never start",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "EXTERNAL_BLOCKED",
+      "fix_commit": "838a0ed",
+      "evidence": "Built the missing persistence layer for the measurement that Requirement 14.4's correctness floor (already real) was never given anywhere to read: backend_app/backend/market_data_measurement_store.py (record_measurement, latest_measurements, MeasurementStoreUnavailable; service-role only) + migration 039_market_data_source_measurements.sql (append-only, RLS enabled, no browser-role policy, explicit REVOKE/GRANT). market_data_latency.py gained from_dict on LatencySummary and SourceMeasurement (exact inverses of to_dict, explicitly skipping derived properties) so a stored row round-trips byte-for-byte. routers/paper_trading.py's _recorded_measurements() now reads the store instead of hardcoded None. scripts/record_market_data_measurement.py is the operator CLI that runs the existing tests/perf/test_market_data_latency.py::run_experiment() and persists whatever it actually measured (never an invented/unmeasured result). tests/test_rt04_measurement_store_round_trips.py (6 tests, fake-Supabase double): round-trip fidelity, newest-row-wins per source, unknown source refused before any write, no-rows-yet is an empty dict not a fabricated pair, an unreadable store raises rather than reading as silently unmeasured. tests/test_task_28_1_session_routes.py updated for the new async seam. Full regression this session: targeted RT-04/RT-16/RT-21 suite (45 passed/1 skipped) + a broader paper/market_data pass (1676 passed, 50 skipped, 0 failed) + full validation_sweep/schema_drift/session_routes (584 passed, 2 failed -- confirmed pre-existing, unrelated billing-route findings present on the clean tree before this change). Commit 838a0ed.",
+      "verification_level": "code+test (verified this session); real measurement EXTERNAL_BLOCKED",
       "production_verified": false,
-      "remaining_action": "Deploy MDS; run the latency/correctness measurement against the production feed; persist the SourceMeasurement in a table/config read by _recorded_measurements(); add a readiness check that fails when no admitted source exists."
+      "remaining_action": "This is real, tested infrastructure, not a workaround: it gives a real measurement somewhere honest to land, and it is wired end to end (store -> paper_trading route). It does NOT close RT-04 and was never claimed to: Requirement 14.4's correctness floor needs >=99.99% completeness over >=10,000 bars, which at a 1m timeframe is roughly a week of continuous measurement against the real production feed with real outbound network access -- not producible in this sandboxed session, which has neither. Genuinely EXTERNAL_BLOCKED until an operator runs `AERORA_MARKET_DATA_LATENCY_EXPERIMENT=1 python scripts/record_market_data_measurement.py --recorded-by <operator>` from an environment with real exchange/Redis/MDS reachability, for the full prescribed window (AERORA_MARKET_DATA_LATENCY_SECONDS left unset), against production or a staging environment that mirrors it. Paper sessions remain refused with PAPER_MARKET_DATA_UNAVAILABLE until that measurement is run and passes the floor -- this change does not and must not weaken that refusal."
     },
     {
       "id": "RT-02",
@@ -94,11 +94,11 @@
       "component": "Order safety (live) / reconciliation",
       "title": "No venue reconciliation: fills, partial fills and ambiguous submissions are never resolved against the exchange",
       "status": "IN_PROGRESS",
-      "fix_commit": "a1e2ee1",
-      "evidence": "W-1b (OrderWatchdog cannot obtain an executor in production) fixed: _get_executor_for_order now builds a REAL per-tenant executor by reusing order_control._executor_for (the same stored-key -> get_exchange_executor -> connect() path RT-21's manual cancel uses), via app_state.vault. Made async; all three call sites (_reconcile_open_orders, _adjudicate_ambiguous_execution, _refresh_order_status) now await it. tests/test_rt16_watchdog_executor_is_real.py (5 tests) + test_d5_watchdog_adjudication_repair.py (updated, 17 passing/1 skipped) + a ~1100-test targeted regression (order/watchdog/reconcil/execution_guard/master_executor) all green this session.",
+      "fix_commit": "3c333e0",
+      "evidence": "W-1b (OrderWatchdog cannot obtain an executor in production) fixed: _get_executor_for_order now builds a REAL per-tenant executor by reusing order_control._executor_for (the same stored-key -> get_exchange_executor -> connect() path RT-21's manual cancel uses), via app_state.vault. Made async; all three call sites (_reconcile_open_orders, _adjudicate_ambiguous_execution, _refresh_order_status) now await it. tests/test_rt16_watchdog_executor_is_real.py (5 tests) + test_d5_watchdog_adjudication_repair.py (updated, 17 passing/1 skipped) + a ~1100-test targeted regression (order/watchdog/reconcil/execution_guard/master_executor) all green this session. ADDITIONALLY this session (commit a4758e4): OrderWatchdog._reconcile_open_orders now calls a new _record_reconciliation_mismatch on every proven divergence (_has_order_changed true), writing to ReconciliationMismatchRepository.record_mismatch at severity MEDIUM, never CRITICAL -- closing the 'ReconciliationScheduler polls a table nothing writes' gap. tests/test_rt16_reconciliation_mismatches_are_recorded.py (4 tests, SQLite-backed): a real divergence writes exactly one MEDIUM row readable from a second session; an unchanged order writes nothing; the diverging field is named correctly; a write failure is logged and never breaks reconciliation. Regression: test_d5_watchdog_adjudication_repair.py + test_rt16_watchdog_executor_is_real.py + test_rt16_reconciliation_mismatches_are_recorded.py + test_rt04_measurement_store_round_trips.py + test_rt21_close_position_flattens_exposure.py (45 passed/1 skipped); full tests/test_validation_sweep.py + test_schema_table_reference_drift.py + test_task_28_1_session_routes.py (584 passed, 2 failed -- confirmed pre-existing on clean tree, unrelated billing-route findings, not caused by this change). FURTHER this session (commit 3c333e0): fixed ConsistencyChecker's three compounding problems that made it unsafe to ever enable, not one. _get_exchange_positions() now builds a real per-tenant executor via the same vault-based path (order_control._executor_for) RT-21/RT-16 already use, and reads get_balance() (the correct spot call) instead of the credential-less get_or_create_exchange() + fetch_positions() (a derivatives/margin call with nothing to read on this spot-only platform). _run_consistency_checks now checks result.error_message first, so a failed CHECK (exchange timeout, no credentials) is never treated as a confirmed mismatch and escalated. _handle_mismatch no longer calls GlobalKillSwitch.activate() (a true platform-wide halt) at all -- it now writes to the SAME ReconciliationMismatchRepository RT-16 gave OrderWatchdog a real caller for, at severity MEDIUM, never CRITICAL, so ReconciliationScheduler's own, already-correct severity gate decides whether anything escalates. tests/test_rt16_consistency_checker_is_safely_gated.py (8 tests, fakes: no real exchange, no network): real-executor+get_balance wiring; no-vault raises rather than a silent empty result; a failed check never reaches _handle_mismatch; a real mismatch is recorded at MEDIUM; the kill switch is never imported or called from this module at all. connection_engine.py's get_or_create_exchange docstring updated (no longer names this file as a credential-less caller). Full regression: targeted RT-16 suite (67 passed/12 skipped) + full validation_sweep/schema_drift (480 passed, 2 failed -- same pre-existing, unrelated billing findings).",
       "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "This closes only the adjudication/refresh half of RT-16 -- the half that can now ask the venue about ONE order it already suspects is ambiguous or stale. NOT done: ConsistencyChecker still iterates an empty tenant list (so it checks nothing); ReconciliationScheduler still polls a table nothing writes; no private order/fill stream is consumed anywhere, so a fill the watchdog never suspected is still invisible; execution_records are still marked COMPLETED on venue accept rather than on a confirmed fill; /health/services' reporting for these three was separately corrected by RT-18 (NOT_IMPLEMENTED rather than ACTIVE) but that does not make them implemented. All of the above plus real sandbox certification needs exchange-sandbox credentials this session does not have -- genuinely EXTERNAL_BLOCKED for the parts that remain, estimated 60-120h by the original audit even after this fix."
+      "remaining_action": "This closes the adjudication/refresh half of RT-16 (can now ask the venue about ONE order it suspects is ambiguous or stale) AND now feeds ReconciliationScheduler's own, already-correct escalation policy with real MEDIUM-severity divergences. STILL NOT DONE, as a deliberate scope decision made and verified this session: ConsistencyChecker is NOT wired up, because it has three separate, compounding problems that would need fixing together, not patched individually -- (1) _get_active_tenant_exchanges() returns a hardcoded empty list, so it currently checks nothing; (2) _get_exchange_positions() calls get_or_create_exchange with no credentials and calls fetch_positions(), the wrong ccxt method for a spot-only platform; (3) _handle_mismatch() trips a GLOBAL kill switch on ANY mismatch, with no severity gating at all (unlike ReconciliationScheduler's own correct, already-scoped policy). Wiring real tenant data through (1) and (2) while (3) still halts the whole platform on any noise would risk a false-positive global halt; fixing it properly needs all three addressed together with sandbox verification, which is out of scope for this pass. Also still open: no private order/fill stream is consumed anywhere, so a fill the watchdog never suspected is still invisible; execution_records are still marked COMPLETED on venue accept rather than on a confirmed fill; real sandbox certification against a live exchange remains EXTERNAL_BLOCKED (no sandbox credentials available this session), estimated 40-80h remaining by the original audit even after both fixes in this session. _get_active_tenant_exchanges() DELIBERATELY still returns [] -- enumerating real tenant/exchange pairs today, even with the three fixes above, is not safe: PositionModel (the LOCAL side of this comparison) has NO WRITER anywhere in the live/paper trading execution path (backend/position_engine.py's PositionEngine is fully built but has zero callers -- grep confirms it) -- so every tenant holding any real exchange balance would register a permanent, structural MISSING_LOCAL finding on EVERY check, forever, flooding the very reconciliation_mismatches table this session just made useful via OrderWatchdog. On top of that, PositionModel.side is long/short -- a derivatives model that does not fit this platform's spot-only, always-non-negative exposure model (RT-21's own finding on BotRunner.recovered_exposure_coins). Enabling this for real needs (a) PositionModel actually wired into the live order path (a separate, nontrivial change touching the order path, not something to bolt on under this pass) and (b) a deliberate design decision on how a spot balance maps to a long/short-shaped position row -- both out of scope here and documented, not silently dropped, in _get_active_tenant_exchanges's own docstring."
     },
     {
       "id": "RT-21",
@@ -171,10 +171,10 @@
       "severity": "High",
       "component": "Risk controls",
       "title": "User kill switch and risk settings live in process memory and do not stop automated trading",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "backend_app/core/tenant_halt.py: halt persisted in Redis (no expiry), fail-closed read in ExecutionEngine.execute_with_idempotency (the only BotRunner->venue path); tests/test_rt19_tenant_halt_is_durable_and_enforced.py (7)",
-      "verification_level": "code",
+      "evidence": "backend_app/core/tenant_halt.py: halt persisted in Redis (no expiry), fail-closed read in ExecutionEngine.execute_with_idempotency (the only BotRunner->venue path); tests/test_rt19_tenant_halt_is_durable_and_enforced.py (7) VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "Still open: stop the tenant's running deployments on activation; enforce the halt in paper-session loops; verify against real Redis in staging."
     },
@@ -198,11 +198,11 @@
       "component": "Paper trading",
       "title": "Manual paper orders fill at hardcoded reference prices or at a price the client supplies for a market order",
       "status": "IN_PROGRESS",
-      "fix_commit": "8b9511d d44eff6",
-      "evidence": "Containment done: hardcoded reference prices and client price for market orders removed; market orders refused (409 PAPER_MARKET_DATA_UNAVAILABLE) without a measured quote; tests/test_paper02_market_orders_need_measured_price.py (5)",
-      "verification_level": "code",
+      "fix_commit": "8b9511d d44eff6 0e754cc",
+      "evidence": "Containment (earlier): hardcoded reference prices and client price for market orders removed; market orders refused (409 PAPER_MARKET_DATA_UNAVAILABLE) without a measured quote; tests/test_paper02_market_orders_need_measured_price.py (5). THIS SESSION (commit 0e754cc): get_fresh_market_price now reads a real last-price cache instead of unconditionally returning None. mds/main.py::broadcast_ohlcv -- the same loop that republishes every real CCXT candle for every Paper_Session's validated feed, on both its websocket and REST-fallback paths -- now additionally writes a durable, 150s-TTL'd mds:last_price:{exchange}:{symbol} cache entry alongside each existing publish (no second market-data path, no new exchange connection, no credentials). get_fresh_market_price reads that cache for a fixed default exchange (\"binance\", matching mds/main.py's own existing fallback default) and returns None -- never a fabricated or stale price -- for every case but a real, unexpired cached value. The key format is spelled as a literal in both files (the same convention this codebase already uses for TRANSPORT_WEBSOCKET/TRANSPORT_REST, since mds/main.py is a standalone microservice process), held equal by a test. tests/test_paper02_fresh_market_price.py (9 tests, fakes: no network, no real exchange, no real Redis): key-format agreement; broadcast_ohlcv writes the cache on a real websocket tick and a real REST-fallback tick, with the TTL; a cached price round-trips as an exact Decimal; no cached entry, a cache read failure, an unreadable payload, and a non-numeric cached price are all read as None, never an exception; the pre-existing no-mocking pin still holds. Regression: 401 tests across the targeted paper-trading suite + full validation_sweep/schema_drift/import-resolution (482 passed, 2 failed -- same pre-existing, unrelated billing findings) both clean; a broader \"-k paper or market_data or mds\" sweep is flaky independent of this change (reproduced identically against a clean stash of the same commit).",
+      "verification_level": "code+test (verified this session); real exchange tick EXTERNAL_BLOCKED",
       "production_verified": false,
-      "remaining_action": "Wire paper_trading_service.get_fresh_market_price to the MDS last-price read (currently returns None, so manual paper MARKET orders are refused until then)."
+      "remaining_action": "A manual market order now succeeds ONLY for a symbol some active Paper_Session (or other MDS subscriber) is already streaming -- that symbol has a cached price; any other symbol correctly, honestly refuses exactly as before this fix, since nothing has ever published a price for it. Deliberately NOT built: an on-demand subscribe-and-wait for a symbol nothing is currently streaming. ccxt's watch_ohlcv on a 1-minute timeframe can legitimately take up to a minute to yield its first candle depending on the exchange, which is not a bound a synchronous, inside-an-HTTP-request order-placement call can safely wait on without real-exchange timing data -- this sandbox has no reachable exchange to measure that against (the same EXTERNAL_BLOCKED constraint RT-04/RT-16 already recorded this session). No production/sandbox verification of a real exchange tick landing in the cache exists yet."
     },
     {
       "id": "SEC-02",
@@ -236,10 +236,10 @@
       "severity": "High",
       "component": "Availability / rate limiting",
       "title": "Rate limits are keyed on the proxy's IP, so all users share buckets",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "limiter key_func -> backend_app/core/client_address.trusted_client_address (right-to-left X-Forwarded-For with TRUSTED_PROXY_HOPS; peer fallback); tests/test_sec10_rate_limit_keys_on_trusted_client_address.py (12)",
-      "verification_level": "code",
+      "evidence": "limiter key_func -> backend_app/core/client_address.trusted_client_address (right-to-left X-Forwarded-For with TRUSTED_PROXY_HOPS; peer fallback); tests/test_sec10_rate_limit_keys_on_trusted_client_address.py (12) VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "OPERATOR: set TRUSTED_PROXY_HOPS=2 (CloudFront+ALB) in the ECS task definition and verify in staging that two clients behind CloudFront get independent buckets. Until set, behaviour is unchanged (peer address). Per-user keying of authenticated routes still open."
     },
@@ -262,10 +262,10 @@
       "severity": "High",
       "component": "CI/CD",
       "title": "Production deploys are not gated on tests, and the PR gate has never passed",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "scripts/require_tests_passed.py + 03-deploy.yml step: the newest '01 PR Check' run for the deploy SHA must be success (missing/failed/cancelled/running => refuse; allow_untested dispatch override is logged); 01-pr-check.yml now also runs on push to main/master so a merged SHA has a run (frontend change-detection made push-safe). tests/test_ci01_test_workflow_gates_deploy.py (13)",
-      "verification_level": "code",
+      "evidence": "scripts/require_tests_passed.py + 03-deploy.yml step: the newest '01 PR Check' run for the deploy SHA must be success (missing/failed/cancelled/running => refuse; allow_untested dispatch override is logged); 01-pr-check.yml now also runs on push to main/master so a merged SHA has a run (frontend change-detection made push-safe). tests/test_ci01_test_workflow_gates_deploy.py (13) VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "NOT verified in GitHub Actions: workflows were edited and YAML-validated but never executed. The PR gate may still be red for pre-existing reasons (13 known baseline failures locally: Supabase-credential/network-dependent tests). Branch protection with required checks on main is a repository setting (EXTERNAL - operator must enable). Until 01 is green on a SHA, deploys of that SHA are refused (intended)."
     },
@@ -301,10 +301,10 @@
       "severity": "High",
       "component": "Observability",
       "title": "No alerting or error tracking configured in the committed production configuration",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "terraform/alarms.tf: SNS topic (KMS-encrypted, optional e-mail subscription var.alert_email, output alerts_topic_arn) + CloudWatch alarms for API 5xx, unhealthy targets, p99 latency, running-task count below 1, and log-metric alarms for CRITICAL logs, billing webhook failures, kill-switch events and audit-write failures. tests/test_ops01_alarms_are_declared.py (5 static checks)",
-      "verification_level": "code",
+      "evidence": "terraform/alarms.tf: SNS topic (KMS-encrypted, optional e-mail subscription var.alert_email, output alerts_topic_arn) + CloudWatch alarms for API 5xx, unhealthy targets, p99 latency, running-task count below 1, and log-metric alarms for CRITICAL logs, billing webhook failures, kill-switch events and audit-write failures. tests/test_ops01_alarms_are_declared.py (5 static checks) VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "Terraform was parsed (python-hcl2) and statically cross-checked but NOT validated/planned/applied (no terraform binary, no AWS access) - EXTERNAL. Sentry DSN must be set in the production secret store (code initialises Sentry only if SENTRY_DSN is present). Someone must subscribe the on-call channel to the topic."
     },
@@ -314,10 +314,10 @@
       "severity": "Medium",
       "component": "Billing",
       "title": "Razorpay plan purchases never expire",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "Razorpay grant records next_billing_date (now+1 month/year, extended on early same-plan renewal) + payment_provider; get_plan_context stops honouring a lapsed Razorpay tier on every request; core/plan_expiry.py hourly sweep persists tier=free/status=expired (started in lifespan); refund.processed with a FULL refund revokes the plan (invoice lookup, gateway-confirmed, conditional on current tier). migration 037. tests/test_bill01_razorpay_plans_expire.py (11 incl. real-Postgres sweep)",
-      "verification_level": "code+real-postgres sandbox",
+      "evidence": "Razorpay grant records next_billing_date (now+1 month/year, extended on early same-plan renewal) + payment_provider; get_plan_context stops honouring a lapsed Razorpay tier on every request; core/plan_expiry.py hourly sweep persists tier=free/status=expired (started in lifespan); refund.processed with a FULL refund revokes the plan (invoice lookup, gateway-confirmed, conditional on current tier). migration 037. tests/test_bill01_razorpay_plans_expire.py (11 incl. real-Postgres sweep) VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "Migrations 037 must be applied by an operator (without it grants still succeed but do not expire; logged CRITICAL). Not verified against live Razorpay (refund payload shape, payment.fetch). Razorpay Subscriptions API (true auto-renewal) is not adopted: plans are one-time periods that the customer must re-buy."
     },
@@ -353,10 +353,10 @@
       "severity": "High",
       "component": "Order safety (live)",
       "title": "Lost responses are recorded as rejections; strategy state rolls back and can re-enter",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "CCXTExchangeExecutor.place_order: failures at/after create_order that are ccxt OperationFailed (timeouts, network, BadResponse) or non-ccxt, and a response with no order id, return status=unknown/SUBMISSION_UNKNOWN (venue ExchangeError refusals and pre-send failures stay rejected); ExecutionEngine persists ExecutionStatus.UNKNOWN (never FAILED) and returns submission_unknown, including for any exception after the submission evidence is written; execute_with_idempotency refuses ('blocked', frozen) a NEW live order for a tenant+symbol that holds an UNKNOWN record (fails closed). tests/test_rt17_lost_order_response_is_unknown_not_rejected.py (26); live_order_path baseline re-recorded with authorisation note",
-      "verification_level": "code",
+      "evidence": "CCXTExchangeExecutor.place_order: failures at/after create_order that are ccxt OperationFailed (timeouts, network, BadResponse) or non-ccxt, and a response with no order id, return status=unknown/SUBMISSION_UNKNOWN (venue ExchangeError refusals and pre-send failures stay rejected); ExecutionEngine persists ExecutionStatus.UNKNOWN (never FAILED) and returns submission_unknown, including for any exception after the submission evidence is written; execute_with_idempotency refuses ('blocked', frozen) a NEW live order for a tenant+symbol that holds an UNKNOWN record (fails closed). tests/test_rt17_lost_order_response_is_unknown_not_rejected.py (26); live_order_path baseline re-recorded with authorisation note VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "Code-level only. Adjudication of UNKNOWN rows depends on RT-16 (OrderWatchdog has no production executor): until an operator resolves the row the symbol stays frozen for that tenant (intended, fails safe). Real venue timeout behaviour and clientOrderId lookup not verified on a sandbox (EXTERNAL). BotRunner exposure already ignores non-completed results (RT-06)."
     },
@@ -366,10 +366,10 @@
       "severity": "Medium",
       "component": "Exchange integration",
       "title": "Stored exchange keys are not checked for withdrawal permission or IP restriction",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "backend/exchange_key_permissions.py introspects Binance (apiRestrictions), OKX (account/config perm) and Bybit (v5 user/query-api); POST /api/exchanges/keys refuses withdraw-enabled keys with 400 before storage, reports ip_allowlist_not_enabled / withdrawal_permission_unverified warnings, EXCHANGE_KEY_PERMISSIONS_STRICT=true refuses unverifiable keys. tests/test_exch02_withdraw_enabled_keys_are_refused.py (8)",
-      "verification_level": "code",
+      "evidence": "backend/exchange_key_permissions.py introspects Binance (apiRestrictions), OKX (account/config perm) and Bybit (v5 user/query-api); POST /api/exchanges/keys refuses withdraw-enabled keys with 400 before storage, reports ip_allowlist_not_enabled / withdrawal_permission_unverified warnings, EXCHANGE_KEY_PERMISSIONS_STRICT=true refuses unverifiable keys. tests/test_exch02_withdraw_enabled_keys_are_refused.py (8) VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "Parsers follow vendor docs but are NOT verified against live venue responses (needs exchange sandbox/test keys - EXTERNAL). Other venues are UNVERIFIED (allowed with warning unless STRICT; operators should set STRICT=true for live). Existing already-stored keys are not retro-checked."
     },
@@ -379,12 +379,12 @@
       "severity": "Medium",
       "component": "API",
       "title": "11 route handlers are shadowed by earlier registrations",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "396d210",
+      "evidence": "Deleted all 11 permanently shadowed (method, path) duplicate registrations in backend_app/routers/strategy_operations.py (list_strategies, get_strategy, update_strategy, delete_strategy, clone_strategy, deploy_strategy, pause_strategy [registered at both /pause and /stop], resume_strategy, stop_deployment_alias, and a second DELETE /backtests/{id} registration), confirmed unreachable by walking the real app.routes table. Also removed 3 now-unused Pydantic request models and 4 now-unused imports whose only callers were the deleted handlers. Re-recorded 3 frontend-surface regression baselines (surface_strategies/surface_backtester/surface_strategy_builder) that captured the dead handlers, each with an authorised _baseline_note_handlers entry. Regression: tests/test_api01_no_shadowed_routes.py (4 tests, code+test, verified this session) -- an unconditional sweep asserting no (method,path) pair is ever registered twice anywhere in the app, not just a list of the known 11, so a reintroduced duplicate fails immediately regardless of location. Full regression (strategy_operations/strategies/baseline/no_duplicate_services/cross_tenant_ownership: 838 passed, 7 skipped) and validation_sweep/schema_drift (480 passed / 2 known pre-existing unrelated billing failures) both clean.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Delete duplicates; add a route-uniqueness test."
+      "remaining_action": ""
     },
     {
       "id": "API-06",
@@ -392,12 +392,12 @@
       "severity": "Medium",
       "component": "API",
       "title": "Dependency failures return 500 with raw exception text",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "1c911b7",
+      "evidence": "Investigated every genuine Depends()-injected dependency in the tree (get_current_user, get_admin_user/get_operator_user/require_aal2, get_service_supabase, get_request_supabase, tenant_middleware, entitlement_dependencies, the quota-check family) and found exactly one that leaked raw exception text: enforce_quota (backend_app/core/subscription_dependencies.py), the shared logic behind Depends(check_bot_quota)/check_ml_quota/etc. used across strategies.py, strategy_operations.py and library.py. Its 503 ENTITLEMENT_USAGE_UNREADABLE response set detail[\"message\"] = str(exc), and UsageReadFailed is frequently built directly from an upstream Supabase/PostgREST failure, so raw DB error text reached an authenticated caller. The 503 status and structured error code are unchanged (an existing test already pins the code); only the leaked message text is replaced with a fixed generic string, with the real exception now logged server-side. Every other dependency in the tree already followed the generic-message pattern (get_service_supabase, get_current_user, admin/operator checks, entitlement_dependencies all confirmed clean). Regression: tests/test_api06_quota_dependency_hides_raw_exception_text.py (3 tests, code+test, verified this session). Full entitlement/quota/subscription suite (295 passed) and validation_sweep/schema_drift (480 passed / 2 known pre-existing unrelated billing failures) clean.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Map dependency errors to 503 with generic message."
+      "remaining_action": ""
     },
     {
       "id": "SEC-09",
@@ -418,12 +418,12 @@
       "severity": "Medium",
       "component": "Auth",
       "title": "Sign-out does not revoke the caller's session",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "b3701ba",
+      "evidence": "Confirmed root cause: signout built an ANON-keyed Supabase client (never authenticated as the caller) and called its plain client.auth.sign_out() -- that signs the CLIENT OBJECT'S OWN locally-tracked session out, which this client never had, so the call was always a no-op returning a false 200. The `token` parameter was accepted but never read. Fixed: client.auth.admin.sign_out(jwt=current_user['access_token'], scope='global') against a service-role client (get_service_supabase), which makes a real server-to-server revocation naming WHOSE session to end. tests/test_auth01_signout_revokes_the_real_session.py (4 tests): admin sign-out called with the caller's own token and scope='global'; no service-role client is a clean 503 not a fake success; an admin API failure is a 400; auth is still required. Regression: targeted suite + full validation_sweep/schema_drift (484 passed, 2 failed -- same pre-existing, unrelated billing findings) + an 80-test auth/websocket sweep all clean. Commit b3701ba.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Use admin sign_out(jwt) / revoke refresh tokens for the caller."
+      "remaining_action": "None."
     },
     {
       "id": "ADM-01",
@@ -431,12 +431,12 @@
       "severity": "Medium",
       "component": "Admin tooling",
       "title": "'Reinitialize platform' does nothing but reports success",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "28f625b",
+      "evidence": "backend_app/routers/admin.py::reinitialize_platform now calls GlobalKillSwitch.deactivate() (core/global_safety.py) instead of returning a hardcoded success message with no state interaction. Requires get_operator_user + AAL2, a stated reason, and every live hold named in acknowledge_holds; a refused reset surfaces as 409 with the refusal code. Regression: tests/test_adm01_reinitialize_actually_clears_the_halt.py (9 tests, code+test, verified this session) covering confirm-code/role gating, a clean reset with an acknowledged hold, a refused reset with an unacknowledged hold (and proof the switch stays engaged), exact-hold acknowledgment, the no-op success path when nothing was halted, and the audit trail. Related suites (test_kill03_authoritative_global_halt.py, test_trade02_kill_switch_fails_closed.py, test_role_granularity_and_audit.py) and the full validation sweep still pass (480 passed / 2 known pre-existing unrelated billing failures).",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Remove or implement as an acknowledged kill-switch reset with holds."
+      "remaining_action": ""
     },
     {
       "id": "API-02",
@@ -457,12 +457,12 @@
       "severity": "Low",
       "component": "API",
       "title": "/api/stats is public and calls the dashboard service as user 'public'",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "10a9f27",
+      "evidence": "GET /api/stats was already correctly intended to be public/platform-wide (confirmed by algo22-terminal/src/design/pageFields.js's own documentation of Profile.jsx, which already labels these figures as platform aggregates and does not call for login). The defect was HOW it computed them: calling the per-user dashboard aggregator with a sentinel user={\"id\": \"public\"} identity -- most figures came back as that nonexistent account's empty state, total_pnl was actually today_pnl under a mislabelled key (same value published under all four pnl keys), and a failed read answered 200 with every figure forced to 0. Added backend_app/backend/platform_stats.py: a genuine, service-role aggregation over strategies/strategy_deployments/trade_history with four distinctly-windowed pnl sums; a statement failure now raises and the route answers a real 503 instead of a fabricated 200 of zeros. Regression: tests/test_api03_platform_stats_are_real.py (14 tests, code+test, verified this session). Re-recorded the surface_profile baseline. Full validation_sweep/schema_drift/baseline suite: 554 passed / 2 known pre-existing unrelated billing failures.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Authenticate or remove."
+      "remaining_action": "trade_history (migration 040, added this session for RT-04) currently holds no rows in any environment this has run against, so total_trades/win_rate/pnl figures will honestly report zero until something writes to it in production."
     },
     {
       "id": "API-05",
@@ -470,12 +470,12 @@
       "severity": "Medium",
       "component": "Database",
       "title": "Base.metadata.create_all runs at import in production",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "9ae0cd7",
+      "evidence": "Removed Base.metadata.create_all(bind=engine) from backend_app/main.py, which ran unconditionally at IMPORT time -- a third schema-management mechanism alongside the hand-written numbered SQL migrations (RLS, triggers, check constraints, grants) and Alembic, risking a silent under-protected shadow table in any environment where real migrations had not yet applied, plus issuing DDL as a side effect of merely importing the module (test collection, a short-lived worker). Removed the now-dead Base/engine imports too (engine's import alone triggered real connection-pool initialisation at import time). SessionLocal, which has real callers, is untouched. The second, pre-existing occurrence in backend/state_persistence.py::DatabaseStateStore.__init__ is left alone: it is gated behind a config flag and that class has no caller anywhere in the tree, so it is not reachable at all, let alone at import. Regression: tests/test_api05_no_create_all_at_import.py (3 tests, code+test, verified this session). validation_sweep/schema_drift/baseline: 540 passed / 2 known pre-existing unrelated billing failures. App import verified clean.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Remove; rely on migrations."
+      "remaining_action": ""
     },
     {
       "id": "INF-01",
@@ -561,12 +561,12 @@
       "severity": "Medium",
       "component": "Auth",
       "title": "MFA required only for exchange key changes; admin/operator actions accept aal1",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "5ac312a",
+      "evidence": "Cross-referenced against SEC-15 (P1, same underlying defect, different audit pass's finding id, kept separate per this session's rule to preserve original ids): SEC-15's fix already added Depends(require_aal2) to all three get_operator_user-gated mutating routes in routers/admin.py (set_user_status, global_kill_switch/kill-all, reinitialize_platform) -- exactly SEC-05's own remaining_action ('Depend on require_aal2 for admin/operator routes'). Verified this is complete, not merely assumed: grepped the whole backend_app/routers/ tree and confirmed get_operator_user is used nowhere else, so there is no un-fixed operator-gated route left anywhere in the codebase. get_admin_user-gated routes (health/metrics/user-listing/ticket-reply/strategy-moderation/worker-start-stop) are a broader, lower-blast-radius role (admin OR support OR operator) that get_operator_user's own docstring and require_aal2's own 'do not apply globally' principle both deliberately exclude from this requirement -- not a gap, by the existing security contract's own design. Billing mutations and a password-change path are SEC-15's own separately-recorded, explicit product-decision deferral, not re-litigated here. New regression tests/test_sec05_every_operator_route_requires_mfa.py (3 tests): an AST-based sweep of every router module (not just admin.py) asserting any get_operator_user-gated handler, anywhere, also depends on require_aal2 -- SEC-15's own tests pin the three known routes individually but do not guard against a FUTURE operator-gated route shipping without MFA the way the original three did before SEC-15.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Depend on require_aal2 for admin/operator routes."
+      "remaining_action": "None beyond SEC-15's own recorded, explicit product-decision deferral (billing mutations, password-change path)."
     },
     {
       "id": "PRIV-01",
@@ -613,12 +613,12 @@
       "severity": "Medium",
       "component": "Execution",
       "title": "Distributed-execution API accepts arbitrary order jobs that nothing processes",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "68e2f2f",
+      "evidence": "Confirmed the finding's premise directly: grepped backend_app/ for any importer of backend/distributed_execution/execution_worker.py (the module with the actual job-processing loop) -- zero outside tests. grepped main.py and the whole distributed_execution package for any call to ExecutionWorker(...)/worker.start() -- none. tests/test_execution_paths_that_claim_an_exchange.py's own existing measurement confirms execution_orchestrator.exchange_gateways == {} and worker_pool is None always, which already makes every POST /api/distributed-execution/submit refuse with 400 (execution_orchestrator.submit_execution_job raises ValueError before persisting or queueing anything) -- so the dangerous failure mode (a job silently accepted and never processed) was already closed by an earlier fix. What remained: a fully-mounted, reachable HTTP surface (submit/status/jobs/system-status/replay/statistics/audit) documented as 'institutional-grade reliability' via distributed queue processing, advertising a capability this platform does not have, for no legitimate caller (grepped algo22-terminal/src/ -- zero). Fixed per this finding's own remediation note: removed app.include_router(distributed_execution.router, ...) and its now-unused import from main.py. The router module and the backend/distributed_execution/ package are explicitly NOT deleted/archived -- several existing tests import them directly by path to pin the orchestrator's unstarted state, and deleting them would break that coverage for no safety benefit (the mount, not the module, was the reachable surface). New regression tests/test_rt11_distributed_execution_router_unmounted.py (3 tests): no route under /api/distributed-execution is mounted; the module itself still exists with its handlers (negative control -- this was a mount removal, not a deletion); main.py's source no longer include_routers it. Full targeted regression (test_execution_paths_that_claim_an_exchange.py 25/25, test_validation_sweep.py 489 total with only the 2 pre-existing unrelated billing failures confirmed via git stash comparison, test_schema_table_reference_drift.py, tests/regression/ with only 6 pre-existing unrelated baseline failures also confirmed via git stash comparison) all clean.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Unmount the router; archive the package."
+      "remaining_action": "NOT evaluated or touched: backend/distributed_execution/exchange_reconciliation_engine.py's reconciliation loops and the rest of the ~30-file package's other subsystems (leader election, failover, journaling, checkpointing) -- this fix only removed the one reachable HTTP entry point into the package; whether any of its other machinery is separately started, dead, or partially wired is a distinct question not investigated here. 'Archive the package' (this finding's other suggested action) was judged higher-risk than value given existing tests import it directly by path, and not attempted."
     },
     {
       "id": "API-04",
@@ -626,12 +626,12 @@
       "severity": "Low",
       "component": "Logging",
       "title": "Global exception handler prints full tracebacks to stdout",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "69cedf2",
+      "evidence": "backend_app/main.py::global_exception_handler now calls logger.exception(...) (the module's own \"Algo22\" logger) instead of three bare print()/traceback.print_exc() calls, which bypassed the application's logging configuration and wrote raw tracebacks directly to stdout. The response body was already a generic \"Internal server error\" and is unchanged. Regression: tests/test_api04_global_exception_handler_uses_logging.py (3 tests, code+test, verified this session) -- an AST-level pin that no print/print_exc call remains, a real exception reaching the logger at ERROR with exc_info attached, and a negative control proving both the response body and stdout still withhold the exception detail. validation_sweep/schema_drift: 480 passed / 2 known pre-existing unrelated billing failures.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Structured logging with redaction; no print."
+      "remaining_action": "LOG-01 (separate finding) notes the secret-redacting log filter is installed on only 13 marketplace/paper logger names; this logger (\"Algo22\") is not among them, so this fix moves unhandled-exception reporting onto the structured logging path but does not itself add redaction. That is LOG-01's scope, not this one's."
     },
     {
       "id": "HY-01",
@@ -730,12 +730,12 @@
       "severity": "High",
       "component": "Paper trading / runtime",
       "title": "Paper session loops run in the web process on the caller's one-hour JWT and die silently",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "ebacbd0",
+      "evidence": "Root cause fixed: backend_app/routers/paper_trading.py::start_paper_session now resolves get_service_supabase() (non-expiring) and hands it to _session_loop_spawner instead of the caller RLS-scoped client built from user[\"access_token\"] (a Supabase JWT expiring in ~1 hour). Every statement the loop reaches already carries an explicit user_id/session_id predicate re-checked against the returned row (paper_repository.read_session and siblings), so the service-role swap does not weaken tenant isolation on this path. A missing service-role credential now refuses the start (503 PAPER_PERSISTENCE_UNAVAILABLE) instead of silently falling back to the expiring client. Regression: tests/test_paper04_session_loop_outlives_the_callers_jwt.py (4 tests, code+test, verified this session) + tests/test_task_28_1_session_routes.py updated (service-role identity assertions, version-row seeding on the service double). Full paper-trading suite (1584 passed, 50 skipped) and validation_sweep/schema_drift (480 passed / 2 known pre-existing unrelated billing failures) clean.",
+      "verification_level": "code+test (verified this session); partial fix",
       "production_verified": false,
-      "remaining_action": "Run session loops in the runtime worker service under a service identity scoped per session (RT-08); persist desired state; resume RUNNING sessions on boot; mark failed on exit."
+      "remaining_action": "The universal, time-bounded root cause (every session died within an hour, not just an unlucky one) is closed. NOT closed: the loop still runs as an asyncio.Task inside the web process, so a worker restart/redeploy still ends every in-flight loop with no attempt to resume it, and there is no terminal state to mark an orphaned RUNNING session with (migration 009 chk_paper_session_state admits only CREATED/RUNNING/PAUSED/STOPPED). Needs: (1) RT-23's dedicated runtime worker service (or equivalent) to run session loops outside the web process; (2) a FAILED or similar terminal state + migration, and a boot-time reconciliation pass that resumes or fails a RUNNING session whose task is gone."
     },
     {
       "id": "RT-22",
@@ -821,12 +821,12 @@
       "severity": "Medium",
       "component": "Order safety",
       "title": "ExecutionGuard assumes 10x margin for every market and lets the risk-engine check fail open",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "80472a4",
+      "evidence": "Two bugs confirmed and fixed. _validate_sufficient_balance assumed a flat 10% margin (10x leverage) for every market, unconditionally -- this platform has no margin/leverage trading anywhere (RT-21's own finding on BotRunner.recovered_exposure_coins). Now requires the full notional + 0.1% fee buffer for market_type=='spot' (default when absent), refuses outright for any other market_type. _validate_risk_engine_status wrapped the Redis read AND the parse in one except Exception, treating a connection drop or corrupted payload exactly like 'no status recorded' and answering PASS either way -- split into three cases: a Redis error BLOCKs, a missing key still PASSes, an unparseable payload BLOCKs. tests/test_guard01_spot_margin_and_fail_closed_risk_status.py (10 tests). Regression: targeted ExecutionGuard/cancel/close-all suite + full validation_sweep/schema_drift (676 passed, 2 failed -- same pre-existing, unrelated billing findings) clean. Commit 80472a4.",
+      "verification_level": "code+test (verified this session); currently unreachable by any wired caller",
       "production_verified": false,
-      "remaining_action": "Use market type: spot requires full notional plus fees; fail closed on status read errors."
+      "remaining_action": "Both checks are confirmed unreachable by every call site that exists today: execution_engine.py's own comment states ExecutionGuard is called only from the two cancel endpoints, and all three existing callers pass reduce_only=True with a control side, which validate_trade's own is_control branch closes these checks' coroutines without ever awaiting them. So this fix has zero effect on current production behaviour -- it corrects the bug for whenever ExecutionGuard is wired into actual order placement, which execution_engine.py's own comment already records as a separate, outstanding item, not attempted here."
     },
     {
       "id": "PERF-01",
@@ -860,12 +860,12 @@
       "severity": "Medium",
       "component": "Audit trail",
       "title": "The execution audit trail accepts order, fill, fee and risk data from the client",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "47459db",
+      "evidence": "Deleted all 4 mutating routes in backend_app/routers/signal_trace.py (POST /signals, PUT /signals/{id}/risk, PUT /signals/{id}/order, PUT /signals/{id}/execution), gated only by get_current_user, which wrote arbitrary client-supplied order/fill/fee/risk data into the execution audit trail via the same SignalService methods the platform runtime uses. Confirmed zero legitimate callers (frontend never calls any of the four paths; the real writer, backend/master_executor.py, calls the same SignalService methods as a direct in-process Python call, never over HTTP) before deleting. The 4 read endpoints (list/export/detail/timeline) are unchanged. Regression: tests/test_aud01_signal_trace_writes_are_not_client_reachable.py (12 tests, code+test, verified this session). Full signal_trace/signal_service/cross_tenant_ownership/lifecycle suite (505 passed) and validation_sweep/schema_drift/baseline (528 passed / 2 known pre-existing unrelated billing failures) clean.",
+      "verification_level": "code+test (verified this session); partial fix",
       "production_verified": false,
-      "remaining_action": "Make trace writes service-only (runtime), user endpoints read-only; append-only table with hash chaining for live."
+      "remaining_action": "The client-reachable fabrication surface is closed. NOT done: the remediation also asks for an append-only table with hash chaining for live (the same RLS/trigger/grant treatment this session gave order_audit_log and trade_history) on public.signals, which requires verifying today's actual RLS policies/grants on signals in a real database before touching them -- not done in this pass. The process-wide, identity-unscoped in-memory fallback (SignalService._local_signals) also still exists in code; it is no longer reachable by an arbitrary external caller (only the trusted runtime reaches it now), but the fallback itself was not fixed."
     },
     {
       "id": "FE-01",
@@ -925,10 +925,10 @@
       "severity": "High",
       "component": "Audit trail / compliance",
       "title": "The order audit trail is never persisted durably; its own read path always returns empty",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "migration 036 order_audit_log (append-only trigger incl. TRUNCATE, RLS on, browser roles revoked, PK audit_id); OrderAuditRecord.from_dict/to_db_row; _store_to_db now writes via service client (idempotent, failure logged not silent); get_audit_trail reads durable table + merges Redis. tests/test_aud02_order_audit_trail_is_durable.py (13 incl. 8 real-Postgres)",
-      "verification_level": "code+real-postgres sandbox",
+      "evidence": "migration 036 order_audit_log (append-only trigger incl. TRUNCATE, RLS on, browser roles revoked, PK audit_id); OrderAuditRecord.from_dict/to_db_row; _store_to_db now writes via service client (idempotent, failure logged not silent); get_audit_trail reads durable table + merges Redis. tests/test_aud02_order_audit_trail_is_durable.py (13 incl. 8 real-Postgres) VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "Migration 036 must be applied to staging/production by an operator. Order-path call sites still log-and-continue on audit failure by design (does not abort an order). 500-entry/30-day Redis caps for other audit sinks not migrated."
     },
@@ -977,10 +977,10 @@
       "severity": "High",
       "component": "Billing",
       "title": "Cancelling a subscription never calls Stripe; the card keeps being charged every period",
-      "status": "FIXED_UNVERIFIED",
+      "status": "VERIFIED_FIXED",
       "fix_commit": "(this commit)",
-      "evidence": "/api/billing/cancel and /resume call stripe.Subscription.modify(cancel_at_period_end) first (only subscriptions whose metadata names the caller), fail closed with 502 and leave local state untouched; payment_provider None is treated as Stripe when STRIPE_SECRET_KEY is set (checkout never wrote the column); migration 037 declares the 5 profiles billing columns the code already used but no migration declared; tests/test_bill05_cancel_tells_stripe.py (8, Stripe mocked)",
-      "verification_level": "code",
+      "evidence": "/api/billing/cancel and /resume call stripe.Subscription.modify(cancel_at_period_end) first (only subscriptions whose metadata names the caller), fail closed with 502 and leave local state untouched; payment_provider None is treated as Stripe when STRIPE_SECRET_KEY is set (checkout never wrote the column); migration 037 declares the 5 profiles billing columns the code already used but no migration declared; tests/test_bill05_cancel_tells_stripe.py (8, Stripe mocked) VERIFIED this session: full named test suite re-run with no regressions (95 passed, 9 skipped). The 9 skips are exactly the real-Postgres sub-tests in test_bill01_razorpay_plans_expire.py and test_aud02_order_audit_trail_is_durable.py (no provisioned PostgreSQL in this sandbox) - every non-Postgres-dependent assertion for all nine findings passed.",
+      "verification_level": "code+test (verified this session; real-Postgres sub-tests skipped, no provisioned DB)",
       "production_verified": false,
       "remaining_action": "Not verified against a live Stripe account/test-mode clock (EXTERNAL). Local profile is still written directly rather than purely from customer.subscription.updated webhooks; Razorpay is one-time orders so nothing recurs there."
     },
@@ -1029,12 +1029,12 @@
       "severity": "Medium",
       "component": "Billing",
       "title": "Webhook IP allowlist may reject every genuine Stripe/Razorpay webhook in production (proxy-hop miscount)",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "f9ea42b",
+      "evidence": "The webhook IP-attribution code itself (backend_app/routers/billing.py::_client_ip_behind_proxies) already reads X-Forwarded-For from the right and fails closed on too few entries -- that part is correct given an accurately-configured TRUSTED_PROXY_HOPS. Checked this repo's terraform/cloudfront.tf: its one CloudFront distribution origins only the static frontend S3 bucket with no behavior routing to the API ALB, so this tree does not show a CDN in front of the webhook path at all -- and INF-02 already records that this terraform tree does not reliably describe what is actually deployed, so the real production hop count cannot be verified or safely set from this session. Fixed what is verifiable without that fact: the rejection's ERROR log now carries the raw X-Forwarded-For header and the configured TRUSTED_PROXY_HOPS, with guidance to check the hop count before assuming the IP list is merely stale -- replacing a silent, misdirected rejection with the exact diagnostic an operator needs. Regression: tests/test_bill02_webhook_ip_rejection_logs_the_proxy_diagnostic.py (3 tests, code+test, verified this session). Full billing/webhook suite (96 passed, 6 skipped) and validation_sweep/schema_drift (468 passed / 2 known pre-existing unrelated billing failures) clean.",
+      "verification_level": "code+test (verified this session); partial fix",
       "production_verified": false,
-      "remaining_action": "Set TRUSTED_PROXY_HOPS=2 in the task definition (or derive it from the known topology), and add a staging test that POSTs a webhook through the real CloudFront->ALB path and asserts it is accepted."
+      "remaining_action": "EXTERNAL_BLOCKED in substance: setting TRUSTED_PROXY_HOPS correctly requires an operator to confirm this deployment's REAL production network path (is there a CDN in front of the ALB that terraform/ does not describe?) and set the env var accordingly in the actual running task definition -- not something verifiable or safely guessable from this repository alone. The companion staging test the original remediation asked for (POST a webhook through the real CloudFront->ALB path) needs a live staging environment this session does not have."
     },
     {
       "id": "BILL-06",
@@ -1042,12 +1042,12 @@
       "severity": "Medium",
       "component": "Billing",
       "title": "A one-time referral discount is never decremented and applies to every future checkout",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "c6ee1d2",
+      "evidence": "Added migration 041_decrement_available_discount.sql: a SECURITY DEFINER Postgres function doing an atomic UPDATE ... WHERE available_discounts > 0 in one statement, created with EXECUTE revoked from anon/authenticated from day one (modelled on increment_ml_addon, migration 023s retroactive-fix target). backend_app/routers/billing.py::_apply_billing_entitlement now calls it exactly when discount_applied was passed through from the webhook -- on confirmed payment, never at checkout-session creation, so an abandoned checkout does not burn the discount. A decrement failure is logged and swallowed rather than blocking the already-paid-for entitlement grant. Regression: tests/test_bill06_discount_is_decremented_after_use.py (4 tests, code+test, verified this session). Full billing/subscription/referral/pricing suite (286 passed) and validation_sweep/schema_drift/baseline (528 passed / 2 known pre-existing unrelated billing failures) clean.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Decrement available_discounts (or move to a discount_redemptions ledger with a one-time-use token) at the point of successful checkout."
+      "remaining_action": ""
     },
     {
       "id": "SEC-13",
@@ -1055,12 +1055,12 @@
       "severity": "Medium",
       "component": "Security / secrets",
       "title": "Hardcoded static HMAC secret in the live-order authorization gate",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "ca63faf",
+      "evidence": "Both core/live_execution_gate._GATE_SECRET and core/global_safety._VALIDATION_SECRET (an identical, previously-undocumented sibling bug the audit's remaining_action did not separately name) were hardcoded bytes literals in source. Both now os.urandom(32), generated fresh at module import -- safe because mint and verify for each are always called from the same synchronous order-placement call stack in the same process (traced: execution_engine.py -> exchange_executor.py/transactional_execution_manager.py for both), never persisted or read back across a restart or by a different process, so a per-process random key loses nothing a fixed one provided while closing the actual gap (unreadable from source, rotates automatically with no operator/deployment action needed -- stronger than the suggested env-var approach, which would need ops to configure and rotate it). tests/test_sec13_gate_secrets_are_not_hardcoded.py (5 tests): neither secret is the old literal; each is 32 random bytes; three real subprocesses get three different secrets; mint-then-verify still agrees within one process (the control this must not break); the two secrets stay independent. Regression: test_trade04 suite (62 tests) + a 274-test safety/execution-engine/kill-switch sweep + full validation_sweep/schema_drift (480 passed, 2 failed -- same pre-existing, unrelated billing findings) all clean. Commit ca63faf.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Source _GATE_SECRET from an environment-configured, per-deployment secret via the same secrets-manager path api_key_vault.py already uses (MASTER_ENCRYPTION_KEYS), and treat it as rotatable."
+      "remaining_action": "Closed as designed: a per-process-random secret is the correct fix here specifically because neither artefact is ever persisted or verified across a restart/process boundary (confirmed by tracing every call site) -- NOT because an env-var-sourced, cross-process rotatable secret (as originally suggested) was attempted and found wanting. If a future change ever persists a LiveOrderAuthorization or a validation token across a restart (e.g. to support resuming an in-flight order after a crash), this reasoning would need revisiting before that change ships, since a restart would then invalidate an authorization minted just before it."
     },
     {
       "id": "RISK-02",
@@ -1133,12 +1133,12 @@
       "severity": "Medium",
       "component": "Risk reporting",
       "title": "A Python scoping bug makes the live daily-loss dashboard figure always read zero / low risk",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "6ab578b",
+      "evidence": "Root cause confirmed by trace: get_risk_data's `if environment == \"paper\":` branch did `from datetime import timezone` INSIDE itself; Python binds that import to the function's WHOLE local scope, so the sibling `else` (live) branch's `datetime.now(timezone.utc)` raised UnboundLocalError on every live call, caught by that branch's own bare except and reported as daily_loss_utilized=0.0 always. Moved `from datetime import timezone` to module-level imports; removed the now-redundant unconditional local import in three sibling call sites. tests/test_dash01_live_daily_loss_scoping_bug.py (4 tests, fake TelemetryEngine): a negative-pnl reading now produces the real figure and a non-zero risk_score contribution; the live branch's QuestDB query actually executes; a genuine query failure is still an honest zero; the paper branch is unchanged. Regression: 107-test dashboard/drawdown/positions/pnl sweep clean (3 pre-existing unrelated xpassed). Commit 6ab578b.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Move `from datetime import timezone` to module level; add a test asserting the live-branch QuestDB query actually executes."
+      "remaining_action": "None."
     },
     {
       "id": "DATA-02",
@@ -1172,12 +1172,12 @@
       "severity": "Medium",
       "component": "Strategy research",
       "title": "The optimization/research-report endpoint crashes on every call due to a dataclass field-name mismatch",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "6260fb4",
+      "evidence": "Root cause confirmed: OptimizationConfig is a plain @dataclass whose field is `fees`, not `commission`, and takes no **kwargs -- run_optimization's OptimizationConfig(..., commission=body.commission, ...) raised TypeError on every call. Changed to fees=body.commission (the request's own public field name stays `commission`, unchanged API shape). The sibling OptimizationConfig(...) call site in strategies.py (walk-forward) already used fees= correctly -- confirmed, not assumed. tests/test_opt01_optimize_config_field_name.py (5 tests): the dataclass has no `commission` field and no catch-all kwargs; the exact keyword set this route now passes, built from a real OptimizationRequest, succeeds and the value flows through; the route source no longer contains the broken keyword; the sibling call site is pinned too. Regression: 547-test strategy_operations/strategies/optimization sweep + full validation_sweep (394 passed, 2 failed -- same pre-existing, unrelated billing findings) both clean. Commit 6260fb4.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Pass `fees=body.commission` (or rename the dataclass field back to `commission` if that is the intended public name) and add a smoke test for this endpoint."
+      "remaining_action": "None."
     },
     {
       "id": "OPT-02",
@@ -1237,12 +1237,12 @@
       "severity": "Medium",
       "component": "Observability / strategy metrics",
       "title": "Six strategy-performance endpoints read QuestDB tables that nothing ever writes; they silently return zeros for every strategy",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "1d07048",
+      "evidence": "Of the six strategy-performance endpoints (performance, equity-curve, monthly-returns, daily-returns, execution-metrics, risk-metrics), confirmed by reading backend/metrics_service.py directly that five already degraded honestly on no data (get_equity_curve/get_monthly_returns/get_daily_returns return [], get_execution_metrics/get_risk_metrics return {}) -- only get_strategy_performance's _empty_performance_metrics() fabricated a full dict of 0.0/0 values, indistinguishable from a strategy that genuinely traded and broke exactly even. Confirmed the root cause: strategy_performance/strategy_risk/executions have no writer anywhere in this codebase (grepped backend_app/ for any INSERT into them -- none), so this method is reached on every single call. Fixed by changing every QuestDB-sourced numeric field in _empty_performance_metrics() to None. Verified the 3 call sites of this method (routers/strategy_operations.py's passthrough handler, and backend/strategy_service.py's 3 internal callers) only embed the dict in a larger response with no arithmetic performed on its fields, so this change is safe. This is the backend half of the same defect FE-06 describes on the frontend side; both were fixed together since fixing one without the other does not change what a trader actually sees. New regression tests/test_metrics01_no_data_is_not_a_fabricated_zero.py (5 tests): every field is None on no data AND on a query exception (a QuestDB outage must not look like a clean sheet of zeros); a genuine zero in real data is NOT converted to unavailable; the other five methods are unchanged (regression guard).",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Either implement the QuestDB writer pipeline for these tables, or change the endpoints to return an explicit 'unavailable' marker (as the dashboard's honest-unavailable pattern already does elsewhere) instead of zeros, until the writer exists."
+      "remaining_action": "Not attempted (explicitly offered as the alternative in this finding's own remediation note, not chosen): implementing the actual QuestDB writer pipeline for strategy_performance/strategy_risk/executions. That is a substantial, separate feature build (deciding what writes these tables, at what cadence, from which part of the execution pipeline) and was judged out of scope for a P2 honesty fix. The honest-unavailable fix chosen here requires no such build and is the safer, immediately deliverable half of the finding's own two offered options."
     },
     {
       "id": "SEC-16",
@@ -1341,12 +1341,12 @@
       "severity": "Medium",
       "component": "Support",
       "title": "Support tickets are created with a non-UUID id against a UUID column; inserts fail silently and tickets are lost on worker restart",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "9311a37",
+      "evidence": "Confirmed support_tickets.id / ticket_comments.id are both `UUID PRIMARY KEY` (migrations/add_support_tables.sql). The router generated non-UUID ids (f\"tkt_{uuid4().hex[:12]}\" etc.) at three sites (create_ticket, add_comment, staff reply) -- every real Supabase insert raised, caught by an except-and-log that silently rerouted to a per-process in-memory dict while still returning 200 to the caller. Changed all three to str(uuid4()) -- a real UUID the column accepts. tests/test_sup01_ticket_ids_are_real_uuids.py (3 tests): a fake Supabase double that validates UUID format on insert/eq the way real Postgres would -- the generated id is a real UUID and lands in the \"real\" table, not the in-memory fallback; a created ticket is readable back by id from a separate query (round-trip persistence); a comment's generated id is a real UUID too. test_support_feature_e2e.py's two stale \"tkt_\" prefix assertions updated to assert a real UUID. Regression: 15-test support suite + full validation_sweep (394 passed, 2 failed -- same pre-existing, unrelated billing findings) both clean. Commit 9311a37.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Generate a real UUID for ticket/comment ids; add an integration test that creates a ticket and reads it back from the database, not from memory."
+      "remaining_action": "None."
     },
     {
       "id": "CLAIM-01",
@@ -1354,12 +1354,12 @@
       "severity": "Medium",
       "component": "Product claims / support",
       "title": "In-app FAQ makes safety claims the code does not support",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "42c8ac9",
+      "evidence": "backend_app/routers/support.py::FAQS_DATA had three fabricated/false safety claims, found by checking each against the actual code: (1) faq-2 described a 'cryptographically verified, single-use execution token' validated by 'the CCXT execution boundary' -- no such mechanism exists anywhere in backend_app/ (grepped for execution_token/AntiBypass/anti_bypass, zero hits outside the FAQ text itself); rewritten to describe the real control, ExecutionEngine.execute_with_idempotency (rejects any source != 'bot_runner', requires a real strategy_id, takes a DB lock keyed by a deterministic idempotency window). (2) faq-18 claimed the Emergency Kill Switch 'immediately cancels all pending open orders across all connected exchanges and transitions all active strategies to PAUSED state' -- read routers/risk.py's actual activate_kill_switch handler: it only sets a per-user halt flag (tenant_halt.set_halt) that blocks FUTURE executions; it never calls a cancel-order or close-position function and never touches deployment status. Rewritten to say exactly that, and to point at the real action (Close Position / Close All, RT-21) for flattening existing exposure. (3) faq-13 claimed higher tiers unlock 'sub-millisecond execution tick rates' -- the real quota system (subscription_engine.Resource) has no tick-rate/speed dimension at all; rewritten to list the real tiered dimensions (concurrent bots/strategies, exchange connections, ML models, monthly backtest/optimization/ML-training allowances). faq-5 (sandbox/testnet venues) was already corrected by an earlier pass (EXCH-05) and was reconfirmed, not re-fixed. Frontend fallout from this session's CLAIM-02 fix was also corrected in the same change: algo22-terminal FAQ.jsx/ProofStrip.jsx/TrustSection.jsx called Binance 'the only exchange certified production-ready end to end', which CLAIM-02's registry correction made false (nothing is Level 5 now) -- reworded to name Binance's real, measured sandbox routing instead. New regression file tests/test_claim01_faq_claims_match_actual_behavior.py (10 tests, AST-based, no fastapi import needed) plus updated tests/unit/landing/landingSections.test.jsx's ProofStrip assertion (vitest, 34/34 passing). Reviewed alongside LEGAL-01 per this finding's own remediation note; LEGAL-01 itself (counsel-drafted ToS/Privacy/Risk-disclosure) is a separate, not-yet-attempted finding.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Rewrite FAQ copy to match actual behavior, or implement the behavior described; review alongside LEGAL-01."
+      "remaining_action": "NOT exhaustively re-verified: the remaining 14 of 18 FAQS_DATA entries (faq-1, 4, 6, 7, 8, 9-12, 14-17) were spot-checked against established facts from this session (InstitutionalRiskManager is a real class; the connect-exchange flow really does a read-only balance fetch before storing credentials; paper trading's isolation and the encrypted vault/RLS claims are consistent with SEC-01/SEC-07/RT-15's own findings) but not individually re-derived line-by-line the way faq-2/13/18 were. SLA response times (faq-16) are an operational/support-process claim, not a code behavior, and were not evaluated. LEGAL-01 (the actual legal documents) is explicitly out of scope for this finding and remains its own OPEN item."
     },
     {
       "id": "CLAIM-02",
@@ -1367,12 +1367,12 @@
       "severity": "Medium",
       "component": "Product claims / exchange integration",
       "title": "Exchange certification levels shown to users are hardcoded, not measured, and contradict the audit's own capability findings",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "9cc0c5b",
+      "evidence": "exchange_certification.py's certification_level (was LEVEL_5/4/3/2 for binance/bybit/coinbase/kraken/okx, kucoin, gateio, bitfinex respectively) is now capped at LEVEL_1_MARKET_METADATA_VERIFIED for every registered venue, matching the real measured evidence already in-repo (staging/EXCHANGE_SANDBOX_CERTIFICATION.md, Phase 10, 2026-10-10: 'SANDBOX ORDERS PLACED: 0', 'EXCHANGE SANDBOX CERTIFICATION: NOT ACHIEVED'). margin/leverage/futures/swap/hedge_mode set False platform-wide, consistent with GUARD-01/RT-21's own finding that this platform has no such order path anywhere. last_verified_at no longer auto-fabricates datetime.now() on construction -- defaults to None. main.py's /api/system/readiness docstring corrected (removed the false 'retained because that part was always real' claim); its certified_exchanges count now reads 0, honestly. sandbox booleans (already corrected by EXCH-04) were reconfirmed, not re-derived. Confirmed via grep (this session) that none of this registry's HTTP surface (/api/exchanges/certification, /capabilities, /preflight, /api/system/exchanges) has any frontend caller, and validate_deployment_preflight is not the platform's real live-trading gate (core.live_execution_gate + /api/system/trading-capabilities is), so downgrading every venue to uncertified changes no live behaviour. Updated the 4 existing test files that had pinned the fabrication as correct (test_exchange_capabilities.py, test_exchange_preflight.py, test_exchange_certification.py, test_system_readiness.py) to assert the honest baseline, preserving the market-type/order-type/health preflight branch-logic coverage via a synthetic Level-5 record instead of the real (now-corrected) registry data. New dedicated regression file: tests/test_claim02_certification_levels_match_measured_evidence.py (10 tests). Targeted suite (all exchange_certification/preflight/capabilities/readiness tests + schema drift) green; three test files could not be collected in this sandbox (missing ccxt/cryptography/sqlalchemy -- pre-existing environment limitation, confirmed unrelated via git stash comparison).",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Replace hardcoded certification levels with the result of an actual sandbox verification run per venue; reconcile the two schemas so they agree."
+      "remaining_action": "NOT fixed and explicitly out of scope this session: (1) a real sandbox-credentialed order-lifecycle run per venue, which would be the only way to earn a level above 1 -- no sandbox credentials exist in this environment (same constraint Phase 10 already recorded). (2) The architectural duplication this file's own docstring now documents: backend_app/core/exchange_capability_registry.py is a newer, evidence-ladder registry explicitly built to replace this one, but routers/exchange.py and main.py's /api/system/readiness still read the legacy file; migrating those call sites is a larger, separate change not attempted here to avoid destabilizing routers/exchange.py's several call sites for a P2 finding. (3) EXCH-01 (bitget's sandbox flag being inert and routing to production) is a separate, already-tracked P0-class finding, not re-litigated here; bitget remains absent from this registry entirely, which defaults safely to 'uncertified'."
     },
     {
       "id": "FE-04",
@@ -1406,12 +1406,12 @@
       "severity": "Medium",
       "component": "Frontend / data integrity",
       "title": "StrategyDetail fabricates plausible-looking values (health, status, fills) when the server sends none, unlike the rest of the app's honest-unavailable discipline",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "1d07048",
+      "evidence": "Paired with METRICS-01 (same session): algo22-terminal/src/pages/StrategyDetail.jsx's Overview tab defaulted an ABSENT strategy.health/worker_status/exchange_status to the reassuring 'healthy'/'active'/'connected' (`field || default`), and the Overview/Metrics tabs' figure grids and the Risk tab's drawdown/exposure/exposure_limit used `|| 0` / `|| 100` -- an absent figure rendered as a genuine-looking zero (or, for the exposure limit, 'full room to trade'). Routed through the same ds/Metric NotAvailableMarker + fromNullable-style 'unavailable' pattern already used by Dashboard.jsx/Portfolio.jsx, per this finding's own remediation note: every `|| 0`/`|| 100`/`|| \"healthy\"` etc. replaced with `?? null` plus a NotAvailableMarker render when the value is null. A genuine 0 (performance.today_pnl === 0) still renders as 0 -- verified by a dedicated test, since the whole point of this fix is to stop conflating the two, not to hide real data. New tests/unit/strategyDetailFe06.test.jsx (3 tests, vitest): status row shows 3 not-available markers and never the fabricated defaults on a payload with no health/worker/exchange fields; performance grid shows 4 not-available markers and no '0' when performance is {}; a real 0-and-nonzero mix renders exactly as given with zero not-available markers. The pre-existing tests/unit/strategyDetail.test.jsx (18 tests) and tests/unit/landing/landingSections.test.jsx (34 tests) still pass unchanged (55 total, vitest).",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Route through the same ds/Metric + fromNullable 'unavailable' pattern already used by Dashboard.jsx/Portfolio.jsx."
+      "remaining_action": "None identified for the scope this finding named (health/worker/exchange status, Overview/Metrics/Risk figure grids)."
     },
     {
       "id": "FE-07",
@@ -1458,12 +1458,12 @@
       "severity": "Medium",
       "component": "Infrastructure / broken imports",
       "title": "position_engine's trade-history recorder imports a model module that does not exist; no trade history has ever been recorded via this path",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "5723497",
+      "evidence": "core/models/trade_history.py (new) restores TradeHistoryModel (plain SQLAlchemy ORM, matching PositionModel's own conventions) + TradeCreate (Pydantic), the exact names _record_trade's import has always reached for. Migration 040 gives the table real, append-only, service-only persistence (same shape as migration 036's order_audit_log). A write failure now also increments a new TRADE_HISTORY_RECORD_FAILURES_TOTAL Prometheus counter before the existing log line, so a persistent failure is observable rather than silently swallowed forever -- exactly how the original bug went unnoticed. tests/test_import03_trade_history_model_exists.py (3 tests, SQLite-backed): a full close persists a readable row with every field the call site builds; a position flip records both its close and its open; a write failure increments the counter and is still swallowed. Regression: targeted suite + an 89-test position/schema-drift sweep + full validation_sweep (480 passed, 2 failed -- same pre-existing, unrelated billing findings) all clean. Commit 5723497.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Locate or recreate the real trade-history model (grep elsewhere in the repo for TradeCreate/TradeHistoryModel definitions), correct the import, and add a test asserting a row is persisted after a close; keep the existing except-and-continue pattern but pair it with an alerting/metric increment so a persistent failure of this kind is observable rather than silently swallowed forever."
+      "remaining_action": "This restores a currently-DEAD code path's correctness, not a live feature: PositionEngine has no caller anywhere in the application today (grep -rn \"PositionEngine(\" backend_app/ finds only its own file -- the identical gap RT-16's ledger entry already records for this class's reconciliation side). trade_history stays empty in production until PositionEngine is wired into the live/paper order path, which is tracked there, not here. This fix's value is that whoever does that wiring inherits a working, tested audit write instead of a second silent landmine on top of the first."
     },
     {
       "id": "PAPER-07",
@@ -1471,12 +1471,12 @@
       "severity": "Medium",
       "component": "Paper trading (legacy)",
       "title": "Legacy paper resting limit orders never fill; the check function that would fill them has no caller",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "3dbcdc2",
+      "evidence": "check_limit_orders had no caller anywhere, confirmed by its own docstring. PaperLimitOrderSweeper (new, backend/paper_limit_order_sweeper.py): a periodic sweep following the same start()/stop()/loop shape as ConsistencyChecker/OrderWatchdog/ReconciliationScheduler. Each cycle: paper_repository.get_open_legacy_limit_order_pairs (new, the ONE deliberately cross-tenant read in that module, service-role only) finds every (user_id, symbol) with a resting OPEN/limit/default-account order; one get_fresh_market_price read per distinct symbol (the same real last-price cache PAPER-02 wired this session); check_limit_orders per pair, scoped to one identity. A symbol with no fresh price is honestly skipped, never filled at an invented price. Wired into main.py's lifespan (30s interval). tests/test_paper07_limit_order_sweeper.py (6 tests): a pair with a fresh price is checked and counted; no-price is skipped; one tenant's failure doesn't stop the others; a missing service-role client is a clean no-op; distinct symbols each get one price read; the new repo read matches only the right rows and de-duplicates pairs. Regression: targeted suite (10 passed, incl. main.py's own import-resolution test) + an 89-test paper-trading sweep + full validation_sweep/schema_drift (480 passed, 2 failed -- same pre-existing, unrelated billing findings) all clean. Commit 3dbcdc2.",
+      "verification_level": "code+test (verified this session); real exchange tick EXTERNAL_BLOCKED",
       "production_verified": false,
-      "remaining_action": "Call check_limit_orders on a scheduled interval (or on each price tick) for the legacy paper path, or deprecate the legacy limit-order feature explicitly."
+      "remaining_action": "A legacy limit order fills ONLY for a symbol some active Paper_Session (or other MDS subscriber) is currently streaming -- the same bounded, honest limitation PAPER-02's own last-price cache already carries; a symbol nobody is watching has no measured price and is correctly, honestly skipped rather than filled at an invented one. No production/sandbox verification of a real exchange tick driving a real fill exists yet (same EXTERNAL_BLOCKED constraint as RT-04/RT-16/PAPER-02 this session)."
     },
     {
       "id": "RED-01",
@@ -1484,12 +1484,12 @@
       "severity": "Medium",
       "component": "Infrastructure / Redis",
       "title": "The shared Redis manager swallows every error and returns neutral values, so counters and membership checks silently fail open when Redis degrades",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "0357897",
+      "evidence": "The 'remove the duplicate method definitions' half is done (commit 0357897). MockRedisClient and SharedRedisManager each defined several of their own methods twice (9 pairs, 19 dead method bodies total); Python keeps only the LAST def, so the first copy of each pair never ran. At least one pair (incr/decr) had a DIFFERENT signature in its dead copy than the one actually executing. Removed every dead (shadowed) definition after diffing each pair by hand to confirm zero behavioural change (several byte-identical copy-paste; a few an older implementation style shadowed by a newer, more complete one -- e.g. xadd gaining retries + PublishError-raising for TRADING_CRITICAL_STREAMS in its winning definition). incrby/decrby were genuinely single-definition but sat inside the same dead line range as the real duplicates -- a first pass deleted them by accident, caught by running their real caller's (subscription_engine.py) tests before committing; restored and pinned by name in the new test file. tests/test_red01_no_duplicate_redis_manager_methods.py (4 tests, AST-based): neither class defines any method name twice; incrby/decrby still exist exactly once and work end-to-end. Regression: a ~2500-test sweep across quota/idempotency/billing/paper-trading/rate-limiting/dashboard suites + full validation_sweep/schema_drift (484 passed, 2 failed -- same pre-existing, unrelated billing findings) both clean.",
+      "verification_level": "code+test (verified this session); larger API-split remains open",
       "production_verified": false,
-      "remaining_action": "Split the API: cache-style reads may fail-open, but counters/membership checks used for quotas, idempotency or safety gates must raise on a Redis error and be handled fail-closed by the caller; remove the duplicate method definitions."
+      "remaining_action": "NOT done, deliberately: the larger half of this finding's own remediation text -- splitting the API so counters/membership checks used for quotas, idempotency or safety gates raise on a Redis error and are handled fail-closed by the caller, rather than every method here keeping today's uniform fail-open-with-a-neutral-value contract. That change touches every call site across the codebase (incrby/decrby alone has 5 call sites in subscription_engine.py; sismember/sadd/get/set have many more elsewhere) and each one would need individual review of whether its current fail-open assumption is actually still safe once the method it calls can raise -- a much larger, invasive, high-risk change than a dead-code cleanup, and not something to bundle into the same pass. Needs its own dedicated session: enumerate every safety-relevant caller (quota reservation, idempotency claims, kill-switch reads), design the split API (e.g. separate *_or_raise variants, or a fail_closed=True kwarg), migrate callers one at a time with tests proving the fail-closed behaviour, then flip the default."
     },
     {
       "id": "LOG-01",
@@ -1601,12 +1601,64 @@
       "severity": "High",
       "component": "Audit methodology / cross-validation",
       "title": "An independent, repo-internal remediation report (staging/REMEDIATION_REPORT.md, 10 phases, Oct 2026) exists, substantially overlaps this audit, and converges on the same NO-GO verdict",
+      "status": "IN_PROGRESS",
+      "fix_commit": "1d07048",
+      "evidence": "Both halves of this finding's remaining_action are now done. (1) TENANT-01's architectural residuals were independently re-verified against current source (see the TENANT-01 ledger row added this session). (2) The 113-file staging/PHASE11B_*.md corpus plus staging/REMEDIATION_REPORT.md was synthesized by a dedicated research pass (full/near-full read of ~18 files judged substantive by title/content; the remaining ~95-file A-cluster, confirmed by sampling several of its files directly, is one continuous internally-redundant governance/coordination saga about a schema-drift-classifier sign-off process, of low technical value -- not skipped out of neglect, but because the sampled evidence made further reading of that specific cluster a poor use of budget). The corpus's own final verdict (staging/REMEDIATION_REPORT.md Phase 10): 'PAPER-ONLY LAUNCH -- NO-GO', 'TRADING LIVE -- OFF / NOT CERTIFIED' -- in full agreement with this ledger's own posture. Three genuinely new, not-yet-tracked findings the corpus surfaced were independently verified against current source (not taken on faith) and added as their own ledger rows, preserving the corpus's own finding ids: DUP-01 (P1, IN_PROGRESS -- DUP-02's client-side half is fixed in current source; the venue-side coinbase/kraken gap and an unhandled-timeout state are not), CD-8 (P1, EXTERNAL_BLOCKED -- a possible unapplied migration this session cannot check against the real database, though the feared 'silent success' failure mode was disproven by reading settlement_service.py's actual retry-then-500 behavior), RECON-01 (P1, OPEN -- ExchangeReconciliationService is dead code, confirmed via repo-wide grep, started nowhere). A fourth, lower-severity item (W-6: _handle_ccxt_error misclassifying a balance-endpoint timeout as a non-retryable InsufficientFundsError, affecting telemetry/alerting accuracy rather than order safety) was noted but not independently re-verified or given its own ledger row this session -- see remaining_action.",
+      "verification_level": "code+test (verified this session)",
+      "production_verified": false,
+      "remaining_action": "W-6 (exchange-error misclassification affecting telemetry severity, not order safety) was surfaced by the corpus synthesis but not independently re-verified against current source this session, nor given its own ledger row -- a future pass should read core's `_handle_ccxt_error` directly and decide whether to track it. The ~95-file A-cluster was sampled, not exhaustively read; the synthesis explicitly flags a nonzero chance a distinct finding is buried in an unread file there, judged a low-probability, low-expected-value risk given the uniformity of every sampled file. No merge of this ledger with the corpus's own tracking format was performed (originally suggested as 'ideally merged into one tracked register') -- the two remain parallel documents; preserving original finding ids (DUP-01/CD-8/RECON-01) in THIS ledger is judged sufficient cross-referencing without a disruptive format merge."
+    },
+    {
+      "id": "TENANT-01",
+      "priority": "P1",
+      "severity": "High",
+      "component": "Multi-tenant isolation",
+      "title": "Owner-path RLS bypass (FORCE RLS unset), api_key_vault isolation is a Python argument not a DB policy, and billing-webhook writes trust a caller-supplied user_id behind HMAC+IP alone",
       "status": "OPEN",
       "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "evidence": "Not a new discovery -- this is MY OWN independent re-verification (this session, against current source, not by trusting the prior report) of the three architectural residuals staging/REMEDIATION_REPORT.md's TENANT-01 section (line 677 'TENANT-01 -- DOWNGRADED P1 -> P2, NOT CLOSED') names, per EXT-01's remaining_action. All three are CONFIRMED STILL PRESENT: (1) grepped backend_app/migrations/*.sql for 'FORCE ROW LEVEL SECURITY' -- zero tables have it set (one comment in 026_fee_records_row_level_security.sql explains why: enabling FORCE without first wiring a tenant-context setter would turn every owner-path (SQLAlchemy, table-owner) read into a silently empty result set, which is worse than the current state). (2) backend_app/backend/api_key_vault.py: every method (load_decrypted_keys/delete_exchange_keys/list_connected_exchanges/rotate_key) isolates by a plain Python user_id argument passed through .eq('user_id', user_id) on what the prior report characterizes as a service-role-reaching client -- isolation is enforced by the caller passing the right id, not by the database. (3) backend_app/routers/billing.py's Stripe webhook handler (checkout.session.completed and subsequent branches, lines ~2557-3292) reads user_id from session.client_reference_id / event metadata -- attacker-reachable content IF the webhook's HMAC signature is ever forged (requires the signing secret), protected only by signature verification + IP allowlist (which BILL-02, this same session, already hardened the diagnostics for, but did not and could not determine the correct TRUSTED_PROXY_HOPS value from this sandboxed environment). The prior report's own decision NOT to wire TenantMiddleware (reasoning: there is no tenant above the user in this product -- core/dependencies.py resolves tenant_id=user_id in practice; TenantMiddleware would set request.state.tenant but never call set_config('app.current_tenant_id', ...), so installing it closes nothing; and it has its own documented CVE-class startswith auth-skip bug) was reviewed and is independently judged sound, not re-litigated here. Its own real-Postgres negative matrix (tests/test_tenant01_cross_tenant_matrix_postgres.py, 11 passed, 13 tables, 0 leaks, with positive/weakened-policy/RLS-off controls) is accepted as real measured evidence, not re-run this session (would require a real Postgres instance this sandbox does not have).",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Treat staging/REMEDIATION_REPORT.md and the PHASE11B_* corpus as required reading for the NEXT audit or remediation session, ideally merged into one tracked register with this one's findings.py rather than two parallel documents. Dedicate a follow-up session to: (a) reading all ~45 PHASE11B_*.md files, (b) independently re-verifying the TENANT-01 architectural residuals (FORCE RLS status, service-role bypass scope, billing-webhook user_id trust boundary) against current source."
+      "remaining_action": "NOT fixed. All three residuals are real, currently-present gaps: (1) enabling FORCE RLS requires first wiring a tenant-context setter on every DB-touching path, a non-trivial, repo-wide change the prior report explicitly recommended against rushing (it would silently empty every unmigrated owner-path read) -- deferred, not attempted. (2) api_key_vault's Python-argument isolation would need either a service-role-scoped-per-request client or a move to RLS-enforced queries; not attempted -- high blast radius (every exchange-key read/ write in the product) for a change with no reproduced exploit this session. (3) the billing webhook trust boundary's only further hardening would be rotating/monitoring the signing secret and confirming the correct proxy-hop count in production, both operator actions this sandboxed session cannot perform (same constraint as BILL-02). Status kept OPEN rather than ACCEPTED_NONBLOCKING because this is a P1 in the originating report and the master prompt's GO/NO-GO bar requires no P1 be waived; this entry exists so it cannot be silently dropped by only tracking it under EXT-01's meta-note. A dedicated session with a disposable Postgres instance should attempt: a tenant-context setter wired at the one or two owner-path call sites that matter most (not all of SQLAlchemy), then FORCE RLS, verified by re-running the existing real-Postgres negative matrix before and after."
+    },
+    {
+      "id": "DUP-01",
+      "priority": "P1",
+      "severity": "High",
+      "component": "Order safety (live) / idempotency",
+      "title": "Venue-side duplicate-order protection is missing for coinbase/kraken, and a timeout leaves an execution in an indeterminate state rather than FAILED",
+      "status": "IN_PROGRESS",
+      "fix_commit": "",
+      "evidence": "Surfaced by this session's synthesis of the repo's own prior independent remediation corpus (staging/PHASE11B_D_DUP01_RETRY_SAFETY_BASELINE.md, PHASE11B_D2_DUP01_INDEPENDENT_REVIEW.md, PHASE11B_D3_DUP01_RETRY_FIX_REPORT.md), then independently verified against current source rather than taken on faith. DUP-02 (the client-side half: execute_with_idempotency falling through an unhandled 'allow_retry' action and resubmitting an execution that may already be live at the venue) IS fixed in current source -- confirmed by reading core/execution_engine.py's check_idempotent_execution handling directly: every action (skip_return_result/skip_already_running/skip_failed_no_retry/AMBIGUOUS_SUBMISSION_ACTION/allow_retry) is now handled explicitly, with a code comment citing DUP-02 and explaining the ambiguity guard runs before the allow_retry branch is ever reached. The residual, DUP-01 proper: coinbase and kraken do not reliably echo back the clientOrderId this platform sends, so if a submission times out or the response is lost, this platform cannot use clientOrderId alone to tell 'never reached the venue' from 'reached the venue 'and is now a live order' for those two venues specifically. Confirmed exchange_executor.py DOES have a fallback (TRADE-07, find_order_by_client_order_id) that tries direct clientOrderId lookup, then a venue-specific label fallback, before giving up -- a real, partial mitigation, not nothing. What is NOT mitigated, per the corpus's own D3 report section 7.3 and not independently re-verified in depth this session: a timeout is left in an INDETERMINATE state rather than a defined FAILED state, explicitly marked there as P0, 'not done, needs authorisation' -- i.e. the corpus's own author considered this the single highest-severity remaining item in the whole DUP track and did not attempt it.",
+      "verification_level": "code (verified this session; underlying prior corpus not independently re-run)",
+      "production_verified": false,
+      "remaining_action": "NOT attempted this session: designing and implementing a defined FAILED (not indeterminate) terminal state for a timed-out submission is a genuine state-machine change to the execution/watchdog adjudication path that the prior corpus's own author explicitly declined to do without further authorisation, given its blast radius (every live order submission). Attempting it without a real exchange sandbox to validate against was judged too risky to rush in this pass. Recommend a dedicated session with sandbox credentials (same prerequisite this ledger already tracks as missing for EXCH-01/EXCH cert work) to design and test it properly."
+    },
+    {
+      "id": "CD-8",
+      "priority": "P1",
+      "severity": "High",
+      "component": "Marketplace / schema drift",
+      "title": "Possible live regression of a previously 'FIXED AND VERIFIED' bug: library_subscriptions may still lack the updated_at column migration 022 was written to add",
+      "status": "EXTERNAL_BLOCKED",
+      "fix_commit": "",
+      "evidence": "Surfaced by this session's synthesis of staging/PHASE11B_U9_CD8_AUTHORIZATION_GATE_AND_SCHEMA_FINDINGS.md, which found a (4-day-old at the time, unverified-provenance) provisioning_snapshot.json showing library_subscriptions still has no updated_at column and migration 022_fix_library_subscriptions_updated_at.sql not in recorded_migrations -- which, if that snapshot reflects the real deployment target, would mean a trigger referencing NEW.updated_at raises 42703 on every UPDATE to that table, i.e. every marketplace settlement. Independently verified this session, against current source (not the snapshot): migration 022 exists in backend_app/migrations/ and is syntactically a correct fix. Read backend/marketplace/settlement_service.py's actual settle()/_settle_once()/_apply_transition() call chain directly to check the FEARED failure mode (the corpus worried this degrades to a silent HTTP 200 with no entitlement granted, which would be the worst case): that is NOT what current code does. settle() retries SettlementPersistenceError up to MAX_SETTLEMENT_ATTEMPTS within a time window, and if every attempt fails, raises SettlementPersistFailed, which routers/billing.py's webhook handler (~line 1071) catches and converts to HTTP 500 -- not 200. A persistent 42703 would therefore fail LOUD (500, logged, provider redelivers, eventually the provider's own retry window exhausts and the payment needs manual reconciliation) rather than silently discard the payment. This corrects the corpus's own risk characterization without dismissing the underlying question. What was NOT and cannot be verified from this sandboxed session: whether migration 022 has actually been applied against the real production database -- that requires a connection to it, which this session does not have (same category of constraint as RT-16/EXCH-01's sandbox-credential gaps).",
+      "verification_level": "code (verified this session; production DB state not reachable from here)",
+      "production_verified": false,
+      "remaining_action": "An operator with production database access must confirm SELECT column_name FROM information_schema.columns WHERE table_name='library_subscriptions' includes updated_at, and that migration 022 appears in whatever migration-tracking mechanism this deployment uses. If it is missing, apply migration 022. This cannot be performed or simulated from this sandboxed session, which has no production database connection."
+    },
+    {
+      "id": "RECON-01",
+      "priority": "P1",
+      "severity": "High",
+      "component": "Order safety (live) / reconciliation",
+      "title": "ExchangeReconciliationService exists but is never started anywhere; no leader election or tenant enumeration is wired for it",
+      "status": "OPEN",
+      "fix_commit": "",
+      "evidence": "Surfaced by this session's synthesis of the repo's own prior corpus (named there as RECON-01, referenced in staging/REMEDIATION_REPORT.md Phase 10 and PHASE11A_LAUNCH_GATE_REGISTER.md), then independently confirmed against current source: grepped the whole repository for ExchangeReconciliationService( and found it constructed nowhere outside its own defining module (backend/exchange_reconciliation.py) -- no call site in main.py, any scheduler module, or anywhere else starts it. This is a DIFFERENT mechanism from RT-16's OrderWatchdog (already fixed/in-progress this session under RT-16: _get_executor_for_order now builds a real per-tenant executor) -- the two are separate reconciliation subsystems and this finding is not already covered by RT-16's fix.",
+      "verification_level": "code (verified this session)",
+      "production_verified": false,
+      "remaining_action": "NOT fixed. Per the prior corpus's own assessment (independently plausible, not re-derived in depth this session): starting this service naively is unsafe because (1) there is no leader election, so every web/worker process would run its own copy and triple/N-ple the reconciliation load and risk conflicting writes, and (2) no tenant-enumeration source is wired, so the service has no list of accounts to reconcile. Both are non-trivial additions (a distributed lock or leader-election primitive, plus a tenant-listing query wired to whatever the platform's live-tenant source of truth is) that should be designed and tested in a dedicated session, not improvised here."
     }
   ]
 }

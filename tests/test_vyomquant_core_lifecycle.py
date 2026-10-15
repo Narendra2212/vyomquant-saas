@@ -391,62 +391,62 @@ class TestVyomQuantCoreLifecycle:
             lambda token=None: ownership_client,
         )
 
+        # AUD-01: POST /signals, PUT /signals/{id}/risk, PUT /signals/{id}/order and
+        # PUT /signals/{id}/execution no longer exist as HTTP routes - any authenticated
+        # trader could previously call them to write fabricated order/fill/fee/risk data
+        # into their own execution audit trail, with no connection to anything the
+        # platform's own risk engine or exchange actually reported. The real writer is
+        # backend/master_executor.py, which calls these SAME SignalService methods as a
+        # direct, in-process Python call - never over HTTP - so this test now does the
+        # same, through the one seam (`create_request_supabase_async`, patched above)
+        # that makes it exercise the identical code path a deleted HTTP call would have.
+        service = await get_signal_service()
+        sig = await service.create_signal(
+            user=mock_user,
+            strategy_id="strat-router-test",
+            strategy_version="1.0.0",
+            deployment_id="dep-001",
+            exchange_id="binance",
+            symbol="ETH/USDT",
+            timeframe="15m",
+            worker_id="w_eth_1",
+            decision="BUY",
+            indicators={"rsi": 42.0},
+            market_info={"price": 3200.0},
+        )
+        sig_id = sig["id"]
+        await service.update_risk_decision(
+            user=mock_user,
+            signal_id=sig_id,
+            risk_passed=True,
+            risk_reason="Approved by risk engine",
+            position_size=1.5,
+            capital=15000.0,
+        )
+        await service.update_order(
+            user=mock_user,
+            signal_id=sig_id,
+            order_id="ord_12345",
+            exchange_order_id="ex_ord_67890",
+            order_status="FILLED",
+            quantity=1.5,
+            filled=1.5,
+            remaining=0.0,
+            average_price=3200.0,
+            fees=4.8,
+            slippage=0.0002,
+            latency_ms=11.2,
+        )
+        await service.update_execution(
+            user=mock_user,
+            signal_id=sig_id,
+            trade_id="tr_9999",
+            pnl=75.0,
+            realized_pnl=75.0,
+        )
+
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Test POST /api/signal-trace/signals
-            create_payload = {
-                "strategy_id": "strat-router-test",
-                "strategy_version": "1.0.0",
-                "deployment_id": "dep-001",
-                "exchange_id": "binance",
-                "symbol": "ETH/USDT",
-                "timeframe": "15m",
-                "worker_id": "w_eth_1",
-                "decision": "BUY",
-                "indicators": {"rsi": 42.0},
-                "market_info": {"price": 3200.0}
-            }
-            res_create = await client.post("/api/signal-trace/signals", json=create_payload)
-            assert res_create.status_code == 200, res_create.text
-            data = res_create.json()
-            assert "id" in data
-            sig_id = data["id"]
-
-            # Test PUT /api/signal-trace/signals/{id}/risk
-            risk_payload = {
-                "risk_passed": True,
-                "risk_reason": "Approved by risk engine",
-                "position_size": 1.5,
-                "capital": 15000.0
-            }
-            res_risk = await client.put(f"/api/signal-trace/signals/{sig_id}/risk", json=risk_payload)
-            assert res_risk.status_code == 200, res_risk.text
-
-            # Test PUT /api/signal-trace/signals/{id}/order
-            order_payload = {
-                "order_id": "ord_12345",
-                "exchange_order_id": "ex_ord_67890",
-                "order_status": "FILLED",
-                "quantity": 1.5,
-                "filled": 1.5,
-                "remaining": 0.0,
-                "average_price": 3200.0,
-                "fees": 4.8,
-                "slippage": 0.0002,
-                "latency_ms": 11.2
-            }
-            res_order = await client.put(f"/api/signal-trace/signals/{sig_id}/order", json=order_payload)
-            assert res_order.status_code == 200, res_order.text
-
-            # Test PUT /api/signal-trace/signals/{id}/execution
-            exec_payload = {
-                "trade_id": "tr_9999",
-                "pnl": 75.0,
-                "realized_pnl": 75.0
-            }
-            res_exec = await client.put(f"/api/signal-trace/signals/{sig_id}/execution", json=exec_payload)
-            assert res_exec.status_code == 200, res_exec.text
-
             # Test GET /api/signal-trace/signals
             res_list = await client.get("/api/signal-trace/signals")
             assert res_list.status_code == 200

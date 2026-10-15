@@ -115,10 +115,12 @@ async def get_or_create_exchange(
        evicts explicitly, and this function no longer depends on it having done so.
 
     2. **A credential-less caller decided the client for everyone.**
-       ``core/consistency_checker.py`` and ``backend/exchange_websocket_listener.py`` call this
-       function with NO credentials. Whichever caller arrived first populated the key, so if one
-       of those won the race an UNAUTHENTICATED client was pooled and then handed to
-       ``routers/orders.py`` and ``routers/market.py``, whose private calls
+       ``backend/exchange_websocket_listener.py`` calls this function with NO credentials
+       (``core/consistency_checker.py`` used to as well, until RT-16 moved it onto a real,
+       vault-based per-tenant executor instead -- see that file's own `_get_exchange_positions`
+       docstring). Whichever caller arrived first populated the key, so if the remaining
+       credential-less caller won the race an UNAUTHENTICATED client was pooled and then handed
+       to ``routers/orders.py`` and ``routers/market.py``, whose private calls
        (``fetch_open_orders``, ``fetch_balance``) cannot work on it. A restart was the only cure.
 
     The rule now applied, which is monotone in authentication and therefore cannot thrash:

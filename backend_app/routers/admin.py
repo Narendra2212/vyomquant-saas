@@ -24,7 +24,9 @@ from backend_app.core.dependencies import (require_aal2, get_admin_user, get_ope
                                            get_telemetry, get_ws_manager,
                                            invalidate_profile_cache)
 from backend_app.core.background_tasks import fire_and_forget_task
-from backend_app.core.models import GlobalKillRequest, UserStatusRequest
+from backend_app.core.models import (GlobalKillRequest,
+                                     PlatformReinitializeRequest,
+                                     UserStatusRequest)
 from supabase import Client as SupabaseClient
 
 router = APIRouter()
@@ -348,19 +350,85 @@ async def kill_switch_status(
 
 @router.post("/reinitialize")
 async def reinitialize_platform(
-    admin: dict = Depends(get_admin_user),
-    _mfa: dict = Depends(require_aal2),  # SEC-15
+    body: PlatformReinitializeRequest,
+    admin: dict = Depends(get_operator_user),
+    _mfa: dict = Depends(require_aal2),  # SEC-15: clearing a platform-wide halt needs MFA
     alert=Depends(get_alert),
 ):
+    """ADM-01. Clear the global kill switch — the real "reinitialize platform" action.
+
+    THE DEFECT
+        This endpoint sent an info alert and unconditionally returned
+        ``{"status": "ACTIVE", "message": "Platform reinitialized. Bots can now be
+        deployed."}`` — whether or not the platform was ever halted, whatever the halt's
+        cause, and with no interaction with `GlobalKillSwitch` at all (the same
+        `get_global_kill_switch()` singleton `/kill-all` and `/kill-switch` use). An
+        operator calling this after a real halt would be told bots can deploy while the
+        authoritative switch — the thing every order path actually reads
+        (`execution_engine.py`, `exchange_executor.place_order`) — stayed engaged, or,
+        worse, could clear a halt nobody had reviewed, since nothing here ever reached
+        `deactivate()`'s hold-acknowledgment check.
+
+    THE FIX
+        Route this directly to `GlobalKillSwitch.deactivate()`, the same mechanism
+        `/kill-all` engages. `deactivate()` itself enforces everything a reset needs: a
+        stated reason, an authenticated operator, and every currently-registered hold
+        named in `acknowledge_holds` — see `core/global_safety.py`. A
+        `KillSwitchResetRefused` is surfaced as 409 with the refusal code and detail
+        rather than swallowed into a false "reinitialized".
+
+        `confirm_code` mirrors `/kill-all`'s guard against a one-click accidental call to
+        the dangerous direction; `get_operator_user` (not `get_admin_user`) matches
+        `/kill-all`'s requirement that the dangerous direction needs the stronger role.
+    """
+    if body.confirm_code != "REINITIALIZE":
+        raise HTTPException(400, "Invalid confirmation code. Must be 'REINITIALIZE'.")
+
+    from backend_app.core.global_safety import (KillSwitchResetRefused,
+                                                 get_global_kill_switch)
+
+    kill_switch = get_global_kill_switch()
+    try:
+        await kill_switch.deactivate(
+            reason=body.reason,
+            operator_id=admin.get("id"),
+            operator_email=admin.get("email"),
+            authorization_source="fastapi:get_operator_user",
+            acknowledge_holds=body.acknowledge_holds,
+        )
+    except KillSwitchResetRefused as e:
+        raise HTTPException(
+            409,
+            {"error": "kill_switch_reset_refused", "code": e.code, "detail": e.detail},
+        )
+    except RuntimeError as e:
+        logger.critical(f"Kill switch reset authorized but failed to apply: {e}")
+        raise HTTPException(500, f"Reinitialize failed: {e}")
+
+    await _log_admin_audit_event(
+        action="PLATFORM_REINITIALIZE",
+        target="PLATFORM",
+        operator=admin,
+        reason=body.reason,
+        details={"acknowledge_holds": body.acknowledge_holds},
+    )
+
     fire_and_forget_task(
         alert.send_info(
-            f"Platform reinitialized by admin {admin.get('email', 'unknown')}."
+            f"Platform reinitialized by operator {admin.get('email', 'unknown')}. "
+            f"Reason: {body.reason}"
         ),
         name="admin_alert_reinitialize"
     )
+
+    status = await kill_switch.get_status()
     return {
         "status": "ACTIVE",
-        "message": "Platform reinitialized. Bots can now be deployed.",
+        "message": "Global kill switch cleared. New order submissions are allowed again.",
+        "reason": body.reason,
+        "kill_switch_active": status["kill_switch_active"],
+        "holds": status["holds"],
+        "holds_readable": status["holds_readable"],
     }
 
 

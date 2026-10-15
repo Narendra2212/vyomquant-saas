@@ -71,6 +71,7 @@ REGRESSION: tests/test_trade02_kill_switch_fails_closed.py
 import asyncio
 import hashlib
 import hmac
+import os
 import logging
 from datetime import datetime
 from typing import Iterable, Optional
@@ -1023,7 +1024,15 @@ async def enforce_kill_switch():
 
 
 
-_VALIDATION_SECRET: bytes = b"aerora_quant_risk_validation_secret_key_2026"
+#: SEC-13. Generated fresh per process, never a literal in source -- see
+#: ``core/live_execution_gate._GATE_SECRET``'s own comment for the full reasoning (a
+#: hardcoded secret is no stronger than an unsigned flag against anyone with repository
+#: read access) and why this is safe: :func:`generate_validation_token` (mint, in
+#: ``execution_engine.py``) and :func:`verify_validation_token` (verify, in
+#: ``exchange_executor.py``) are always called from the SAME synchronous order-placement
+#: call stack in the SAME process -- the token is handed off as an in-memory attribute on
+#: the executor instance, never persisted or read back after a restart.
+_VALIDATION_SECRET: bytes = os.urandom(32)
 
 def generate_validation_token(execution_id: str, symbol: str, size) -> str:
     """Generate a HMAC-SHA256 validation token to prevent direct executor bypass."""

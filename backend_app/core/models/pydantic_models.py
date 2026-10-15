@@ -417,6 +417,28 @@ class GlobalKillRequest(BaseModel):
         return v.strip()
 
 
+class PlatformReinitializeRequest(BaseModel):
+    """ADM-01. Body for ``POST /api/admin/reinitialize``.
+
+    This is the reset half of the global kill switch: it exists so an operator cannot
+    clear a halt without stating why and without acknowledging every independent hold
+    `GlobalKillSwitch.deactivate()` currently has registered (see
+    `backend_app/core/global_safety.py`'s ``HOLDS_KEY`` mechanism). ``acknowledge_holds``
+    defaults to empty, which is correct when nothing is holding the switch — `deactivate()`
+    itself refuses if any live hold was not named here.
+    """
+
+    confirm_code: str
+    reason: str = Field(..., min_length=3, description="Logged justification for clearing the halt")
+    acknowledge_holds: List[str] = Field(default_factory=list)
+
+    @validator("reason", pre=True, always=True)
+    def validate_reason_non_empty(cls, v):
+        if not v or not isinstance(v, str) or not v.strip():
+            raise ValueError("Reason must be a non-empty string.")
+        return v.strip()
+
+
 # ── STRATEGY LIMITS ───────────────────────────────────────────────────────
 
 

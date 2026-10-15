@@ -78,9 +78,13 @@ from backend_app.core.config import print_config_status, settings
 # ── Runtime Services ────────────────────────────────────────────────
 from backend_app.core.consistency_checker import (PositionConsistencyChecker,
                                                   get_consistency_checker)
-# Database imports — ALL SQLAlchemy models must be imported here so that
-# Base.metadata.create_all() registers their tables at startup.
-from backend_app.core.database import Base, SessionLocal, engine
+from backend_app.backend.paper_limit_order_sweeper import (
+    PaperLimitOrderSweeper, get_paper_limit_order_sweeper)
+# Database imports. The SQLAlchemy model imports below this line are kept for the
+# modules that actually use them (routers, Alembic's own `env.py` target_metadata) -
+# API-05 removed only the `Base.metadata.create_all(bind=engine)` DDL call this comment
+# used to justify; see that removal's own note, further down, for why.
+from backend_app.core.database import SessionLocal
 from backend_app.core.http_metrics import \
     MarketplacePaperHttpMetricsMiddleware
 from backend_app.core.metrics import HTTP_REQUEST_DURATION, HTTP_REQUESTS_TOTAL
@@ -102,7 +106,7 @@ from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 from backend_app.core.dependencies import get_admin_user
 #  Router imports 
-from backend_app.routers import (admin, analytics, auth, billing, copilot, dashboard, distributed_execution,
+from backend_app.routers import (admin, analytics, auth, billing, copilot, dashboard,
                                  exchange, health, health_websocket, library, market, metrics, notifications,
                                  orders, paper_trading, portfolio, referral, risk, security, signal_trace,
                                  signals, strategies, strategy_operations, support, user)
@@ -424,6 +428,17 @@ async def lifespan(app: FastAPI):
         service_status["consistency_checker"] = "INACTIVE"
         logger.warning(f" ConsistencyChecker: INACTIVE — {e}")
 
+    # ── Runtime Service: PaperLimitOrderSweeper (PAPER-07) ───────────
+    _paper_limit_sweeper: Optional[PaperLimitOrderSweeper] = None
+    try:
+        _paper_limit_sweeper = get_paper_limit_order_sweeper()
+        await _paper_limit_sweeper.start()
+        service_status["paper_limit_order_sweeper"] = "ACTIVE"
+        logger.info(" PaperLimitOrderSweeper: started (interval=30s)")
+    except Exception as e:
+        service_status["paper_limit_order_sweeper"] = "INACTIVE"
+        logger.warning(f" PaperLimitOrderSweeper: INACTIVE — {e}")
+
     # ── Runtime Service: OrderWatchdog ───────────────────────────────
     _order_watchdog: Optional[OrderWatchdog] = None
     _watchdog_db = None
@@ -552,6 +567,14 @@ async def lifespan(app: FastAPI):
             logger.info(" ConsistencyChecker: stopped")
     except Exception as e:
         logger.warning(f" ConsistencyChecker shutdown error: {e}")
+
+    # Runtime Service: PaperLimitOrderSweeper — stop background sweep loop
+    try:
+        if _paper_limit_sweeper is not None:
+            await _paper_limit_sweeper.stop()
+            logger.info(" PaperLimitOrderSweeper: stopped")
+    except Exception as e:
+        logger.warning(f" PaperLimitOrderSweeper shutdown error: {e}")
 
     # Runtime Service: OrderWatchdog — cancel background monitoring task
     try:
@@ -835,12 +858,27 @@ if CorrelationIdMiddleware:
 
     app.add_middleware(CorrelationIdMiddleware, validator=_is_acceptable_request_id)
 
-# Create database tables (skip if database not available)
-try:
-    Base.metadata.create_all(bind=engine)
-except Exception as e:
-    logger.warning(f"Database not available at startup: {e}")
-    logger.warning("Backend will start without database connection")
+# API-05: `Base.metadata.create_all(bind=engine)` used to run here, unconditionally, at
+# IMPORT time. Removed. Two reasons, not one:
+#
+# 1. This is a THIRD schema-management mechanism alongside the hand-written numbered SQL
+#    migrations (`backend_app/migrations/*.sql`, which declare RLS policies, triggers,
+#    check constraints and explicit grants this ORM layer knows nothing about) and
+#    Alembic (`backend_app/alembic/`, whose own `env.py` already targets this same
+#    `Base.metadata`). `create_all` only creates a table that does not already exist, so
+#    in any environment where the real migrations have not yet been applied - a fresh
+#    database, a developer machine, a broken deploy - it would silently materialise
+#    whatever a SQLAlchemy model class here declares: no RLS, no triggers, no grants, no
+#    check constraints. A caller that later checks "does this table exist" would get a
+#    truthful yes for a table missing every safety property the real migration gives it.
+# 2. It ran at IMPORT, inside `main.py`'s own module body - every process that imports
+#    this module (the web server, a worker, a test collection run) attempted a
+#    schema-mutating DDL statement against whatever `DATABASE_URL` it happened to
+#    resolve, merely by being imported. A test suite or a short-lived worker has no
+#    business issuing DDL as a side effect of `import backend_app.main`.
+#
+# The migrations are the only source of truth for schema now; nothing here replaces
+# that, because nothing here should.
 
 #  CORS — origins are strictly env-var driven; no hardcoded fallbacks to prevent domain-hijack vulnerability.
 _cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:1420,http://localhost:3000,http://127.0.0.1:1420,http://127.0.0.1:3000")
@@ -885,7 +923,19 @@ app.include_router(risk.router, prefix="/api/risk", tags=["Risk Management"])
 app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
-app.include_router(distributed_execution.router, prefix="/api/distributed-execution", tags=["Distributed Execution"])
+#  RT-11: distributed_execution.router WAS mounted here. Removed: `execution_orchestrator`
+#  is never initialized or started anywhere in this codebase (confirmed by
+#  tests/test_execution_paths_that_claim_an_exchange.py's own measurement --
+#  `exchange_gateways == {}` and `worker_pool is None` always), so every submission already
+#  refused with 400 before this fix. That refusal closed the dangerous failure mode (a job
+#  silently accepted and never processed), but left a fully-documented, "institutional-grade
+#  reliability" HTTP surface mounted for a queue nothing drains -- confusing to any caller
+#  and, per this finding, worth removing rather than leaving reachable-but-useless. No
+#  frontend caller exists (grepped algo22-terminal/src/). The router module and the
+#  `backend/distributed_execution/` package are intentionally left in place, not deleted:
+#  several tests import them directly by path to pin the orchestrator's unstarted state,
+#  and `backend/distributed_execution/exchange_reconciliation_engine.py`'s reconciliation
+#  loops are a separate, not-yet-evaluated concern this change does not touch.
 app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(health_websocket.router, prefix="/health", tags=["Health"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
@@ -1015,11 +1065,25 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch all unhandled exceptions and return a normalized 500 error response."""
-    import traceback
-    print(f"GLOBAL EXCEPTION HANDLER: {type(exc).__name__}: {exc}")
-    print(f"TRACEBACK: {traceback.format_exc()}")
-    traceback.print_exc()
+    """Catch all unhandled exceptions and return a normalized 500 error response.
+
+    API-04. This used to write the exception type, message and full traceback to stdout
+    via three separate bare ``print()``/``traceback.print_exc()`` calls -- bypassing the
+    application's own logging configuration entirely (no level, no handler routing, no
+    structured format for whatever ingests this process's logs) and, in many deployments,
+    landing in the SAME raw, unredacted stream any other stdout write would. Routed
+    through this module's own ``logger`` instead: ``logger.exception`` logs at ERROR and
+    attaches the current exception's traceback the same way ``traceback.format_exc()``
+    did, through the one path every other error in this codebase already reports through.
+    The response body is unchanged -- it already said only "Internal server error" and
+    never echoed ``exc`` to the caller.
+    """
+    logger.exception(
+        "Unhandled exception on %s: %s: %s",
+        request.scope.get("path"),
+        type(exc).__name__,
+        exc,
+    )
     from backend_app.core.schemas import create_api_error_response
     body = create_api_error_response(
         status_code=500,
@@ -1250,8 +1314,15 @@ async def system_readiness():
     OBS-01: this returned the literal string "HEALTHY" for database, redis, risk_engine,
     execution_engine and reconciliation, and `"status": "READY"` always. Nothing was
     probed. It now reports the same measured dependency set as `/health/ready` and
-    carries the same 503, with the exchange-certification matrix retained because that
-    part was always real.
+    carries the same 503.
+
+    CLAIM-02: `certified_exchanges` below is NOT a measured fact either -- it is
+    `exchange_certification.py`'s own count of venues it marks LEVEL_5, and that file's
+    levels were themselves hardcoded overclaims until this finding corrected them (see
+    its module docstring). This count is included for backwards compatibility with
+    whatever reads this endpoint today; as of the correction it reads 0, honestly,
+    because no venue has ever had a sandbox or live order placed against it
+    (staging/EXCHANGE_SANDBOX_CERTIFICATION.md, Phase 10, 2026-10-10).
     """
     from backend_app.core.exchange_certification import \
         get_exchange_certification_registry
@@ -1325,38 +1396,39 @@ async def system_exchanges():
     return get_exchange_certification_registry().get_certification_matrix()
 
 
-#  Stats endpoint 
+#  Stats endpoint
 @app.get("/api/stats", tags=["Stats"])
 async def get_stats():
-    """Get system trading statistics calculated from live database records."""
+    """Platform-wide trading statistics. Public and unauthenticated BY DESIGN -- this is
+    not any one account's data (see ``algo22-terminal/src/design/pageFields.js``'s
+    documentation of ``pages/Profile.jsx``'s *Automation Account Context* card, which
+    already labels these four figures as the platform's aggregate, not the caller's).
+
+    API-03. This used to call the PER-USER dashboard aggregator with a sentinel
+    ``user={"id": "public"}`` identity that owns nothing -- most figures came back as
+    that non-existent account's empty state, ``total_pnl`` was actually today's P&L
+    under a mislabelled key, and a failed read answered 200 with every figure forced to
+    0, indistinguishable from a genuinely idle platform. See
+    ``backend_app.backend.platform_stats`` for the real, service-role aggregation this
+    now calls instead, and why a failure here is a 503, not a false "all zero".
+    """
+    from backend_app.backend.platform_stats import (
+        PlatformStatsUnavailable,
+        get_platform_stats,
+    )
+    from backend_app.core.dependencies import get_service_supabase
+
     try:
-        from backend_app.backend.dashboard_aggregation_service import get_dashboard_service
-        svc = await get_dashboard_service()
-        data = await svc.get_dashboard_data(user={"id": "public"}, equity_days=30)
-        overview = data.get("overview", {})
-        bots = data.get("bots", {})
-        return {
-            "total_trades": overview.get("total_trades", 0),
-            "total_pnl": float(overview.get("today_pnl", 0.0)),
-            "win_rate": float(overview.get("win_rate", 0.0)),
-            "active_bots": int(bots.get("running", 0)),
-            "total_strategies": int(bots.get("total", 0)),
-            "daily_pnl": float(overview.get("today_pnl", 0.0)),
-            "weekly_pnl": float(overview.get("today_pnl", 0.0)),
-            "monthly_pnl": float(overview.get("today_pnl", 0.0)),
-        }
-    except Exception as e:
-        logger.warning(f"Error fetching stats from dashboard service: {e}")
-        return {
-            "total_trades": 0,
-            "total_pnl": 0.0,
-            "win_rate": 0.0,
-            "active_bots": 0,
-            "total_strategies": 0,
-            "daily_pnl": 0.0,
-            "weekly_pnl": 0.0,
-            "monthly_pnl": 0.0,
-        }
+        return await get_platform_stats(get_service_supabase())
+    except PlatformStatsUnavailable as exc:
+        logger.error(f"Platform stats unavailable: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "PLATFORM_STATS_UNAVAILABLE",
+                "message": "Platform-wide statistics could not be computed.",
+            },
+        )
 
 
 # NOTE: Auth routes (/api/auth/register, /api/auth/login) are registered via

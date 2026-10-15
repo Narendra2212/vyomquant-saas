@@ -685,9 +685,21 @@ async def enforce_quota(
             current = await usage_ledger.count(resource, user["id"], supabase, parent_id=parent_id)
     except UsageReadFailed as exc:
         # A figure that could not be read is not a figure of zero. 503, not a pass.
+        #
+        # API-06. `detail["message"]` used to be `str(exc)` -- `UsageReadFailed` is
+        # frequently constructed directly from an upstream failure
+        # (`usage_ledger.py`'s own `raise UsageReadFailed(str(exc)) from exc`), so the
+        # raw Supabase/PostgREST error text (table names, constraint names, connection
+        # detail) reached the caller verbatim in a 503 body. The status code was already
+        # correct; only the leaked text is replaced here, with the real exception logged
+        # server-side where an operator can still read it.
+        logger.error("Quota usage for %s could not be read: %s", resource, exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": "ENTITLEMENT_USAGE_UNREADABLE", "message": str(exc)},
+            detail={
+                "error": "ENTITLEMENT_USAGE_UNREADABLE",
+                "message": "Usage could not be verified right now. Please try again.",
+            },
         ) from exc
 
     if current >= limit:

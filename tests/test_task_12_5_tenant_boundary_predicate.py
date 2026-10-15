@@ -385,6 +385,18 @@ DOCUMENTED_UNSCOPED_READS: FrozenSet[str] = frozenset(
         # by tenant - it reads no column of the row it touches and returns a bool, never the row.
         # See its own docstring, "Whether paper_accounts exists, cached".
         "paper_persistence_supported",
+        # PAPER-07. The ONE sanctioned cross-tenant read in this module, and unscoped BY
+        # NECESSITY rather than oversight: its job is "which (user_id, symbol) pairs across the
+        # WHOLE paper_orders book have an open legacy limit order", which is precisely the
+        # question no single tenant's predicate can answer - the sweeper
+        # (paper_limit_order_sweeper.py) needs to find every tenant with open work, not confirm
+        # one. Its own docstring names this as "the ONE sanctioned cross-tenant read in the
+        # module, service-role-only". Compensating controls: it returns only `(user_id, symbol)`
+        # identity pairs, never balances/prices/quantities, and every (user_id, symbol) pair it
+        # yields is immediately re-scoped by `PaperTradingService.check_limit_orders(symbol,
+        # price, user_id=user_id)` - called once per pair with that pair's own user_id - so no
+        # tenant's order is ever read or acted on under another tenant's identity.
+        "get_open_legacy_limit_order_pairs",
     }
 )
 

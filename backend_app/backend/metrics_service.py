@@ -220,31 +220,39 @@ class MetricsService:
             return {}
     
     def _empty_performance_metrics(self) -> Dict:
-        """Return empty performance metrics structure."""
+        """Return the performance structure for "no data" -- every QuestDB-sourced field is
+        ``None``, not ``0``/``0.0`` (METRICS-01). ``strategy_performance`` has no writer
+        anywhere in this codebase, so this method is reached on every single call until
+        one exists; a block of zeros here was never "no trades yet", it was "this pipeline
+        has never run". ``None`` lets a caller (and, through it, the frontend's
+        ``fromNullable``/``NotAvailableMarker`` pattern -- see FE-06) tell "not reported"
+        from "reported, and it is zero" -- the two mean opposite things to a trader reading
+        a win rate or a P&L figure.
+        """
         return {
             "strategy_id": None,
             "timestamp": None,
             "time_range": "1d",
-            "today_pnl": 0.0,
-            "today_return_pct": 0.0,
-            "lifetime_pnl": 0.0,
-            "unrealized_pnl": 0.0,
-            "available_balance": 0.0,
-            "total_equity": 0.0,
-            "roi_pct": 0.0,
-            "win_rate": 0.0,
-            "sharpe_ratio": 0.0,
-            "sortino_ratio": 0.0,
-            "profit_factor": 0.0,
-            "max_drawdown": 0.0,
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "avg_trade": 0.0,
-            "avg_win": 0.0,
-            "avg_loss": 0.0,
-            "position_count": 0,
-            "total_volume": 0.0,
+            "today_pnl": None,
+            "today_return_pct": None,
+            "lifetime_pnl": None,
+            "unrealized_pnl": None,
+            "available_balance": None,
+            "total_equity": None,
+            "roi_pct": None,
+            "win_rate": None,
+            "sharpe_ratio": None,
+            "sortino_ratio": None,
+            "profit_factor": None,
+            "max_drawdown": None,
+            "total_trades": None,
+            "winning_trades": None,
+            "losing_trades": None,
+            "avg_trade": None,
+            "avg_win": None,
+            "avg_loss": None,
+            "position_count": None,
+            "total_volume": None,
             "realtime": {}
         }
     

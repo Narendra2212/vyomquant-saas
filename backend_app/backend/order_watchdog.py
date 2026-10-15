@@ -317,7 +317,7 @@ class OrderWatchdog:
                         
                         # Update order from exchange status
                         await self._update_order_from_status(order, result)
-                        
+
                         # Trigger alert for fill
                         res_filled_dec = Decimal(result.filled_size or "0")
                         order_filled_dec = Decimal(order.filled_size or "0")
@@ -328,7 +328,14 @@ class OrderWatchdog:
                                 f"STEP 9: Order fill detected via reconciliation. "
                                 f"Filled {fill_amount} @ {result.avg_price}"
                             )
-                        
+
+                        # RT-16: this is the discrepancy ReconciliationScheduler exists to
+                        # escalate, and until now nothing ever wrote one for it to find.
+                        self._record_reconciliation_mismatch(
+                            order, order_status_val, res_status_val,
+                            order_filled_dec, res_filled_dec,
+                        )
+
                         discrepancy_count += 1
                     
                     reconciled_count += 1
@@ -347,7 +354,58 @@ class OrderWatchdog:
                 
         except Exception as e:
             logger.error(f"STEP 9: Reconciliation batch error: {e}", exc_info=True)
-    
+
+    def _record_reconciliation_mismatch(
+        self,
+        order: ExecutionRecordModel,
+        local_status: str,
+        exchange_status: str,
+        local_filled: Decimal,
+        exchange_filled: Decimal,
+    ) -> None:
+        """RT-16: feed ``ReconciliationScheduler`` the discrepancy it exists to escalate.
+
+        Until this call existed, ``core/models/reconciliation.py``'s
+        ``ReconciliationMismatchRepository.record_mismatch`` had no caller anywhere in the
+        application -- the scheduler was polling a table nothing ever wrote to. This is the
+        write side, placed at the one spot ``_reconcile_open_orders`` already proved a
+        genuine local/venue divergence (``_has_order_changed`` was true), not a guess at a
+        different one.
+
+        Severity MEDIUM ("status or fill-price divergence" -- this file's own taxonomy;
+        see ``core/models/reconciliation.MismatchSeverity``), never CRITICAL: CRITICAL is
+        the scheduler's own trigger for a global kill switch, and this function has no
+        basis to claim this is a SIZE or SYMBOL mismatch (CRITICAL's definition) -- only
+        that the venue's status or fill figure moved since the DB was last told. A failure
+        to record never blocks or alters reconciliation itself; this is additive visibility,
+        not a new control.
+        """
+        try:
+            from backend_app.core.models.reconciliation import (
+                MismatchSeverity, ReconciliationMismatchCreate,
+                ReconciliationMismatchRepository)
+
+            field = "filled_size" if local_filled != exchange_filled else "status"
+            repo = ReconciliationMismatchRepository(self.db)
+            repo.record_mismatch(ReconciliationMismatchCreate(
+                tenant_id=order.tenant_id,
+                execution_id=order.execution_id,
+                order_id=order.order_id,
+                symbol=order.symbol,
+                side=getattr(order, "side", None) or "unknown",
+                field=field,
+                local_value=f"status={local_status},filled={local_filled}",
+                exchange_value=f"status={exchange_status},filled={exchange_filled}",
+                severity=MismatchSeverity.MEDIUM,
+                raw_local_state={"status": local_status, "filled_size": str(local_filled)},
+                raw_exchange_state={"status": exchange_status, "filled_size": str(exchange_filled)},
+            ))
+        except Exception as exc:  # noqa: BLE001 - recording the mismatch must never break reconciliation
+            logger.error(
+                "STEP 9: could not record reconciliation mismatch for %s: %s",
+                order.execution_id, exc,
+            )
+
     def _find_open_orders(self) -> List[ExecutionRecordModel]:
         """
         STEP 9: Find all open orders that need reconciliation.

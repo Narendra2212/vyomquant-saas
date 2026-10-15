@@ -116,15 +116,10 @@ class MockRedisClient:
         """
         return self._store.pop(key, None)
 
-    async def incr(self, key: str) -> int:
-        val = int(self._store.get(key, 0)) + 1
-        self._store[key] = str(val)
-        return val
-
-    async def decr(self, key: str) -> int:
-        val = int(self._store.get(key, 0)) - 1
-        self._store[key] = str(val)
-        return val
+    # RED-01: a dead-on-arrival `incr`/`decr` (no `amount` parameter) used to sit here,
+    # shadowed by this class's own later, complete definitions below - Python keeps only
+    # the LAST `def` with a given name in a class body, so this one never ran. Removed
+    # rather than left as a second, misleading answer to "what does incr do here".
 
     async def incrby(self, key: str, amount: int) -> int:
         val = int(self._store.get(key, 0)) + amount
@@ -230,12 +225,8 @@ class MockRedisClient:
             self._store[key].insert(0, str(v))
         return len(self._store[key])
 
-    async def rpush(self, key: str, *values: Any) -> int:
-        if key not in self._store or not isinstance(self._store[key], list):
-            self._store[key] = []
-        for v in values:
-            self._store[key].append(str(v))
-        return len(self._store[key])
+    # RED-01: a byte-identical `rpush` duplicate used to sit here, shadowed by this
+    # class's own later definition below. Removed as dead code.
 
     async def hset(self, key: str, name: str = None, value: str = None, mapping: dict = None) -> int:
         if key not in self._store or not isinstance(self._store[key], dict):
@@ -834,15 +825,9 @@ class SharedRedisManager:
                 logger.warning(f"EXISTS failed for '{key}': {e}")
         return False
 
-    async def setex(self, key: str, ttl: int, value: Any):
-        """Proxy to cache setex method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.setex(key, ttl, value)
-            except Exception as e:
-                logger.warning(f"SETEX failed for '{key}': {e}")
-        return None
+    # RED-01: a byte-identical `setex` duplicate used to sit here, shadowed by this
+    # class's own later definition below. Removed as dead code (see that definition's
+    # own comment on the duplicate-method pattern across this class).
 
     async def getdel(self, key: str) -> Optional[str]:
         """Read a key and delete it **atomically**; returns the value, or ``None``.
@@ -904,25 +889,15 @@ class SharedRedisManager:
         )
         return None
 
-    async def incr(self, key: str) -> int:
-        """Proxy to cache incr method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.incr(key)
-            except Exception as e:
-                logger.warning(f"INCR failed for '{key}': {e}")
-        return 0
-
-    async def decr(self, key: str) -> int:
-        """Proxy to cache decr method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.decr(key)
-            except Exception as e:
-                logger.warning(f"DECR failed for '{key}': {e}")
-        return 0
+    # RED-01: dead duplicates of incr, decr, lrange, llen, rpush, lpop and expire used to
+    # sit here, all shadowed by this class's own later definitions below (Python keeps
+    # only the LAST `def` with a given name in a class body). Several of these were not
+    # even behaviourally identical to the definition that actually ran (e.g. this
+    # `incr`/`decr` took no `amount`; the versions below do) -- dead code that documents
+    # behaviour nothing here produces is worse than no comment at all. Removed.
+    #
+    # incrby/decrby are NOT duplicates and were never shadowed - this is their one and
+    # only definition (subscription_engine.py's usage-quota tracking calls them).
 
     async def incrby(self, key: str, amount: int) -> int:
         """Proxy to cache incrby method."""
@@ -944,81 +919,10 @@ class SharedRedisManager:
                 logger.warning(f"DECRBY failed for '{key}': {e}")
         return 0
 
-    async def lrange(self, key: str, start: int, end: int) -> list:
-        """Proxy to lrange method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.lrange(key, start, end)
-            except Exception as e:
-                logger.warning(f"LRANGE failed for '{key}': {e}")
-        return []
+    # RED-01: a dead `xadd` duplicate used to sit here, shadowed by this class's own
+    # later definition below (which additionally adds retries and raises PublishError
+    # for TRADING_CRITICAL_STREAMS -- this simpler version never ran). Removed.
 
-    async def llen(self, key: str) -> int:
-        """Proxy to llen method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.llen(key)
-            except Exception as e:
-                logger.warning(f"LLEN failed for '{key}': {e}")
-        return 0
-
-    async def rpush(self, key: str, *values: Any) -> int:
-        """Proxy to rpush method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.rpush(key, *values)
-            except Exception as e:
-                logger.warning(f"RPUSH failed for '{key}': {e}")
-        return 0
-
-    async def lpop(self, key: str) -> Optional[str]:
-        """Proxy to lpop method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.lpop(key)
-            except Exception as e:
-                logger.warning(f"LPOP failed for '{key}': {e}")
-        return None
-    
-    async def expire(self, key: str, seconds: int) -> bool:
-        """Proxy to expire method."""
-        if DEV_MODE:
-            return await self._mock_client.expire(key, seconds)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.cache:
-            try:
-                return await self._redis_manager.cache.expire(key, seconds)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"EXPIRE failed for '{key}': {e}")
-                return False
-        return False
-    
-    async def xadd(self, stream: str, data: dict, **kwargs):
-        """Proxy to xadd method (for streams)."""
-        if DEV_MODE:
-            return await self._mock_client.xadd(stream, data, **kwargs)
-        
-        await self._ensure_manager()
-        if self._redis_manager and self._redis_manager.events:
-            try:
-                import json
-                body = {
-                    k: json.dumps(v) if not isinstance(v, str) else v
-                    for k, v in data.items()
-                }
-                return await self._redis_manager.events.xadd(stream, body, **kwargs)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"XADD failed for '{stream}': {e}")
-                return None
-        return None
-    
     async def xrevrange(self, stream: str, count: int = None, **kwargs):
         """Proxy to xrevrange method (for streams)."""
         if DEV_MODE:
@@ -1151,15 +1055,8 @@ class SharedRedisManager:
                 logger.warning(f"LPOP failed for '{key}': {e}")
         return None
 
-    async def zremrangebyscore(self, key: str, min: Any, max: Any) -> int:
-        """Proxy to cache zremrangebyscore method."""
-        client = await self._get_active_cache()
-        if client:
-            try:
-                return await client.zremrangebyscore(key, min, max)
-            except Exception as e:
-                logger.warning(f"ZREMRANGEBYSCORE failed for '{key}': {e}")
-        return 0
+    # RED-01: a byte-identical `zremrangebyscore` duplicate used to sit here, shadowed
+    # by this class's own later definition below. Removed as dead code.
 
     async def zcard(self, key: str) -> int:
         """Proxy to cache zcard method."""

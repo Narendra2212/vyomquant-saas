@@ -159,6 +159,12 @@ class ExecutionGuard:
         self.max_order_size_usd = Decimal("1000000")  # $1M max order
         self.min_order_size_usd = Decimal("10")  # $10 min order
         self.max_spread_pct = Decimal("0.01")  # 1% max spread
+        # GUARD-01: a spot buy's required funding, as a fraction of notional on top of
+        # the full notional itself -- covers the exchange's own trading fee so a balance
+        # check that just barely clears the notional does not then fail at the venue
+        # over the fee. Matches the default fee rate used elsewhere in this codebase
+        # (e.g. paper_trading_service's default_fee_rate).
+        self.fee_buffer_pct = Decimal("0.001")  # 0.1%
         
         # Statistics
         self.total_validations = 0
@@ -815,25 +821,49 @@ class ExecutionGuard:
     ) -> ValidationResult:
         """
         STEP 7.4: Balance Validation
-        
+
         Check:
         available_balance >= required_margin
-        
+
         IF not: BLOCK
+
+        GUARD-01. SPOT REQUIRES THE FULL NOTIONAL, NOT 10% "MARGIN"
+        -------------------------------------------------------------
+        This used to assume a flat 10% margin requirement (10x leverage) for every
+        market, unconditionally. There is no margin/leverage trading anywhere on this
+        platform -- RT-21's own investigation of ``BotRunner.recovered_exposure_coins``
+        established the exposure model is spot-only, always non-negative, no short
+        side, let alone a leveraged one -- so that 10% figure would have passed this
+        check with as little as 1/10th of what buying the asset actually costs. A
+        ``market_type`` other than ``"spot"`` is refused outright rather than guessed at:
+        this guard has no correct way to price a feature that does not exist here.
         """
         # Get available balance
         available_balance = Decimal(str(portfolio_state.get("available_balance", 0)))
         free_margin = Decimal(str(portfolio_state.get("free_margin", portfolio_state.get("available_balance", 0))))
-        
+
         # Calculate required margin for this trade
         size = Decimal(str(signal.get("size", 0)))
         price = Decimal(str(signal.get("price", 0)))
         notional = size * price
-        
-        # Assume 10% margin requirement (adjustable)
-        margin_requirement_pct = Decimal("0.10")
-        required_margin = notional * margin_requirement_pct
-        
+
+        market_type = str(signal.get("market_type") or "spot").strip().lower()
+        if market_type != "spot":
+            return ValidationResult(
+                check_name="balance_validation",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message=(
+                    f"Unsupported market_type={market_type!r}: this platform supports "
+                    "spot trading only, so a margin/leverage requirement cannot be "
+                    "correctly computed for it."
+                ),
+                details={"market_type": market_type},
+            )
+
+        # Spot: the full notional, plus a buffer for the venue's own trading fee.
+        required_margin = notional * (Decimal("1") + self.fee_buffer_pct)
+
         # Use the more conservative of available_balance or free_margin
         effective_balance = min(available_balance, free_margin)
         
@@ -848,7 +878,8 @@ class ExecutionGuard:
                     "free_margin": str(free_margin),
                     "required_margin": str(required_margin),
                     "notional_value": str(notional),
-                    "margin_requirement_pct": str(margin_requirement_pct),
+                    "market_type": market_type,
+                    "fee_buffer_pct": str(self.fee_buffer_pct),
                     "shortfall": str(required_margin - effective_balance),
                 },
             )
@@ -1481,44 +1512,72 @@ class ExecutionGuard:
         )
     
     async def _validate_risk_engine_status(self) -> ValidationResult:
-        """Validate risk engine is operational."""
+        """Validate risk engine is operational.
+
+        GUARD-01. FAILS CLOSED ON A GENUINE READ OR PARSE FAILURE
+        -----------------------------------------------------------
+        The whole ``try`` used to span the Redis read AND the parse, with one
+        ``except Exception`` treating EVERY failure - a dropped Redis connection, a
+        corrupted status payload, this guard's own `self.redis` being `None` - exactly
+        like "no status has ever been recorded", and answering PASS either way. That
+        conflates two different facts: "nothing has reported unhealthy" (a real absence,
+        legitimately PASS) and "the evidence could not be read" (a failure, which a
+        safety gate must not silently resolve to its own claim that things are fine).
+
+        A missing key is still the first case and still PASS. A Redis error or an
+        unparseable payload is now the second, and BLOCKs.
+        """
+        risk_key = "risk:engine:status"
         try:
-            risk_key = "risk:engine:status"
             status = await self.redis.get(risk_key)
-            
-            if status:
-                # SECURITY: Use json.loads instead of ast.literal_eval for safer deserialization
-                # Fallback to ast.literal_eval for backward compatibility during migration
-                try:
-                    status_data = json.loads(status.decode())
-                except (json.JSONDecodeError, ValueError):
-                    # During migration, some data may still be stored as Python literals
-                    # This fallback will be removed once all data is migrated to JSON
-                    status_data = ast.literal_eval(status.decode())
-                if not status_data.get("operational", True):
-                    return ValidationResult(
-                        check_name="risk_engine",
-                        passed=False,
-                        severity=ValidationSeverity.BLOCK,
-                        message="Risk engine not operational",
-                        details=status_data,
-                    )
-            
-            return ValidationResult(
-                check_name="risk_engine",
-                passed=True,
-                severity=ValidationSeverity.PASS,
-                message="Risk engine operational",
-            )
-            
         except Exception as e:
-            # If no status set, assume operational (default)
+            return ValidationResult(
+                check_name="risk_engine",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message=f"Risk engine status could not be read: {e}",
+            )
+
+        if not status:
             return ValidationResult(
                 check_name="risk_engine",
                 passed=True,
                 severity=ValidationSeverity.PASS,
-                message=f"Risk engine status unknown (assumed OK): {e}",
+                message="Risk engine status not recorded (nothing has reported unhealthy)",
             )
+
+        try:
+            # SECURITY: Use json.loads instead of ast.literal_eval for safer deserialization
+            # Fallback to ast.literal_eval for backward compatibility during migration
+            try:
+                status_data = json.loads(status.decode())
+            except (json.JSONDecodeError, ValueError):
+                # During migration, some data may still be stored as Python literals
+                # This fallback will be removed once all data is migrated to JSON
+                status_data = ast.literal_eval(status.decode())
+        except Exception as e:
+            return ValidationResult(
+                check_name="risk_engine",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message=f"Risk engine status payload is unreadable: {e}",
+            )
+
+        if not status_data.get("operational", True):
+            return ValidationResult(
+                check_name="risk_engine",
+                passed=False,
+                severity=ValidationSeverity.BLOCK,
+                message="Risk engine not operational",
+                details=status_data,
+            )
+
+        return ValidationResult(
+            check_name="risk_engine",
+            passed=True,
+            severity=ValidationSeverity.PASS,
+            message="Risk engine operational",
+        )
 
     async def _validate_composite_risk_score(
         self,
