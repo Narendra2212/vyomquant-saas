@@ -1552,9 +1552,9 @@
       "status": "OPEN",
       "fix_commit": "",
       "evidence": "",
-      "verification_level": "none",
+      "verification_level": "investigated, not fixed",
       "production_verified": false,
-      "remaining_action": "Delete core/credential_vault.py."
+      "remaining_action": "INVESTIGATED THIS SESSION, deliberately NOT deleted -- confirmed core/credential_vault.py::CredentialVault is genuinely unimported by any application router/service (grepped the whole backend_app/ tree), so the \"unused\" half of the title holds. But \"delete it\" is riskier than it looks: at least 8 test files exercise it directly as if it were live, security-relevant code -- test_credential_vault_strength.py, test_credential_vault_key.py, test_tenant01_credential_vault_isolation.py, test_no_undefined_names.py (static-checks ITS OWN source for undefined names), tests/regression/capture_baseline.py's capture_credential_vault, test_exchange_credential_log_redaction.py, test_strategy_dag_architecture.py, test_task_8_2_deployment_binding.py, test_builder_tenant_isolation.py. Most tellingly, test_tenant01_credential_vault_isolation.py explicitly frames CredentialVault's Redis tenant-key-scoping + stored-tenant re-check as a REAL negative control for a TENANT-01 residual -- and that pattern (tenant-scoped Redis key + a re-verification against the stored tenant_id) is a STRONGER isolation design than api_key_vault.py's bare .eq('user_id', user_id) PostgREST filter, which is the actual gap TENANT-01's own ledger entry names. Deleting credential_vault.py now would not just remove dead code; it would discard a more-isolated, already-tested alternative that a future session fixing TENANT-01's api_key_vault.py gap might want to migrate TOWARD, and would require touching 8+ test files to do it. Left OPEN rather than guessed at: whether this module is abandoned debris or a half-landed migration target is an architectural judgment call for whoever owns that direction, not something to decide by deleting it and seeing what breaks."
     },
     {
       "id": "PM-01",
