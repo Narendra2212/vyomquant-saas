@@ -348,6 +348,13 @@ def _session_row(**overrides: Any) -> Dict[str, Any]:
     seeded as ``PENDING_SELECTION`` - a value no selection rule can produce - so "the feed
     recorded the source it selected" is a change this file can see, rather than a value that
     was already there.
+
+    ``event_sequence`` is seeded at ``0``, the column's real DEFAULT (009), not left absent: this
+    double's ``eq`` filter compares ``str(row.get(col))`` against the literal it was given, and an
+    ABSENT key reads back as ``None`` -> ``"None"``, which never equals ``"0"`` -
+    :func:`paper_repository.allocate_session_event_sequence`'s own compare-and-swap (``UPDATE ...
+    WHERE event_sequence = 0``) would then lose its three attempts against this fixture even
+    though the real column defaults the row to exactly the value the swap expects (PAPER-06).
     """
     row: Dict[str, Any] = {
         "id": SESSION,
@@ -360,6 +367,7 @@ def _session_row(**overrides: Any) -> Dict[str, Any]:
         "market_data_source": "PENDING_SELECTION",
         "feed_state": feed.FEED_STATE_PENDING,
         "feed_transport": None,
+        "event_sequence": 0,
     }
     row.update(overrides)
     return row

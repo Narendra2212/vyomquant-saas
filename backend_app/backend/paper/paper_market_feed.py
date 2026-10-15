@@ -1430,11 +1430,24 @@ class FeedHandle:
 
         The payload names the channel and the reason and carries no credential, no endpoint and no
         other user's identifier (Requirement 26.4).
+
+        PAPER-06: this used to allocate its sequence number from
+        ``repo.next_session_event_sequence`` (``max(paper_events.sequence) + 1`` over the LOG)
+        while every other Paper_Channel event allocates from ``repo.allocate_session_event_sequence``
+        (an atomic compare-and-swap on the ``paper_sessions.event_sequence`` COUNTER). Those two can
+        disagree: this writer's INSERT advances the log but never touches the counter, so the next
+        ordinary event's counter-based allocation can read a STALE, lower number and collide with
+        the sequence this writer already used -- ``uq_paper_event_seq`` then refuses that ordinary
+        event's INSERT with ``PaperDuplicateSessionEvent``, and nothing upstream of ``record_event``
+        (``paper_session_service._emit`` / the bar-stepping loop) catches and retries it, so that
+        bar is dropped rather than recorded. Routing this writer through the SAME counter-based
+        allocator as every other event means there is only one source of truth for the next
+        sequence number, so this race cannot happen at all.
         """
         if self.supabase is None:
             return
         try:
-            sequence = repo.next_session_event_sequence(
+            sequence = repo.allocate_session_event_sequence(
                 self.supabase, self.user_id, self.session_id
             )
             event_id = (
