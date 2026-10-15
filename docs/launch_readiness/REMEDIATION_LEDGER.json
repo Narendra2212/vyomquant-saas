@@ -1510,12 +1510,12 @@
       "severity": "Low",
       "component": "Configuration / database",
       "title": "database_pool silently falls back to sqlite or a hardcoded postgres:postgres@localhost DSN on misconfiguration",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "fb3eb06",
+      "evidence": "Confirmed by reading backend_app/core/database_pool.py: two separate silent substitutions. (1) DATABASE_URL unset -> fell back to sqlite:///./algo22.db unconditionally UNLESS the trading mode (VYOMQUANT_MODE) was paper/live -- a process running in \"safe\" mode in production would silently write every read and write to an ephemeral, per-container SQLite file with no error anywhere. (2) DATABASE_URL set to a Supabase project URL (https://..., not a Postgres DSN) with SUPABASE_DB_URL unset -> fell back to the well-known postgres:postgres@localhost:5432/postgres DSN, silently connecting under a completely different identity. Refactored both into a pure resolve_database_url() function (mirroring core/rate_limit.py::resolve_rate_limit_config's own frozen-decision pattern) gated on local_state_is_acceptable() -- the same shared \"is there a second process to coordinate with?\" judgement core/runtime_env.py already centralizes for redis_manager and rate_limit -- raising instead of substituting outside a declared local/test environment. The pre-existing paper/live refusal (keyed on the trading mode, not the deployment environment) is preserved unchanged and checked first, so it is not weakened. New tests/test_cfg01_database_url_fails_closed.py (9 tests): both substitutions are proven to raise outside a local/test environment and to still produce the fallback inside one; the pre-existing paper/live refusal is proven to still fire even INSIDE a local environment (negative control, not weakened); a configured real DSN passes through unchanged in both cases (negative control). tests/test_database_pool.py, test_database_pool_math.py, test_sqlalchemy_pool_events_fix.py, test_get_db_dependency.py (24 tests, pre-existing) and the broader -k database sweep (136 tests) still pass.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Refuse to start (raise) rather than silently substituting a different database when DATABASE_URL is missing or malformed outside a declared local/test environment."
+      "remaining_action": "core/database.py's own \"no-pooling fallback\" (referenced in a comment in database_pool.py as running \"precisely when THIS module failed to import\") was not audited for the same pattern -- out of scope for this pass, which fixed the module CFG-01 names."
     },
     {
       "id": "RL-01",
