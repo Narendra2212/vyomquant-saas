@@ -488,6 +488,34 @@ def normalise_execution_config(raw: Any) -> Dict[str, Any]:
             {"unknown_fields": unknown, "known_fields": list(EXECUTION_CONFIG_FIELDS)},
         )
 
+    # DEPLOY-01: every field :data:`EXECUTION_CONFIG_FIELDS` names is validated and stored
+    # into the strategy_deployments row, but grepping the whole execution path (BotRunner,
+    # ExecutionGuard, order_control) turns up no reader for any of them -- a deployment with
+    # max_order_notional=1000 runs with exactly the same order-size ceiling as one with no
+    # execution_config at all. That is the UNKNOWN_FIELD refusal above's own stated reason
+    # for refusing a key ("the limit it expresses would not be in force"), applied
+    # inconsistently: a KNOWN field with the same property was silently accepted instead.
+    # Refused here too, not silently stored, until a real enforcement path exists --
+    # the same choice strategy_service.assert_deploy_params_applicable already makes for
+    # capital/trade_size_pct/stop_loss_pct/max_drawdown_pct (DEPLOY_PARAMS_NOT_APPLIED).
+    supplied_but_not_enforced = sorted(
+        str(k) for k in raw if str(k) in EXECUTION_CONFIG_FIELDS and raw[k] is not None
+    )
+    if supplied_but_not_enforced:
+        raise DeployRejected(
+            "EXECUTION_CONFIG_NOT_ENFORCED",
+            f"execution_config field(s) {supplied_but_not_enforced} are validated and "
+            "stored but no execution path reads them yet, so this deployment would run "
+            "with exactly the limits a bare execution_config would have had. Remove "
+            "them rather than rely on a limit that is not in force. Per-trade risk that "
+            "IS enforced lives on the strategy's own risk configuration "
+            "(strategies.risk: position_size_pct, stop_loss_pct, take_profit_pct).",
+            {
+                "not_enforced_fields": supplied_but_not_enforced,
+                "known_fields": list(EXECUTION_CONFIG_FIELDS),
+            },
+        )
+
     return {str(key): raw[key] for key in EXECUTION_CONFIG_FIELDS if key in raw}
 
 

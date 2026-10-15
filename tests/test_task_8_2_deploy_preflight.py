@@ -528,7 +528,10 @@ class TestTheRefusalsThatAreAboutTheRequest:
         assert condition["status"] == db.CONDITION_FAILED
         assert condition["code"] == "EXECUTION_CONFIG_UNKNOWN_FIELD"
 
-    def test_a_known_execution_config_field_passes(self):
+    def test_a_known_but_unenforced_execution_config_field_is_a_reported_condition(self):
+        """DEPLOY-01: max_order_notional is a published field, but nothing in the execution
+        path reads it yet -- a value here is refused at preflight, the same as an unknown
+        field, rather than reported as passing and silently discarded on deploy."""
         response = _get(
             _sb(),
             params={
@@ -537,11 +540,12 @@ class TestTheRefusalsThatAreAboutTheRequest:
             },
         )
 
+        assert response.status_code == 200, response.text
         body = response.json()
-        assert _condition(body, "execution_config")["detail"]["fields"] == [
-            "max_order_notional"
-        ]
-        assert body["deployable"] is True
+        condition = _condition(body, "execution_config")
+        assert condition["status"] == db.CONDITION_FAILED
+        assert condition["code"] == "EXECUTION_CONFIG_NOT_ENFORCED"
+        assert body["deployable"] is False
 
     def test_an_unauthenticated_caller_gets_no_condition_data(self):
         """Requirement 22.4: no strategy data on an authorization failure."""
