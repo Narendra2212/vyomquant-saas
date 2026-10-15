@@ -561,12 +561,12 @@
       "severity": "Medium",
       "component": "Auth",
       "title": "MFA required only for exchange key changes; admin/operator actions accept aal1",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "PENDING",
+      "evidence": "Cross-referenced against SEC-15 (P1, same underlying defect, different audit pass's finding id, kept separate per this session's rule to preserve original ids): SEC-15's fix already added Depends(require_aal2) to all three get_operator_user-gated mutating routes in routers/admin.py (set_user_status, global_kill_switch/kill-all, reinitialize_platform) -- exactly SEC-05's own remaining_action ('Depend on require_aal2 for admin/operator routes'). Verified this is complete, not merely assumed: grepped the whole backend_app/routers/ tree and confirmed get_operator_user is used nowhere else, so there is no un-fixed operator-gated route left anywhere in the codebase. get_admin_user-gated routes (health/metrics/user-listing/ticket-reply/strategy-moderation/worker-start-stop) are a broader, lower-blast-radius role (admin OR support OR operator) that get_operator_user's own docstring and require_aal2's own 'do not apply globally' principle both deliberately exclude from this requirement -- not a gap, by the existing security contract's own design. Billing mutations and a password-change path are SEC-15's own separately-recorded, explicit product-decision deferral, not re-litigated here. New regression tests/test_sec05_every_operator_route_requires_mfa.py (3 tests): an AST-based sweep of every router module (not just admin.py) asserting any get_operator_user-gated handler, anywhere, also depends on require_aal2 -- SEC-15's own tests pin the three known routes individually but do not guard against a FUTURE operator-gated route shipping without MFA the way the original three did before SEC-15.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Depend on require_aal2 for admin/operator routes."
+      "remaining_action": "None beyond SEC-15's own recorded, explicit product-decision deferral (billing mutations, password-change path)."
     },
     {
       "id": "PRIV-01",
