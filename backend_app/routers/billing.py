@@ -1480,6 +1480,27 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
         logger.error(f"Failed to update Supabase profile for user {user_id}: {e}")
         raise
 
+    # BILL-06. `available_discounts` was read and applied to the charge at checkout but
+    # never decremented anywhere - a one-time discount, once granted, applied to every
+    # future checkout forever. Decremented HERE, on confirmed payment (never at checkout
+    # session creation, where a customer who abandons the session would burn it for
+    # nothing), through the atomic RPC migration 041 added - `UPDATE ... WHERE
+    # available_discounts > 0` in one statement, so two concurrent webhook deliveries for
+    # the same user cannot both decrement past zero. A failure here (including "nothing
+    # was available to decrement") is logged and swallowed rather than raised: the
+    # customer has already paid and the entitlement above is already granted, so refusing
+    # the whole request over an accounting side-effect would be the worse outcome by far.
+    if discount_applied:
+        try:
+            sb.rpc("decrement_available_discount", {"target_user_id": user_id}).execute()
+        except Exception as discount_err:
+            logger.warning(
+                "Could not decrement available_discounts for user %s after a discounted "
+                "checkout (%s); the entitlement was still granted.",
+                user_id,
+                discount_err,
+            )
+
     # Invalidate profile cache so the new tier takes effect immediately (FIX N4)
     await invalidate_profile_cache(user_id)
 
