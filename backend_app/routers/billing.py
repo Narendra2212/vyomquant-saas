@@ -443,11 +443,34 @@ def _validate_webhook_ip(request: Request, provider: str) -> None:
         # request, and it needs to be visible in whatever surfaces production errors. The
         # allowlist size is included because "0 entries" and "the provider changed its egress
         # range" are the two causes and they are indistinguishable from the address alone.
+        #
+        # BILL-02. The raw ``X-Forwarded-For`` and ``TRUSTED_PROXY_HOPS`` are now logged too.
+        # A THIRD cause this rejection can have is a proxy-hop miscount: if this deployment's
+        # real chain has one more hop than ``TRUSTED_PROXY_HOPS`` accounts for (a CDN in front
+        # of the load balancer that this code was not told about), ``_client_ip_behind_proxies``
+        # resolves to the nearer proxy's OWN address, not the provider's - and that address is
+        # never in ``allowed_ips`` no matter how current the list is, so EVERY genuine webhook
+        # is rejected and the previous message's advice ("update the IP list") sends an operator
+        # the wrong direction. The resolved address and the raw header, read together, are what
+        # distinguish the two: a `client_ip` that is not shaped like a public provider address,
+        # or that recurs across many distinct source requests, points at the hop count rather
+        # than a stale allowlist. Fixing the actual count requires knowing this deployment's real
+        # proxy topology (how many hops sit in front of this process in production), which this
+        # code cannot determine from inside the request it is handling.
+        hops_configured = os.environ.get("TRUSTED_PROXY_HOPS", str(_TRUSTED_PROXY_HOPS_DEFAULT))
         logger.error(
-            "Webhook REJECTED by IP allowlist: provider=%s client_ip=%s allowlist_entries=%d. "
-            "The payment may already be captured; no entitlement will be granted for it. "
-            "Set %s_WEBHOOK_IPS to the provider's current egress list.",
-            provider, client_ip, len(allowed_ips), provider.upper(),
+            "Webhook REJECTED by IP allowlist: provider=%s client_ip=%s allowlist_entries=%d "
+            "x_forwarded_for=%r trusted_proxy_hops=%s. The payment may already be captured; no "
+            "entitlement will be granted for it. If client_ip does not look like one of the "
+            "provider's own published addresses, TRUSTED_PROXY_HOPS likely does not match this "
+            "deployment's real proxy chain (see _client_ip_behind_proxies) - check that before "
+            "assuming %s_WEBHOOK_IPS is merely stale.",
+            provider,
+            client_ip,
+            len(allowed_ips),
+            request.headers.get("X-Forwarded-For"),
+            hops_configured,
+            provider.upper(),
         )
         raise HTTPException(403, "Webhook request from unauthorized IP address")
 
