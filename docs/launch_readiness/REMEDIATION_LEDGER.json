@@ -1042,12 +1042,12 @@
       "severity": "Medium",
       "component": "Billing",
       "title": "A one-time referral discount is never decremented and applies to every future checkout",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "c6ee1d2",
+      "evidence": "Added migration 041_decrement_available_discount.sql: a SECURITY DEFINER Postgres function doing an atomic UPDATE ... WHERE available_discounts > 0 in one statement, created with EXECUTE revoked from anon/authenticated from day one (modelled on increment_ml_addon, migration 023s retroactive-fix target). backend_app/routers/billing.py::_apply_billing_entitlement now calls it exactly when discount_applied was passed through from the webhook -- on confirmed payment, never at checkout-session creation, so an abandoned checkout does not burn the discount. A decrement failure is logged and swallowed rather than blocking the already-paid-for entitlement grant. Regression: tests/test_bill06_discount_is_decremented_after_use.py (4 tests, code+test, verified this session). Full billing/subscription/referral/pricing suite (286 passed) and validation_sweep/schema_drift/baseline (528 passed / 2 known pre-existing unrelated billing failures) clean.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Decrement available_discounts (or move to a discount_redemptions ledger with a one-time-use token) at the point of successful checkout."
+      "remaining_action": ""
     },
     {
       "id": "SEC-13",
