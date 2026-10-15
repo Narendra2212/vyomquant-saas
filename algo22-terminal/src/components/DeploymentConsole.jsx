@@ -26,23 +26,11 @@ import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { post, get } from "../api";
 
-const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
+const DeploymentConsole = ({ strategyId, versionId }) => {
   const [activeTab, setActiveTab] = useState("deployments");
   const [deployments, setDeployments] = useState([]);
   const [selectedDeployment, setSelectedDeployment] = useState(null);
-  const [isDeploying, setIsDeploying] = useState(false);
-  
-  const [deploymentConfig, setDeploymentConfig] = useState({
-    environment: "paper",
-    exchange_id: null,
-    exchange_symbol: "BTC/USDT",
-    worker_region: "us-east-1",
-    initial_capital: 10000,
-    risk_per_trade: 0.01,
-    max_drawdown: 0.2,
-    daily_loss_limit: 0.05
-  });
-  
+
   const loadDeployments = async () => {
     try {
       const response = await get(`/api/strategies/${strategyId}/deployments`);
@@ -51,27 +39,18 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
       console.error("Failed to load deployments:", error);
     }
   };
-  
-  const deployStrategy = async () => {
-    setIsDeploying(true);
-    
-    try {
-      const response = await post(`/api/strategies/${strategyId}/deploy`, {
-        execution_graph: executionGraph,
-        ...deploymentConfig
-      });
-      
-      if (response.status === "deployed") {
-        await loadDeployments();
-        setSelectedDeployment(response.deployment_id);
-      }
-    } catch (error) {
-      console.error("Deployment failed:", error);
-    } finally {
-      setIsDeploying(false);
-    }
-  };
-  
+
+  // FE-08: a "Deploy Strategy" button used to live in this console's header, posting
+  // straight to the legacy `POST /api/strategies/{id}/deploy` with no confirmation, no
+  // preflight review, and no real-funds acknowledgement -- the canonical deploy path
+  // (`lib/deployFlow.js` + `components/deploy/DeployConfirmation.jsx`) is none of those
+  // things optional. RT-03 already made that legacy route itself paper-only server-side
+  // regardless of what this form sent, so clicking it could not reach live capital -- but
+  // it still bypassed the one reviewed entry point for no reason, from the same page that
+  // offers it. Removed outright per this finding's own first option, rather than rebuilt
+  // to duplicate the canonical flow's gating a second time. This console still reads and
+  // manages EXISTING deployments (pause/resume/stop below); creating a new one belongs to
+  // the canonical flow only.
   const pauseDeployment = async (deploymentId) => {
     try {
       await post(`/api/deployments/${deploymentId}/pause`);
@@ -142,17 +121,15 @@ const DeploymentConsole = ({ strategyId, versionId, executionGraph }) => {
   
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%" }}>
-      {/* Header */}
+      {/* Header. FE-08: the unguarded "Deploy Strategy" button that lived here is gone --
+          see the comment above `pauseDeployment`. */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Server size={24} style={{ color: token.brand.base }} />
           <span style={{ fontSize: 18, fontWeight: 700, color: token.content.primary }}>Deployment Console</span>
         </div>
-        <Button variant="primary" size="sm" Icon={Play} onClick={deployStrategy} disabled={isDeploying}>
-          {isDeploying ? "Deploying..." : "Deploy Strategy"}
-        </Button>
       </div>
-      
+
       {/* Tabs */}
       <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${token.line.default}`, paddingBottom: 12 }}>
         {["deployments", "worker", "health", "logs"].map(tab => (
