@@ -471,6 +471,25 @@ export const libraryApi = {
   clone: (listingId) => post(`/api/library/${encodeURIComponent(listingId)}/clone`),
 
   /**
+   * Deploy a Listing the caller is entitled to, without copying its logic (MKT-05).
+   *
+   * `POST /api/library/{library_id}/deploy` (`deploy_marketplace_strategy`, rate-limited
+   * 10/60s). The subscriber-safe path: the server binds a new `strategy_deployments` row to
+   * the OWNER's current version and never copies `buy_logic`/`sell_logic`/`risk`/
+   * `indicators` into a row the caller owns. Runs as a PAPER deployment — there is no live
+   * path for a marketplace Listing today.
+   *
+   * `body` accepts only `symbol`, `timeframe`, `capital` and `session_options`; any other key
+   * is a 422 that names the field but never echoes the value. All four are optional.
+   *
+   * @param {string} listingId
+   * @param {{symbol?: string, timeframe?: string, capital?: number, session_options?: Object}} [body]
+   * @returns {Promise<Object>} `{deployment_id, library_id, granted_via, message}`.
+   */
+  deploy: (listingId, body = {}) =>
+    post(`/api/library/${encodeURIComponent(listingId)}/deploy`, body),
+
+  /**
    * Submit or update the caller's rating for a Listing.
    *
    * `POST /api/library/{library_id}/rate` (`rate_strategy`, rate-limited 20/minute). Only a

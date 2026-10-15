@@ -85,7 +85,7 @@ const { mockApi } = vi.hoisted(() => {
       'myStrategies',
       'checkout', 'subscriptionStatus',
       'cancelSubscription', 'renewSubscription',
-      'clone', 'rate', 'settings',
+      'clone', 'deploy', 'rate', 'settings',
       'creatorAnalytics', 'subscriberAnalytics',
     ]),
     submissions: fns(['create', 'get', 'priceRange', 'setPrice']),
@@ -259,8 +259,8 @@ const stubCatalogue = (card = catalogueCard()) => {
 const signIn = () => sessionStorage.setItem('token', 'a-token');
 const signOut = () => sessionStorage.removeItem('token');
 
-const renderPage = () => render(
-  <MemoryRouter>
+const renderPage = (initialEntries = ['/']) => render(
+  <MemoryRouter initialEntries={initialEntries}>
     <StrategyMarketplace />
   </MemoryRouter>,
 );
@@ -853,7 +853,120 @@ describe('unmeasured figures and unread prices (Requirements 28.1, 28.5)', () =>
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════
-// 6. Controls — each assertion above, shown failing when the behaviour it describes is broken
+// 6. MKT-05 — the deploy flow for a subscriber who already holds the Subscription
+// ═════════════════════════════════════════════════════════════════════════════════════════
+//
+// Before this: a subscriber had no control anywhere on this page that could reach
+// `POST /api/library/{id}/deploy` — `isSubscribed` only ever produced a disabled "Subscribed"
+// button. This section proves the control exists, calls the real endpoint with what the
+// trader typed (and nothing invented for a field they left blank), and that `?listing_id=
+// &intent=deploy` on the URL opens the right Listing on mount without a card click.
+
+const ACTIVE_SUBSCRIPTION = { subscription: { status: 'active', expires_at: null } };
+
+describe('deploy (MKT-05): the control a subscriber uses to run what they paid for', () => {
+  it('is absent for a listing the caller has not subscribed to', async () => {
+    signIn();
+    await openDetail(listingDetail(), { subscription: { status: 'not_subscribed' } });
+
+    expect(screen.queryByTestId('deploy-panel')).toBeNull();
+  });
+
+  it('appears once the subscription reads back as active', async () => {
+    signIn();
+    await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+
+    expect(await screen.findByTestId('deploy-panel')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /^deploy$/i })).not.toBeNull();
+  });
+
+  it('sends only the fields the trader actually typed', async () => {
+    signIn();
+    mockApi.library.deploy.mockResolvedValue({
+      deployment_id: 'dep-1',
+      library_id: LISTING_ID,
+      message: 'Marketplace deployment created against the owner\'s version.',
+    });
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await user.type(screen.getByLabelText(/symbol/i), 'BTC/USDT');
+    await user.type(screen.getByLabelText(/timeframe/i), '1h');
+    await user.type(screen.getByLabelText(/capital/i), '5000');
+    await user.click(screen.getByRole('button', { name: /^deploy$/i }));
+
+    await waitFor(() => expect(mockApi.library.deploy).toHaveBeenCalledWith(LISTING_ID, {
+      symbol: 'BTC/USDT',
+      timeframe: '1h',
+      capital: 5000,
+    }));
+    expect(window.showToast).toHaveBeenCalledWith(
+      'success',
+      'Marketplace deployment created against the owner\'s version.',
+    );
+    expectNoDialogAndOnlyLibrary();
+  });
+
+  it('sends an empty body when every field is left blank, rather than inventing one', async () => {
+    signIn();
+    mockApi.library.deploy.mockResolvedValue({ deployment_id: 'dep-2', library_id: LISTING_ID });
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await user.click(screen.getByRole('button', { name: /^deploy$/i }));
+
+    await waitFor(() => expect(mockApi.library.deploy).toHaveBeenCalledWith(LISTING_ID, {}));
+  });
+
+  it('reports a refusal through the toast mechanism, never a dialog', async () => {
+    signIn();
+    mockApi.library.deploy.mockRejectedValue(new Error('MARKETPLACE_SUBSCRIPTION_EXPIRED'));
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await user.click(screen.getByRole('button', { name: /^deploy$/i }));
+
+    await waitFor(() => expect(window.showToast).toHaveBeenCalledWith('error', expect.any(String)));
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('opens the named Listing directly when the URL carries ?listing_id and intent=deploy', async () => {
+    signIn();
+    const detail = listingDetail();
+    stubCatalogue(catalogueCard({ name: detail.name, price_minor: detail.price_minor }));
+    mockApi.library.detail.mockResolvedValue(detail);
+    mockApi.library.subscriptionStatus.mockResolvedValue(ACTIVE_SUBSCRIPTION.subscription);
+
+    render(
+      <MemoryRouter initialEntries={[`/?listing_id=${LISTING_ID}&intent=deploy`]}>
+        <StrategyMarketplace />
+      </MemoryRouter>,
+    );
+
+    // No card click anywhere in this test -- the URL alone put the page in the detail view.
+    await screen.findByRole('heading', { level: 2, name: detail.name });
+    expect(await screen.findByTestId('deploy-panel')).not.toBeNull();
+    expect(mockApi.library.detail).toHaveBeenCalledWith(LISTING_ID);
+  });
+
+  it('does not open any Listing when the URL carries listing_id with no deploy intent', async () => {
+    signIn();
+    stubCatalogue();
+
+    render(
+      <MemoryRouter initialEntries={[`/?listing_id=${LISTING_ID}`]}>
+        <StrategyMarketplace />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /strategy marketplace/i });
+    expect(mockApi.library.detail).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('deploy-panel')).toBeNull();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// 7. Controls — each assertion above, shown failing when the behaviour it describes is broken
 // ═════════════════════════════════════════════════════════════════════════════════════════
 
 describe('controls: the assertions above can fail', () => {

@@ -175,6 +175,11 @@ const EXPECTED = {
   },
 
   clone: { args: [ID], verb: 'post', call: [`/api/library/${ENC}/clone`] },
+
+  // MKT-05: the subscriber-safe deploy path. Default body is {}, the handler's own default
+  // for a request carrying none of symbol/timeframe/capital/session_options.
+  deploy: { args: [ID], verb: 'post', call: [`/api/library/${ENC}/deploy`, {}] },
+
   rate: { args: [ID, RATING_BODY], verb: 'post', call: [`/api/library/${ENC}/rate`, RATING_BODY] },
 
   // A PATCH, not a PUT: the route is `@literal_router.patch("/{library_id}/settings")`.
