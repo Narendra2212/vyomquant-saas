@@ -94,10 +94,16 @@ def validate_production_config() -> None:
         jwt_secret = os.getenv("JWT_SECRET")
         weak_secrets = ["dev-secret-change-in-production", "dummy", "test", "secret"]
         if jwt_secret and any(weak in jwt_secret.lower() for weak in weak_secrets):
+            # SEC-11: this used to log jwt_secret[:10] -- ten real characters of the
+            # production JWT signing secret, straight into whatever log sink this
+            # process ships to. Naming which weak pattern matched identifies the
+            # problem exactly as well, without putting any of the secret's own
+            # characters in a log line.
+            matched = next(weak for weak in weak_secrets if weak in jwt_secret.lower())
             logger.warning(
-                f"SECURITY: JWT_SECRET appears to be a weak development secret. "
-                f"Production requires a cryptographically strong secret. "
-                f"Current value contains: {jwt_secret[:10]}..."
+                f"SECURITY: JWT_SECRET appears to be a weak development secret "
+                f"(matches known placeholder pattern {matched!r}). "
+                f"Production requires a cryptographically strong secret."
             )
         
         # Additional JWT_SECRET validation (warning only)
