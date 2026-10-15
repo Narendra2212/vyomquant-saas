@@ -1263,12 +1263,12 @@
       "severity": "Low",
       "component": "API / marketplace",
       "title": "Marketplace browse builds a PostgREST filter from raw user input",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "7bf90c1",
+      "evidence": "Confirmed by reading backend_app/routers/library.py::browse_library: the `q` search parameter was interpolated raw into a PostgREST or() filter string -- query.or_(f\"name.ilike.%{q}%,description.ilike.%{q}%\") -- and PostgREST's filter mini-language treats `,`, `.`, `(`, `)` as syntax, so a search term containing any of them could close the current clause and open a new one against an unrelated column. Separately, the handler fetched ALL matching rows via query.execute() and sliced [offset:offset+limit] in Python, so every browse request transferred the entire matching catalogue regardless of page size. Fixed both. (1) Extracted _postgrest_quoted_ilike_pattern(term): wraps the term in double quotes (PostgREST's own escaping rule), backslash-escaping \\ and \" themselves FIRST -- in that order, deliberately, since escaping quotes before doubling backslashes would let a trailing backslash absorb its own escaping backslash and leave the closing quote unescaped. (2) Switched to count=\"exact\" on .select() plus .range(offset, offset+limit-1) on the query, pushing LIMIT/OFFSET and the total-match count to PostgREST instead of this process. Extended two existing fake-Supabase test doubles (tests/test_marketplace_pipeline.py::FakeTable, tests/test_library_detail_projection_regression.py::_Query/_Resp) with .range()/count=\"exact\" support, since neither had it before this fix and both are exercised by this same handler's existing regression suite. New tests/test_api08_browse_search_term_is_escaped.py (9 tests): the pure escaping function round-trips a plain term, each of the four reserved characters, a term attempting to break out via literal double quotes, and a trailing-backslash ordering-sensitivity case (verified against an independently-written unescaper, not just 'whatever the function produces'); an end-to-end request with reserved characters in q no longer errors; pagination through the real route returns the requested page and an accurate total count sourced from PostgREST, not len() over everything. tests/test_marketplace_pipeline.py, test_library_detail_projection_regression.py, test_listing_projection.py and 3 other library/marketplace test files (633 tests total) still pass -- test_listing_projection.py's own static sweep for unprojected Listing-row leaks required restating the total-count computation as max(page_result.count or 0, len(paginated)) rather than a ternary, since its row-content taint tracker only exempts a handful of row-REDUCING call names (len, sum, min, max, ...) when they are the ENTIRE assigned expression, not a ternary branch.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Parameterize/escape the search term; paginate at the query level."
+      "remaining_action": "None."
     },
     {
       "id": "SEC-12",
