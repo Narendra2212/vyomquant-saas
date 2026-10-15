@@ -860,12 +860,12 @@
       "severity": "Medium",
       "component": "Audit trail",
       "title": "The execution audit trail accepts order, fill, fee and risk data from the client",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "47459db",
+      "evidence": "Deleted all 4 mutating routes in backend_app/routers/signal_trace.py (POST /signals, PUT /signals/{id}/risk, PUT /signals/{id}/order, PUT /signals/{id}/execution), gated only by get_current_user, which wrote arbitrary client-supplied order/fill/fee/risk data into the execution audit trail via the same SignalService methods the platform runtime uses. Confirmed zero legitimate callers (frontend never calls any of the four paths; the real writer, backend/master_executor.py, calls the same SignalService methods as a direct in-process Python call, never over HTTP) before deleting. The 4 read endpoints (list/export/detail/timeline) are unchanged. Regression: tests/test_aud01_signal_trace_writes_are_not_client_reachable.py (12 tests, code+test, verified this session). Full signal_trace/signal_service/cross_tenant_ownership/lifecycle suite (505 passed) and validation_sweep/schema_drift/baseline (528 passed / 2 known pre-existing unrelated billing failures) clean.",
+      "verification_level": "code+test (verified this session); partial fix",
       "production_verified": false,
-      "remaining_action": "Make trace writes service-only (runtime), user endpoints read-only; append-only table with hash chaining for live."
+      "remaining_action": "The client-reachable fabrication surface is closed. NOT done: the remediation also asks for an append-only table with hash chaining for live (the same RLS/trigger/grant treatment this session gave order_audit_log and trade_history) on public.signals, which requires verifying today's actual RLS policies/grants on signals in a real database before touching them -- not done in this pass. The process-wide, identity-unscoped in-memory fallback (SignalService._local_signals) also still exists in code; it is no longer reachable by an arbitrary external caller (only the trusted runtime reaches it now), but the fallback itself was not fixed."
     },
     {
       "id": "FE-01",
