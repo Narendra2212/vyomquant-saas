@@ -444,12 +444,12 @@
       "severity": "Low",
       "component": "API",
       "title": "Unauthenticated test endpoints in production",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "5645d2a",
+      "evidence": "Found both unauthenticated test endpoints by grepping every router for a literal 'Test endpoint' docstring/route path: GET /api/test-basic (backend_app/main.py, a bare module-level route mounted between admin.router and risk.router -- 'Test endpoint to verify basic routing works') and GET /api/billing/test (backend_app/routers/billing.py -- 'Test endpoint to verify billing router is loaded'). Confirmed neither is a disguised real feature: both return a static {'status': 'ok', ...} with no auth dependency and no logic. Distinguished these from routers/exchange.py's POST /test and /test-stored, which ARE real, authenticated, rate-limited features (testing a user's exchange API credentials before saving them, SEC-12's own subject) -- left untouched. Confirmed via grep that neither removed route is referenced by any test, monitoring check, or load-balancer probe anywhere in the repo. Removed both. New tests/test_api02_test_endpoints_removed.py (3 tests) proves both are absent from app.routes on the real, fully-wired FastAPI app (not a hand-built test client), and that the billing routes immediately around the removed one are unaffected. Full regression (new suite + every billing test in the repo + validation_sweep + router_registration_completeness, 375+ tests) clean except pre-existing failures independently confirmed unrelated: ran the same files with and without this change via git stash and got an identical failure set and pass count both times.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Remove."
+      "remaining_action": "None."
     },
     {
       "id": "API-03",
