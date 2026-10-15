@@ -627,6 +627,13 @@ export default function AuthPage({ mode = "signin" }) {
 
         if (signUpError) throw signUpError;
 
+        // FE-04: if this project's email-confirmation requirement is off, `signUp` above
+        // already returns a live session -- the OTP screen below would then be decorative,
+        // not a second factor, exactly like the sign-in branch below. Torn down
+        // unconditionally so nothing live exists until the OTP step actually succeeds,
+        // whether or not this project's config would have granted a session here.
+        await supabase.auth.signOut();
+
         // Account registered. NOTHING IS DISPATCHED HERE - the only email is the confirm-signup
         // one `signUp` above already sent. This line used to claim it dispatched an OTP, which it
         // never did; the code the screen below asks for comes from that template`s `{{ .Token }}`
@@ -649,6 +656,18 @@ export default function AuthPage({ mode = "signin" }) {
         }
 
         // Password verified successfully!
+        // FE-04: `signInWithPassword` succeeding does not merely verify the password -- it
+        // is a complete Supabase sign-in. `persistSession: true` means the SDK has already
+        // written a live, fully-privileged session into its own storage at this point, with
+        // or without this app's OWN `sessionStorage` bookkeeping below. Leaving that session
+        // live made the OTP step that follows pure UI theatre: anyone who could read that
+        // already-established session (this tab, another tab sharing storage, a later bug)
+        // had full account access with zero second factor, which is exactly what this page's
+        // "two-factor" copy tells a trader cannot happen. Torn down immediately so nothing
+        // live exists between the password check and a successful `verifyOtp` below, which
+        // establishes its own fresh session and is the only session this flow ever keeps.
+        await supabase.auth.signOut();
+
         // DO NOT grant application access or persist session to sessionStorage yet.
         // Immediately dispatch the 2nd factor Email OTP challenge.
         let dispatched = false;

@@ -42,8 +42,8 @@ from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.core.event_bus import publish_command, PublishError
 from backend_app.core.rate_limit import limiter
 import ccxt
-from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
-from backend_app.backend.backtest_runtime import get_backtest_runtime
+from backend_app.backend.optimization_engine import OptimizationEngine, get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
+from backend_app.backend.backtest_runtime import BacktestRuntime, get_backtest_runtime
 # The server half of Requirement 12.7 (design.md -> "Server-side artifact resolution"). It runs
 # BESIDE the owner-scoped predicates in this module, never in place of them: each call site
 # invokes it only where the handler had already decided to refuse, so an owner's behaviour is
@@ -3634,8 +3634,10 @@ async def walk_forward_optimization(
     
     Uses the optimization_engine.run_walk_forward_analysis() method for proper implementation.
     """
-    from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
-    from backend_app.backend.backtest_runtime import get_backtest_runtime
+    # OPT-03: OptimizationEngine/OptimizationConfig/OptimizationMethod/ValidationMethod
+    # and BacktestRuntime are already imported at module scope (so
+    # `patch("backend_app.routers.strategies.OptimizationEngine", ...)` reaches the
+    # name this closure resolves) -- no local re-import of them here.
     from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
     from uuid import uuid4
     import ccxt
@@ -3697,16 +3699,9 @@ async def walk_forward_optimization(
             dependencies={}
         )
         
-        # Get optimization engine and backtest runtime
-        optimization_engine = get_optimization_engine()
-        backtest_runtime = get_backtest_runtime()
-        
-        # Inject backtest runtime
-        optimization_engine.set_backtest_runtime(backtest_runtime)
-        
         # Create exchange instance
         exchange_instance = ccxt.binance()
-        
+
         # Create optimization config for walk-forward
         config = OptimizationConfig(
             method=OptimizationMethod.GRID_SEARCH,  # Use grid search as base
@@ -3728,6 +3723,29 @@ async def walk_forward_optimization(
             max_drawdown=payload.get("max_drawdown", 0.2),
             daily_loss_limit=payload.get("daily_loss_limit", 0.05)
         )
+
+        # OPT-03: a fresh engine + runtime for THIS request only, not the shared
+        # process-wide get_optimization_engine()/get_backtest_runtime() singletons --
+        # every concurrent or back-to-back call to this endpoint shared the SAME
+        # OptimizationEngine instance (and therefore the same _optimization_history,
+        # read back by run_walk_forward_analysis's own _get_best_parameters call),
+        # so one tenant's call could read another tenant's optimization results. The
+        # shared backtest_runtime singleton also ran on its class defaults
+        # regardless of what `config` above carries, the same "accepted but ignored"
+        # bug backend_app/routers/strategy_operations.py::_backtest_runtime_for
+        # already fixed for the plain backtest endpoint -- built here from the SAME
+        # payload-derived values `config` already carries, so this endpoint's
+        # capital/fee/slippage/risk fields are the ones actually simulated against.
+        backtest_runtime = BacktestRuntime(
+            initial_capital=config.initial_capital,
+            fees=config.fees,
+            slippage=config.slippage,
+            risk_per_trade=config.risk_per_trade,
+            max_drawdown=config.max_drawdown,
+            daily_loss_limit=config.daily_loss_limit,
+        )
+        optimization_engine = OptimizationEngine()
+        optimization_engine.set_backtest_runtime(backtest_runtime)
         
         # Run genuine walk-forward analysis
         walk_forward_results = await optimization_engine.run_walk_forward_analysis(

@@ -31,7 +31,7 @@ from backend_app.backend.backtest_service import get_backtest_service
 # from backend_app.backend.subscription_service import get_subscription_service  # DEPRECATED: Use library.py for subscriptions
 from backend_app.backend.strategy_compiler import get_compiler, CompilerError, ValidationError
 from backend_app.backend.backtest_runtime import BacktestRuntime, get_backtest_runtime
-from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
+from backend_app.backend.optimization_engine import OptimizationEngine, get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
 from backend_app.backend.deployment_manager import get_deployment_manager, DeploymentConfig as DeployConfig, DeploymentEnvironment
 # The server half of Requirement 12.7 (design.md -> "Server-side artifact resolution"). Invoked
 # only where a handler has already decided to refuse, so it changes nothing an owner sees and
@@ -61,12 +61,6 @@ from backend_app.core.performance_monitor import (
     verify_cache_configuration,
     verify_query_optimization
 )
-from backend_app.core.crash_recovery import (
-    crash_recovery_manager,
-    verify_state_consistency,
-    periodic_crash_check
-)
-
 router = APIRouter()
 logger = logging.getLogger("StrategyOperationsRouter")
 
@@ -1840,6 +1834,41 @@ async def _approved_search_budget(user: dict, supabase: Any, body: Any) -> Any:
     return budget
 
 
+def _optimization_engine_for(body: "OptimizationRequest") -> tuple:
+    """A fresh :class:`OptimizationEngine` + :class:`BacktestRuntime` for **this
+    request only** (OPT-03).
+
+    Deliberately not ``get_optimization_engine()`` / ``get_backtest_runtime()``. Both
+    are process-wide singletons: every tenant's call to this endpoint shared the SAME
+    ``OptimizationEngine`` instance, and therefore the SAME ``_optimization_history``
+    list -- ``_get_best_parameters(self._optimization_history)`` (read by every one of
+    ``run_walk_forward_analysis``/``run_sensitivity_analysis``/``run_monte_carlo_
+    simulation``/``run_benchmark_comparison``) could read back a DIFFERENT tenant's
+    optimization results, not just this request's own, if two optimize calls
+    overlapped or ran back to back in the same process. The shared
+    ``get_backtest_runtime()`` singleton is also the exact "parameter the endpoint
+    accepts but silently ignores" bug ``_backtest_runtime_for`` above already fixed for
+    the plain backtest endpoint (see that function's docstring): this endpoint's
+    ``initial_capital``/``commission``/``slippage``/``risk_per_trade``/``max_drawdown``/
+    ``daily_loss_limit`` fields were accepted and then never applied, because the
+    singleton runs on its class defaults regardless of what was submitted.
+
+    Returns ``(optimization_engine, backtest_runtime)`` with the runtime already
+    injected into the engine, so the call site is a single assignment.
+    """
+    backtest_runtime = BacktestRuntime(
+        initial_capital=body.initial_capital,
+        fees=body.commission,
+        slippage=body.slippage,
+        risk_per_trade=body.risk_per_trade,
+        max_drawdown=body.max_drawdown,
+        daily_loss_limit=body.daily_loss_limit,
+    )
+    optimization_engine = OptimizationEngine()
+    optimization_engine.set_backtest_runtime(backtest_runtime)
+    return optimization_engine, backtest_runtime
+
+
 @router.post("/strategies/{strategy_id}/optimize")
 @limiter.limit("10/minute")
 async def run_optimization(request: Request, 
@@ -1907,13 +1936,10 @@ async def run_optimization(request: Request,
             dependencies=body.execution_graph.get("dependencies", {})
         )
         
-        # Get optimization engine
-        optimization_engine = get_optimization_engine()
-        backtest_runtime = get_backtest_runtime()
-        
-        # Inject backtest runtime
-        optimization_engine.set_backtest_runtime(backtest_runtime)
-        
+        # OPT-03: a fresh engine + runtime for THIS request only, not the shared
+        # process-wide singletons (see _optimization_engine_for's own docstring).
+        optimization_engine, backtest_runtime = _optimization_engine_for(body)
+
         # ── The aggregate search budget, before any trial runs ───────────
         #
         # `check_optimization_quota` above has already bounded how many SEARCHES this
@@ -3463,124 +3489,37 @@ async def verify_performance(request: Request,
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# CRASH RECOVERY ENDPOINTS
+# CRASH RECOVERY ENDPOINTS -- UNMOUNTED (OPS-03)
 # ══════════════════════════════════════════════════════════════════════════
-
-@router.post("/crash-recovery/recover-deployment")
-@limiter.limit("10/minute")
-async def recover_deployment(request: Request,
-    body: Dict[str, Any],
-    user: dict = Depends(get_current_user)
-):
-    """
-    Recover a crashed deployment.
-    
-    Initiates recovery process for a deployment that has crashed.
-    """
-    try:
-        deployment_id = body.get("deployment_id")
-        if not deployment_id:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "MISSING_DEPLOYMENT_ID", "message": "deployment_id is required"}
-            )
-        
-        recovery_result = await crash_recovery_manager.recover_deployment(
-            deployment_id=deployment_id,
-            user_id=user["id"],
-            strategy_id=body.get("strategy_id", "")
-        )
-        
-        return recovery_result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error recovering deployment for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOYMENT_RECOVERY_FAILED", "message": str(e)}
-        )
-
-
-@router.post("/crash-recovery/recover-signals")
-@limiter.limit("10/minute")
-async def recover_signals(request: Request,
-    body: Dict[str, Any],
-    user: dict = Depends(get_current_user)
-):
-    """
-    Recover signals that may have been lost during crash.
-    """
-    try:
-        strategy_id = body.get("strategy_id")
-        if not strategy_id:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "MISSING_STRATEGY_ID", "message": "strategy_id is required"}
-            )
-        
-        crash_time = datetime.fromisoformat(body.get("crash_time", datetime.now(timezone.utc).isoformat()))
-        
-        recovery_result = await crash_recovery_manager.recover_signals(
-            strategy_id=strategy_id,
-            user_id=user["id"],
-            crash_time=crash_time
-        )
-        
-        return recovery_result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error recovering signals for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "SIGNAL_RECOVERY_FAILED", "message": str(e)}
-        )
-
-
-@router.get("/crash-recovery/verify-state")
-@limiter.limit("10/minute")
-async def verify_system_state(request: Request,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Verify overall system state consistency.
-    
-    Checks deployment-worker, signal, and portfolio consistency.
-    """
-    try:
-        consistency_result = await verify_state_consistency()
-        return consistency_result
-    except Exception as e:
-        logger.error(f"Error verifying system state: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STATE_VERIFICATION_FAILED", "message": str(e)}
-        )
-
-
-@router.get("/crash-recovery/log")
-@limiter.limit("50/minute")
-async def get_recovery_log(request: Request,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Get crash recovery operation log.
-    """
-    try:
-        recovery_log = crash_recovery_manager.get_recovery_log()
-        active_recoveries = crash_recovery_manager.get_active_recoveries()
-        
-        return {
-            "recovery_log": recovery_log,
-            "active_recoveries": active_recoveries
-        }
-    except Exception as e:
-        logger.error(f"Error getting recovery log: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "RECOVERY_LOG_FAILED", "message": str(e)}
-        )
+#
+# The four endpoints that used to live here (/crash-recovery/recover-deployment,
+# recover-signals, verify-state, log) called straight into
+# backend_app.core.crash_recovery.CrashRecoveryManager, whose own methods are
+# fabrication, not recovery: _get_deployment_state returns a HARDCODED placeholder dict
+# for every deployment_id ("status": "running", "exchange_id": "binance") instead of
+# querying anything; _cancel_open_orders, _restart_worker are bare `pass`; _reconcile_
+# portfolio always returns {"positions": [], "balance": 0.0, "reconciled": True}; and
+# _verify_recovery always returns {"success": True, ...} unconditionally. So
+# recover_deployment ALWAYS reported RecoveryStatus.SUCCEEDED, having cancelled no
+# orders, reconciled nothing, and restarted nothing -- a false "recovery succeeded"
+# confirmation on a crash-handling endpoint for a live-trading platform is a worse
+# failure mode than no endpoint at all: an operator who trusts it has no reason to look
+# further. recover_signals and verify_system_state are the same shape (their private
+# helpers are stubs returning empty/fixed results). get_recovery_log additionally
+# returned every tenant's active_recoveries/recovery_log unscoped by the caller's own
+# user_id -- any authenticated caller could read every other tenant's recovery activity.
+#
+# Unmounted rather than patched, per this finding's own remediation note ("Unmount
+# until implemented on RT-16"): RT-16 (VERIFIED_FIXED earlier this session) built the
+# real venue-reconciliation primitives (ReconciliationScheduler, adjudication against
+# the actual exchange) that a real implementation of this endpoint would have to be
+# built on, and that work was not done for crash-specific recovery in this pass.
+# backend_app/core/crash_recovery.py is UNCHANGED -- its own placeholder nature is
+# documented in its module docstring, and this is a mount removal from this router,
+# not a deletion, matching the precedent this session already set for RT-11's
+# distributed_execution router.
+#
+# See tests/test_ops03_crash_recovery_endpoints_unmounted.py.
 
 
 def _pipeline_timeframes() -> tuple:

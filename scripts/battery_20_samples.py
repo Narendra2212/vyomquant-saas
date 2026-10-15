@@ -1,3 +1,4 @@
+import os
 import time
 import requests
 import json
@@ -6,7 +7,12 @@ import sys
 
 BASE_URL = "https://d7d88qs4jmch.cloudfront.net"
 SUPABASE_URL = "https://wrkexcjqnidkdrayhlsi.supabase.co"
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indya2V4Y2pxbmlka2RyYXlobHNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3ODkyOTIsImV4cCI6MjA5MDM2NTI5Mn0.NTXqianuwy4xLw4FMY09Z0Q70wf7KWCIzkejaU2sR8s"
+# SEC-06: this used to hardcode a real Supabase anon JWT for this project, committed to
+# git. Read from the environment instead; fail loudly rather than silently falling back
+# to a credential this file would otherwise need to keep carrying.
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+if not SUPABASE_ANON_KEY:
+    sys.exit("SUPABASE_ANON_KEY must be set in the environment to run this script.")
 
 print("=" * 80)
 print("AUTHENTICATING FOR 20-SAMPLE BENCHMARK BATTERY")

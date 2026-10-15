@@ -283,6 +283,68 @@ async def create_request_supabase_async(access_token: str) -> Optional[_PooledAs
 _service_supabase_client = None
 _service_supabase_lock = threading.Lock()
 
+_service_supabase_async_client: Optional[_PooledAsyncPostgrestClient] = None
+_service_supabase_async_lock = asyncio.Lock()
+
+
+async def get_service_supabase_async() -> Optional[_PooledAsyncPostgrestClient]:
+    """Process-wide **async**, connection-pooled service-role PostgREST client.
+
+    PERF-01: ``core/risk_manager.py``'s per-trade risk-settings read used to call
+    ``supabase.create_client`` (a brand-new, synchronous ``httpx.Client``) and then a
+    blocking ``.execute()`` on EVERY trade, from inside an ``async def`` -- blocking the
+    whole event loop, not just that one request, for the duration of a Supabase round
+    trip on every single order. ``get_service_supabase()`` above already fixed the
+    "brand-new client" half for other service-role callers (it is a memoized
+    singleton), but its ``.execute()`` is still synchronous network I/O.
+
+    This mirrors ``create_request_supabase_async`` and its
+    ``_PooledAsyncPostgrestClient``/``get_shared_async_transport()`` connection pool --
+    same pooled transport, so this costs no additional connections -- but with the
+    SERVICE_ROLE_KEY as both ``apiKey`` and bearer token instead of a per-request user
+    JWT, matching what ``get_service_supabase()`` already grants.  Memoized the same way
+    ``get_service_supabase()`` is: built once, reused for the life of the process.
+
+    Fails closed exactly like ``get_service_supabase()``: missing credentials raise
+    outside DEV_MODE rather than silently handing a caller a client that cannot work.
+    """
+    global _service_supabase_async_client
+    if _service_supabase_async_client is None:
+        async with _service_supabase_async_lock:
+            if _service_supabase_async_client is None:
+                url = os.environ.get("SUPABASE_URL")
+                key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+                if not url or not key:
+                    if DEV_MODE:
+                        logger.warning(
+                            "SUPABASE_SERVICE_ROLE_KEY missing in DEV_MODE, async "
+                            "service client unavailable"
+                        )
+                        return None
+                    raise RuntimeError(
+                        "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY required for the "
+                        "async service-role client."
+                    )
+                try:
+                    transport = await get_shared_async_transport()
+                    headers = {"apiKey": key, "Authorization": f"Bearer {key}"}
+                    rest_url = f"{url.rstrip('/')}/rest/v1"
+                    _service_supabase_async_client = _PooledAsyncPostgrestClient(
+                        base_url=rest_url,
+                        schema="public",
+                        headers=headers,
+                        timeout=DEFAULT_POSTGREST_CLIENT_TIMEOUT,
+                        transport=transport,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Failed to construct async service-role client: %s", exc)
+                    if DEV_MODE:
+                        return None
+                    raise RuntimeError(
+                        f"Failed to initialize async service-role client: {exc}"
+                    ) from exc
+    return _service_supabase_async_client
+
 
 def get_service_supabase():
     """Process-wide **service-role** Supabase client for operator/platform actions.

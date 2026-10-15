@@ -31,15 +31,23 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, validator
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 from backend_app.core.dependencies import get_current_user, get_request_supabase
+from backend_app.core.rate_limit import limiter
 from backend_app.core.runtime_env import local_fallbacks_are_acceptable
 from supabase import Client as SupabaseClient
 
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
+# REF-02: this used to be its own `Limiter(key_func=get_remote_address)` -- a SEPARATE
+# instance from every other router's, with two compounding defects. (1) Behind
+# CloudFront/ALB the socket peer `get_remote_address` reads is the shared edge address,
+# not the caller's own -- every caller landed in the SAME bucket, so the limit was
+# either shared by everyone (one heavy caller exhausts it for all) or trivially useless.
+# (2) A bare `Limiter(...)` with no `storage_uri` defaults to slowapi's own in-memory
+# store, which is per-POD: in a multi-replica deployment the effective limit becomes the
+# configured one times the replica count. The shared `core.rate_limit.limiter` (SEC-10's
+# `trusted_client_address`, resolved storage backend) is what every other router in this
+# codebase already uses for exactly this reason.
 logger = logging.getLogger("ReferralRouter")
 
 _service_client = None
@@ -174,9 +182,16 @@ class ValidateReferralCodeRequest(BaseModel):
 
 
 class ValidateReferralCodeResponse(BaseModel):
-    """Response for referral code validation"""
+    """Response for referral code validation.
+
+    REF-02: ``referrer_id`` (the referrer's raw Supabase user UUID) used to be returned
+    here. Nothing in the frontend reads it -- grepped algo22-terminal/src/: the only
+    reference was this field's own name in a JSDoc type comment -- so returning it
+    disclosed another user's identifier for no caller-facing purpose. ``valid`` and
+    ``message`` are the whole contract an unauthenticated-in-practice caller (see
+    ``validate_referral_code``'s own docstring) needs to decide whether to submit a code.
+    """
     valid: bool
-    referrer_id: Optional[str] = None
     message: str
 
 
@@ -648,10 +663,21 @@ async def validate_referral_code(
     """
     Validate a referral code before signup.
     Returns referrer information if valid.
+
+    REF-02: ``supabase`` stays in the signature because ``get_request_supabase`` rejects
+    a request with NO Authorization header at all -- but it builds its client from
+    whatever bearer-token string was supplied, without ever verifying that string is a
+    genuinely valid, signed Supabase JWT (``create_request_supabase_async`` does no
+    signature or expiry check), and this handler never actually issues a query through
+    that client to have Supabase itself reject a bad one. In effect, any non-empty
+    Authorization header value passes, with no real identity verification -- this
+    endpoint is unauthenticated in substance, matching the finding's own title, even
+    though a bare header-presence check remains. Real verification would mean switching
+    to a dependency that decodes and checks the JWT itself (e.g. ``get_current_user``),
+    which was not attempted here: this fix is scoped to the rate-limiter key and the
+    UUID disclosure the remediation note names, not a rewrite of this endpoint's
+    authentication.
     """
-    # `supabase` stays in the signature: `get_request_supabase` is what rejects an
-    # unauthenticated caller with 401, so removing it would make this endpoint public.
-    # The LOOKUP, however, deliberately does not use it -- see `_get_service_client`.
     if not supabase:
         raise HTTPException(status_code=503, detail="Database connection unavailable")
 
@@ -681,7 +707,6 @@ async def validate_referral_code(
         
         return ValidateReferralCodeResponse(
             valid=True,
-            referrer_id=referrer["user_id"],
             message="Valid referral code"
         )
         

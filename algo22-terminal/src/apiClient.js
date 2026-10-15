@@ -154,18 +154,6 @@ const cache = new Map();
 const idempotencyKeys = new Map();
 
 /**
- * Get stable session identifier from sessionStorage using crypto.randomUUID()
- */
-const getSessionId = () => {
-  let sessionId = sessionStorage.getItem('api_session_id');
-  if (!sessionId) {
-    sessionId = `sess_${crypto.randomUUID()}`;
-    sessionStorage.setItem('api_session_id', sessionId);
-  }
-  return sessionId;
-};
-
-/**
  * Safe get pattern for cache reads - prevents race conditions
  */
 const safeGet = (map, key) => {
@@ -210,27 +198,27 @@ const generateRequestId = () => {
 };
 
 /**
- * Generate stable idempotency key from payload with session scoping
+ * FE-05: a per-request idempotency key, not a hash of request shape.
+ *
+ * This used to hash `${sessionId}_${url}_${payloadStr}` -- deterministic in exactly
+ * the wrong direction: two SEPARATE, deliberately-identical submissions (the same
+ * symbol/side/quantity placed twice in a row on purpose, or any other legitimate
+ * repeat of the same shape) collided onto the SAME key, so the backend's own
+ * idempotency check silently treated the second one as a duplicate retry of the
+ * first and dropped it. An idempotency key is supposed to identify ONE user intent
+ * (one click, one submit), not the shape of the request it produced.
+ *
+ * `crypto.randomUUID()` per call fixes that collision, at the cost of the one thing
+ * the hash incidentally provided for free: a manual retry of a FAILED request (same
+ * `config` re-sent) used to land on the same key by accident of identical content.
+ * That was never reliable (axios-retry or similar middleware isn't wired here, so
+ * nothing re-sends the exact same `config` object today), and the caller-supplied
+ * path below is the real fix for it: a component that wants retries of one intent to
+ * share a key generates its own UUID once and passes it as `options.idempotencyKey`
+ * (see `api/modules/strategies.js::deploy`), which this interceptor now honours
+ * instead of overwriting.
  */
-const generateIdempotencyKey = (url, data = {}) => {
-  const sessionId = getSessionId();
-  const payloadStr = JSON.stringify(data);
-  const hash = simpleHash(`${sessionId}_${url}_${payloadStr}`);
-  return `idemp_${hash}`;
-};
-
-/**
- * Simple hash function for idempotency keys
- */
-const simpleHash = (str) => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return Math.abs(hash).toString(36);
-};
+const generateIdempotencyKey = () => `idemp_${crypto.randomUUID()}`;
 
 /**
  * Normalize query params for consistent cache keys
@@ -660,10 +648,13 @@ client.interceptors.request.use(
     config.headers['X-Request-ID'] = requestId;
     config.metadata = { requestId, startTime: Date.now() };
 
-    // Add stable idempotency key for mutating operations
+    // Add an idempotency key for mutating operations. FE-05: honour a key the
+    // caller already supplied (one UUID per user intent, e.g.
+    // api/modules/strategies.js::deploy's options.idempotencyKey) rather than
+    // overwriting it -- this interceptor used to clobber every caller-supplied key
+    // unconditionally.
     if (config.method !== 'get' && config.method !== 'GET') {
-      const data = config.data || {};
-      const idempKey = generateIdempotencyKey(config.url, data);
+      const idempKey = config.headers['Idempotency-Key'] || generateIdempotencyKey();
 
       // Enforce size limit
       enforceSizeLimit(idempotencyKeys, MAX_IDEMPOTENCY_KEYS);

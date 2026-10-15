@@ -48,15 +48,23 @@ class TestRouterRegistrationCompleteness:
             if isinstance(route, APIRoute)
         }
         
-        # List of router files that are expected to be registered
+        # List of router files that are expected to be registered.
+        #
+        # "distributed_execution" is deliberately absent (RT-11): the module and its
+        # package are kept -- several tests import them directly by path to pin the
+        # orchestrator's unstarted state -- but main.py no longer mounts the router
+        # itself. It advertised a reachable HTTP surface ("institutional-grade
+        # reliability via distributed queue processing") for a capability this platform
+        # does not have (zero legitimate callers, worker_pool always None), and every
+        # one of its routes already refused with 400 before this fix too; unmounting it
+        # is the remediation this finding's own ledger entry records as VERIFIED_FIXED.
         expected_routers = {
             "admin",
-            "analytics", 
+            "analytics",
             "auth",
             "billing",
             "dag_tasks",
             "dashboard",
-            "distributed_execution",
             "exchange",
             "health",
             "health_websocket",
@@ -93,8 +101,6 @@ class TestRouterRegistrationCompleteness:
             elif router_name == "billing" and any("/api/billing" in route for route in registered_routes):
                 router_contributed = True
             elif router_name == "dashboard" and any("/api/" in route for route in registered_routes):
-                router_contributed = True
-            elif router_name == "distributed_execution" and any("/api/distributed-execution" in route for route in registered_routes):
                 router_contributed = True
             elif router_name == "exchange" and any("/api/exchanges" in route for route in registered_routes):
                 router_contributed = True

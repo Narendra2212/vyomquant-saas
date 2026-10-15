@@ -211,10 +211,9 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, CheckCircle, Database, Mail, ShieldCheck, Wifi } from "lucide-react";
+import { Bell, CheckCircle, Database, ExternalLink, Mail, ShieldCheck } from "lucide-react";
 
 import { CommandButton } from "../components/ds/CommandButton";
-import { Field } from "../components/ds/Field";
 import { Metric, NotAvailableMarker } from "../components/ds/Metric";
 import { Panel } from "../components/ds/Panel";
 import { StatusBadge } from "../components/ds/StatusBadge";
@@ -255,9 +254,6 @@ const Marker = ({ field, reason }) => (
 
 /** The four steps, in order. Unchanged — the same four strings the page has always had. */
 const STEPS = Object.freeze(["Secure Account", "Demo Backtest", "Connect Exchange", "Choose Plan"]);
-
-/** The six exchanges the connect step offers. Unchanged. */
-const EXCHANGES = Object.freeze(["Binance", "Bybit", "OKX", "Kraken", "Coinbase", "KuCoin"]);
 
 /**
  * The demo backtest's payload, byte-identical to the one this page has always posted.
@@ -715,33 +711,35 @@ export default function Wizard() {
             <h2 className="mb-1 text-section font-semibold text-content-primary">
               Connect Your Exchange
             </h2>
-            {/* fontSize: 11 → --text-body (sentence — Q1). */}
+            {/* FE-07: the exchange-select buttons, the two "API Key"/"Secret Key" `Field`s
+                and the "Test Connection" button that used to live here had no `onClick` /
+                `value` / `onChange` at all -- nothing tracked which exchange was picked,
+                nothing captured a keystroke typed into either field, and "Test Connection"
+                tested nothing. "Next: Choose Plan" advanced regardless, so a trader who
+                filled this in reasonably believed they had connected an exchange; they had
+                not, and nothing they typed was kept anywhere, encrypted or otherwise,
+                despite the sentence below once promising exactly that.
+
+                The real save/test flow (`ExchangeManager`, `/app/exchange`) already exists,
+                already works, and already carries AUTH-01's AAL2/MFA step-up requirement on
+                the credential-save endpoint -- a requirement this one-screen wizard step has
+                no way to satisfy inline (a trader this early in onboarding has typically not
+                enrolled a TOTP factor yet). Linking out, rather than rebuilding that flow a
+                second time here, is this finding's own first offered option and the one that
+                does not risk silently discarding a key a second way. */}
             <p className="mb-5 text-body text-content-secondary">
-              Add API credentials to deploy bots. Keys are encrypted at rest.
+              Connect an exchange from Exchange Manager to deploy bots with real capital. You
+              can do this now or later — Paper Trading needs no exchange keys at all.
             </p>
-            {/* fontSize: 10 → `ds/CommandButton`'s own step; the declaration is removed
-                rather than mapped, because the step belongs to the primitive. All six
-                exchanges keep their button, their name and their tab stop. */}
-            <div className="mb-4 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-              {EXCHANGES.map((exchange) => (
-                <CommandButton key={exchange} intent="secondary" className="justify-center">
-                  {exchange}
-                </CommandButton>
-              ))}
-            </div>
-            <div className="mb-4 flex flex-col gap-3">
-              <Field id="wizard-api-key" label="API Key" placeholder="Paste your API key..." type="password" />
-              <Field
-                id="wizard-secret-key"
-                label="Secret Key"
-                placeholder="Paste your secret key..."
-                type="password"
-              />
-            </div>
+            <CommandButton
+              intent="secondary"
+              icon={ExternalLink}
+              onClick={() => navigate("/app/exchange")}
+              className="mb-4 w-full justify-center"
+            >
+              Open Exchange Manager
+            </CommandButton>
             <div className="flex gap-2">
-              <CommandButton intent="secondary" icon={Wifi}>
-                Test Connection
-              </CommandButton>
               <CommandButton
                 intent="primary"
                 onClick={() => setStep(3)}

@@ -446,31 +446,15 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         # validation failure, because the field is typed `Optional[str]`.
         body={"mode": 12345},
     ),
-    MutatingRoute(
-        key="strategy_operations.recover_deployment",
-        method="POST",
-        path="/api/crash-recovery/recover-deployment",
-        handler="backend_app.routers.strategy_operations:recover_deployment",
-        # `body: Dict[str, Any]` - a bare dict. FOUND while running this sweep: sending it
-        # a body naming none of the fields the handler itself checks for (`deployment_id`)
-        # reaches the handler's own `raise HTTPException(400, ...)` for the missing field
-        # - which its OWN `except Exception as e:` then catches and re-wraps as a 500
-        # (`DEPLOYMENT_RECOVERY_FAILED`), because unlike its sibling handlers in this same
-        # file it has no `except HTTPException: raise` guard before the blanket clause.
-        # Reported as a finding, not fixed here (see this file's own report).
-        body={"__validation_sweep_marker__": {"nested": [1, 2, 3]}},
-        no_schema=True,
-    ),
-    MutatingRoute(
-        key="strategy_operations.recover_signals",
-        method="POST",
-        path="/api/crash-recovery/recover-signals",
-        handler="backend_app.routers.strategy_operations:recover_signals",
-        # Same shape, same finding, same missing `except HTTPException: raise` guard -
-        # `strategy_id` in place of `deployment_id`.
-        body={"__validation_sweep_marker__": {"nested": [1, 2, 3]}},
-        no_schema=True,
-    ),
+    # OPS-03: strategy_operations.recover_deployment / recover_signals (POST
+    # /api/crash-recovery/recover-deployment, /recover-signals) used to be registered
+    # here. Both endpoints -- and their sibling verify-state/log routes -- were
+    # unmounted (VERIFIED_FIXED this session): every method
+    # backend_app.core.crash_recovery.CrashRecoveryManager calls into is a stub that
+    # always reports fabricated success, never cancelling an order, reconciling a
+    # position, or restarting anything. The validation-sweep finding this entry used to
+    # record (a missing `except HTTPException: raise` guard turning the handler's own
+    # 400 into a 500) is moot now that the handler no longer exists.
     MutatingRoute(
         key="strategy_operations.preview_node",
         method="POST",
@@ -1479,12 +1463,16 @@ def test_a_route_with_no_schema_to_violate_still_never_answers_500(route: Mutati
     (there is no shape to malform, so any JSON object is "valid" input to FastAPI) and not
     one at all for the no-body group (there is no body). But Requirement 1.39's "never
     500" half is still owed for whatever THIS sweep sends such a route, and a 500 here is
-    a genuine application defect this sweep already surfaced while being written - two of
-    them, named in this file's own report and in the per-entry comments above
-    (`strategy_operations.recover_deployment`/`recover_signals` re-wrapping their own
-    raised 400 into a 500; `update_backtest_results` crashing on an untyped field). Neither
-    is fixed here - reported, per this task's own instruction not to fix production
-    routes without checking back first.
+    a genuine application defect this sweep already surfaced while being written -
+    `update_backtest_results` crashing on an untyped field, named in this file's own
+    report and in the per-entry comment above. Not fixed here - reported, per this
+    task's own instruction not to fix production routes without checking back first.
+
+    (A second pair of findings used to live here: `strategy_operations.recover_
+    deployment`/`recover_signals` re-wrapped their own raised 400 into a 500. OPS-03
+    unmounted both routes entirely this session - the underlying handler fabricated
+    success unconditionally regardless of this 500, which was the smaller problem - so
+    their MutatingRoute entries are gone rather than the finding staying open here.)
     """
     response = client.request(route.method, route.path, params=dict(route.query), json=route.body)
     if response.status_code == 500 and route.key in _ENVIRONMENT_GAP_ROUTE_KEYS:

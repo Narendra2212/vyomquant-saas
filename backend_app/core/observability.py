@@ -1026,9 +1026,61 @@ def guarded_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-# Installed at import. The filter touches only the twelve logger names above, so no output from
-# any other module changes, and ``main.py``'s ``logging.basicConfig`` is neither called nor
-# altered from here.
+def install_root_log_redaction(root: Optional[logging.Logger] = None) -> int:
+    """LOG-01: attach :class:`RedactingLogFilter` to every HANDLER on the root logger.
+
+    :func:`install_log_redaction` only ever protects the thirteen names in
+    :data:`GUARDED_LOGGER_NAMES` - task 33.4's own scope, deliberately narrow (see this
+    module's docstring: "Attaching to the root's handlers instead would redact the
+    whole process's output, which the task forbids"). LOG-01 is the later finding that
+    asks for exactly the thing that task declined: billing, exchange, execution and
+    auth loggers carried no secret redaction at all, so a JWT, an API key or anything
+    else :data:`SECRET_VALUE_PATTERNS` matches could reach a log sink unredacted from
+    any of them.
+
+    THE DISTINCTION THAT MAKES THIS NECESSARY, NOT REDUNDANT WITH ``install_log_redaction``
+    ------------------------------------------------------------------------------------
+    A :class:`logging.Logger`'s own filters apply ONLY to records that logger itself
+    originates - ``Logger.handle`` checks ``self.filters``, never an ancestor's.
+    Attaching to a named logger (what :func:`install_log_redaction` does) therefore
+    protects only that one logger. A :class:`logging.Handler`'s filters, by contrast,
+    run for every record that reaches that handler via propagation, regardless of which
+    logger originated it - which is the mechanism this function uses to cover every
+    logger that is not individually guarded, without walking (or even knowing) its name.
+
+    A record from an already-guarded logger (e.g. ``PaperRepository``) is redacted once
+    by its own logger-level filter and then, if it propagates to the root handler,
+    passes through this filter too; the second pass is a no-op (nothing in already-
+    redacted text matches a secret pattern), not a double-mangling (see
+    ``tests/test_log01_root_redaction_covers_every_logger.py``).
+
+    Idempotent, same convention as :func:`install_log_redaction`: a handler that
+    already carries a :class:`RedactingLogFilter` is left alone.
+
+    Args:
+        root: the logger to read handlers from. Defaults to the real root logger;
+            injectable so a test can attach to its own logger instead of mutating the
+            process-wide root.
+
+    Returns:
+        How many handlers newly received the filter (0 if the root has no handlers yet
+        - e.g. before ``main.py``'s ``logging.basicConfig`` has run - or if every
+        handler already carried one).
+    """
+    target = logging.getLogger() if root is None else root
+    newly_guarded = 0
+    for handler in target.handlers:
+        if not any(
+            isinstance(existing, RedactingLogFilter) for existing in handler.filters
+        ):
+            handler.addFilter(RedactingLogFilter())
+            newly_guarded += 1
+    return newly_guarded
+
+
+# Installed at import. The filter touches only the thirteen logger names above, so no
+# output from any other module changes, and ``main.py``'s ``logging.basicConfig`` is
+# neither called nor altered from here.
 install_log_redaction()
 
 
@@ -1056,6 +1108,7 @@ __all__ = [
     "get_request_id",
     "guarded_logger",
     "install_log_redaction",
+    "install_root_log_redaction",
     "is_denied_key",
     "key_tokens",
     "log_fields",

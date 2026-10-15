@@ -225,11 +225,22 @@ except Exception as e:
     _execution_router_import_error = e
 
 
-#  Logging setup 
+#  Logging setup
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s  %(message)s"
 )
 logger = logging.getLogger("Algo22")
+
+# LOG-01: core/observability.py's RedactingLogFilter only ever protected the thirteen
+# marketplace/paper logger names in GUARDED_LOGGER_NAMES -- billing, exchange,
+# execution and auth loggers carried no secret redaction at all. Attaching the same
+# filter to the handler basicConfig just installed on the root logger covers every
+# OTHER logger too, since a Handler's filters run for every record that propagates to
+# it regardless of which logger originated it (unlike a Logger's own filters, which
+# apply only to that logger's own records).
+from backend_app.core.observability import install_root_log_redaction
+
+install_root_log_redaction()
 
 
 

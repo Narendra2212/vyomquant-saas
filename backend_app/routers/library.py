@@ -1156,6 +1156,22 @@ async def _invalidate_browse_cache(context: str) -> None:
         logger.warning(f"Redis browse-cache invalidation failed ({context}): {exc}")
 
 
+def _postgrest_quoted_ilike_pattern(term: str) -> str:
+    """API-08: ``term`` made safe to embed in a raw PostgREST ``or()``/``filter()`` string.
+
+    PostgREST's filter mini-language treats ``,``, ``.``, ``(`` and ``)`` as syntax -- a
+    search term containing any of them, interpolated raw into ``or=(col.ilike.%term%,...)``,
+    could close the current clause and open a new one against an unrelated column rather
+    than being matched as literal text. PostgREST's own escaping rule closes this: wrap the
+    value in double quotes, with ``\\`` and ``"`` themselves backslash-escaped first so the
+    quoting itself cannot be broken out of. Returns the value already wrapped in the ``%...%``
+    ilike wildcards and in the quotes PostgREST's filter syntax requires -- ready to drop
+    straight into an ``ilike.`` clause.
+    """
+    escaped = term.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"%{escaped}%"'
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/library — Browse catalogue
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1207,7 +1223,7 @@ async def browse_library(
 
     query = (
         svc.table("library_strategies")
-        .select(_listing_projection.LISTING_SELECT)
+        .select(_listing_projection.LISTING_SELECT, count="exact")
         .eq("is_active", True)
         .in_("moderation_status", ["approved", "featured"])
     )
@@ -1227,8 +1243,8 @@ async def browse_library(
         if tag_list:
             query = query.contains("tags", tag_list)
     if q:
-        # Simple ilike search on name and description
-        query = query.or_(f"name.ilike.%{q}%,description.ilike.%{q}%")
+        quoted_pattern = _postgrest_quoted_ilike_pattern(q)
+        query = query.or_(f"name.ilike.{quoted_pattern},description.ilike.{quoted_pattern}")
 
     # --- Sort ---
     sort_map = {
@@ -1242,18 +1258,26 @@ async def browse_library(
     sort_col, sort_asc = sort_map.get(sort, ("clone_count", False))
     query = query.order(sort_col, desc=not sort_asc)
 
+    # API-08: paginate AT THE QUERY, not after fetching every matching row into this
+    # process. .range() pushes the LIMIT/OFFSET to Postgres; count="exact" above asks
+    # PostgREST for the total match count in the same round trip (its own COUNT(*),
+    # not len() over a full result set this process no longer has to hold).
+    offset = (page - 1) * limit
     try:
-        all_result = query.execute()
+        page_result = query.range(offset, offset + limit - 1).execute()
     except Exception as exc:
         # A read that did not complete is MARKETPLACE_READ_FAILED, never a zero-filled 200 on
         # the cache-miss DB path (Requirements 1.5, 1.7; design.md "Never-swallow rule").
         logger.error(f"Library browse DB error: {exc}")
         raise MarketplaceError(MARKETPLACE_READ_FAILED)
 
-    all_rows = all_result.data or []
-    count = len(all_rows)
-    offset = (page - 1) * limit
-    paginated = all_rows[offset : offset + limit]
+    paginated = page_result.data or []
+    # max(), not a ternary: tests/test_listing_projection.py's static sweep recognises a
+    # handful of row-REDUCING calls (len, sum, min, max, ...) as yielding a figure about the
+    # rows rather than the rows themselves; page_result.count is PostgREST's own total match
+    # count, never the full row set, and is always >= len(paginated) when present, so max()
+    # picks it correctly and falls back to len(paginated) when PostgREST reported none.
+    count = max(page_result.count or 0, len(paginated))
 
     # Batched alias read for the page (one round trip), then per-row projection through the one
     # public serialiser. A row that cannot be projected fails the read (mirrors the detail path).

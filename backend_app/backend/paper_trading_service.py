@@ -316,12 +316,10 @@ class PaperTradingService:
 
         The Paper_Session routes (task 28.1) issue their statements through
         ``paper/paper_session_service`` and ``paper/paper_repository`` rather than through this
-        service, but they must reach the SAME handle by the same three-source rule - the bound
-        one first, then a client carrying the caller's JWT so RLS resolves ``auth.uid()``, then
-        the anon singleton - or a test that bound a Persistence_Layer here would find the session
-        routes talking to a different one, and a request-scoped read would silently lose its
-        row-level-security scope. Resolving it twice was the alternative, and two resolutions can
-        disagree about which of the three sources applies.
+        service, but they must reach the SAME handle by the same resolution rule - the bound
+        one first, then the platform's own service-role client, then the anon singleton - or a
+        test that bound a Persistence_Layer here would find the session routes talking to a
+        different one.
 
         Raises:
             PaperError: ``PAPER_PERSISTENCE_UNAVAILABLE`` when no handle can be obtained.
@@ -329,17 +327,43 @@ class PaperTradingService:
         return self._client(access_token)
 
     def _client(self, access_token: Optional[str] = None) -> Any:
-        """The RLS-scoped Persistence_Layer handle for this call.
+        """The Persistence_Layer handle for this call.
+
+        PAPER-03: every statement this facade issues, read or write, now goes through the
+        platform's own service-role credential - never a per-request client carrying the
+        caller's JWT. ``access_token`` is still accepted, for call-site compatibility with the
+        several routers that pass ``user.get("access_token")``, but it no longer selects a
+        client.
+
+        Before this fix, rule #2 below was ``create_request_supabase(access_token)``: a client
+        scoped to the caller's own identity, which ``auth.uid()`` resolved against the
+        ``*_owner_access`` row-level-security policies ``009_paper_trading.sql`` pairs with a
+        GRANT of SELECT, INSERT (and, on most tables, UPDATE) to ``authenticated``. Those
+        policies check only row OWNERSHIP (``owner_id = auth.uid()`` or equivalent) - they
+        cannot and do not check that the values being written are the ones this module's own
+        order-matching, risk-gating and accounting logic computed. Any trader's own JWT could
+        therefore issue an unmediated PostgREST call against their own ``paper_*`` rows -
+        fabricating a balance, a fill price, a position size, or an order's state - skipping
+        every check ``place_order``/``cancel_order`` perform. Migration 043 revokes the WRITE
+        half of that grant; this is the code half, so the migration does not break a write path
+        that was supposed to keep working. (Every read already restates its own ``user_id``/
+        ``account_id`` predicate in-process - see ``paper_repository.read_account`` - so moving
+        off RLS is not a new scoping gap: those explicit predicates, not RLS, were already what
+        made a read return the right row.)
+
+        This is the same move PAPER-04 already made for the bot-driven session loop, which binds
+        ``get_service_supabase()`` directly before it can outlive one request's JWT; this
+        extends it to the manual, HTTP-driven order path and every other caller that reaches
+        this method without a handle already bound.
 
         Three sources, in descending order of authority:
 
-        1. the handle bound by :meth:`bind_persistence`;
-        2. a per-request client carrying the caller's JWT, so ``auth.uid()`` resolves and the
-           row-level-security policies on the ``paper_*`` tables apply to the identity that
-           made the request - which is why the routers pass ``user["access_token"]``;
-        3. the module-level anon singleton, for the internal callers that hold no token
-           (``routers/risk.py`` and ``dashboard_aggregation_service``, until task 23.5 hands
-           one down).
+        1. the handle bound by :meth:`bind_persistence` (how every existing test, and the
+           bot-driven session loop, already supply a double or a service client);
+        2. the platform's own service-role client (``get_service_supabase``), for a real request
+           that bound nothing;
+        3. the module-level anon singleton, reached only when service-role credentials are not
+           configured at all (``DEV_MODE``'s local-run fallback).
 
         Raises:
             PaperError: ``PAPER_PERSISTENCE_UNAVAILABLE`` when no handle can be obtained at
@@ -351,17 +375,16 @@ class PaperTradingService:
             return self._supabase
 
         client = None
-        if access_token:
-            try:
-                from backend_app.core.dependencies import create_request_supabase
+        try:
+            from backend_app.core.dependencies import get_service_supabase
 
-                client = create_request_supabase(str(access_token))
-            except Exception as exc:  # noqa: BLE001 - falls through to the anon singleton
-                logger.warning(
-                    "A request-scoped Supabase client could not be created for a paper read; "
-                    "falling back to the module client. Detail: %s",
-                    exc,
-                )
+            client = get_service_supabase()
+        except Exception as exc:  # noqa: BLE001 - falls through to the anon singleton
+            logger.warning(
+                "The platform service-role Supabase client could not be constructed for a "
+                "paper statement; falling back to the anon singleton. Detail: %s",
+                exc,
+            )
         if client is None:
             try:
                 from backend_app.core.dependencies import get_supabase

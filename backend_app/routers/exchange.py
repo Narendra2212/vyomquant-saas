@@ -946,13 +946,45 @@ async def get_exchange_auth_schema(
 
 
 @router.post("/test")
+@limiter.limit("10/minute")
 async def test_connection(
+    request: Request,
     body: ExchangeKeysRequest,
     user: dict = Depends(get_current_user),
 ):
     """
     Test exchange connection with provided credentials before saving.
     Validates API keys, permissions, clock synchronization, and API scope.
+
+    SEC-12: THIS ENDPOINT IS AN UNRESTRICTED VALIDITY ORACLE FOR THIRD-PARTY API KEYS.
+    ------------------------------------------------------------------------------------
+    The caller's own ``api_key``/``secret_key``/etc. never have to belong to the caller
+    -- this handler dials the named venue with whatever credentials the request body
+    carries and reports back whether they are valid and what they can see. With no
+    route-specific limit, any authenticated session could use this platform as a
+    high-volume checker for OTHER people's stolen or leaked exchange API keys: submit a
+    candidate key/secret pair, learn immediately whether it is live and what balance it
+    holds, at whatever rate the platform's generic request handling allows.
+
+    ``@limiter.limit("10/minute")`` (the same bound ``routers/auth.py`` uses for
+    account-enumeration-prone endpoints) is the actual fix for "unrestricted": it bounds
+    how many third-party credentials a single session can probe per minute, which is
+    the dimension this finding's title names.
+
+    ``require_aal2`` was deliberately NOT added here, even though AUTH-01's remediation
+    note for this same finding suggested it "matching store_keys". AAL2 raises the cost
+    of acting under a given identity once; it does nothing to bound how many probes that
+    identity can run afterward, so against bulk third-party-key probing specifically it
+    is a one-time toll, not a rate limit. ``store_keys`` needs AAL2 because it PERSISTS
+    a credential to this user's own vault (AUTH-01's documented "Exchange API key
+    mutation" case); this handler persists nothing. Adding it here would also directly
+    contradict tests/test_auth01_require_aal2_is_wired.py::
+    test_read_and_test_handlers_do_not_require_aal2, which pins -- with its own
+    reasoning -- that ``test_connection`` must NOT require AAL2, per ``require_aal2``'s
+    own "DO NOT apply globally" rule for a handler that submits credentials but persists
+    nothing. That pinned decision was not re-litigated here.
+
+    Regression: tests/test_sec12_exchange_test_endpoint_is_rate_limited.py
     """
     bridge = None
     try:

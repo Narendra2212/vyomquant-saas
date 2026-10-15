@@ -5,6 +5,55 @@ import sys
 
 db_url = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
+
+def fetch_privileged_tables_without_rls(cur):
+    """``[(tablename, rowsecurity), ...]`` for every ``public`` table that grants
+    ``anon`` or ``authenticated`` any privilege.
+
+    DB-03: the RLS check this replaced walked a hardcoded ``required_tables`` list, so
+    a customer table added by a later migration -- Supabase's default privilege shape
+    grants ``anon``/``authenticated`` something on most new tables automatically -- was
+    invisible to it unless someone remembered to add its name here too. This is the
+    other direction: it asks the catalog which tables those two roles can actually
+    touch, so a forgotten ``ENABLE ROW LEVEL SECURITY`` on a brand-new table is caught
+    without this file ever being edited again.
+    """
+    cur.execute("""
+        SELECT t.tablename, t.rowsecurity
+        FROM pg_tables t
+        WHERE t.schemaname = 'public'
+          AND EXISTS (
+              SELECT 1 FROM information_schema.table_privileges g
+              WHERE g.table_schema = 'public'
+                AND g.table_name = t.tablename
+                AND g.grantee IN ('anon', 'authenticated')
+          )
+        ORDER BY t.tablename;
+    """)
+    return cur.fetchall()
+
+
+def evaluate_privilege_hardening(rows):
+    """Pure pass/fail decision from :func:`fetch_privileged_tables_without_rls`'s rows.
+
+    Kept separate from the database call so the decision logic has a test that needs
+    no live Postgres -- the same split ``scripts/verify_rls.py`` already uses for its
+    own catalog checks.
+    """
+    unprotected = sorted(name for name, rls_enabled in rows if not rls_enabled)
+    if unprotected:
+        print(
+            f"FAILED: {len(unprotected)} table(s) grant anon/authenticated a privilege "
+            f"but do NOT have RLS enabled: {unprotected}"
+        )
+        return False
+    print(
+        f"PASSED: every one of the {len(rows)} table(s) granting anon/authenticated a "
+        f"privilege has RLS enabled."
+    )
+    return True
+
+
 def validate_production_db():
     conn = psycopg2.connect(db_url)
     cur = conn.cursor()
@@ -60,19 +109,16 @@ def validate_production_db():
     else:
         print("PASSED: All critical reconciled columns exist!")
 
-    print("\n=== 3. VALIDATING RLS STATUS ===")
-    cur.execute("SELECT tablename, rowsecurity FROM pg_tables WHERE schemaname = 'public';")
-    rls_status = {r[0]: r[1] for r in cur.fetchall()}
-    
-    unprotected = []
-    for tbl in required_tables:
-        if tbl in rls_status and not rls_status[tbl]:
-            unprotected.append(tbl)
-            
-    if unprotected:
-        print(f"FAILED: Unprotected tables without RLS: {unprotected}")
-    else:
-        print("PASSED: 100% of user-owned and data tables have RLS ENABLED!")
+    print("\n=== 3. VALIDATING RLS STATUS (every anon/authenticated-privileged table, not just required_tables) ===")
+    # DB-03: this used to walk `required_tables` -- the same fixed list section 1
+    # checks for existence -- so a customer table that migration 6 months from now
+    # grants anon/authenticated a privilege on, but forgets to ENABLE ROW LEVEL
+    # SECURITY, would never be examined unless someone also remembered to add its name
+    # here. fetch_privileged_tables_without_rls asks the catalog which tables those
+    # roles can actually reach, so nothing added later can go unchecked by omission.
+    privilege_hardening_passed = evaluate_privilege_hardening(
+        fetch_privileged_tables_without_rls(cur)
+    )
 
     print("\n=== 4. VALIDATING STORED RPC FUNCTIONS ===")
     required_rpcs = [
@@ -123,5 +169,8 @@ def validate_production_db():
     cur.close()
     conn.close()
 
+    return privilege_hardening_passed
+
 if __name__ == '__main__':
-    validate_production_db()
+    if not validate_production_db():
+        sys.exit(1)
