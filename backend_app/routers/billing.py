@@ -49,6 +49,11 @@ from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user,
                                            get_request_supabase,
                                            invalidate_profile_cache)
+from backend_app.core.webhook_idempotency import (
+    acquire_webhook_processing,
+    mark_webhook_completed,
+    release_webhook_processing,
+)
 from backend_app.core.database import get_db
 from backend_app.core.realtime_sync import RealtimeSync
 from backend_app.core.models import AddPaymentMethodRequest, PaymentMethodModel
@@ -2548,6 +2553,21 @@ async def stripe_webhook(
             logger.info(f"Stripe webhook {event_id} lock collision, skipping")
             return {"status": "duplicate"}
 
+        # SEC-03: a DURABLE claim underneath the Redis fast path above, closing the gap
+        # Redis cannot cover on its own -- a Redis flush/restart/TTL expiry (the above
+        # check would then read as "not a duplicate") or a transient Redis outage
+        # (redis_manager is deliberately fail-soft: an error there already read as "no
+        # record" and fell through to here). public.webhook_events (migration 045)
+        # never expires and is unaffected by either. See core/webhook_idempotency.py's
+        # module docstring.
+        if not await acquire_webhook_processing("stripe", event_id):
+            logger.info(
+                f"Stripe webhook {event_id} already durably processed (webhook_events), "
+                f"skipping"
+            )
+            await redis_manager.delete(idempotency_key)
+            return {"status": "duplicate"}
+
     try:
         # Log webhook event for audit trail
         logger.info(f"Stripe webhook event: {event['type']}")
@@ -3002,6 +3022,9 @@ async def stripe_webhook(
         # Successfully completed — store completed status with 24h TTL
         if idempotency_key:
             await redis_manager.set(idempotency_key, "completed", ex=86400)
+        if event_id:
+            # SEC-03: durable completion, never expires.
+            await mark_webhook_completed("stripe", event_id)
 
         return {"status": "success"}
 
@@ -3009,6 +3032,8 @@ async def stripe_webhook(
         # On failure or rollback, release processing lock so retry can proceed
         if idempotency_key:
             await redis_manager.delete(idempotency_key)
+        if event_id:
+            await release_webhook_processing("stripe", event_id)
         raise
 
 
@@ -3054,6 +3079,17 @@ async def razorpay_webhook(
             logger.info(f"Razorpay webhook {event_id} lock collision, skipping")
             return {"status": "duplicate"}
 
+        # SEC-03: a DURABLE claim underneath the Redis fast path above -- see the
+        # identical comment on the Stripe handler above and core/webhook_idempotency.
+        # py's module docstring.
+        if not await acquire_webhook_processing("razorpay", event_id):
+            logger.info(
+                f"Razorpay webhook {event_id} already durably processed "
+                f"(webhook_events), skipping"
+            )
+            await redis_manager.delete(idempotency_key)
+            return {"status": "duplicate"}
+
     secret = webhook_secret or "dummy_webhook_secret"
     expected_sig = hmac.new(
         secret.encode(),
@@ -3064,6 +3100,8 @@ async def razorpay_webhook(
     if not hmac.compare_digest(expected_sig, x_razorpay_signature or ""):
         if idempotency_key:
             await redis_manager.delete(idempotency_key)
+        if event_id:
+            await release_webhook_processing("razorpay", event_id)
         logger.warning("Razorpay webhook: invalid signature")
         raise HTTPException(400, "Invalid Razorpay signature")
 
@@ -3072,6 +3110,8 @@ async def razorpay_webhook(
     except Exception:
         if idempotency_key:
             await redis_manager.delete(idempotency_key)
+        if event_id:
+            await release_webhook_processing("razorpay", event_id)
         raise HTTPException(400, "Invalid JSON body")
     
     try:
@@ -3092,6 +3132,8 @@ async def razorpay_webhook(
                 )
                 if idempotency_key:
                     await redis_manager.set(idempotency_key, "completed", ex=86400)
+                if event_id:
+                    await mark_webhook_completed("razorpay", event_id)
                 return {"status": "ignored", "reason": "order_mismatch"}
             user_id = notes.get("user_id")
             item_key = notes.get("item") or notes.get("item_key")  # Support both keys for compatibility
@@ -3360,6 +3402,9 @@ async def razorpay_webhook(
         # Successfully completed — store completed status with 24h TTL
         if idempotency_key:
             await redis_manager.set(idempotency_key, "completed", ex=86400)
+        if event_id:
+            # SEC-03: durable completion, never expires.
+            await mark_webhook_completed("razorpay", event_id)
 
         return {"status": "success"}
 
@@ -3367,6 +3412,8 @@ async def razorpay_webhook(
         # On failure or rollback, release processing lock so retry can proceed
         if idempotency_key:
             await redis_manager.delete(idempotency_key)
+        if event_id:
+            await release_webhook_processing("razorpay", event_id)
         raise
 
 
