@@ -106,7 +106,7 @@ from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.state import app_state
 from backend_app.core.dependencies import get_admin_user
 #  Router imports 
-from backend_app.routers import (admin, analytics, auth, billing, copilot, dashboard, distributed_execution,
+from backend_app.routers import (admin, analytics, auth, billing, copilot, dashboard,
                                  exchange, health, health_websocket, library, market, metrics, notifications,
                                  orders, paper_trading, portfolio, referral, risk, security, signal_trace,
                                  signals, strategies, strategy_operations, support, user)
@@ -923,7 +923,19 @@ app.include_router(risk.router, prefix="/api/risk", tags=["Risk Management"])
 app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
-app.include_router(distributed_execution.router, prefix="/api/distributed-execution", tags=["Distributed Execution"])
+#  RT-11: distributed_execution.router WAS mounted here. Removed: `execution_orchestrator`
+#  is never initialized or started anywhere in this codebase (confirmed by
+#  tests/test_execution_paths_that_claim_an_exchange.py's own measurement --
+#  `exchange_gateways == {}` and `worker_pool is None` always), so every submission already
+#  refused with 400 before this fix. That refusal closed the dangerous failure mode (a job
+#  silently accepted and never processed), but left a fully-documented, "institutional-grade
+#  reliability" HTTP surface mounted for a queue nothing drains -- confusing to any caller
+#  and, per this finding, worth removing rather than leaving reachable-but-useless. No
+#  frontend caller exists (grepped algo22-terminal/src/). The router module and the
+#  `backend/distributed_execution/` package are intentionally left in place, not deleted:
+#  several tests import them directly by path to pin the orchestrator's unstarted state,
+#  and `backend/distributed_execution/exchange_reconciliation_engine.py`'s reconciliation
+#  loops are a separate, not-yet-evaluated concern this change does not touch.
 app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(health_websocket.router, prefix="/health", tags=["Health"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])

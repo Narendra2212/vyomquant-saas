@@ -1178,20 +1178,11 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         handler="backend_app.routers.dag_tasks:trigger_recovery",
         body=None,
     ),
-    # ══════════════════ distributed_execution.py (prefix /api/distributed-execution) ═════
-    MutatingRoute(
-        key="distributed_execution.submit_execution_job",
-        method="POST",
-        path="/api/distributed-execution/submit",
-        handler="backend_app.routers.distributed_execution:submit_execution_job",
-    ),
-    MutatingRoute(
-        key="distributed_execution.replay_job",
-        method="POST",
-        path=f"/api/distributed-execution/job/{_ID}/replay",
-        handler="backend_app.routers.distributed_execution:replay_job",
-        body=None,
-    ),
+    # RT-11: distributed_execution.router is no longer mounted in main.py (every
+    # submission was already refused with 400 -- execution_orchestrator is never started
+    # anywhere -- but the fully-mounted surface advertised a distributed-execution
+    # capability this platform does not have). The two MutatingRoute entries that used to
+    # live here are gone with it; see tests/test_rt11_distributed_execution_router_unmounted.py.
     # ══════════════════ auth.py (prefix /api/auth, unauthenticated) ══════════════════
     MutatingRoute(
         key="auth.signout",
@@ -1590,7 +1581,9 @@ _SWEPT_MODULE_PREFIXES: Tuple[str, ...] = (
     "backend_app.routers.admin",
     "backend_app.routers.library",
     "backend_app.routers.dag_tasks",
-    "backend_app.routers.distributed_execution",
+    # RT-11: distributed_execution.router is no longer mounted (see the matrix comment
+    # above) - removed from this prefix list too, since app.routes has nothing under it
+    # to walk.
     "backend_app.routers.auth",
 )
 
