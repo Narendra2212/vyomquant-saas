@@ -3,8 +3,13 @@ sys.path.insert(0, '.')
 from backend_app.core.dependencies import create_request_supabase_async
 from backend_app.core.pricing_service import PricingService
 
-os.environ['SUPABASE_URL'] = 'https://wrkexcjqnidkdrayhlsi.supabase.co'
-os.environ['SUPABASE_ANON_KEY'] = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indya2V4Y2pxbmlka2RyYXlobHNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3ODkyOTIsImV4cCI6MjA5MDM2NTI5Mn0.NTXqianuwy4xLw4FMY09Z0Q70wf7KWCIzkejaU2sR8s'
+os.environ.setdefault('SUPABASE_URL', 'https://wrkexcjqnidkdrayhlsi.supabase.co')
+# SEC-06: this used to hardcode a real Supabase anon JWT for this project, committed to
+# git. setdefault, not an unconditional assignment: a caller's own SUPABASE_ANON_KEY
+# still wins, and if neither the caller nor the environment supplies one, fail loudly
+# instead of carrying a credential in this file.
+if not os.environ.get('SUPABASE_ANON_KEY'):
+    sys.exit("SUPABASE_ANON_KEY must be set in the environment to run this script.")
 
 async def main():
     import requests
