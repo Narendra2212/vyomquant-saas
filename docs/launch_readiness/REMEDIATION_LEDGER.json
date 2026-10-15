@@ -405,12 +405,12 @@
       "severity": "High",
       "component": "Marketplace integrity",
       "title": "Marketplace owners can write their own price evaluations and backtest evidence directly",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "PENDING",
+      "evidence": "Confirmed the defect precisely by reading migration 007's grants: 'GRANT SELECT, INSERT ON public.marketplace_backtest_evidence TO authenticated' and the identical grant on marketplace_price_evaluations, combined with a 'FOR ALL TO authenticated USING (auth.uid() = owner_id) WITH CHECK (auth.uid() = owner_id)' RLS policy -- a marketplace listing owner can INSERT directly into their own supposedly INDEPENDENT evidence/price record. Confirmed by reading the real application code (backend/marketplace/submission_service.py, pricing_evaluator.py, routers/library.py) that every legitimate read AND write of these two tables already goes through a service-role client (_build_service_client()/svc) -- the authenticated grant is used by nothing legitimate. Fixed with migration 042: REVOKE INSERT ... FROM authenticated on both tables; SELECT and the service_role grants are untouched. UNUSUALLY STRONG VERIFICATION FOR A SQL FIX THIS SESSION: this repo already has a real PostgreSQL 16 server installed (not reachable in earlier sessions' sandboxes, confirmed newly available this session) -- started it, created the anon/authenticated/service_role roles, built a same-named mirror of the two tables with migration 007's exact pre-fix grant/policy shape, and PROVED THE EXPLOIT FOR REAL: an authenticated owner inserted a fabricated 99.9% win-rate evidence row and a fabricated price evaluation, both succeeding. Applied migrations/042_marketplace_evidence_service_role_only_write.sql VERBATIM from disk against that same database and re-ran the identical exploit: 'ERROR: permission denied for table marketplace_backtest_evidence'. New tests/test_sec09_marketplace_evidence_service_role_only_postgres.py (5 tests, psycopg2 against a real server, same DATABASE_URL/skip convention as tests/test_tenant01_cross_tenant_matrix_postgres.py): the exploit is reproduced BEFORE applying the migration (not merely asserted); authenticated can no longer INSERT into either table after; authenticated SELECT and service_role INSERT/UPDATE are both verified unaffected (negative controls). All 5 passed against this session's real Postgres instance.",
+      "verification_level": "code+test (verified this session, real PostgreSQL)",
       "production_verified": false,
-      "remaining_action": "Revoke authenticated writes on evaluation/evidence/backtest result tables; write only via service role."
+      "remaining_action": "marketplace_submissions (also authenticated-writable per migration 007, GRANT SELECT, INSERT, UPDATE) was deliberately NOT touched -- this finding names price evaluations and backtest evidence specifically, and whether the submissions table's own direct-write grant is legitimate (an owner creating/transitioning their own submission row) or a separate issue was not investigated. The regression test runs against this session's own locally-started PostgreSQL 16 server and local anon/authenticated/service_role roles it created manually (not a Supabase project); it was not run against the actual Supabase-hosted production/staging database, which this sandboxed session has no credentials for."
     },
     {
       "id": "AUTH-01",
