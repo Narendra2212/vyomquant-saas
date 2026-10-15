@@ -61,12 +61,6 @@ from backend_app.core.performance_monitor import (
     verify_cache_configuration,
     verify_query_optimization
 )
-from backend_app.core.crash_recovery import (
-    crash_recovery_manager,
-    verify_state_consistency,
-    periodic_crash_check
-)
-
 router = APIRouter()
 logger = logging.getLogger("StrategyOperationsRouter")
 
@@ -3463,124 +3457,37 @@ async def verify_performance(request: Request,
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# CRASH RECOVERY ENDPOINTS
+# CRASH RECOVERY ENDPOINTS -- UNMOUNTED (OPS-03)
 # ══════════════════════════════════════════════════════════════════════════
-
-@router.post("/crash-recovery/recover-deployment")
-@limiter.limit("10/minute")
-async def recover_deployment(request: Request,
-    body: Dict[str, Any],
-    user: dict = Depends(get_current_user)
-):
-    """
-    Recover a crashed deployment.
-    
-    Initiates recovery process for a deployment that has crashed.
-    """
-    try:
-        deployment_id = body.get("deployment_id")
-        if not deployment_id:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "MISSING_DEPLOYMENT_ID", "message": "deployment_id is required"}
-            )
-        
-        recovery_result = await crash_recovery_manager.recover_deployment(
-            deployment_id=deployment_id,
-            user_id=user["id"],
-            strategy_id=body.get("strategy_id", "")
-        )
-        
-        return recovery_result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error recovering deployment for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOYMENT_RECOVERY_FAILED", "message": str(e)}
-        )
-
-
-@router.post("/crash-recovery/recover-signals")
-@limiter.limit("10/minute")
-async def recover_signals(request: Request,
-    body: Dict[str, Any],
-    user: dict = Depends(get_current_user)
-):
-    """
-    Recover signals that may have been lost during crash.
-    """
-    try:
-        strategy_id = body.get("strategy_id")
-        if not strategy_id:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "MISSING_STRATEGY_ID", "message": "strategy_id is required"}
-            )
-        
-        crash_time = datetime.fromisoformat(body.get("crash_time", datetime.now(timezone.utc).isoformat()))
-        
-        recovery_result = await crash_recovery_manager.recover_signals(
-            strategy_id=strategy_id,
-            user_id=user["id"],
-            crash_time=crash_time
-        )
-        
-        return recovery_result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error recovering signals for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "SIGNAL_RECOVERY_FAILED", "message": str(e)}
-        )
-
-
-@router.get("/crash-recovery/verify-state")
-@limiter.limit("10/minute")
-async def verify_system_state(request: Request,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Verify overall system state consistency.
-    
-    Checks deployment-worker, signal, and portfolio consistency.
-    """
-    try:
-        consistency_result = await verify_state_consistency()
-        return consistency_result
-    except Exception as e:
-        logger.error(f"Error verifying system state: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "STATE_VERIFICATION_FAILED", "message": str(e)}
-        )
-
-
-@router.get("/crash-recovery/log")
-@limiter.limit("50/minute")
-async def get_recovery_log(request: Request,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Get crash recovery operation log.
-    """
-    try:
-        recovery_log = crash_recovery_manager.get_recovery_log()
-        active_recoveries = crash_recovery_manager.get_active_recoveries()
-        
-        return {
-            "recovery_log": recovery_log,
-            "active_recoveries": active_recoveries
-        }
-    except Exception as e:
-        logger.error(f"Error getting recovery log: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "RECOVERY_LOG_FAILED", "message": str(e)}
-        )
+#
+# The four endpoints that used to live here (/crash-recovery/recover-deployment,
+# recover-signals, verify-state, log) called straight into
+# backend_app.core.crash_recovery.CrashRecoveryManager, whose own methods are
+# fabrication, not recovery: _get_deployment_state returns a HARDCODED placeholder dict
+# for every deployment_id ("status": "running", "exchange_id": "binance") instead of
+# querying anything; _cancel_open_orders, _restart_worker are bare `pass`; _reconcile_
+# portfolio always returns {"positions": [], "balance": 0.0, "reconciled": True}; and
+# _verify_recovery always returns {"success": True, ...} unconditionally. So
+# recover_deployment ALWAYS reported RecoveryStatus.SUCCEEDED, having cancelled no
+# orders, reconciled nothing, and restarted nothing -- a false "recovery succeeded"
+# confirmation on a crash-handling endpoint for a live-trading platform is a worse
+# failure mode than no endpoint at all: an operator who trusts it has no reason to look
+# further. recover_signals and verify_system_state are the same shape (their private
+# helpers are stubs returning empty/fixed results). get_recovery_log additionally
+# returned every tenant's active_recoveries/recovery_log unscoped by the caller's own
+# user_id -- any authenticated caller could read every other tenant's recovery activity.
+#
+# Unmounted rather than patched, per this finding's own remediation note ("Unmount
+# until implemented on RT-16"): RT-16 (VERIFIED_FIXED earlier this session) built the
+# real venue-reconciliation primitives (ReconciliationScheduler, adjudication against
+# the actual exchange) that a real implementation of this endpoint would have to be
+# built on, and that work was not done for crash-specific recovery in this pass.
+# backend_app/core/crash_recovery.py is UNCHANGED -- its own placeholder nature is
+# documented in its module docstring, and this is a mount removal from this router,
+# not a deletion, matching the precedent this session already set for RT-11's
+# distributed_execution router.
+#
+# See tests/test_ops03_crash_recovery_endpoints_unmounted.py.
 
 
 def _pipeline_timeframes() -> tuple:
