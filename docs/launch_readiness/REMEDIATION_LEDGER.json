@@ -873,12 +873,12 @@
       "severity": "Medium",
       "component": "Frontend / auth",
       "title": "Any access_token in the URL hash becomes the session (login CSRF)",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "PENDING",
+      "evidence": "Confirmed the defect directly in algo22-terminal/src/App.jsx: getEffectiveToken() (read by both AuthGuard and GuestGuard, so on every protected and every guest-only route) checked window.location.hash for access_token= on ANY path and, if not demonstrably expired, silently adopted it into sessionStorage -- a non-expired token proves only that Supabase signed it for SOMEONE, not that it was issued to this browser or that this page load is a legitimate redirect. PasswordRecoveryHandler's own non-recovery access_token= branch had the identical defect, unconditionally (storing the token before even checking the path, let alone expiry). Confirmed Google OAuth (signInWithOAuth) and magic-link OTP (signInWithOtp) are both real, offered sign-in methods (AuthPage.jsx), so this hash-handling could not simply be deleted. Confirmed config.js::getAuthRedirectUrl is the SINGLE redirect target Supabase is ever told to use for every OTP/sign-up/resend/OAuth call site (AUTH_REDIRECT_PATH = '/app/dashboard'), and that no resetPasswordForEmail call with an explicit redirectTo exists anywhere in src/ (so the recovery email's landing path is NOT controlled by this frontend and cannot be safely allowlisted). Fixed by requiring window.location.pathname to be one of the paths Supabase is actually ever told to redirect to (AUTH_REDIRECT_PATH/signin/signup/root) before either call site honours a hash access_token; also added the missing expiry check to PasswordRecoveryHandler's two branches. New tests/unit/authHashLandingPath.test.jsx (4 tests, vitest): the allowlist accepts exactly the four legitimate paths and rejects an arbitrary in-app page; a direct exercise of getEffectiveToken() proves a hash token on a disallowed path is never stored or returned, and the identical token on the real redirect path IS adopted (proving this narrows, not removes, the feature). Pre-existing auth suites (auth_otp/auth_oauth/authRedirectOrigin, 52 tests) still pass unchanged.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Let supabase-js handle OAuth with PKCE and state; never accept tokens from the hash outside the OAuth callback route."
+      "remaining_action": "This narrows the attack from 'any page in the app' to 'the one path Supabase is told to redirect to', but does NOT make the underlying implicit OAuth/magic-link flow itself CSRF-proof: an attacker can still craft a link landing on AUTH_REDIRECT_PATH itself (https://<app>/app/dashboard#access_token=<attacker's own valid token>) and a victim clicking it still adopts the attacker's session. The complete fix is PKCE (flowType: 'pkce' on the Supabase client), which binds the callback to a locally-held code_verifier an attacker cannot forge -- but switching flowType changes the redirect format for every auth path (OAuth, magic link, sign-up, AND the password-recovery email this frontend does not even control the redirect for) and is a live-Supabase-project-config change this sandboxed session has no live project or OAuth provider credentials to test end-to-end. Explicitly not attempted, to avoid shipping an untested change to the only path into the product. The type=recovery branch's landing path is not allowlisted at all, for the stated reason (this frontend never sets its redirectTo), and remains exposed to the same class of attack without narrowing."
     },
     {
       "id": "FE-02",
@@ -1432,12 +1432,12 @@
       "severity": "Medium",
       "component": "Frontend / trading safety",
       "title": "A third, unsafeguarded deploy entry point exists in the Deployments tab",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "PENDING",
+      "evidence": "Traced every deploy entry point in algo22-terminal/src/ to find the one FE-08 refers to. Confirmed three exist: (1) the canonical, fully-reviewed flow (lib/deployFlow.js + components/deploy/DeployConfirmation.jsx, POST /api/strategy-operations/.../versions/{v}/deploy, the only live-capable path, gated by preflight + a real-funds acknowledgement), (2) StrategyDetail.jsx's own handleDeploy/handleConfirmDeploy, which calls the LEGACY POST /api/strategies/{id}/deploy but only from a ds/ConfirmDialog's explicit confirm (already correctly gated, not this finding), and (3) components/DeploymentConsole.jsx's deployStrategy -- a 'Deploy Strategy' button in the console's header (rendered as StrategyDetail.jsx's 'Deployments' tab) that posted straight to the same legacy endpoint with NO confirmation dialog, no preflight, and no acknowledgement at all. Confirmed server-side (backend_app/routers/strategies.py's deploy_bot, RT-03's own code comment) that this legacy route is ALREADY forced paper-only regardless of what the request body carries -- so this control could never reach live capital -- but it still bypassed the one reviewed entry point for no reason, from the very page that offers that reviewed entry point. Also noticed its own success check (response.status === 'deployed') could never match what the route actually returns ('running'), so the control did not even work as written. Fixed per this finding's first offered option: removed the button, deployStrategy, and the dead isDeploying/deploymentConfig state outright, rather than rebuilding it to duplicate the canonical flow's gating a second time. The console's real job (listing and pausing/resuming/stopping EXISTING deployments) is untouched. New tests/unit/deploymentConsoleFe08.test.jsx (3 tests, vitest): no 'Deploy Strategy' control renders anywhere; the console never posts to the legacy deploy endpoint during the test; listing existing deployments still works. Pre-existing strategyDetail.test.jsx (18 tests) and strategyDetailFe06.test.jsx (3 tests) still pass unchanged.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Remove this deploy control (route to the canonical DeployConfirmation flow instead) or add the same confirmation/preflight gating."
+      "remaining_action": "None identified. The legacy endpoint's existing paper-only server-side enforcement (RT-03) and the other two entry points' existing gating are unchanged by this fix."
     },
     {
       "id": "INF-05",

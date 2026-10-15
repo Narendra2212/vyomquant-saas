@@ -38,7 +38,7 @@ import { token } from './design/tokens';
 import { Button } from './components/ui/Button';
 // The one auth-redirect origin derivation (see `config.js`). Used by the local
 // `UpdatePasswordPage` below, which is the component `/reset-password` actually renders.
-import { getAuthRedirectUrl } from './config';
+import { getAuthRedirectUrl, AUTH_REDIRECT_PATH } from './config';
 
 // Public routes (lazy)
 const LandingPage    = lazy(() => import('./components/landing/LandingPage'));
@@ -279,8 +279,21 @@ function isDemonstrablyExpiredJwt(token) {
   }
 }
 
+// FE-01: the paths a legitimate Supabase OAuth/magic-link redirect can actually land on.
+// `getAuthRedirectUrl` (config.js) hands Supabase this exact path for every OTP/sign-up/
+// resend/OAuth call site, so a hash carrying `access_token=` has no legitimate reason to
+// appear anywhere else. `/signin`/`/signup`/`/` are included because `PasswordRecoveryHandler`
+// below redirects a hash landing on any of those three toward the dashboard itself.
+const _AUTH_HASH_LANDING_PATHS = [AUTH_REDIRECT_PATH, "/signin", "/signup", "/"];
+
+// Exported for tests/unit/authHashLandingPath.test.jsx (FE-01) -- not used by any other
+// module.
+export function _isLegitimateAuthHashLandingPath(pathname) {
+  return _AUTH_HASH_LANDING_PATHS.includes(pathname);
+}
+
 // Synchronously extracts auth token from sessionStorage or URL hash
-function getEffectiveToken() {
+export function getEffectiveToken() {
   let token = sessionStorage.getItem("token");
   // An expired token is not a session. Both guards read this one function, so discarding it
   // here is what stops `AuthGuard` admitting a dead credential to the shell - every read
@@ -290,7 +303,23 @@ function getEffectiveToken() {
     sessionStorage.removeItem("token");
     token = null;
   }
-  if (!token && typeof window !== "undefined" && window.location.hash) {
+  // FE-01: this used to run on EVERY guarded route, with no check that this was actually
+  // the OAuth/magic-link redirect landing. An attacker-crafted link to any page at all --
+  // `/app/strategies/xyz#access_token=<a token the attacker owns>` -- made the victim's
+  // browser adopt the ATTACKER's session: a login CSRF, not merely an open redirect. A
+  // non-expired token proves nothing about WHO it was issued to; it only proves Supabase
+  // signed it for someone. Restricting this to the one path Supabase is actually told to
+  // redirect to closes the "any page" breadth of the attack. It does not make the implicit
+  // flow itself CSRF-proof -- only PKCE (a `code` exchanged against a locally-held
+  // verifier) does that, and switching `flowType` is a live-Supabase-project change this
+  // sandboxed session has no way to test end-to-end; tracked as the remaining gap under
+  // FE-01, not attempted here.
+  if (
+    !token &&
+    typeof window !== "undefined" &&
+    window.location.hash &&
+    _isLegitimateAuthHashLandingPath(window.location.pathname)
+  ) {
     const hash = window.location.hash;
     if (hash.includes("access_token=")) {
       const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
@@ -371,17 +400,28 @@ function PasswordRecoveryHandler() {
     const hash = window.location.hash;
     if (hash) {
       if (hash.includes("type=recovery")) {
+        // NOT path-scoped like the branch below: nothing in src/ calls
+        // `resetPasswordForEmail` with an explicit `redirectTo`, so this app does not
+        // control -- and cannot assert -- which path a legitimate recovery email actually
+        // lands on. Still rejects a demonstrably expired token; the login-CSRF exposure
+        // this branch shares with the one below is recorded as a known, unresolved FE-01
+        // residual rather than narrowed on a guess.
         const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
         const token = params.get("access_token");
-        if (token) {
+        if (token && !isDemonstrablyExpiredJwt(token)) {
           sessionStorage.setItem("token", token);
           window.history.replaceState(null, "", window.location.pathname);
           navigate("/reset-password", { replace: true });
         }
-      } else if (hash.includes("access_token=")) {
+      } else if (hash.includes("access_token=") && _isLegitimateAuthHashLandingPath(window.location.pathname)) {
+        // FE-01: this used to store ANY hash's access_token on ANY path unconditionally --
+        // the login-CSRF this finding is about. Gated on the same landing-path allowlist
+        // `getEffectiveToken` above uses, for the same reason: Supabase is only ever told
+        // to redirect here (`getAuthRedirectUrl`/`AUTH_REDIRECT_PATH`), so a hash arriving
+        // anywhere else has no legitimate source.
         const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
         const token = params.get("access_token");
-        if (token) {
+        if (token && !isDemonstrablyExpiredJwt(token)) {
           sessionStorage.setItem("token", token);
           window.history.replaceState(null, "", window.location.pathname);
           if (window.location.pathname === "/signin" || window.location.pathname === "/signup" || window.location.pathname === "/") {
