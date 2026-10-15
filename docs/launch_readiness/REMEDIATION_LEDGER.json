@@ -1289,12 +1289,12 @@
       "severity": "Low",
       "component": "API / market data",
       "title": "Unauthenticated-friendly market-data routes can be used as a free proxy to any exchange",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "a1804e1",
+      "evidence": "Confirmed by reading backend_app/routers/market.py: six routes (/candles, /orderbook, /ticker, /funding, /data/{symbol}/{timeframe}, /data/historical) required only Depends(get_current_user) -- a free Supabase signup -- with no route-specific rate limit (only /symbols had one). Their shared _get_data_engine helper's public-fallback branch (no stored exchange keys, the common case for a free account) opened a brand-new ConnectionEngine -- and therefore a fresh load_markets() handshake against the real venue -- on every single request, with no pooling at all. Together: a free, unthrottled proxy for probing a real exchange's public market data through this platform's own outbound IP. Fixed both. (1) Added @limiter.limit(\"60/minute\") (the same bound /symbols already used) to all six routes; get_market_data (the /data/{symbol}/{timeframe} alias, which calls get_candles(...) directly as a plain function, not through FastAPI routing) now forwards the request object it needs for its own decorator through to the one get_candles' decorator needs too. (2) Routed the public-fallback branch through get_or_create_exchange -- the SAME pool infrastructure the authenticated branch already uses, confirmed to support a credential-less mode by its own docstring ('No credential supplied -> reuse whatever is pooled') -- under a shared pseudo-identity constant, so repeated public requests for one exchange reuse one pooled client instead of opening a new one every time. New tests/test_api11_market_data_pooled_and_rate_limited.py (2 tests): two separate public-fallback calls for the same exchange are proven to hit get_or_create_exchange under the identical shared identity and with no credential in either call (mocked, no real network); a static AST sweep confirms every one of the six named route handlers carries a @limiter.limit(...) decorator. tests/test_market_none_keys_fix.py (2 tests, pre-existing, exercises this same _get_data_engine public-fallback path against the REAL binance venue) still passes -- confirming the pooling change works end to end, not just against the mock. Broader sweep (427 tests across pool lifecycle, route contracts, CORS, market-data edge cases and the validation sweep) clean except 2 unrelated pre-existing billing failures (already confirmed in an earlier finding this session). Also repaired, in the same pass: tests/test_router_registration_completeness.py's generic 'every router file must be registered' sweep still listed 'distributed_execution' as expected -- a residual break from this SAME session's earlier RT-11 fix, which deliberately unmounted that router (VERIFIED_FIXED; it advertised institutional-grade reliability for a capability this platform does not have). Removed it from the expected set with a comment explaining why, rather than leaving a known-broken test in the suite.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Add a route-specific rate limit; reuse pooled public clients instead of constructing new ones per request."
+      "remaining_action": "None."
     },
     {
       "id": "HY-04",
