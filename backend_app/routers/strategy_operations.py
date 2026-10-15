@@ -31,7 +31,7 @@ from backend_app.backend.backtest_service import get_backtest_service
 # from backend_app.backend.subscription_service import get_subscription_service  # DEPRECATED: Use library.py for subscriptions
 from backend_app.backend.strategy_compiler import get_compiler, CompilerError, ValidationError
 from backend_app.backend.backtest_runtime import BacktestRuntime, get_backtest_runtime
-from backend_app.backend.optimization_engine import get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
+from backend_app.backend.optimization_engine import OptimizationEngine, get_optimization_engine, OptimizationConfig, OptimizationMethod, ValidationMethod
 from backend_app.backend.deployment_manager import get_deployment_manager, DeploymentConfig as DeployConfig, DeploymentEnvironment
 # The server half of Requirement 12.7 (design.md -> "Server-side artifact resolution"). Invoked
 # only where a handler has already decided to refuse, so it changes nothing an owner sees and
@@ -1834,6 +1834,41 @@ async def _approved_search_budget(user: dict, supabase: Any, body: Any) -> Any:
     return budget
 
 
+def _optimization_engine_for(body: "OptimizationRequest") -> tuple:
+    """A fresh :class:`OptimizationEngine` + :class:`BacktestRuntime` for **this
+    request only** (OPT-03).
+
+    Deliberately not ``get_optimization_engine()`` / ``get_backtest_runtime()``. Both
+    are process-wide singletons: every tenant's call to this endpoint shared the SAME
+    ``OptimizationEngine`` instance, and therefore the SAME ``_optimization_history``
+    list -- ``_get_best_parameters(self._optimization_history)`` (read by every one of
+    ``run_walk_forward_analysis``/``run_sensitivity_analysis``/``run_monte_carlo_
+    simulation``/``run_benchmark_comparison``) could read back a DIFFERENT tenant's
+    optimization results, not just this request's own, if two optimize calls
+    overlapped or ran back to back in the same process. The shared
+    ``get_backtest_runtime()`` singleton is also the exact "parameter the endpoint
+    accepts but silently ignores" bug ``_backtest_runtime_for`` above already fixed for
+    the plain backtest endpoint (see that function's docstring): this endpoint's
+    ``initial_capital``/``commission``/``slippage``/``risk_per_trade``/``max_drawdown``/
+    ``daily_loss_limit`` fields were accepted and then never applied, because the
+    singleton runs on its class defaults regardless of what was submitted.
+
+    Returns ``(optimization_engine, backtest_runtime)`` with the runtime already
+    injected into the engine, so the call site is a single assignment.
+    """
+    backtest_runtime = BacktestRuntime(
+        initial_capital=body.initial_capital,
+        fees=body.commission,
+        slippage=body.slippage,
+        risk_per_trade=body.risk_per_trade,
+        max_drawdown=body.max_drawdown,
+        daily_loss_limit=body.daily_loss_limit,
+    )
+    optimization_engine = OptimizationEngine()
+    optimization_engine.set_backtest_runtime(backtest_runtime)
+    return optimization_engine, backtest_runtime
+
+
 @router.post("/strategies/{strategy_id}/optimize")
 @limiter.limit("10/minute")
 async def run_optimization(request: Request, 
@@ -1901,13 +1936,10 @@ async def run_optimization(request: Request,
             dependencies=body.execution_graph.get("dependencies", {})
         )
         
-        # Get optimization engine
-        optimization_engine = get_optimization_engine()
-        backtest_runtime = get_backtest_runtime()
-        
-        # Inject backtest runtime
-        optimization_engine.set_backtest_runtime(backtest_runtime)
-        
+        # OPT-03: a fresh engine + runtime for THIS request only, not the shared
+        # process-wide singletons (see _optimization_engine_for's own docstring).
+        optimization_engine, backtest_runtime = _optimization_engine_for(body)
+
         # ── The aggregate search budget, before any trial runs ───────────
         #
         # `check_optimization_quota` above has already bounded how many SEARCHES this
