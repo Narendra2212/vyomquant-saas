@@ -25,6 +25,8 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import Request
 
+from backend_app.core.client_address import trusted_edge_is_configured
+
 logger = logging.getLogger("CountryDetection")
 
 # Private and loopback network ranges (RFC 1918, RFC 3927, RFC 4291)
@@ -265,41 +267,53 @@ class CountryDetector:
     def extract_client_ip(cls, request: Optional[Request]) -> str:
         """
         Extract trusted client IP address from request.
-        
-        Evaluates trusted proxy headers:
+
+        GEO-01: every one of CF-Connecting-IP, True-Client-IP, X-Real-IP and
+        X-Forwarded-For is exactly as attacker-controllable as the X-Country headers
+        this method already refuses to read -- a caller that reaches this process
+        directly, bypassing whatever CDN is supposed to set them, can set any of them to
+        anything. ``core/client_address.py``'s SEC-10 fix already answers "is there a
+        real proxy chain in front of us" once, via ``TRUSTED_PROXY_HOPS``; this reuses
+        that same operator-confirmed signal rather than trusting these headers
+        unconditionally. Unconfigured (the fail-safe default), only the raw socket peer
+        is used -- never spoofable, though shared behind a proxy until an operator sets
+        the variable for this deployment's real topology.
+
+        Evaluates, only when ``trusted_edge_is_configured()``:
         1. CF-Connecting-IP (Cloudflare)
         2. True-Client-IP (Akamai / Cloudflare Enterprise)
         3. X-Real-IP (Nginx reverse proxy)
         4. X-Forwarded-For (ALB / ECS proxy chain: leftmost non-private IP)
-        5. Direct socket connection IP (request.client.host)
-        
+        Always falls back to the direct socket connection IP (request.client.host).
+
         Strictly ignores spoofed headers (X-Country, X-Country-Code, X-Client-Geo).
         """
         if not request:
             return "127.0.0.1"
 
-        # Check direct trusted CDN headers
-        cf_ip = request.headers.get("CF-Connecting-IP")
-        if cf_ip and not cls.is_private_ip(cf_ip):
-            return cf_ip.strip()
+        if trusted_edge_is_configured():
+            # Check direct trusted CDN headers
+            cf_ip = request.headers.get("CF-Connecting-IP")
+            if cf_ip and not cls.is_private_ip(cf_ip):
+                return cf_ip.strip()
 
-        true_client_ip = request.headers.get("True-Client-IP")
-        if true_client_ip and not cls.is_private_ip(true_client_ip):
-            return true_client_ip.strip()
+            true_client_ip = request.headers.get("True-Client-IP")
+            if true_client_ip and not cls.is_private_ip(true_client_ip):
+                return true_client_ip.strip()
 
-        x_real_ip = request.headers.get("X-Real-IP")
-        if x_real_ip and not cls.is_private_ip(x_real_ip):
-            return x_real_ip.strip()
+            x_real_ip = request.headers.get("X-Real-IP")
+            if x_real_ip and not cls.is_private_ip(x_real_ip):
+                return x_real_ip.strip()
 
-        # Parse X-Forwarded-For header
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            ips = [ip.strip() for ip in forwarded_for.split(",") if ip.strip()]
-            for ip in ips:
-                if not cls.is_private_ip(ip):
-                    return ip
-            if ips:
-                return ips[0]
+            # Parse X-Forwarded-For header
+            forwarded_for = request.headers.get("X-Forwarded-For")
+            if forwarded_for:
+                ips = [ip.strip() for ip in forwarded_for.split(",") if ip.strip()]
+                for ip in ips:
+                    if not cls.is_private_ip(ip):
+                        return ip
+                if ips:
+                    return ips[0]
 
         # Fall back to socket host
         if request.client and request.client.host:
@@ -313,8 +327,16 @@ class CountryDetector:
         Extract trusted edge CDN country headers injected by reverse proxies/CDNs.
         - CloudFront-Viewer-Country (AWS CloudFront GeoIP)
         - CF-IPCountry (Cloudflare GeoIP)
+
+        GEO-01: both headers are only as trustworthy as the edge that is supposed to set
+        them. A caller reaching this process directly -- bypassing CloudFront/Cloudflare
+        entirely, which this deployment's own terraform does not even describe (INF-02)
+        -- can set either header to any ISO code it likes and silently get that
+        country's price list instead of its own. Gated on the same ``TRUSTED_PROXY_HOPS``
+        operator confirmation ``extract_client_ip`` now requires: unconfigured, this
+        returns ``None`` and callers fall through to IP-based detection instead.
         """
-        if not request:
+        if not request or not trusted_edge_is_configured():
             return None
 
         # AWS CloudFront edge GeoIP header

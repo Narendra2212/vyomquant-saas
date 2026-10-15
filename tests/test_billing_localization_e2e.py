@@ -67,8 +67,14 @@ def make_mock_request(client_ip: str, headers: dict = None) -> Request:
 class TestIPGeolocationAndProxyHeaders:
     """Audit Section 1: Real Server-Side IP Extraction & Multi-Tier Resolution."""
 
-    def test_x_forwarded_for_leftmost_public_ip(self):
-        """ALB/ECS proxy chain: leftmost non-private IP is extracted as original client."""
+    def test_x_forwarded_for_leftmost_public_ip(self, monkeypatch):
+        """ALB/ECS proxy chain: leftmost non-private IP is extracted as original client.
+
+        GEO-01: this proxy header is only honoured once an operator has confirmed a
+        real trusted chain exists (TRUSTED_PROXY_HOPS) -- see
+        TestEdgeHeadersUntrustedByDefault below for the unconfigured case.
+        """
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"X-Forwarded-For": "103.21.124.1, 10.0.1.5, 172.16.0.2"}
@@ -78,8 +84,9 @@ class TestIPGeolocationAndProxyHeaders:
         country = CountryDetector.detect_country_from_ip(client_ip, req)
         assert country == "IN"
 
-    def test_cf_connecting_ip_precedence(self):
-        """Cloudflare CF-Connecting-IP takes precedence over socket IP."""
+    def test_cf_connecting_ip_precedence(self, monkeypatch):
+        """Cloudflare CF-Connecting-IP takes precedence over socket IP, once trusted (GEO-01)."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"CF-Connecting-IP": "51.140.0.1"}
@@ -89,8 +96,9 @@ class TestIPGeolocationAndProxyHeaders:
         country = CountryDetector.detect_country_from_ip(client_ip, req)
         assert country == "GB"
 
-    def test_true_client_ip_akamai(self):
-        """Akamai True-Client-IP is recognized."""
+    def test_true_client_ip_akamai(self, monkeypatch):
+        """Akamai True-Client-IP is recognized, once trusted (GEO-01)."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"True-Client-IP": "13.112.0.1"}
@@ -100,8 +108,9 @@ class TestIPGeolocationAndProxyHeaders:
         country = CountryDetector.detect_country_from_ip(client_ip, req)
         assert country == "JP"
 
-    def test_cloudfront_viewer_country_edge_header(self):
-        """AWS CloudFront edge GeoIP header is respected when present."""
+    def test_cloudfront_viewer_country_edge_header(self, monkeypatch):
+        """AWS CloudFront edge GeoIP header is respected when present and trusted (GEO-01)."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"CloudFront-Viewer-Country": "DE"}
@@ -111,8 +120,9 @@ class TestIPGeolocationAndProxyHeaders:
         assert country == "DE"
         assert CountryDetector.get_country_currency(country) == "EUR"
 
-    def test_cf_ipcountry_edge_header(self):
-        """Cloudflare edge GeoIP header is respected when present."""
+    def test_cf_ipcountry_edge_header(self, monkeypatch):
+        """Cloudflare edge GeoIP header is respected when present and trusted (GEO-01)."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
         req = make_mock_request(
             "10.0.0.1",
             headers={"CF-IPCountry": "FR"}
@@ -145,6 +155,62 @@ class TestIPGeolocationAndProxyHeaders:
             country = CountryDetector.detect_country_from_ip(client_ip, req)
             assert country == "US"
             assert CountryDetector.get_country_currency(country) == "USD"
+
+
+class TestEdgeHeadersUntrustedByDefault:
+    """GEO-01: every proxy/CDN header this module reads is attacker-controllable the
+    moment a caller reaches this process directly instead of through the CDN that is
+    supposed to set it -- the same problem SEC-10's TRUSTED_PROXY_HOPS already solved for
+    rate-limit keys. With TRUSTED_PROXY_HOPS unset (the fail-safe default, and this
+    sandbox's default), none of these headers may change the detected IP or country:
+    only the direct socket peer and, downstream of it, the deterministic US/USD fallback
+    may.
+    """
+
+    def test_x_forwarded_for_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request(
+            "10.0.0.1",
+            headers={"X-Forwarded-For": "103.21.124.1, 10.0.1.5, 172.16.0.2"}
+        )
+        # The socket peer itself is private here (as it always is behind a real ALB), so
+        # this must fall all the way to the US/USD default -- NOT the India address an
+        # attacker put in the header.
+        assert CountryDetector.extract_client_ip(req) == "10.0.0.1"
+
+    def test_cf_connecting_ip_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request("10.0.0.1", headers={"CF-Connecting-IP": "51.140.0.1"})
+        assert CountryDetector.extract_client_ip(req) == "10.0.0.1"
+
+    def test_true_client_ip_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request("10.0.0.1", headers={"True-Client-IP": "13.112.0.1"})
+        assert CountryDetector.extract_client_ip(req) == "10.0.0.1"
+
+    def test_cloudfront_viewer_country_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        """The attack this finding names: spoof the edge country header directly against
+        the origin to get a cheaper region's price list without even touching the
+        existing, legitimate manual currency-override path."""
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request("10.0.0.1", headers={"CloudFront-Viewer-Country": "DE"})
+        assert CountryDetector.detect_country_from_headers(req) is None
+        client_ip = CountryDetector.extract_client_ip(req)
+        country = CountryDetector.detect_country_from_ip(client_ip, req)
+        assert country == "US"
+        assert CountryDetector.get_country_currency(country) == "USD"
+
+    def test_cf_ipcountry_is_not_honoured_without_trusted_proxy_hops(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_PROXY_HOPS", raising=False)
+        req = make_mock_request("10.0.0.1", headers={"CF-IPCountry": "FR"})
+        assert CountryDetector.detect_country_from_headers(req) is None
+
+    def test_edge_headers_trusted_once_an_operator_configures_the_hop_count(self, monkeypatch):
+        """Negative control: this is a default, not a removal -- the same header works
+        the moment TRUSTED_PROXY_HOPS reflects this deployment's real topology."""
+        monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
+        req = make_mock_request("10.0.0.1", headers={"CloudFront-Viewer-Country": "DE"})
+        assert CountryDetector.detect_country_from_headers(req) == "DE"
 
 
 # ── 2. All 240+ Country Coverage Matrix ───────────────────────────────────────

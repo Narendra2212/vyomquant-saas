@@ -31,6 +31,21 @@ def _hops() -> int:
     return value if value >= 1 else 0
 
 
+def trusted_edge_is_configured() -> bool:
+    """Whether an operator has confirmed a trusted proxy/CDN chain fronts this process.
+
+    GEO-01 reuses this: any edge-injected header (``CloudFront-Viewer-Country``,
+    ``CF-IPCountry``, ``CF-Connecting-IP``, ``True-Client-IP``, ``X-Real-IP``, as well as
+    ``X-Forwarded-For`` itself) is exactly as spoofable as ``X-Forwarded-For`` is when
+    ``TRUSTED_PROXY_HOPS`` is unset -- a caller hitting the origin directly, bypassing
+    the CDN this header is supposed to come from, can set any of them to anything. The
+    same fail-safe this module already applies to IP-based rate-limit keys (never trust
+    a proxy header unless an operator has configured how many trusted hops exist) is the
+    right default for a GeoIP header too.
+    """
+    return _hops() >= 1
+
+
 def trusted_client_address(request: Any) -> str:
     try:
         peer = get_remote_address(request)
