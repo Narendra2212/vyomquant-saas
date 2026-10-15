@@ -129,8 +129,15 @@ class FakeTable:
         self._op_data: Any = None
         self._single = False
         self._upsert_conflict: Optional[str] = None
+        self._count_mode: Optional[str] = None
+        self._range: Optional[tuple] = None
 
     def select(self, *args, **kwargs) -> "FakeTable":
+        self._count_mode = kwargs.get("count")
+        return self
+
+    def range(self, start: int, end: int) -> "FakeTable":
+        self._range = (start, end)
         return self
 
     def eq(self, col: str, val: Any) -> "FakeTable":
@@ -254,12 +261,18 @@ class FakeTable:
                 # Supabase returns data: None when single() finds no rows
                 return _Resp(None)
             return _Resp(result[0])
-        return _Resp(result)
+
+        total = len(result) if self._count_mode == "exact" else None
+        if self._range is not None:
+            start, end = self._range
+            result = result[start : end + 1]
+        return _Resp(result, count=total)
 
 
 class _Resp:
-    def __init__(self, data):
+    def __init__(self, data, count=None):
         self.data = data
+        self.count = count
 
 
 class FakeDB:

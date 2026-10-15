@@ -289,8 +289,9 @@ def PRE_FIX_PROJECTION(
 
 
 class _Resp:
-    def __init__(self, data: Any):
+    def __init__(self, data: Any, count: Optional[int] = None):
         self.data = data
+        self.count = count
 
 
 class _Query:
