@@ -1177,8 +1177,13 @@ async def health():
     }
 
 
-#  Runtime Services health endpoint 
-@app.get("/health/services", tags=["System"])
+#  Runtime Services health endpoint
+# API-07: per-service internal state (ConsistencyChecker/OrderWatchdog/PnLEngine) is
+# operational detail, not the liveness/readiness signal a load balancer needs -- confirmed
+# via deploy-archive/k8s/ingress.yaml (ALB health check is /health) and healthcheck.sh
+# (Docker's own check is /health/live), neither of which names this path. Gated behind
+# get_admin_user rather than left public.
+@app.get("/health/services", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def health_services():
     """Per-service ACTIVE/INACTIVE status for ConsistencyChecker, OrderWatchdog, PnLEngine."""
     runtime = _runtime_service_status
@@ -1313,7 +1318,7 @@ async def system_trading_capabilities():
     }
 
 
-@app.get("/api/system/readiness", tags=["System"])
+@app.get("/api/system/readiness", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_readiness():
     """System readiness check — confirms critical dependencies are operational.
 
@@ -1329,6 +1334,10 @@ async def system_readiness():
     whatever reads this endpoint today; as of the correction it reads 0, honestly,
     because no venue has ever had a sandbox or live order placed against it
     (staging/EXCHANGE_SANDBOX_CERTIFICATION.md, Phase 10, 2026-10-10).
+
+    API-07: this is a diagnostic duplicate of `/health/ready` (the actual LB/K8s gate,
+    confirmed still public -- deploy-archive/k8s/ingress.yaml names /health as the ALB
+    target, not this path) carrying extra operational detail. Gated behind get_admin_user.
     """
     from backend_app.core.exchange_certification import \
         get_exchange_certification_registry
@@ -1354,13 +1363,17 @@ async def system_readiness():
     return JSONResponse(status_code=report.http_status, content=body)
 
 
-@app.get("/api/system/health", tags=["System"])
+@app.get("/api/system/health", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_health():
-    """Comprehensive system health across runtime workers and dependencies."""
+    """Comprehensive system health across runtime workers and dependencies.
+
+    API-07: gated behind get_admin_user -- this is `health()`'s own, more detailed
+    report, not the LB/K8s liveness target (that is the bare `/health`, still public).
+    """
     return await health()
 
 
-@app.get("/api/system/dependencies", tags=["System"])
+@app.get("/api/system/dependencies", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_dependencies():
     """Dependency health, measured.
 
@@ -1389,15 +1402,15 @@ async def system_dependencies():
     }
 
 
-@app.get("/api/system/workers", tags=["System"])
+@app.get("/api/system/workers", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_workers():
-    """Background workers operational status."""
+    """Background workers operational status. API-07: gated behind get_admin_user."""
     return await health_services()
 
 
-@app.get("/api/system/exchanges", tags=["System"])
+@app.get("/api/system/exchanges", tags=["System"], dependencies=[Depends(get_admin_user)])
 async def system_exchanges():
-    """Certified exchanges status matrix."""
+    """Certified exchanges status matrix. API-07: gated behind get_admin_user."""
     from backend_app.core.exchange_certification import get_exchange_certification_registry
     return get_exchange_certification_registry().get_certification_matrix()
 
