@@ -1451,11 +1451,23 @@ def test_malformed_input_never_answers_500(route: MutatingRoute, client):
 #: 500 left to excuse. `library.clone_strategy` was never in this set and was the red test that
 #: surfaced the defect; it passes for the same reason. The sweep's skip count went 11 -> 10 and
 #: its pass count 382 -> 383 in that one change.
+#: `billing.cancel_subscription` / `billing.resume_subscription` added on the same evidence as
+#: this set's other out-of-band-client entries. Both declare `supabase: Any =
+#: Depends(get_request_supabase)` -- this sweep's `client` fixture overrides that dependency --
+#: but neither handler body ever reads the parameter: both call `_background_sb()` instead, which
+#: builds its own client straight from `os.environ["SUPABASE_URL"]` /
+#: `os.environ["SUPABASE_SERVICE_ROLE_KEY"]` and raises `RuntimeError("Billing webhook Supabase
+#: service credentials are not configured.")` when either is absent, exactly as this sandbox's
+#: environment is. No DI override this sweep installs can reach that constructor, and the route
+#: being hit here carries no body to malform at all (`_ROUTES_WITHOUT_A_SCHEMA_TO_VIOLATE`'s
+#: no-body group), so the 500 cannot be a function of what this sweep sent either way.
 _ENVIRONMENT_GAP_ROUTE_KEYS = frozenset(
     {
         "copilot.delete_copilot_session",
         "strategy_operations.cancel_training_job",
         "billing.create_portal_session",
+        "billing.cancel_subscription",
+        "billing.resume_subscription",
     }
 )
 
