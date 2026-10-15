@@ -665,12 +665,12 @@
       "severity": "Low",
       "component": "Secrets hygiene",
       "title": "Supabase anon JWT committed in six scripts",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "f878c8a",
+      "evidence": "Grepped the repo for the JWT literal and confirmed the title's own count: exactly six scripts/*.py files hardcoded the identical real Supabase anon JWT for this project (ref wrkexcjqnidkdrayhlsi, role anon, committed to git) -- verify_authenticated_production.py, battery_20_samples.py, run_production_browser_forensic_audit.py, verify_production_browser_final.py, generate_browser_console_baseline.py (identical SUPABASE_ANON_KEY = \"eyJ...\" line in all five), and test_currency_repro.py (same literal, assigned via an unconditional os.environ[...] = ... instead). All six now read SUPABASE_ANON_KEY from the environment (test_currency_repro.py via setdefault on SUPABASE_URL plus a presence check on SUPABASE_ANON_KEY, so a caller's own value still wins) and exit with a clear message naming the missing variable when it is unset, rather than silently falling back to the committed credential. New tests/test_sec06_no_hardcoded_supabase_jwt_in_scripts.py (187 tests): a JWT-shaped-literal regex scan across every file in scripts/ (not just the six named, so a seventh script reintroducing the pattern is caught the same way) finds none; each of the six named scripts is executed as a subprocess with SUPABASE_ANON_KEY unset and asserted to exit non-zero naming that variable (three of the six import playwright at module level before anything this fix touches -- those three skip gracefully, not fail, in an environment where playwright is not installed, rather than reporting a false negative about the env-var guard); and a static source check confirms each reads os.environ.get(\"SUPABASE_ANON_KEY\") rather than some other hardcoded source. The subprocess tests deliberately never set a real or fake key and let the scripts proceed -- five of the six scripts make a real network call to a live production endpoint shortly after the env-var check, and this test suite must not issue those requests on every run.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Read from env."
+      "remaining_action": "SUPABASE_URL (the project's own Supabase domain, not a secret -- it is also decodable from inside the JWT's own claims, which is what made this an anon-key finding and not a URL-confidentiality one) was deliberately left hardcoded in the five scripts that had it as a bare constant; SEC-06 and its remediation note (\"Read from env\") name the JWT specifically. Credential rotation for the leaked anon key itself (now that it has been in git history) is an operator action this sandboxed session cannot perform; anon keys are designed to be client-exposed and are gated entirely by RLS, so this is a hygiene/policy fix, not a live-exploit fix."
     },
     {
       "id": "DEP-01",
