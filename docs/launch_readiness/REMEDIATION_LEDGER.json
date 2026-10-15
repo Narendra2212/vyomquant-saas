@@ -600,12 +600,12 @@
       "severity": "Medium",
       "component": "Database",
       "title": "Privilege-hardening backstop does not detect RLS-disabled customer tables",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "40641d0",
+      "evidence": "Confirmed the defect by reading scripts/post_migration_validation.py section 3 (\"VALIDATING RLS STATUS\"): it checked rowsecurity only for tables already named in the required_tables list defined at the top of the same function -- the same list section 1 checks for existence. A table a later migration grants anon or authenticated a privilege on (Supabase grants most new tables a default privilege shape automatically) but never gets ENABLE ROW LEVEL SECURITY would not be examined at all unless someone also remembered to add its name to this list -- the exact gap the title names. Separately, the script never called sys.exit(1) despite importing sys, so even a FAILED line printed to stdout left the process exiting 0. Fixed both: fetch_privileged_tables_without_rls(cur) now asks the catalog directly (pg_tables joined against information_schema.table_privileges for grantee IN ('anon','authenticated')) for every table either role can touch, with no table name hardcoded anywhere; evaluate_privilege_hardening(rows) is the pure decision half (same fetch/evaluate split already used in scripts/verify_rls.py), and validate_production_db() now returns that result, with __main__ calling sys.exit(1) when it fails. VERIFIED AGAINST A REAL POSTGRESQL 16 SERVER (this session's own local instance): created a table named db03_brand_new_customer_table_not_on_any_list -- confirmed absent from required_tables by inspecting validate_production_db's own source -- granted authenticated SELECT on it with RLS left disabled, and proved the new check finds it anyway (fetch_privileged_tables_without_rls returns it; evaluate_privilege_hardening fails). Negative controls: enabling RLS on that same table makes the check pass; a table with no anon/authenticated grant at all is never flagged even with RLS disabled (service-only tables are a normal, intentional configuration). New tests/test_db03_privilege_hardening_detects_untracked_tables_postgres.py (4 tests, real Postgres) and tests/test_db03_privilege_hardening_pure_logic.py (5 tests, no database) all passed. tests/test_migration_tooling.py (36 tests, pre-existing, covers this same file's import-of-os regression) still passes.",
+      "verification_level": "code+test (verified this session, real PostgreSQL)",
       "production_verified": false,
-      "remaining_action": "Fail if any public table lacks RLS while anon/authenticated hold privileges."
+      "remaining_action": "Not wired into any CI workflow (grepped .github/ -- no match), and was not before this fix either; it remains a manually-run script. A dedicated session should add it as a CI gate run against a disposable Postgres instance, or against staging before a production migration is promoted. Sections 1, 2, 4, 5 and 6 of the same script (table existence, column existence, RPC existence, security-definer check, metadata export) were not touched -- this finding names only the RLS/privilege check's detection gap, not those checks' own exit-code behavior."
     },
     {
       "id": "RT-11",
