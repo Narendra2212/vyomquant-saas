@@ -1393,12 +1393,12 @@
       "severity": "Low",
       "component": "Frontend / idempotency",
       "title": "The API client overwrites caller-supplied Idempotency-Key headers with its own weak hash",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "5a97cb3",
+      "evidence": "Confirmed by reading algo22-terminal/src/apiClient.js's request interceptor: it called generateIdempotencyKey(config.url, data), which hashed sessionId_url_payloadStr with a weak 32-bit simpleHash into the Idempotency-Key header UNCONDITIONALLY -- even when the caller (api/modules/strategies.js::deploy's options.idempotencyKey, a prepared but not-yet-wired-to-any-UI call site) had already set its own Idempotency-Key header, it was overwritten. The deeper bug: the hash was deterministic over (session, url, payload), so two SEPARATE, deliberately-identical submissions (placing the same order twice in a row on purpose) collided onto the identical key, and the backend's own idempotency check would then treat the second legitimate order as a duplicate retry of the first. Fixed: the interceptor now checks config.headers['Idempotency-Key'] for an existing value first and only falls back to its own generator when the caller supplied none; the fallback itself (generateIdempotencyKey) no longer takes url/data at all -- it is now idemp_${crypto.randomUUID()}, content-independent, so two identical submissions never collide. Removed simpleHash (now unused) and getSessionId (now unused -- confirmed no other call site anywhere in algo22-terminal/src or tests references either name). New algo22-terminal/tests/unit/apiClientIdempotencyFe05.test.js (4 tests, same axios-mock convention as the existing ATTACK 3 idempotency test it extends): a caller-supplied key is honoured verbatim, not overwritten; a request with no caller key still gets a defined idemp_-prefixed key; two identical submissions with no caller key get DIFFERENT keys (the collision bug, proven fixed); a GET request still never receives the header. The pre-existing tests/unit/attack_frontend_full.test.js (8 tests, whose ATTACK 3 only asserted the idemp_ prefix and definedness, not hash-determinism) still passes.",
+      "verification_level": "code+test (verified this session)",
       "production_verified": false,
-      "remaining_action": "Honour an existing Idempotency-Key header; otherwise generate a random UUID per user intent, not a hash of request shape."
+      "remaining_action": "No current UI call site actually passes options.idempotencyKey to strategies.deploy (or any other caller-supplied-key path) yet -- this fix makes the mechanism correct for when one is wired up, consistent with how this session treated other prepared-but-unused mechanisms (e.g. SEC-11). A future session adding a 'Deploy' button's retry/resubmit handling should generate one UUID per click and pass it through, rather than relying on this interceptor's own per-request fallback, if intentional retry-coalescing is wanted."
     },
     {
       "id": "FE-06",
