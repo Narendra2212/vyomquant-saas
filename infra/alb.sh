@@ -152,10 +152,21 @@ fi
 ALB_DNS_NAME=$(aws elbv2 describe-load-balancers --region "$AWS_REGION" --load-balancer-arns "$ALB_ARN" --query "LoadBalancers[0].DNSName" --output text)
 echo "[SUCCESS] ALB DNS Name: $ALB_DNS_NAME"
 
-# 6. Create or Reuse Backend Target Group (FastAPI Port 8000, /health)
+# 6. Create or Reuse Backend Target Group (FastAPI Port 8000, /health/ready)
+#
+# INF-01: this used to point at /health, which backend_app/main.py's health() handler
+# always answers HTTP 200 regardless of its "status": "degraded" body -- a target with no
+# reachable database or Redis still passed. /health/ready (core/readiness.py) measures
+# those dependencies and returns a real 503 when either is down, which `matcher` here
+# (unchanged, still a bare "HttpCode=200") actually reads as unhealthy. terraform/alb.tf's
+# aws_lb_target_group.api carries the same fix -- this script is the mechanism that
+# ACTUALLY ran against production (per INF-02, terraform does not describe it), and the
+# `modify-target-group` call below runs on every invocation of this script regardless of
+# whether the target group already existed, so leaving the old path here would silently
+# re-clobber the terraform fix back to /health the next time this script runs.
 TG_API_ARN=$(aws elbv2 describe-target-groups --region "$AWS_REGION" --names "$TG_API_NAME" --query "TargetGroups[0].TargetGroupArn" --output text 2>/dev/null || true)
 if [ -z "$TG_API_ARN" ] || [ "$TG_API_ARN" == "None" ]; then
-    echo "[INFO] Creating Backend Target Group $TG_API_NAME (Port 8000, /health)..."
+    echo "[INFO] Creating Backend Target Group $TG_API_NAME (Port 8000, /health/ready)..."
     TG_API_ARN=$(aws elbv2 create-target-group \
         --name "$TG_API_NAME" \
         --protocol HTTP \
@@ -163,7 +174,7 @@ if [ -z "$TG_API_ARN" ] || [ "$TG_API_ARN" == "None" ]; then
         --vpc-id "$VPC_ID" \
         --target-type ip \
         --health-check-protocol HTTP \
-        --health-check-path "/health" \
+        --health-check-path "/health/ready" \
         --health-check-interval-seconds 30 \
         --health-check-timeout-seconds 5 \
         --healthy-threshold-count 2 \
@@ -174,7 +185,7 @@ if [ -z "$TG_API_ARN" ] || [ "$TG_API_ARN" == "None" ]; then
     echo "[SUCCESS] Created Backend Target Group: $TG_API_ARN"
 else
     echo "[INFO] Reusing Backend Target Group: $TG_API_ARN"
-    aws elbv2 modify-target-group --target-group-arn "$TG_API_ARN" --health-check-path "/health" --region "$AWS_REGION" >/dev/null || true
+    aws elbv2 modify-target-group --target-group-arn "$TG_API_ARN" --health-check-path "/health/ready" --region "$AWS_REGION" >/dev/null || true
 fi
 
 # 7. Create or Reuse Frontend Target Group (Port 3000, /)

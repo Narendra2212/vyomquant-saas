@@ -125,7 +125,13 @@ joblib==1.4.2
 tensorflow==2.16.1
 
 # --- Utilities & Observability --------------------------------------------
-python-dotenv==1.0.1
+# CI-04/DEP-01: PYSEC-2026-2270 is fixed in 1.2.2. Confirmed no version-sensitive usage --
+# every call site in this codebase is a bare load_dotenv()/find_dotenv() (core/config.py,
+# worker.py, alembic/env.py and the dev-only test_*.py scripts) -- and the full
+# validation/schema/environment-precedence/execution-guard suites pass unchanged against
+# 1.2.2 in this session's venv. Unlike setuptools (held at 78.1.1 just above; see that
+# pin's own comment) or starlette (DEP-01), there was no conflict to document here.
+python-dotenv==1.2.2
 pydantic[email]==2.8.2
 pydantic-settings==2.4.0
 httpx==0.27.0

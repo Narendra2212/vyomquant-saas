@@ -35,6 +35,19 @@ FROM python:3.11-slim as production
 
 WORKDIR /app
 
+# CI-03: release provenance. 06-frontend-deploy.yml already stamps the deployed UI with
+# the commit it was built from (dist/release.json), so "which frontend runs against which
+# backend" is answerable by comparing it to the backend image's own commit -- but nothing
+# ever exposed that on the backend side. 02-build.yml passes these as --build-arg from its
+# own IMAGE_TAG (the commit SHA already used to tag the image in ECR) and the build
+# timestamp; GET /release.json below reads them back at runtime. Defaulted to "unknown"
+# rather than left unset, so a local `docker build` with no --build-arg still produces a
+# working, honestly-labelled image instead of a KeyError.
+ARG GIT_SHA=unknown
+ARG BUILT_AT=unknown
+ENV GIT_SHA=$GIT_SHA
+ENV BUILT_AT=$BUILT_AT
+
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -m -r -g appuser appuser
 

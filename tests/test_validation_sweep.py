@@ -919,6 +919,14 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         # `channels`/`events` required nested models.
         body={"channels": "not-an-object"},
     ),
+    MutatingRoute(
+        key="user.delete_account_endpoint",
+        method="DELETE",
+        path="/api/user/account",
+        handler="backend_app.routers.user:delete_account_endpoint",
+        # `DeleteAccountRequest.confirm` is the one required field (PRIV-01).
+        body=_GENERIC_MALFORMED_BODY,
+    ),
     # ══════════════════ referral.py (prefix /api) ══════════════════
     MutatingRoute(
         key="referral.validate_referral_code",

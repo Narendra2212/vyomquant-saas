@@ -62,21 +62,46 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build, tag, and push API image to ECR
+      # CI-02: this used to also tag and push `:latest` alongside the commit-SHA tag.
+      # Nothing in the deploy path ever reads it -- scripts/ecs_deploy_and_diagnose.py
+      # builds its image_uri as "{ECR_REGISTRY}/vyomquant-api:{IMAGE_TAG}" where IMAGE_TAG
+      # is 03-deploy.yml's own `github.event.workflow_run.head_sha || github.sha`, i.e.
+      # always the commit SHA -- but a mutable `:latest` tag sitting in the registry is
+      # still a live risk: anything that pulls it later (a manual `docker pull`, a stray
+      # script, a future workflow written without re-reading this one) gets whatever was
+      # built most recently rather than a pinned, known commit. Only the immutable
+      # SHA-tagged image is built and pushed now.
+      - name: Build and push API image to ECR
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           echo "=== Building Docker Image ==="
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest -f Dockerfile .
-          
+          # CI-03: bakes this image's own commit SHA + build time into it (GET /release.json
+          # reads these back at runtime), the backend counterpart to 06-frontend-deploy.yml's
+          # dist/release.json stamp.
+          docker build \
+            --build-arg GIT_SHA=$IMAGE_TAG \
+            --build-arg BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f Dockerfile .
+
           echo "=== Pushing Docker Image ==="
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-          DIGEST=$(aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || echo "$IMAGE_TAG")
-          
+          # CI-02: this used to fall back to echoing $IMAGE_TAG (a tag, not a digest) if
+          # `aws ecr describe-images` failed, so a describe failure silently produced an
+          # `image_digest` output that was not actually a digest -- indistinguishable from
+          # a real one to anything consuming it. Nothing reads this output today (grepped
+          # every workflow and script for `image_digest` / `outputs.image_digest`), but an
+          # output that lies about its own contents is a trap for whatever is the first
+          # thing that ever does. Fail the step instead.
+          DIGEST=$(aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "::error::Could not retrieve a real digest for $ECR_REPOSITORY:$IMAGE_TAG after push; refusing to report a fake one."
+            exit 1
+          fi
+
           echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
           echo "image_digest=$DIGEST" >> $GITHUB_OUTPUT
           echo "=== Pushed Image Digest: $DIGEST ==="

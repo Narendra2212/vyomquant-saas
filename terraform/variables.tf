@@ -79,3 +79,9 @@ variable "alert_email" {
   type        = string
   default     = ""
 }
+
+variable "github_repository" {
+  description = "CI-02: GitHub \"owner/repo\" slug trusted by the GitHub Actions OIDC deploy role (see iam.tf's github_actions_deploy) to assume it. Must match this repository exactly -- a wrong value either trusts no workflow (safe but broken) or, in the worst case, trusts the wrong repository."
+  type        = string
+  default     = "Narendra2212/vyomquant-saas"
+}

@@ -198,6 +198,32 @@ class DataEngine:
         except (ValueError, KeyError, IndexError):
             raise ValueError(f"unsupported timeframe {timeframe!r}") from None
 
+    async def _fetch_ohlcv_page(
+        self,
+        symbol: str,
+        timeframe: str,
+        since: Optional[int],
+        batch_size: int,
+        max_retries: int,
+    ) -> list:
+        """One ``fetch_ohlcv`` call, retried with exponential backoff (FIX DS-1)."""
+        for attempt in range(max_retries):
+            try:
+                return await self.exchange.fetch_ohlcv(
+                    symbol, timeframe, since=since, limit=batch_size
+                )
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(
+                        f"fetch_historical_ohlcv failed for {symbol} "
+                        f"after {max_retries} attempts: {e}"
+                    )
+                    raise
+                wait = 2**attempt
+                logger.warning(f"OHLCV fetch error: {e}. Retrying in {wait}s...")
+                await asyncio.sleep(wait)
+        return []  # unreachable: the loop above always returns or raises
+
     async def fetch_historical_ohlcv(
         self,
         symbol: str,
@@ -205,26 +231,44 @@ class DataEngine:
         limit: int = 1_000,
         max_retries: int = 3,
         require_full: bool = False,
+        since_ms: Optional[int] = None,
+        until_ms: Optional[int] = None,
     ) -> list:
         """
-        Fetches up to ``limit`` of the MOST RECENT historical OHLCV bars, oldest first.
+        Fetches OHLCV bars, oldest first, in one of two modes.
 
-        DATA-01: this used to page FORWARD. The first call (``since=None``) returns the
-        latest page; asking for ``since=last_ts+1`` then returns nothing (there is nothing
-        newer), so every request for more than one page silently came back with at most
-        ~500 bars whatever ``limit`` said - a "10,000 bar" backtest ran on 500. It now pages
-        BACKWARD: after the latest page, each request starts one page-width before the
-        oldest bar held and keeps only bars strictly older than it.
+        ``since_ms`` and ``until_ms`` both ``None`` (the default): up to ``limit`` of the
+        MOST RECENT bars. DATA-01: this used to page FORWARD, which silently returned at
+        most ~500 bars however large ``limit`` was ("since the newest page, there is
+        nothing newer"). It now pages BACKWARD: after the latest page, each request starts
+        one page-width before the oldest bar held and keeps only bars strictly older.
 
-        Coverage is never claimed silently. A short result logs a WARNING naming how many
-        bars were wanted and how many exist; with ``require_full=True`` it raises
-        ``InsufficientHistoryError`` instead, for consumers that must not run on less.
+        ``since_ms`` given (BT-02): bars from that instant forward, up to ``until_ms``
+        (exclusive) if given, else up to ``limit`` bars or the latest bar the exchange
+        holds. This is the mode a caller with an explicit historical window needs -
+        BEFORE this existed, every caller that asked for a specific ``start_date``/
+        ``end_date`` (a backtest, an optimization trial, a walk-forward window) received
+        this same "most recent" mode regardless, so a backtest requested over 2020 silently
+        ran on whatever the most recent bars happened to be when it was called. That
+        defect is NOT in this function - it is in every caller that had a date range to
+        honour and called the no-argument mode anyway; this mode is what lets them stop.
 
-        FIX DS-1: Retry sleep is exponential (1s, 2s, 4s).
+        Coverage is never claimed silently in either mode. A short result logs a WARNING
+        naming how many bars were wanted and how many exist; with ``require_full=True`` it
+        raises ``InsufficientHistoryError`` instead, for consumers that must not run on
+        less.
+
         FIX DS-2: Paginated fetch; most exchanges cap at 500 per call.
         """
         exchange_limit = 500  # conservative cap that works for all exchanges
         tf_ms = self._timeframe_ms(timeframe)
+
+        if since_ms is not None:
+            return await self._fetch_ohlcv_bounded(
+                symbol, timeframe, since_ms, until_ms, limit, max_retries,
+                exchange_limit, tf_ms, require_full,
+            )
+
         all_bars: list[list] = []
         oldest: Optional[int] = None  # oldest bar timestamp collected so far
 
@@ -232,22 +276,9 @@ class DataEngine:
             batch_size = min(exchange_limit, limit - len(all_bars))
             since = None if oldest is None else oldest - batch_size * tf_ms
 
-            for attempt in range(max_retries):
-                try:
-                    batch = await self.exchange.fetch_ohlcv(
-                        symbol, timeframe, since=since, limit=batch_size
-                    )
-                    break
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        logger.error(
-                            f"fetch_historical_ohlcv failed for {symbol} "
-                            f"after {max_retries} attempts: {e}"
-                        )
-                        raise
-                    wait = 2**attempt  # FIX DS-1: exponential backoff
-                    logger.warning(f"OHLCV fetch error: {e}. Retrying in {wait}s...")
-                    await asyncio.sleep(wait)
+            batch = await self._fetch_ohlcv_page(
+                symbol, timeframe, since, batch_size, max_retries
+            )
 
             if oldest is not None:
                 # Only bars strictly older than what we already hold are new information.
@@ -269,6 +300,76 @@ class DataEngine:
             msg = (
                 f"fetch_historical_ohlcv({symbol}, {timeframe}): wanted {limit} bars but "
                 f"only {len(sorted_bars)} are available from the exchange"
+            )
+            if require_full:
+                raise InsufficientHistoryError(msg)
+            logger.warning(msg)
+        return sorted_bars
+
+    async def _fetch_ohlcv_bounded(
+        self,
+        symbol: str,
+        timeframe: str,
+        since_ms: int,
+        until_ms: Optional[int],
+        limit: int,
+        max_retries: int,
+        exchange_limit: int,
+        tf_ms: int,
+        require_full: bool,
+    ) -> list:
+        """BT-02: bars from ``since_ms`` forward, bounded by ``until_ms`` and/or ``limit``.
+
+        Pages FORWARD rather than backward: the window's start is known and fixed, so each
+        page asks for the bars immediately after the last one collected, exactly as
+        ``since=last_ts+one_bar`` naturally does for ccxt's own "bars at or after ``since``"
+        contract. A page returning nothing, or a page entirely at or past ``until_ms``,
+        ends the fetch - the latter trims rather than discards, so a window whose end
+        falls mid-page is not silently rounded up to the next bar past it.
+        """
+        all_bars: list[list] = []
+        since = since_ms
+
+        while len(all_bars) < limit:
+            if until_ms is not None and since >= until_ms:
+                break
+            batch_size = min(exchange_limit, limit - len(all_bars))
+            batch = await self._fetch_ohlcv_page(
+                symbol, timeframe, since, batch_size, max_retries
+            )
+            if not batch:
+                break  # no more data at or after `since`
+
+            if until_ms is not None:
+                in_range = [bar for bar in batch if bar[0] < until_ms]
+                hit_the_end = len(in_range) < len(batch)
+                batch = in_range
+            else:
+                hit_the_end = False
+
+            if not batch:
+                break
+
+            all_bars.extend(batch)
+            newest = max(bar[0] for bar in batch)
+            if newest < since:
+                break  # defensive: no progress
+            since = newest + tf_ms
+            if hit_the_end:
+                break
+
+        unique = {bar[0]: bar for bar in all_bars}
+        sorted_bars = sorted(unique.values(), key=lambda b: b[0])[:limit]
+
+        if len(sorted_bars) < limit and until_ms is None:
+            # An open-ended window ("from X onward") that came up short is the same
+            # under-coverage DATA-01 already warns on. A CLOSED window (`until_ms` given)
+            # legitimately returns fewer than `limit` bars whenever the window itself
+            # holds fewer - that is not under-coverage, it is the window being short, so
+            # it is not warned on here.
+            msg = (
+                f"fetch_historical_ohlcv({symbol}, {timeframe}, since_ms={since_ms}): wanted "
+                f"{limit} bars but only {len(sorted_bars)} are available from the exchange"
             )
             if require_full:
                 raise InsufficientHistoryError(msg)

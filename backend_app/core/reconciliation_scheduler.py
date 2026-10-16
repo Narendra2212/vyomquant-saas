@@ -23,10 +23,32 @@ EXPECTED RESULT:
   ✔ No mismatch is ever silently ignored.
   ✔ CRITICAL mismatches immediately halt all execution via kill switch.
   ✔ Full audit trail — every escalation is recorded in the DB.
+
+INF-04 — LEADER ELECTION (one worker per poll cycle, not every worker)
+------------------------------------------------------------------------
+`start_reconciliation_scheduler()` is called from `main.py`'s FastAPI lifespan startup
+hook, which runs once per WEB WORKER PROCESS — every uvicorn/gunicorn worker therefore
+built its own `ReconciliationScheduler` and ran this loop independently, polling the same
+`reconciliation_mismatches` table every `POLL_INTERVAL_SECONDS` from N processes at once.
+Each process would escalate the same NEW mismatch and attempt to trigger the SAME kill
+switch redundantly on every cycle — the kill switch and the "already-escalated" check are
+each idempotent on their own, so this did not multiply a mismatch's real-world effect, but
+it did multiply the DB/alerting load by N for no benefit, which is exactly INF-04's finding.
+
+`_try_become_leader` makes exactly one process "the" scheduler at a time via a renewable
+Redis lease (`SET key value NX EX` to win it when unheld, a plain `SET` to renew it while
+still held) — the same primitive `master_executor`'s own execution lock and
+`IdempotentExchangeSubmission.claim_submission` already use, and it fails CLOSED the same
+way theirs do: `redis_manager.get_client()`'s own docstring explains why an unavailable
+cache in a non-development deployment must refuse rather than hand back a per-process mock
+that would make every worker win its own lock and silently reintroduce the N-way fan-out
+this fix exists to remove. A worker that is not leader this cycle skips `_poll_and_escalate`
+entirely rather than running it a second time for nothing.
 """
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -41,6 +63,13 @@ POLL_INTERVAL_SECONDS: int = 30          # How often to poll for new mismatches
 BATCH_SIZE: int = 50                     # Max mismatches processed per poll
 MAX_RE_ESCALATION_ROUNDS: int = 3        # Re-escalate after N escalation cycles
 RE_ESCALATION_INTERVAL_SECONDS: int = 300  # 5 minutes between re-escalations
+
+#: INF-04. Longer than one poll cycle so a renewal that lands a little late (a slow DB
+#: round trip, a GC pause) does not let a second process win leadership mid-cycle; short
+#: enough that a crashed leader's role is picked up by another process within one TTL
+#: window rather than leaving the mismatches table unpolled indefinitely.
+LEADER_LOCK_TTL_SECONDS: int = POLL_INTERVAL_SECONDS * 3
+LEADER_LOCK_KEY: str = "leader:reconciliation_scheduler"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -63,11 +92,20 @@ class ReconciliationScheduler:
         self,
         poll_interval: int = POLL_INTERVAL_SECONDS,
         batch_size: int = BATCH_SIZE,
+        leader_lock_ttl: int = LEADER_LOCK_TTL_SECONDS,
+        leader_lock_key: str = LEADER_LOCK_KEY,
     ):
         self._poll_interval = poll_interval
         self._batch_size = batch_size
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        #: One id per process: the module-level singleton means one instance per worker,
+        #: so this is stable for the process's whole lifetime and distinct from every
+        #: other worker's - exactly the identity a renewable lease needs to tell "still
+        #: me, renew" apart from "someone else, back off".
+        self._instance_id = str(uuid.uuid4())
+        self._leader_lock_ttl = leader_lock_ttl
+        self._leader_lock_key = leader_lock_key
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -98,10 +136,17 @@ class ReconciliationScheduler:
 
     async def _loop(self) -> None:
         """Main polling loop — runs until _running is False."""
-        logger.info("[ReconciliationScheduler] Loop started")
+        logger.info(
+            f"[ReconciliationScheduler] Loop started — instance={self._instance_id}"
+        )
         while self._running:
             try:
-                await self._poll_and_escalate()
+                if await self._try_become_leader():
+                    await self._poll_and_escalate()
+                else:
+                    logger.debug(
+                        "[ReconciliationScheduler] Not leader this cycle — skipping poll"
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -110,6 +155,49 @@ class ReconciliationScheduler:
                     exc_info=True,
                 )
             await asyncio.sleep(self._poll_interval)
+
+    # ── Leader Election (INF-04) ────────────────────────────────────────────────
+
+    async def _try_become_leader(self) -> bool:
+        """``True`` iff THIS process may run ``_poll_and_escalate`` this cycle.
+
+        A renewable lease, not a one-shot lock: a process already holding it re-sets the
+        SAME key with its OWN value to extend the TTL (plain ``SET``, no ``NX``, so it
+        always succeeds for the current holder) rather than letting the lease lapse and
+        re-racing for it every cycle - the module docstring's "INF-04 — LEADER ELECTION"
+        section explains why a one-shot-only lock would be wrong here (every process
+        would lose and regain leadership every single cycle, which defeats the point).
+        A process that does NOT hold it attempts ``SET key value NX EX`` once; winning
+        that call is what makes it the new leader.
+
+        Fails CLOSED: no reachable Redis client answers ``False`` (never-leader) rather
+        than letting every process assume it has no competition and poll independently -
+        the exact silent per-process fan-out this method exists to prevent. See
+        ``redis_manager.get_client``'s own docstring for why a DEV_MODE-only mock must
+        never stand in for Redis outside a development deployment.
+        """
+        from backend_app.core.cache.redis_manager import redis_manager
+
+        try:
+            client = await redis_manager.get_client()
+            if client is None:
+                return False
+            current_holder = await client.get(self._leader_lock_key)
+            if current_holder == self._instance_id:
+                await client.set(
+                    self._leader_lock_key, self._instance_id, ex=self._leader_lock_ttl
+                )
+                return True
+            acquired = await client.set(
+                self._leader_lock_key,
+                self._instance_id,
+                nx=True,
+                ex=self._leader_lock_ttl,
+            )
+            return bool(acquired)
+        except Exception as e:
+            logger.warning(f"[ReconciliationScheduler] Leadership check failed: {e}")
+            return False
 
     # ── Poll & Escalate ───────────────────────────────────────────────────────
 

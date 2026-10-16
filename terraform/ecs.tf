@@ -461,6 +461,22 @@ locals {
     # INF-03 / marketplace Requirement 11.8: the subscription expiry sweep (30s). It was built
     # and tested but had no deployment entry, so paid marketplace access never ended.
     marketplace_expiry = { cpu = 256, memory = 512, command = ["python", "-m", "backend_app.workers.marketplace_expiry_worker"] }
+    # OPS-TRAIN-01: backend_app.backend.training_worker.TrainingWorker claims QUEUED rows
+    # via the atomic `SET status='RUNNING' ... WHERE status='QUEUED'` transition described
+    # in that module's own docstring and runs them -- but nothing has ever run this process
+    # in production, so every training job a user submits stays QUEUED forever. The
+    # module's own run_worker() docstring says it is "meant to be deployed as a separate
+    # process", never wired into main.py's startup, specifically so a fitting job can never
+    # share the API process's interpreter, saturate its Redis connection, or block
+    # order/execution request handling (Requirement 16.6, TrainingIsolator's own docstring).
+    # Sized well above the other workers: core/ml_safety.py's MemoryMonitor and
+    # backend/ml_training_policy.py's own resource tiers cap an individual training run at
+    # up to 4096 MB (CAP_MAX_MEMORY / the `max_memory_mb=4_096` tier) -- 512 MB (every other
+    # worker here) would not even fit one job at its own documented ceiling, let alone the
+    # interpreter plus torch/tensorflow/catboost/scikit-learn already loaded. 2 vCPU / 8192
+    # MB leaves roughly 2x headroom over that 4 GB per-job cap for everything else resident
+    # in the process.
+    training = { cpu = 2048, memory = 8192, command = ["python", "-m", "backend_app.backend.training_worker"] }
   }
 }
 

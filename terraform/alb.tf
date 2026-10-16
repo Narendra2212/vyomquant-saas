@@ -19,12 +19,23 @@ resource "aws_lb_target_group" "api" {
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
 
+  # INF-01: this pointed at /health, which backend_app/main.py's own health() handler
+  # always answers with HTTP 200 -- its "status": "degraded" (Redis/Supabase/QuestDB down)
+  # lives only in the JSON body, which this ALB health check (a bare status-code matcher)
+  # never reads. A target with no reachable database or Redis still passed every check and
+  # kept receiving production traffic. /health/ready (core/readiness.py's
+  # evaluate_readiness(), added under OBS-01) actually measures the database and Redis --
+  # Supabase/Postgres because every authenticated request resolves identity and RLS
+  # through it, Redis because it backs the rate limiter and the distributed execution
+  # locks outside a declared local environment -- and returns a real 503 when either is
+  # down, which this matcher does read. Its own PROBE_TIMEOUT_SECONDS (3.0s per
+  # dependency) fits inside this check's 5s timeout without raising it.
   health_check {
     healthy_threshold   = 3
     unhealthy_threshold = 3
     timeout             = 5
     interval            = 30
-    path                = "/health"
+    path                = "/health/ready"
     matcher             = "200"
   }
 }

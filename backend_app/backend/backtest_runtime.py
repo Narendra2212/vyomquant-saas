@@ -369,6 +369,30 @@ def _longest_streak(trade_pnls: List[float], winning: bool) -> int:
     return longest
 
 
+def _requested_window_ms(start_date: str, end_date: str) -> Tuple[Optional[int], Optional[int]]:
+    """``(start_date, end_date)`` ISO strings as ``(since_ms, until_ms)``, or ``(None, None)``.
+
+    BT-02's plumbing: an unreadable or blank date answers ``(None, None)`` rather than
+    raising, which falls back to ``fetch_historical_ohlcv``'s existing "most recent N bars"
+    mode - the same behaviour every caller already got, for a date this function cannot
+    make sense of, rather than a new way for a backtest request to fail. A date that DOES
+    parse is always treated as UTC when it carries no offset, matching every other instant
+    this module reads from a request rather than from a clock.
+    """
+    def _epoch_ms(value: str) -> Optional[int]:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+
+    return _epoch_ms(start_date), _epoch_ms(end_date)
+
+
 class BacktestRuntime:
     """
     Integrated backtesting runtime that executes Strategy Packages.
@@ -640,12 +664,22 @@ class BacktestRuntime:
             logger.info(f"[BACKTEST] Fetching historical data from {start_date} to {end_date}")
             symbol = strategy_package.metadata.get("symbols", ["BTC/USDT"])[0]
             timeframe = strategy_package.metadata.get("timeframe", "15m")
-            
+
+            # BT-02: `start_date`/`end_date` used to be logged and recorded on the backtest
+            # row and otherwise ignored - `fetch_historical_ohlcv` with no `since_ms` always
+            # answers "the most recent N bars", so a backtest asked for over 2020 ran on
+            # whatever the most recent bars happened to be when it was called, and a
+            # walk-forward window's train and test periods (different date ranges, same
+            # call shape) ran on the IDENTICAL data. `_requested_window_ms` turns the two
+            # ISO strings this method already receives into the bounds that mode needs.
+            since_ms, until_ms = _requested_window_ms(start_date, end_date)
             ohlcv_data = await self.data_engine.fetch_historical_ohlcv(
                 symbol=symbol,
                 timeframe=timeframe,
                 limit=10_000,  # Fetch up to 10k bars
-                max_retries=3
+                max_retries=3,
+                since_ms=since_ms,
+                until_ms=until_ms,
             )
             
             if not ohlcv_data or len(ohlcv_data) < 50:

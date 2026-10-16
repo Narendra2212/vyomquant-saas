@@ -73,6 +73,11 @@ python_portable/
 *_venv/
 **/venv/
 **/.venv/
+# HY-01: staging/.ccxt_upgrade_probe/ was a throwaway virtualenv
+# (staging/probe_ccxt_upgrade_delta.py's own PROBE_DIR) accidentally committed wholesale
+# -- 1730+ site-packages files. Ignored by directory name rather than only by the venv
+# patterns above, since its own name does not end in `venv`.
+**/.ccxt_upgrade_probe/
 
 # ── NODE / FRONTEND & ELECTRON RELEASES ─────────────────────────────────────
 node_modules/
