@@ -912,12 +912,12 @@
       "severity": "Low",
       "component": "Desktop distribution",
       "title": "Desktop builds are unsigned and not notarized",
-      "status": "OPEN",
+      "status": "EXTERNAL_BLOCKED",
       "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "evidence": "Confirmed the current state directly: .github/workflows/07-desktop-build.yml (named '07 Desktop Build (native, unsigned)') is a deliberately scope-disciplined, build-VERIFICATION-only workflow -- its own extensive header comment states plainly that it ESTABLISHES only that the Tauri bundler produces real installer artifacts of plausible size on each OS, and explicitly does NOT establish code signing, macOS notarization, or Windows Authenticode, naming those 'separate, owner-approved steps.' It creates no GitHub release and 'publishes nothing' by its own design. Grepped every workflow for any release-publishing mechanism (softprops/action-gh-release, `gh release create`, or equivalent): none exists anywhere in this repository's CI. Both code signing and macOS notarization require real, paid credentials this sandbox cannot obtain or simulate: a macOS code-signing certificate + Apple Developer Program enrollment + an app-specific password/API key for notarization, and a Windows Authenticode certificate purchased from a CA. 'Publish checksums' (this finding's third ask) has no release channel to attach checksums TO yet, since this workflow deliberately creates none -- adding a checksum-generation step with nowhere to publish the result would be premature, not a real step toward the fix.",
+      "verification_level": "investigated; blocked on real signing credentials",
       "production_verified": false,
-      "remaining_action": "Code-sign and notarize; publish checksums."
+      "remaining_action": "EXTERNAL_BLOCKED. Needs, in order: (1) a decision to actually obtain a macOS Developer ID certificate + Apple Developer Program enrollment and a Windows Authenticode certificate -- a real money/compliance decision for the product owner, not something to provision from a sandbox; (2) the corresponding secrets (Apple ID/team ID/app-password or API key, the Windows cert + password) added to this repository and wired into 07-desktop-build.yml's existing build steps (codesign/notarytool on macOS, signtool on Windows); (3) only then does 'publish checksums' become meaningful -- a release-publishing step (e.g. softprops/action-gh-release) that does not exist anywhere in this repo's CI today would need to be added alongside it, generating SHA256 sums for each signed artifact. None of this is reachable from this sandbox."
     },
     {
       "id": "AUD-02",
