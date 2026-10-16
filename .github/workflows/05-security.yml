@@ -159,3 +159,119 @@ jobs:
         with:
           name: iac-scan-report
           path: reports/
+
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #  CI-04: FULL-TREE SECRET SCAN
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #
+  # iac-scan above only ever pointed its `secret` scanner at terraform/ and
+  # aerora_quant_platform/infrastructure/ -- that job's own SC-29 comment explains why a
+  # repo-wide scan was deferred: deliberate fake-credential fixtures live under tests/ (a
+  # fake EC private key, a PEM header, fake Stripe/Razorpay test keys, ...), and a scanner
+  # that cries wolf on day one over its own test suite is a scanner someone disables. That
+  # comment named the fix too: "it needs an ignore file written first."
+  #
+  # Grepped the whole tree for the patterns Trivy's secret scanner itself looks for (PEM
+  # BEGIN markers, AKIA.../sk_test_/sk_live_-shaped strings) instead of guessing at which
+  # files need excluding: exactly 11 files, all under tests/, none in backend_app/ or
+  # scripts/. `skip-files` names those 11 specifically rather than excluding all of
+  # tests/, so a new test file added later -- including one that accidentally pastes in a
+  # real credential -- stays covered by default.
+  secret-scan-repo-wide:
+    name: Trivy Secret Scan — whole repository (blocking, CRITICAL/HIGH)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Trivy secret scan — repository-wide except known fixture files
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'secret'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          skip-files: 'tests/test_credential_vault_strength.py,tests/test_billing_payment_surface_refusals.py,tests/test_model_versioning.py,tests/test_env03_placeholder_secrets_are_invalid.py,tests/test_validation_sweep.py,tests/test_log_redaction.py,tests/test_marketplace_checkout_regression.py,tests/test_training_status.py,tests/test_billing_e2e.py,tests/test_credential_vault_key.py,tests/test_bill05_cancel_tells_stripe.py'
+          hide-progress: true
+
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #  CI-04 / DEP-01: BLOCKING DEPENDENCY AUDIT
+  # ════════════════════════════════════════════════════════════════════════════════════
+  #
+  # Both pip-audit and npm audit already ran in 04-nightly-audit.yml -- but only on the
+  # 02:00 UTC nightly cron (never on push or pull_request, so a vulnerable dependency
+  # merged at any other hour waits up to a day to be reported at all) and both with
+  # `continue-on-error: true` (so even the nightly run never actually blocked anything --
+  # every finding landed in an uploaded JSON artifact nobody is forced to open). This job
+  # runs on every push/PR this workflow already triggers on and fails the build.
+  #
+  # pip-audit has no built-in severity filter (unlike Trivy's `severity:` input above), so
+  # the gate here is "block on every advisory pip-audit finds a fix for, except this
+  # explicit, reviewed ignore list" rather than a severity threshold -- the same
+  # ratchet-from-a-known-baseline shape as the IaC scan above, just expressed as
+  # --ignore-vuln instead of a severity floor. Each ignored ID is DEP-01's own
+  # already-investigated, currently-irreducible residual (ledger: docs/launch_readiness/
+  # REMEDIATION_LEDGER.json), re-confirmed this session by actually running pip-audit
+  # against this session's installed venv rather than carried forward from memory:
+  #   PYSEC-2026-161/248/249/2280/2281 - starlette; needs a 1.x migration that broke
+  #     route-introspection tests at collection when tried (fastapi 0.143/starlette 1.8).
+  #   PYSEC-2026-3447 - setuptools; the fix (83.0.0) removes pkg_resources and breaks
+  #     `import razorpay` (see requirements-base.txt's own comment on that pin).
+  #   PYSEC-2026-1805 - protobuf; pulled in transitively by tensorflow/opentelemetry-proto,
+  #     whose current pins cap it below the fixed version.
+  # A new advisory outside this list fails the job; removing an entry here (because it was
+  # actually fixed) should happen in the same commit that bumps the pin, as DEP-01's
+  # python-dotenv fix (PYSEC-2026-2270, closed) did this session.
+  dependency-audit:
+    name: Blocking Dependency Vulnerability Audit (pip-audit + npm audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'requirements-cpu.txt'
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit (blocking)
+        run: |
+          pip-audit \
+            --ignore-vuln PYSEC-2026-161 \
+            --ignore-vuln PYSEC-2026-248 \
+            --ignore-vuln PYSEC-2026-249 \
+            --ignore-vuln PYSEC-2026-2280 \
+            --ignore-vuln PYSEC-2026-2281 \
+            --ignore-vuln PYSEC-2026-3447 \
+            --ignore-vuln PYSEC-2026-1805
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'algo22-terminal/package-lock.json'
+
+      - name: Install frontend dependencies
+        run: |
+          cd algo22-terminal
+          npm ci
+
+      - name: Run npm audit (blocking, HIGH and above)
+        run: |
+          cd algo22-terminal
+          npm audit --audit-level=high --omit=dev
