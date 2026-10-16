@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Callable
 from uuid import uuid4
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import copy
 
@@ -25,10 +25,55 @@ import numpy as np
 import pandas as pd
 
 from backend_app.backend.strategy_compiler import StrategyPackage, ExecutionGraph
-from backend_app.backend.backtest_runtime import BacktestRuntime
+from backend_app.backend.backtest_runtime import BacktestRuntime, _requested_window_ms
 from backend_app.core.risk_engine import RiskEngine
 
 logger = logging.getLogger("OptimizationEngine")
+
+
+#: Bars per calendar year for a ccxt-style timeframe, for annualising a bar-level Sharpe.
+_TIMEFRAME_SECONDS = {"s": 1, "m": 60, "h": 3_600, "d": 86_400, "w": 604_800, "M": 2_592_000}
+_SECONDS_PER_YEAR = 365.25 * 86_400
+
+#: The tunable-parameter count :meth:`OptimizationEngine._calculate_strategy_score`'s
+#: complexity score treats as "as complex as this heuristic scores" (0.0). A heuristic
+#: choice documented at the call site, not a measured constant.
+_COMPLEXITY_PARAM_CAP = 10.0
+
+
+def _bars_per_year(timeframe: str) -> float:
+    """``"15m"`` -> ~35,040 bars/year. Falls back to one bar a day for an unreadable timeframe."""
+    try:
+        amount = int(timeframe[:-1])
+        unit_seconds = _TIMEFRAME_SECONDS[timeframe[-1]]
+        return _SECONDS_PER_YEAR / (amount * unit_seconds)
+    except (ValueError, KeyError, IndexError):
+        return 365.0
+
+
+def _equity_curve_returns(results: Dict[str, Any]) -> List[float]:
+    """Per-bar percentage returns from a backtest's own ``equity_curve``, oldest first.
+
+    OPT-02's beta needs a RETURN series, not the single scalar figures
+    ``_calculate_performance_metrics`` reports - this is the one place that series already
+    exists on a backtest's own result payload. Returns ``[]`` when the curve is absent or
+    too short to difference, which :meth:`OptimizationEngine._calculate_beta` already
+    reads as "not enough paired observations".
+    """
+    curve = results.get("equity_curve") or []
+    if isinstance(curve, dict):
+        curve = curve.get("data", []) or []
+    values = [
+        float(point.get("equity", 0.0)) if isinstance(point, dict) else float(point)
+        for point in curve
+    ]
+    if len(values) < 2:
+        return []
+    arr = np.array(values, dtype=float)
+    nonzero = arr[:-1] != 0
+    returns = np.zeros(len(arr) - 1)
+    returns[nonzero] = np.diff(arr)[nonzero] / arr[:-1][nonzero]
+    return returns.tolist()
 
 
 class OptimizationMethod(Enum):
@@ -356,33 +401,54 @@ class OptimizationEngine:
     ) -> List[WalkForwardResult]:
         """
         Run walk-forward analysis.
-        
+
         PHASE B: Walk Forward Analysis
-        Training window → Validation window → Testing window
-        Rolling or expanding windows.
+        Training window -> Testing window, rolling or expanding.
+
+        OPT-02: each window's parameters are now fit independently on that window's OWN
+        training period (:meth:`_optimize_on_window`), then evaluated unchanged on that
+        window's test period - genuine out-of-sample testing, rather than one global "best"
+        parameter set evaluated on every window's train and test alike. Depends on BT-02:
+        before that fix, two different windows' backtests ran on byte-identical data (the
+        most recent N bars, regardless of the window's own dates), which would have made
+        this fit meaningless however it was computed.
         """
         logger.info(f"[WALK_FORWARD] Starting analysis with {config.validation_method.value}")
-        
+
         results = []
-        
-        # Get best parameters from optimization
-        best_params = self._get_best_parameters(self._optimization_history)
-        
+
         # Generate windows
         windows = self._generate_walk_forward_windows(config)
-        
+
         for i, (train_start, train_end, test_start, test_end) in enumerate(windows):
             logger.info(f"[WALK_FORWARD] Iteration {i+1}/{len(windows)}: {train_start} to {test_end}")
-            
-            # Train on training window
-            train_metrics = await self._evaluate_on_window(
-                strategy_package, best_params, train_start, train_end,
+
+            # OPT-02: fit THIS window's parameters on THIS window's in-sample period, not
+            # once on whatever _optimization_history happened to hold from an earlier,
+            # differently-dated run. Every prior version of this loop called
+            # self._get_best_parameters(self._optimization_history) a single time before
+            # the loop and reused that one parameter set for every window's train AND test
+            # evaluation - which is backtesting a fixed strategy on a rolling window, not
+            # walk-forward analysis: Requirement-grade walk-forward re-optimizes in-sample
+            # and only then tests out-of-sample, so an edge that survives is an edge the
+            # fitting process could find afresh each time, not one fossilised from a single
+            # global search.
+            window_params = await self._optimize_on_window(
+                strategy_package, config, train_start, train_end,
                 user, strategy_id, version_id, version, exchange_instance
             )
 
-            # Test on testing window
+            # Train on training window - the SAME window the parameters were just fit on,
+            # so train_metrics reports the in-sample fit's own performance.
+            train_metrics = await self._evaluate_on_window(
+                strategy_package, window_params, train_start, train_end,
+                user, strategy_id, version_id, version, exchange_instance
+            )
+
+            # Test on testing window, with the window-fit parameters carried forward
+            # unchanged - this is the out-of-sample half the whole analysis is for.
             test_metrics = await self._evaluate_on_window(
-                strategy_package, best_params, test_start, test_end,
+                strategy_package, window_params, test_start, test_end,
                 user, strategy_id, version_id, version, exchange_instance
             )
             
@@ -392,12 +458,12 @@ class OptimizationEngine:
                 train_end=train_end,
                 test_start=test_start,
                 test_end=test_end,
-                parameters=best_params,
+                parameters=window_params,
                 train_metrics=train_metrics,
                 test_metrics=test_metrics,
                 backtest_id=str(uuid4())
             )
-            
+
             results.append(result)
         
         return results
@@ -567,13 +633,13 @@ class OptimizationEngine:
         Buy & Hold, Equal Weight, Market Benchmark, Custom Benchmark.
         """
         logger.info(f"[BENCHMARK] Running benchmark comparison")
-        
+
         # Get best parameters
         best_params = self._get_best_parameters(self._optimization_history)
-        
+
         # Run strategy backtest
         modified_package = self._modify_package_parameters(strategy_package, best_params)
-        
+
         strategy_result = await self.backtest_runtime.run_backtest(
             strategy_package=modified_package,
             user=user,
@@ -584,19 +650,35 @@ class OptimizationEngine:
             end_date=config.parameters.get("end_date", "2023-12-31"),
             exchange_instance=exchange_instance
         )
-        
+
         # Run buy & hold benchmark
         buy_hold_result = await self._run_buy_hold_benchmark(
-            config, user, strategy_id, exchange_instance
+            strategy_package, config, exchange_instance
         )
-        
+
+        # OPT-02: alpha/beta against a benchmark that could not be measured would be a
+        # fabricated number dressed as a real one - "not computed" is the honest answer
+        # when _run_buy_hold_benchmark itself could not measure (insufficient/unreachable
+        # historical data), same as the benchmark's own figures in that case.
+        benchmark_returns = buy_hold_result.pop("_bar_returns", None)
+        if buy_hold_result.get("computed"):
+            alpha = (
+                strategy_result["results"].get("total_return_pct", 0)
+                - buy_hold_result.get("total_return_pct", 0)
+            )
+            strategy_returns = _equity_curve_returns(strategy_result["results"])
+            beta = self._calculate_beta(strategy_returns, benchmark_returns or [])
+        else:
+            alpha = None
+            beta = None
+
         comparison = {
             "strategy": strategy_result["results"],
             "buy_hold": buy_hold_result,
-            "alpha": strategy_result["results"].get("total_return_pct", 0) - buy_hold_result.get("total_return_pct", 0),
-            "beta": self._calculate_beta(strategy_result["results"], buy_hold_result)
+            "alpha": alpha,
+            "beta": beta,
         }
-        
+
         return comparison
     
     async def generate_research_report(
@@ -779,7 +861,71 @@ class OptimizationEngine:
         )
         
         return result["results"]
-    
+
+    async def _optimize_on_window(
+        self,
+        strategy_package: StrategyPackage,
+        config: OptimizationConfig,
+        start_date: str,
+        end_date: str,
+        user: dict,
+        strategy_id: str,
+        version_id: str,
+        version: str,
+        exchange_instance
+    ) -> Dict:
+        """Fit THIS window's own best parameters, searching only within ``[start_date, end_date)``.
+
+        OPT-02's core fix: a copy of ``config`` with its ``parameters["start_date"/"end_date"]``
+        overridden to the window - every search method (``_grid_search``, ``_random_search``,
+        ``_bayesian_optimization``, ``_genetic_algorithm``) already reads its backtest window
+        from exactly those two keys, so this is the one change needed for all four rather than a
+        parallel, window-aware copy of each. The SAME ``config.method`` and ``n_iterations`` the
+        caller chose are reused, so a window's fit is the same search the caller asked for,
+        scoped to a different date range - not a different, smaller search.
+
+        The window's own trials are kept OUT of ``self._optimization_history``: that list backs
+        :func:`run_optimization`'s own results and ``run_benchmark_comparison``'s "best
+        parameters so far", and folding a window-scoped trial into it would let one window's fit
+        leak into another's, or into the whole-period benchmark - the cross-tenant-shaped leak
+        OPT-03 already fixed at the engine-instance level, reintroduced inside one instance.
+
+        Returns:
+            The best parameters found for this window, or ``{}`` if every trial in it failed
+            (:meth:`_get_best_parameters`'s own answer for no results) - :func:`_evaluate_on_window`
+            then runs the strategy's own defaults, which is the same answer an empty
+            ``_optimization_history`` already gave the caller before this fix existed.
+        """
+        window_config = replace(
+            config,
+            parameters={**config.parameters, "start_date": start_date, "end_date": end_date},
+        )
+
+        if config.method == OptimizationMethod.GRID_SEARCH:
+            window_results = await self._grid_search(
+                strategy_package, window_config, user, strategy_id, version_id, version,
+                exchange_instance
+            )
+        elif config.method == OptimizationMethod.RANDOM_SEARCH:
+            window_results = await self._random_search(
+                strategy_package, window_config, user, strategy_id, version_id, version,
+                exchange_instance
+            )
+        elif config.method == OptimizationMethod.BAYESIAN_OPTIMIZATION:
+            window_results = await self._bayesian_optimization(
+                strategy_package, window_config, user, strategy_id, version_id, version,
+                exchange_instance
+            )
+        elif config.method == OptimizationMethod.GENETIC_ALGORITHM:
+            window_results = await self._genetic_algorithm(
+                strategy_package, window_config, user, strategy_id, version_id, version,
+                exchange_instance
+            )
+        else:
+            raise ValueError(f"Unsupported optimization method: {config.method}")
+
+        return self._get_best_parameters(window_results)
+
     def _randomize_scenario(self, config: OptimizationConfig) -> Dict:
         """Randomize scenario parameters for Monte Carlo."""
         return {
@@ -836,24 +982,117 @@ class OptimizationEngine:
     
     async def _run_buy_hold_benchmark(
         self,
+        strategy_package: StrategyPackage,
         config: OptimizationConfig,
-        user: dict,
-        strategy_id: str,
         exchange_instance
     ) -> Dict:
-        """Run buy & hold benchmark."""
-        # Simplified buy & hold - in production, fetch actual asset returns
+        """Buy the strategy's own symbol at the window's open, hold it, measure what that did.
+
+        OPT-02: this used to return ``{"total_return_pct": 50.0, "sharpe_ratio": 1.0,
+        "max_drawdown": 20.0}`` UNCONDITIONALLY - the same three numbers for every
+        strategy, every symbol and every date range, reported next to a REAL backtest's
+        own measured figures as if they were equally real. Fetches the strategy's own
+        symbol/timeframe over the SAME window ``run_benchmark_comparison`` backtests the
+        strategy over (BT-02's ``since_ms``/``until_ms`` is what makes "the same window"
+        possible at all), and computes total return, a bar-return Sharpe and max drawdown
+        from the closes actually fetched - never a literal.
+
+        A benchmark that cannot be measured answers ``"computed": False`` with every
+        figure ``None`` instead of a number nothing backs - the other acceptable half of
+        OPT-02's remedy, used here (rather than raising) so one symbol's unreachable
+        history does not take down the whole research report.
+        """
+        symbol = strategy_package.metadata.get("symbols", ["BTC/USDT"])[0]
+        timeframe = strategy_package.metadata.get("timeframe", "15m")
+        since_ms, until_ms = _requested_window_ms(
+            config.parameters.get("start_date", "2023-01-01"),
+            config.parameters.get("end_date", "2023-12-31"),
+        )
+
+        try:
+            self.backtest_runtime.set_data_engine(exchange_instance)
+            ohlcv = await self.backtest_runtime.data_engine.fetch_historical_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=10_000,
+                max_retries=3,
+                since_ms=since_ms,
+                until_ms=until_ms,
+            )
+        except Exception as e:
+            logger.warning(f"[BENCHMARK] buy & hold data fetch failed for {symbol}: {e}")
+            ohlcv = None
+
+        if not ohlcv or len(ohlcv) < 2:
+            return {
+                "total_return_pct": None,
+                "sharpe_ratio": None,
+                "max_drawdown": None,
+                "computed": False,
+                "reason": (
+                    f"insufficient historical data for {symbol} over the requested window "
+                    f"({len(ohlcv) if ohlcv else 0} bar(s))"
+                ),
+            }
+
+        closes = np.array([bar[4] for bar in ohlcv], dtype=float)
+        bar_returns = np.diff(closes) / closes[:-1]
+        total_return_pct = float((closes[-1] - closes[0]) / closes[0] * 100.0)
+
+        bars_per_year = _bars_per_year(timeframe)
+        mean_return = float(np.mean(bar_returns))
+        std_return = float(np.std(bar_returns))
+        sharpe_ratio = (
+            float(mean_return / std_return * np.sqrt(bars_per_year)) if std_return > 0 else 0.0
+        )
+
+        equity = np.cumprod(1.0 + bar_returns)
+        running_max = np.maximum.accumulate(equity)
+        drawdowns = (running_max - equity) / running_max
+        max_drawdown = float(np.max(drawdowns) * 100.0) if len(drawdowns) else 0.0
+
         return {
-            "total_return_pct": 50.0,  # Placeholder
-            "sharpe_ratio": 1.0,
-            "max_drawdown": 20.0
+            "total_return_pct": total_return_pct,
+            "sharpe_ratio": sharpe_ratio,
+            "max_drawdown": max_drawdown,
+            "computed": True,
+            "symbol": symbol,
+            "bars": len(ohlcv),
+            "_bar_returns": bar_returns.tolist(),
         }
-    
-    def _calculate_beta(self, strategy_metrics: Dict, benchmark_metrics: Dict) -> float:
-        """Calculate beta against benchmark."""
-        # Simplified beta calculation
-        return 1.0
-    
+
+    def _calculate_beta(
+        self, strategy_returns: List[float], benchmark_returns: List[float]
+    ) -> Optional[float]:
+        """Beta as the textbook ratio: ``cov(strategy, benchmark) / var(benchmark)``.
+
+        OPT-02: this used to return the literal ``1.0`` for every strategy against every
+        benchmark - "moves exactly like the market" regardless of what either series
+        actually did. Aligned by truncating both series to their shared length from the
+        most recent end, since the strategy's equity curve and the benchmark's bar count
+        are not guaranteed to match exactly (a strategy that closed its last bar early, or
+        a benchmark fetch capped short of the full window, is still comparable over the
+        bars both series do share).
+
+        Returns ``None`` - not a fabricated value - when there are fewer than two paired
+        observations or the benchmark had zero variance over the window: a ratio over zero
+        variance is undefined, not zero and not one.
+        """
+        n = min(len(strategy_returns), len(benchmark_returns))
+        if n < 2:
+            return None
+        s = np.asarray(strategy_returns[-n:], dtype=float)
+        b = np.asarray(benchmark_returns[-n:], dtype=float)
+        # ddof=1 to match np.cov's own default normalisation (N-1) below - mixing a
+        # population variance (ddof=0, the N default) with a sample covariance would scale
+        # the ratio by N/(N-1) for no reason, which is wrong by construction rather than by
+        # a rounding error.
+        benchmark_variance = float(np.var(b, ddof=1))
+        if benchmark_variance == 0.0:
+            return None
+        covariance = float(np.cov(s, b)[0][1])
+        return covariance / benchmark_variance
+
     def _calculate_strategy_score(
         self,
         optimization_results: List[OptimizationResult],
@@ -907,8 +1146,21 @@ class OptimizationEngine:
         else:
             score["consistency"] = 0.0
         
-        # Complexity score (number of parameters)
-        score["complexity"] = 0.8  # Placeholder
+        # OPT-02: complexity score, from the strategy's own tunable-parameter count.
+        #
+        # This used to be the literal 0.8 for every strategy regardless of how many
+        # parameters it actually exposed. Scored as SIMPLICITY (higher = better), matching
+        # every other component this method weights positively into "overall" -
+        # "overfitting_risk" below is likewise really overfitting SAFETY, not risk. A
+        # strategy with no tunable parameters at all scores 1.0; one at or past
+        # _COMPLEXITY_PARAM_CAP tunable parameters scores 0.0. The cap is a heuristic
+        # choice, not a measured constant - documented as one rather than passed off as
+        # derived.
+        if optimization_results:
+            num_params = len(optimization_results[0].parameters)
+            score["complexity"] = max(1.0 - num_params / _COMPLEXITY_PARAM_CAP, 0.0)
+        else:
+            score["complexity"] = 0.5
         
         # Overfitting risk (train vs test performance difference)
         if walk_forward_results:
