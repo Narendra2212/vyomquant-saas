@@ -291,3 +291,30 @@ def test_expiry_worker_is_now_hosted_inf03():
     """
     assert "MarketplaceExpiryWorker" not in _unhosted_workers()
     assert "backend_app.workers.marketplace_expiry_worker" in _deployed_modules()
+
+
+def test_training_worker_is_now_hosted_ops_train_01():
+    """OPS-TRAIN-01: queued training jobs had no PRODUCTION process to claim and run them.
+
+    ``TrainingWorker`` (backend_app/backend/training_worker.py) is NOT a ``WorkerBase``
+    subclass - it is a plain class, and that module's own ``run_worker()`` docstring
+    explains why it was never wired into ``main.py``'s startup the way the others under
+    test here are: Requirement 16.6/``TrainingIsolator`` require training to run in a
+    separate process so a fitting job can never share the API process's interpreter,
+    saturate Redis, or block order/execution handling. Because it is not a ``WorkerBase``
+    subclass, it is invisible to the discovery above and ``test_no_new_unhosted_workers``
+    never covered it.
+
+    Checked against ``terraform/ecs.tf`` specifically, NOT the generic
+    ``_deployed_modules()`` helper above: docker-compose.yml already runs this worker for
+    local dev (confirmed by inspection), which would make a ``_deployed_modules()``-based
+    assertion pass whether or not the finding - "no PRODUCTION task definition" - was
+    actually fixed. terraform/ecs.tf is what deploys to production.
+    """
+    ecs_tf = (REPO / "terraform" / "ecs.tf").read_text(encoding="utf-8")
+    assert "backend_app.backend.training_worker" in ecs_tf, (
+        "backend_app.backend.training_worker has no entry in terraform/ecs.tf's "
+        "local.worker_definitions - queued training jobs have no production process "
+        "to claim and run them (OPS-TRAIN-01). docker-compose.yml running it for local "
+        "dev does not satisfy this: that is not what deploys to production."
+    )
