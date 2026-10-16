@@ -1232,26 +1232,58 @@ class BaseExchangeExecutor(ABC):
         ``ExchangeError.message`` unredacted, since every caller logs it and it can
         reach an API response body. Redact this instance's own key/secret/password
         values before classifying or storing the message anywhere below.
+
+        W-6: this used to classify PURELY by substring match on the message, in a fixed
+        order that checked "insufficient"/"balance" before "network"/"timeout" -- so a
+        transient network error from an operation literally named fetch_balance (a
+        message like "Request timeout fetching balance") matched the funds check first
+        and was returned as a non-retryable InsufficientFundsError instead of a
+        retryable NetworkError, even though nothing about the actual failure had
+        anything to do with available funds. Classifying by ccxt's own exception type
+        first closes this: a type cannot be fooled by what operation the message
+        happens to name. Ordered most-specific-first, since ccxt's hierarchy nests
+        RateLimitExceeded/RequestTimeout/DDoSProtection under NetworkError, and
+        InsufficientFunds/BadSymbol/InvalidOrder/AuthenticationError under
+        ExchangeError. Falls through (never raises) when ``ccxt`` is not a real module
+        with that hierarchy -- e.g. patched out in a test -- so the substring fallback
+        below, unchanged in content but reordered for the same reason (network/timeout
+        checked before insufficient/balance), still runs for a non-ccxt exception
+        (asyncio.TimeoutError, an aiohttp/OS error) exactly as it always has.
         """
         redacted = self._redact_credentials(str(error))
         error_str = redacted.lower()
-        
-        # Classify error
-        if "insufficient" in error_str or "balance" in error_str:
-            return InsufficientFundsError(redacted)
-        
-        if "rate limit" in error_str or "too many requests" in error_str:
-            return RateLimitError(redacted, retry_after=60)
-        
-        if "symbol" in error_str or "market" in error_str:
-            return InvalidSymbolError(redacted)
-        
+
+        if CCXT_AVAILABLE:
+            try:
+                if isinstance(error, ccxt.RateLimitExceeded):
+                    return RateLimitError(redacted, retry_after=60)
+                if isinstance(error, ccxt.NetworkError):
+                    return NetworkError(redacted)
+                if isinstance(error, ccxt.InsufficientFunds):
+                    return InsufficientFundsError(redacted)
+                if isinstance(error, (ccxt.BadSymbol, ccxt.InvalidOrder)):
+                    return InvalidSymbolError(redacted)
+                if isinstance(error, ccxt.AuthenticationError):
+                    return AuthenticationError(redacted)
+            except TypeError:
+                pass  # `ccxt` here is not a real exception hierarchy (e.g. a test double).
+
+        # Fallback for anything not a recognised ccxt type.
         if "network" in error_str or "timeout" in error_str or "connection" in error_str:
             return NetworkError(redacted)
-        
+
+        if "insufficient" in error_str or "balance" in error_str:
+            return InsufficientFundsError(redacted)
+
+        if "rate limit" in error_str or "too many requests" in error_str:
+            return RateLimitError(redacted, retry_after=60)
+
+        if "symbol" in error_str or "market" in error_str:
+            return InvalidSymbolError(redacted)
+
         if "authentication" in error_str or "apikey" in error_str or "key" in error_str:
             return AuthenticationError(redacted)
-        
+
         # Generic error - check if retryable
         retryable = any(word in error_str for word in ["timeout", "network", "temporarily", "busy"])
         return ExchangeError(redacted, retryable=retryable)
