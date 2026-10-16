@@ -78,7 +78,13 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           echo "=== Building Docker Image ==="
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f Dockerfile .
+          # CI-03: bakes this image's own commit SHA + build time into it (GET /release.json
+          # reads these back at runtime), the backend counterpart to 06-frontend-deploy.yml's
+          # dist/release.json stamp.
+          docker build \
+            --build-arg GIT_SHA=$IMAGE_TAG \
+            --build-arg BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f Dockerfile .
 
           echo "=== Pushing Docker Image ==="
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG

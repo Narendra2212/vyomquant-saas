@@ -1295,6 +1295,24 @@ async def health_ready():
     return JSONResponse(status_code=report.http_status, content=report.to_dict())
 
 
+# CI-03: release provenance -- the backend counterpart to 06-frontend-deploy.yml's
+# dist/release.json. That workflow already stamps the deployed UI with the commit it was
+# built from; this reads back the SAME shape ({"sha", "built_at"}) for the backend image,
+# baked in at build time by Dockerfile's GIT_SHA/BUILT_AT ARGs (set from 02-build.yml's own
+# IMAGE_TAG -- the commit SHA already used to tag the image in ECR). This is deliberately
+# the SHA of the running IMAGE, not of whatever source tree happens to be checked out --
+# that is the comparison a "does the deployed frontend match the deployed backend" check
+# actually needs. "unknown" (the Dockerfile ARG's own default) means the image was built
+# without passing --build-arg, e.g. a local `docker build` outside this CI pipeline, not a
+# broken endpoint.
+@app.get("/release.json", tags=["System"])
+async def release_info():
+    return {
+        "sha": os.environ.get("GIT_SHA", "unknown"),
+        "built_at": os.environ.get("BUILT_AT", "unknown"),
+    }
+
+
 @app.get("/api/system/trading-capabilities", tags=["System"])
 async def system_trading_capabilities():
     """FE-03 / RT-15: tell the UI whether LIVE execution is available on this platform.
