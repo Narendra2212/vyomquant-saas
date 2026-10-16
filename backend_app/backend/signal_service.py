@@ -459,7 +459,18 @@ class SignalService:
         if local:
             if not _matches_column_filter(local.get("environment"), environment):
                 return None
-            if not user_id or str(local.get("user_id", "")) == user_id or user_id == "anonymous":
+            # AUD-01: this used to read `not user_id or ... or user_id == "anonymous"` --
+            # an unidentifiable caller (empty user_id) matched EVERY branch of that `or`
+            # chain and got the signal back regardless of whose it was, the opposite of
+            # this file's own documented rule a few hundred lines up ("an ownership
+            # question that cannot be answered withholds rather than discloses"). It also
+            # checked the CALLER's resolved id against the literal string "anonymous"
+            # rather than the SIGNAL's own stored owner -- inconsistent with
+            # list_signals's bulk-read fallback just below, which (correctly) treats
+            # "anonymous" as a property of the row, not of the caller. Fixed to match:
+            # an empty user_id matches nothing, and "anonymous" describes an ownerless
+            # row, not an unauthenticated caller.
+            if user_id and (str(local.get("user_id", "")) == user_id or str(local.get("user_id", "")) == "anonymous"):
                 return local
         return None
     
@@ -569,9 +580,19 @@ class SignalService:
             logger.debug(f"Supabase list_signals fallback: {e}")
         
         # Local fallback filter
+        #
+        # AUD-01: this used to be `if user_id and owner != user_id and owner !=
+        # "anonymous": continue` -- an unidentifiable caller (empty user_id) made the
+        # leading `user_id and` false, so the WHOLE condition was false and `continue`
+        # never ran: every signal in this process's memory, owned by every tenant, was
+        # returned to a caller this service could not identify. Fixed to fail closed:
+        # no identifiable caller means no results, not all of them.
         results = []
         for s in self._local_signals.values():
-            if user_id and str(s.get("user_id", "")) != user_id and str(s.get("user_id", "")) != "anonymous":
+            if not user_id:
+                continue
+            owner = str(s.get("user_id", ""))
+            if owner != user_id and owner != "anonymous":
                 continue
             if not _matches_column_filter(s.get("strategy_id"), strategy_id):
                 continue
