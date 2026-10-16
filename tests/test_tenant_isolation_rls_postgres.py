@@ -265,19 +265,39 @@ def test_authenticated_cannot_read_another_tenants_row_by_primary_key(engine, se
 
 @pytest.mark.parametrize("table", sorted(AUTH_UID_TABLES))
 def test_authenticated_cannot_update_another_tenants_row(engine, seeded, table):
-    """A refused UPDATE must affect zero rows rather than silently succeeding."""
+    """Two acceptable outcomes, mirroring test_authenticated_cannot_delete_another_tenants_row.
+
+    A cross-tenant UPDATE can be stopped either by the row level policy -- the statement
+    runs and affects zero rows -- or by table privilege, where PostgreSQL refuses it with
+    `permission denied` before any policy is consulted. Both leave the row intact.
+
+    `paper_accounts` takes the second path: `043_paper_trading_service_role_only_write.sql`
+    revoked `authenticated`'s own prior UPDATE grant on the paper tables (009's original
+    grant, which is why the DELETE test's own docstring could cite it as still current for
+    UPDATE at the time) once a session's own lifecycle no longer needed a direct client
+    write. The privilege denial is the designed, stronger control there, not a gap.
+    """
     ids = seeded["ids"]
     victim, attacker = TENANTS[0], TENANTS[1]
+
     with engine.begin() as conn:
         _as_authenticated(conn, attacker)
-        result = conn.execute(
-            text(f"UPDATE public.{table} SET user_id = :me WHERE id = :id"),
-            {"me": attacker, "id": ids[(table, victim)]},
-        )
-        assert result.rowcount == 0, (
-            f"{table}: tenant {attacker} updated tenant {victim}'s row "
-            f"({result.rowcount} row(s) affected)"
-        )
+        try:
+            result = conn.execute(
+                text(f"UPDATE public.{table} SET user_id = :me WHERE id = :id"),
+                {"me": attacker, "id": ids[(table, victim)]},
+            )
+        except Exception as exc:  # noqa: BLE001 - the refusal class is the finding
+            message = str(exc).lower()
+            assert "permission denied" in message or "policy" in message, (
+                f"{table}: cross-tenant UPDATE failed, but not by privilege or policy: "
+                f"{exc}"
+            )
+        else:
+            assert result.rowcount == 0, (
+                f"{table}: tenant {attacker} updated tenant {victim}'s row "
+                f"({result.rowcount} row(s) affected)"
+            )
 
     # And the victim's row is unchanged, checked as the owner so RLS cannot hide a
     # successful write from the verification query.
