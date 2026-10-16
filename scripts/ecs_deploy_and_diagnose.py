@@ -634,12 +634,12 @@ def collect_diagnostics(service_arn: Optional[str] = None) -> Dict:
     return diag
 
 
-def get_current_task_definition_arn() -> str:
-    """Fetch currently running task definition ARN from the ECS service before deployment."""
+def get_service_task_definition_arn(service_name: str) -> str:
+    """Fetch the task definition ARN a given ECS service is currently running."""
     code, stdout, stderr = run_aws_cmd([
         "ecs", "describe-services",
         "--cluster", ECS_CLUSTER,
-        "--services", ECS_SERVICE
+        "--services", service_name
     ])
     if code == 0:
         try:
@@ -648,8 +648,126 @@ def get_current_task_definition_arn() -> str:
             if services:
                 return services[0].get("taskDefinition", "")
         except Exception as e:
-            print(f"[ecs_deploy] Exception parsing describe-services: {e}")
+            print(f"[ecs_deploy] Exception parsing describe-services for {service_name}: {e}")
     return ""
+
+
+def get_current_task_definition_arn() -> str:
+    """Fetch currently running task definition ARN from the ECS service before deployment."""
+    return get_service_task_definition_arn(ECS_SERVICE)
+
+
+#: terraform/ecs.tf's aws_ecs_service.workers (for_each over local.worker_definitions)
+#: names every worker service "vyomquant-worker-<key>-service-<environment>". Matched by
+#: prefix rather than hardcoding the worker keys, so a worker added to that map (as
+#: OPS-TRAIN-01's `training` entry was) is picked up here with no second place to update.
+WORKER_SERVICE_PREFIX = os.getenv("WORKER_SERVICE_PREFIX", "vyomquant-worker-")
+
+
+def list_worker_services() -> List[str]:
+    """Every ECS service in this cluster matching the worker naming convention."""
+    code, stdout, stderr = run_aws_cmd([
+        "ecs", "list-services",
+        "--cluster", ECS_CLUSTER,
+        "--max-items", "100",
+    ])
+    if code != 0:
+        print(f"[ecs_deploy] list-services failed: {stderr.strip()}")
+        return []
+    try:
+        arns = json.loads(stdout).get("serviceArns", [])
+    except Exception as e:
+        print(f"[ecs_deploy] Exception parsing list-services output: {e}")
+        return []
+    names = [arn.rsplit("/", 1)[-1] for arn in arns]
+    return [name for name in names if name.startswith(WORKER_SERVICE_PREFIX)]
+
+
+def register_worker_task_definition(image_uri: str, current_task_def_arn: str) -> Tuple[bool, str]:
+    """Same intent as register_task_definition, for a worker rather than the API.
+
+    Sets the image on every container in the task def rather than matching a container
+    named "vyomquant-api"/"api" -- a worker task definition has exactly one container
+    (named "worker-<key>", per terraform/ecs.tf), so "every container" and "the one
+    matching container" are the same set here, without needing to know that name.
+    Deliberately skips validate_critical_config: it asserts API-shaped configuration
+    (port 8000, cpu=1024, mem=2048, the full API secret set) that does not describe a
+    worker task definition (OPS-TRAIN-01's `training` entry alone is cpu=2048/mem=8192).
+    """
+    success, current_td = get_current_task_definition(current_task_def_arn)
+    if not success:
+        return False, "Failed to fetch current worker task definition from ECS"
+
+    if not current_td.get("containerDefinitions"):
+        return False, "No container definitions found in worker task definition"
+
+    for container in current_td["containerDefinitions"]:
+        container["image"] = image_uri
+
+    for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
+                'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt']:
+        current_td.pop(key, None)
+
+    family = current_td.get("family", "worker")
+    temp_td_file = f"task-def-rendered-{family}.json"
+    with open(temp_td_file, "w", encoding="utf-8") as f:
+        json.dump(current_td, f, indent=2)
+
+    code, stdout, stderr = run_aws_cmd([
+        "ecs", "register-task-definition",
+        "--cli-input-json", f"file://{temp_td_file}"
+    ])
+    if code != 0:
+        return False, f"Worker task def registration failed: {stderr}"
+
+    parsed = json.loads(stdout)
+    arn = parsed.get("taskDefinition", {}).get("taskDefinitionArn", "")
+    return True, arn
+
+
+def redeploy_workers(image_uri: str) -> Dict[str, bool]:
+    """INF-03: after the API's own forward deploy succeeds, roll every worker ECS
+    service onto the same image.
+
+    terraform/ecs.tf's own comment on local.worker_definitions says "Workers use the
+    backend image" -- but nothing besides that image's mutable `:latest` tag ever
+    carried new code to a running worker (CI-02 stopped 02-build.yml from pushing that
+    tag at all, since nothing else was supposed to depend on it; this closes the
+    dependency it turned out workers had). Best-effort and isolated per worker: one
+    worker failing to redeploy is reported, not raised, so it cannot be mistaken for a
+    failure of the API's own already-confirmed-good deployment, and does not stop the
+    other workers from being attempted.
+    """
+    results: Dict[str, bool] = {}
+    for service_name in list_worker_services():
+        current_arn = get_service_task_definition_arn(service_name)
+        if not current_arn:
+            print(f"[ecs_deploy] Could not read current task definition for {service_name}; skipping")
+            results[service_name] = False
+            continue
+
+        reg_ok, arn_or_err = register_worker_task_definition(image_uri, current_arn)
+        if not reg_ok:
+            print(f"[ecs_deploy] Failed to register new task def for {service_name}: {arn_or_err}")
+            results[service_name] = False
+            continue
+
+        code, stdout, stderr = run_aws_cmd([
+            "ecs", "update-service",
+            "--cluster", ECS_CLUSTER,
+            "--service", service_name,
+            "--task-definition", arn_or_err,
+            "--force-new-deployment",
+        ])
+        if code != 0:
+            print(f"[ecs_deploy] Failed to update service {service_name}: {stderr}")
+            results[service_name] = False
+            continue
+
+        print(f"[ecs_deploy] {service_name} updated to {arn_or_err}")
+        results[service_name] = True
+
+    return results
 
 
 def execute_deployment(image_uri: str) -> bool:
@@ -736,11 +854,25 @@ def execute_deployment(image_uri: str) -> bool:
     outcome = wait_for_rollout(DEPLOY_WAIT_SECONDS, deployment_id)
     if outcome == ROLLOUT_COMPLETED:
         print("✅ ECS DEPLOYMENT COMPLETED & STABLE!")
+
+        # INF-03: only after the API's own deployment is confirmed stable on this image --
+        # never before, and a worker failure here must not turn this into a non-SUCCESS
+        # outcome for the API, which already proved itself healthy above.
+        worker_results = redeploy_workers(image_uri)
+        if worker_results:
+            failed_workers = [name for name, ok in worker_results.items() if not ok]
+            if failed_workers:
+                print(f"⚠️  Worker redeploy had failures: {failed_workers}")
+            else:
+                print(f"✅ Redeployed {len(worker_results)} worker service(s) onto {image_uri}")
+
         _write_github_step_summary([
             "## ✅ ECS Deployment — SUCCESS",
             f"**New task definition:** `{new_task_def_arn}`",
             f"**Image:** `{image_uri}`",
             f"**Deployment id:** `{deployment_id or 'n/a'}`",
+            f"**Workers redeployed:** `{sum(worker_results.values())}/{len(worker_results)}`"
+            if worker_results else "**Workers redeployed:** none found",
         ])
         return True
 
