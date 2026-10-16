@@ -639,12 +639,12 @@
       "severity": "Low",
       "component": "Repository hygiene",
       "title": "Committed virtualenv, probe outputs and ~450 report documents",
-      "status": "OPEN",
-      "fix_commit": "",
-      "evidence": "",
-      "verification_level": "none",
+      "status": "IN_PROGRESS",
+      "fix_commit": "5f697da",
+      "evidence": "Confirmed via `git ls-files | grep site-packages` that staging/.ccxt_upgrade_probe/ was a complete, committed virtualenv: 1730+ tracked files under Lib/site-packages/, 52MB on disk (`du -sh`). staging/probe_ccxt_upgrade_delta.py's own docstring and PROBE_DIR constant identify this exact path as a THROWAWAY virtualenv that script creates on demand to probe a ccxt dependency upgrade -- it was never meant to be committed, only regenerated. staging/probe_p10i_writer_inventory.py independently confirms this: it already excludes this same directory from its own file-walking logic, i.e. an earlier pass had already recognized it as noise to skip, without ever removing it from git. Removed with `git rm -r --cached staging/.ccxt_upgrade_probe` (1736 files) + `rm -rf` from disk in commit d1542578c06b65ccf129b9c33ff6f22ea5d54809, and `**/.ccxt_upgrade_probe/` added to .gitignore (by directory name, not just the existing venv-suffix patterns, since this directory's name does not end in `venv`) so re-running the probe script cannot recommit it. The .gitignore edit itself was dropped by that first commit's own `git add -A staging/.ccxt_upgrade_probe .gitignore` call -- one bad pathspec in that invocation (the directory no longer existed on disk by that point) aborted the whole `git add` and silently excluded the unrelated .gitignore edit too -- caught by re-diffing HEAD afterward and landed separately in commit 5f697da. Full regression: tests/test_validation_sweep.py (376 passed, 2 skipped) -- a pure repository-hygiene change touching no application code, run as a sanity check only.",
+      "verification_level": "code (verified this session)",
       "production_verified": false,
-      "remaining_action": "Remove from tree; keep reports in a docs site."
+      "remaining_action": "Only the unambiguous-garbage half of this finding's title is fixed: the committed virtualenv and its probe outputs. The OTHER half -- '~450 report documents' -- was deliberately NOT touched: staging/'s ~231 markdown reports (REMEDIATION_REPORT.md, PHASE11A_LAUNCH_GATE_REGISTER.md and siblings) are this session's own active evidence source for OTHER findings' ledger entries (e.g. TENANT-01's and RECON-01's own evidence fields quote staging/REMEDIATION_REPORT.md by name) -- moving or deleting them now would destroy live audit-trail content this same remediation pass still depends on, for a cosmetic repository-hygiene gain. The finding's own suggested remedy ('keep reports in a docs site') requires a docs site that does not exist in this sandbox to move them to -- that is a separate infrastructure decision for a dedicated session, not something to guess at here. Left OPEN/undone: relocating or pruning the markdown report corpus once a destination and a cutover point (after which ledger entries would cite the new location instead) are decided."
     },
     {
       "id": "HY-02",
