@@ -1389,15 +1389,15 @@ class TestHttpSurface:
         assert body["versions"][0]["canvas"]["read_only"] is True
         assert body["versions"][1]["canvas"]["editable"] is True
 
-    def test_the_duplicate_stop_route_behaves_identically(self):
-        """Two registrations of one path pre-date this task; both now do the same thing."""
-        from backend_app.routers import strategy_operations as ops
-
-        handlers = [
-            route
-            for route in ops.router.routes
-            if getattr(route, "path", "") == "/deployments/{deployment_id}/stop"
-        ]
-        assert len(handlers) == 2
-        source = ROUTER_PATH.read_text(encoding="utf-8")
-        assert source.count('_transition_deployment_endpoint(\n        "stop"') == 2
+    # test_the_duplicate_stop_route_behaves_identically used to assert there were two
+    # registrations of POST /deployments/{id}/stop in strategy_operations.router (the
+    # live one at line ~439, and stop_deployment_alias, declared
+    # include_in_schema=False, further down). Commit 396d210 (API-01) deleted
+    # stop_deployment_alias as confirmed-unreachable dead code: Starlette matches routes
+    # in registration order, so the first registration always answered and the second
+    # could never run. The single surviving registration is exercised by this class's
+    # own test_a_successful_transition_reports_the_binding_state[stop],
+    # test_another_tenants_deployment_is_a_404, test_the_body_admits_a_reason_and_
+    # nothing_else and test_no_body_is_fine_because_a_reason_is_optional, and the
+    # route table's freedom from ANY duplicate (not just this one) is now asserted
+    # unconditionally by tests/test_api01_no_shadowed_routes.py.
