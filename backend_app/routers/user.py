@@ -11,6 +11,7 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend_app.core.database import get_db
@@ -193,4 +194,77 @@ async def get_security_logs(
         raise HTTPException(
             status_code=503,
             detail="Unable to retrieve security logs. Please try again later."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PRIV-01: account data export and account deletion
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/user/account/export")
+async def export_account(
+    user: dict = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_request_supabase),
+):
+    """Every category of this user's own data this product knows how to read.
+
+    See ``backend/account_lifecycle.py``'s own module docstring for exactly which
+    categories are covered and why connected exchanges are listed by name only.
+    """
+    if not supabase:
+        raise HTTPException(
+            status_code=503, detail="Unable to export account data. Please try again later."
+        )
+    from backend_app.backend.account_lifecycle import export_account_data
+
+    try:
+        return await export_account_data(supabase, user_id=user["id"])
+    except Exception as e:
+        logger.error(f"Failed to export account data for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to export account data. Please try again later."
+        )
+
+
+class DeleteAccountRequest(BaseModel):
+    """Requires the caller to type a confirmation phrase, so a client bug or a stray
+    DELETE call cannot destroy account access by accident (Requirement-shaped: there is
+    no undo for the PII anonymisation half of this operation)."""
+    confirm: str = Field(
+        ..., description='Must be exactly "DELETE MY ACCOUNT" to proceed.'
+    )
+
+
+@router.delete("/user/account")
+async def delete_account_endpoint(
+    body: DeleteAccountRequest,
+    user: dict = Depends(get_current_user),
+    supabase: SupabaseClient = Depends(get_request_supabase),
+):
+    """Stop runtimes, revoke exchange keys, anonymise PII, lock the account.
+
+    See ``backend/account_lifecycle.py``'s own module docstring for exactly what this does
+    and does not do, and why: this anonymises the profile and freezes the account rather
+    than physically cascade-deleting every historical row that references this user.
+    """
+    if body.confirm != "DELETE MY ACCOUNT":
+        raise HTTPException(
+            status_code=422,
+            detail='confirm must be exactly "DELETE MY ACCOUNT" to proceed.',
+        )
+    if not supabase:
+        raise HTTPException(
+            status_code=503, detail="Unable to delete account. Please try again later."
+        )
+    from backend_app.backend.account_lifecycle import delete_account
+
+    try:
+        return await delete_account(supabase, user_id=user["id"], user=user)
+    except Exception as e:
+        logger.error(f"Failed to delete account for user {user['id']}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to delete account. Please try again later."
         )
