@@ -1386,22 +1386,16 @@ class TestHttpMapping:
         assert resp.status_code == 422
         service.deploy_version.assert_not_awaited()
 
-    def test_the_legacy_strategy_deploy_maps_a_binding_refusal_too(self):
-        client, ops = _client_and_router()
-        service = MagicMock()
-        service.deploy_strategy = AsyncMock(
-            side_effect=db.DeployRejected(
-                "LIVE_REQUIRES_EXCHANGE_ACCOUNT",
-                "A live deployment must name the exchange account it trades through.",
-                {"mode": "live"},
-                http_status=422,
-            )
-        )
-
-        async def _get():
-            return service
-
-        with patch.object(ops, "get_strategy_service", _get):
-            resp = client.post("/api/strategies/s1/deploy", json={"environment": "live"})
-        assert resp.status_code == 422
-        assert resp.json()["detail"]["error"] == "LIVE_REQUIRES_EXCHANGE_ACCOUNT"
+    # test_the_legacy_strategy_deploy_maps_a_binding_refusal_too used to live here,
+    # POSTing to /api/strategies/s1/deploy through `_client_and_router()`, which mounts
+    # only `strategy_operations.router`. API-01 (this session) deleted that router's
+    # deploy_strategy handler as confirmed-unreachable dead code: `strategies.router` is
+    # mounted before it in main.py and Starlette matches in registration order, so
+    # `strategies.py`'s own `deploy_bot` answered this path in every environment this has
+    # ever run in, and still does -- this test started answering 404 the moment the dead
+    # handler it exercised was removed, not because the real route broke. The real
+    # route's binding-refusal mapping (`_deploy_current_version_paper` catching
+    # `DeployRejected` and re-raising it as `HTTPException(status_code=e.http_status, ...)`)
+    # is covered where the live handler actually is:
+    # tests/test_rt08_deployment_state_is_durable.py::
+    # test_a_refused_deploy_surfaces_its_own_status_and_a_failed_start_is_a_400.

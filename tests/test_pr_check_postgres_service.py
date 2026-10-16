@@ -372,11 +372,18 @@ def test_the_fix_the_proof_guards_is_in_the_tree(raw):
 
 
 def test_the_unit_tests_lane_still_carries_the_source_level_half(db_job):
-    """The new file's two source-level tests (both tables are declared; 021's index
-    predicate covers every live status spelling) are NOT skipped at module level, so
-    they run in the `unit-tests` lane where DATABASE_URL is blank. A module-level
-    `pytestmark` would have taken them with the races and the drift guard would then
-    only ever run in the one job that has a server.
+    """The file's source-level tests (both tables are declared; 021's index predicate
+    covers every live status spelling; 044's rekeyed index predicate does too) are NOT
+    skipped at module level, so they run in the `unit-tests` lane where DATABASE_URL is
+    blank. A module-level `pytestmark` would have taken them with the races and the
+    drift guard would then only ever run in the one job that has a server.
+
+    Counts (3 source-level, 9 @requires_postgres races) as of MKT-04's two added races
+    (test_mkt04_a_second_subscriber_can_deploy_while_the_first_is_still_live,
+    test_mkt04_the_same_user_still_cannot_double_deploy_the_same_strategy) and its own
+    added source-level test (test_044_rekeys_to_user_and_strategy_with_the_same_
+    predicate) -- was 2 and 7 when this test was first written, before MKT-04 extended
+    the target file.
     """
     with open(os.path.join(REPO, CONCURRENCY_POSTGRES_FILE), encoding="utf-8") as handle:
         source = handle.read()
@@ -392,8 +399,8 @@ def test_the_unit_tests_lane_still_carries_the_source_level_half(db_job):
         "a module-level pytestmark in the concurrency proof would skip its two "
         f"source-level tests in the unit-tests lane too: {assignments}"
     )
-    assert source.count("@requires_postgres") == 7, (
-        "expected exactly the seven database races to be marked; the two source-level "
+    assert source.count("@requires_postgres") == 9, (
+        "expected exactly the nine database races to be marked; the three source-level "
         "tests must stay unmarked"
     )
 

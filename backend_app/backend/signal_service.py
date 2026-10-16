@@ -180,7 +180,49 @@ class SignalService:
         except Exception as e:
             logger.debug(f"Supabase client resolution fallback: {e}")
             return None
-    
+
+    async def _record_signal_audit(
+        self,
+        sb,
+        *,
+        signal_id: str,
+        event_type: str,
+        user_id: Optional[str],
+        strategy_id: Optional[str],
+        payload: Dict[str, Any],
+    ) -> None:
+        """AUD-01: append this transition to the durable, append-only signal_audit_log.
+
+        `signals` is mutated in place by design (update_risk_decision/update_order/
+        update_execution overwrite the same row as a signal progresses) -- this is the
+        separate, durable history 046_signal_audit_log.sql added for exactly that reason.
+        Called only when the caller's own write to `signals` already succeeded, so an
+        audit row never claims a transition that was not actually persisted. A record
+        failure is logged and never raises: this is additive visibility, not a new
+        control, matching the same convention RT-16's ConsistencyChecker._handle_mismatch
+        and 036/040's other callers already use.
+        """
+        if sb is None:
+            return
+        try:
+            insert_res = sb.table("signal_audit_log").insert({
+                "signal_id": signal_id,
+                "event_type": event_type,
+                "user_id": user_id or None,
+                "strategy_id": strategy_id,
+                "payload": payload,
+            }).execute()
+            result = await insert_res if inspect.isawaitable(insert_res) else insert_res
+            if not result or not getattr(result, "data", None):
+                logger.warning(
+                    f"[SIGNAL_AUDIT] {event_type} audit row for signal {signal_id} did "
+                    f"not report a written row"
+                )
+        except Exception as e:  # noqa: BLE001 - see docstring
+            logger.warning(
+                f"[SIGNAL_AUDIT] failed to record {event_type} for signal {signal_id}: {e}"
+            )
+
     async def create_signal(
         self,
         user: dict,
@@ -259,6 +301,14 @@ class SignalService:
                         user_id=user_id,
                         generated_at=signal_data["generated_at"],
                     )
+                    await self._record_signal_audit(
+                        sb,
+                        signal_id=signal_id,
+                        event_type="created",
+                        user_id=user_id,
+                        strategy_id=strategy_id,
+                        payload=signal_data,
+                    )
                     return result.data[0]
         except Exception as e:
             logger.debug(f"Supabase signal insert fallback for {signal_id}: {e}")
@@ -307,6 +357,14 @@ class SignalService:
                 result = await query_res if inspect.isawaitable(query_res) else query_res
                 if result and hasattr(result, "data") and result.data:
                     self._local_signals[signal_id] = result.data[0]
+                    await self._record_signal_audit(
+                        sb,
+                        signal_id=signal_id,
+                        event_type="risk_decision",
+                        user_id=user_id,
+                        strategy_id=result.data[0].get("strategy_id"),
+                        payload=update_data,
+                    )
                     return result.data[0]
         except Exception as e:
             logger.debug(f"Supabase update_risk_decision fallback for {signal_id}: {e}")
@@ -366,6 +424,14 @@ class SignalService:
                 result = await query_res if inspect.isawaitable(query_res) else query_res
                 if result and hasattr(result, "data") and result.data:
                     self._local_signals[signal_id] = result.data[0]
+                    await self._record_signal_audit(
+                        sb,
+                        signal_id=signal_id,
+                        event_type="order",
+                        user_id=user_id,
+                        strategy_id=result.data[0].get("strategy_id"),
+                        payload=update_data,
+                    )
                     return result.data[0]
         except Exception as e:
             logger.debug(f"Supabase update_order fallback for {signal_id}: {e}")
@@ -417,6 +483,14 @@ class SignalService:
                 result = await query_res if inspect.isawaitable(query_res) else query_res
                 if result and hasattr(result, "data") and result.data:
                     self._local_signals[signal_id] = result.data[0]
+                    await self._record_signal_audit(
+                        sb,
+                        signal_id=signal_id,
+                        event_type="execution",
+                        user_id=user_id,
+                        strategy_id=result.data[0].get("strategy_id"),
+                        payload=update_data,
+                    )
                     return result.data[0]
         except Exception as e:
             logger.debug(f"Supabase update_execution fallback for {signal_id}: {e}")

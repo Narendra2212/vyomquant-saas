@@ -100,7 +100,11 @@ def _create_mirror_tables(cur) -> None:
     """
     cur.execute("DROP TABLE IF EXISTS public.marketplace_backtest_evidence CASCADE")
     cur.execute("DROP TABLE IF EXISTS public.marketplace_price_evaluations CASCADE")
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+    # No CREATE EXTENSION pgcrypto: nothing below calls a pgcrypto function -- every
+    # row id default is gen_random_uuid(), a core builtin since PG13. A stray call here
+    # used to do nothing useful and broke against pgserver's PyPI wheel (no pgcrypto
+    # shipped at all) -- same root cause and fix as test_paper03_write_service_role_
+    # only_postgres.py's _create_mirror_tables.
 
     cur.execute(
         "CREATE TABLE public.marketplace_backtest_evidence ("

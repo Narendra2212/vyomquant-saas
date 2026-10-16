@@ -105,9 +105,15 @@ def db():
 def _create_mirror_tables(cur) -> None:
     """Migration 009's grant/policy shape for the eleven tables PAPER-03 is about -- not their
     full column set, which this fix does not touch.
-    """
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
+    No `CREATE EXTENSION pgcrypto` here: nothing below calls a pgcrypto function --
+    every row id default is `gen_random_uuid()`, a core builtin since PG13, not the
+    extension. A stray `CREATE EXTENSION IF NOT EXISTS pgcrypto` used to sit here doing
+    nothing useful, and broke outright against `pgserver`'s PyPI wheel (no pgcrypto
+    shipped at all; `scripts/provision_database.py`'s own substrate step already
+    documents this and falls back to a non-cryptographic shim for the one real caller,
+    the referral-code trigger -- this fixture has no such caller to fall back for).
+    """
     for tbl in _ALL_TABLES:
         cur.execute(f"DROP TABLE IF EXISTS public.{tbl} CASCADE")
         cur.execute(
