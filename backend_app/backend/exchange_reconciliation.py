@@ -94,22 +94,37 @@ class ExchangeReconciliationService:
         self,
         db_session: Session,
         exchange_client: Optional[Any] = None,
-        state_machine: Optional[OrderStateMachine] = None
+        state_machine: Optional[OrderStateMachine] = None,
+        vault: Optional[Any] = None,
     ):
         """
         Initialize reconciliation service.
-        
+
         Args:
             db_session: SQLAlchemy session for DB operations
-            exchange_client: Exchange API client (ccxt or custom)
+            exchange_client: A single, already-connected exchange client shared across
+                every call. Correct only when this instance is used for exactly one
+                tenant and one exchange account -- RECON-01's own named defect is that
+                nothing in this service enforced that, so a caller could pass a
+                tenant_id the client does not actually belong to and reconcile one
+                tenant's orders against another's exchange account. Kept for backward
+                compatibility with existing callers/tests that already pass one.
             state_machine: Order state machine instance
+            vault: An ``APIKeyVault``-shaped object (``load_decrypted_keys(user_id,
+                exchange_id)``). When provided, ``_fetch_exchange_orders`` resolves a
+                FRESH, per-(tenant_id, exchange_id) executor for each call via the same
+                ``order_control._executor_for`` helper RT-16's OrderWatchdog fix and
+                RT-21's manual cancel both already use, instead of trusting
+                ``exchange_client`` to belong to whichever tenant_id is passed in.
+                Takes precedence over ``exchange_client`` when set.
         """
         self.db = db_session
         self.exchange = exchange_client
+        self.vault = vault
         self.state_machine = state_machine or get_order_state_machine()
         self._running = False
         self._reconciliation_task: Optional[asyncio.Task] = None
-        
+
         logger.info("ExchangeReconciliationService initialized")
     
     async def reconcile_open_orders(
@@ -224,18 +239,36 @@ class ExchangeReconciliationService:
         # "I cannot see the exchange" and "the exchange is empty" must not be the same
         # value, so this refuses instead. Regression:
         # tests/test_p10d_exchange_reconciliation_fails_safely.py
-        if not self.exchange:
+        #
+        # RECON-01: when a vault is configured, this resolves a FRESH executor scoped
+        # to THIS tenant_id and THIS exchange_id on every call, rather than trusting
+        # self.exchange (set once at construction) to belong to whichever tenant_id a
+        # caller happens to pass in -- the defect this finding named ("architected for
+        # exactly one tenant_id and one exchange_client per instance"). Same helper
+        # RT-16's OrderWatchdog fix and RT-21's manual cancel already use.
+        if self.vault is not None:
+            if not exchange_id:
+                raise RuntimeError(
+                    "cannot resolve a per-tenant exchange executor without an "
+                    "exchange_id: reconcile_open_orders was called with vault "
+                    "configured but exchange_id=None."
+                )
+            from backend_app.backend.order_control import _executor_for
+            exchange = await _executor_for(str(tenant_id), str(exchange_id), self.vault)
+        elif not self.exchange:
             raise RuntimeError(
                 "cannot reconcile: no exchange client is configured on this "
                 "ExchangeReconciliationService. Refusing to report zero open orders, "
                 "which would be read as every active order having left the venue."
             )
-        
+        else:
+            exchange = self.exchange
+
         try:
             # This would call the actual exchange API
             # Format depends on exchange (ccxt, custom, etc.)
-            orders = await self.exchange.fetch_open_orders()
-            
+            orders = await exchange.fetch_open_orders()
+
             # Normalize to common format
             normalized = []
             for order in orders:

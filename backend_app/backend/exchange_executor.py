@@ -37,7 +37,7 @@ from datetime import datetime
 from decimal import ROUND_DOWN, Decimal
 from enum import Enum
 from collections import defaultdict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend_app.backend.state_service import OrderStatus
 
@@ -1840,6 +1840,28 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
                 status="unknown" if _outcome_is_ambiguous(e) else "error",
                 error_message=error.message
             )
+
+    async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """RECON-01: the one place that lists this account's resting orders.
+
+        Extracted from :meth:`cancel_all_open_orders`'s own internal listing step so a
+        caller that only wants to COMPARE orders (reconciliation) does not have to go
+        through a method whose name and purpose is to cancel them. Same rate limit,
+        same symbol normalisation, same error path.
+
+        Raises the classified :class:`ExchangeError` on a venue/network failure rather
+        than returning ``[]``: an empty list and "the venue could not be asked" are
+        different facts, and a caller (e.g. a reconciliation pass) that treated them the
+        same would read every currently-open order as having left the venue.
+        """
+        ccxt_symbol = self.normalizer.format_symbol_for_ccxt(symbol) if symbol else None
+        await self.rate_limiter.acquire("fetch_open_orders")
+        try:
+            return await self._exchange.fetch_open_orders(ccxt_symbol)
+        except Exception as e:
+            error = self._handle_ccxt_error(e)
+            logger.error("FETCH_OPEN_ORDERS failed: %s", error.message)
+            raise error
 
     async def cancel_all_open_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """RT-21: cancel every resting order (optionally for one symbol). Reduce-only by nature.
