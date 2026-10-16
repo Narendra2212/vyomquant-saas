@@ -940,26 +940,91 @@ async def _settle_once(
             settled_at=instant,
         )
         if duplicate:
-            await _audit_duplicate_ignored(
-                reference=reference,
-                subscription_id=subscription_id,
-                provider=provider,
-                amount_minor=amount_minor,
-                currency=currency,
-                is_reversal=is_reversal,
+            # MKT-03: a duplicate AT THE LEDGER is not necessarily a duplicate at the
+            # Subscription. ``state.insert_issued`` already being true was the case
+            # ``_insert_settlement`` resolves on its own (this call's own row, resumed below as
+            # usual) - this branch is only reached when it was FALSE, meaning the row
+            # ``uq_settlement_reference_reversal`` found belongs to an EARLIER process: a prior
+            # delivery that crashed, or exhausted its own Requirement 10.11 retry budget, between
+            # writing the ledger row (step 2) and finishing the transition (step 3) or the
+            # entitlement (step 4). Returning ``DUPLICATE_IGNORED`` unconditionally here is what
+            # left that payment recorded as settled with the Subscription never activated and
+            # nothing to resume it.
+            #
+            # The ``subscription`` read in step 1 may be exactly as stale as the finding
+            # describes, so it is re-read here rather than trusted. When the fresh read shows the
+            # transition genuinely never landed, it is safe to fall through to steps 3/4 below
+            # with this fresher image instead of returning - ``_apply_transition`` guards its own
+            # UPDATE by the status it was just handed, so this cannot re-apply a transition that
+            # already happened.
+            #
+            # RESUMABLE MEANS EXACTLY "THE TRANSITION IS STILL PENDING", computed the same way
+            # ``_apply_transition`` itself decides ``permitted`` - deliberately WITHOUT its
+            # ``renewal_in_place`` addition for a payment. ``renewal_in_place`` EXTENDS an
+            # already-``active`` period rather than merely setting it, and an already-``active``
+            # row is indistinguishable here between "this exact settlement already activated it"
+            # (nothing pending; resuming would extend the period a second time for one payment)
+            # and "a separate, later renewal already extended it" (also nothing pending, for a
+            # different reason) - so it is excluded by construction rather than guessed at.
+            # ``fresh_status in ELIGIBLE_FOR_ACTIVATION`` already answers "not yet active and
+            # still eligible" with no such ambiguity, which is exactly what is needed: falling
+            # through below then transitions exactly once, precisely because
+            # ``_apply_transition``'s own ``.eq("status", from_status)`` guard cannot match twice.
+            # A reversal has no analogous extension to double: ``can_transition(..., REFUNDED)``
+            # is already ``False`` once a Subscription IS refunded, so using it directly is safe
+            # with no renewal_in_place-style carve-out needed.
+            resumed_subscription = _read_subscription(supabase, subscription_id)
+            fresh_status = (
+                _normalise_status(_get(resumed_subscription, "status"))
+                if resumed_subscription is not None
+                else None
             )
-            return SettlementResult(
-                outcome=SettlementOutcome.DUPLICATE_IGNORED,
-                provider_reference=reference,
-                is_reversal=is_reversal,
-                subscription_id=subscription_id,
-                amount_minor=amount_minor,
-                owner_share_minor=owner_share_minor,
-                platform_fee_minor=platform_fee_minor,
-                currency=currency,
-                from_status=_normalise_status(_get(subscription, "status")),
-                attempts=attempt,
-            )
+            if is_reversal:
+                transition_pending = resumed_subscription is not None and can_transition(
+                    normalise_subscription_state(fresh_status), SubscriptionState.REFUNDED
+                )
+            else:
+                transition_pending = (
+                    resumed_subscription is not None and fresh_status in ELIGIBLE_FOR_ACTIVATION
+                )
+            if resumed_subscription is not None and transition_pending:
+                subscription = resumed_subscription
+                state.subscription = resumed_subscription
+                state.settlement_recorded = True
+                state.settlement_id = _read_settlement_id(
+                    supabase, reference=reference, is_reversal=is_reversal
+                )
+                await _audit_duplicate_resumed(
+                    reference=reference,
+                    subscription_id=subscription_id,
+                    provider=provider,
+                    amount_minor=amount_minor,
+                    currency=currency,
+                    is_reversal=is_reversal,
+                )
+                # No ``return`` - steps 3 and 4 below complete what this redelivery found
+                # outstanding, and the function's normal RECORDED/REVERSED return reports it.
+            else:
+                await _audit_duplicate_ignored(
+                    reference=reference,
+                    subscription_id=subscription_id,
+                    provider=provider,
+                    amount_minor=amount_minor,
+                    currency=currency,
+                    is_reversal=is_reversal,
+                )
+                return SettlementResult(
+                    outcome=SettlementOutcome.DUPLICATE_IGNORED,
+                    provider_reference=reference,
+                    is_reversal=is_reversal,
+                    subscription_id=subscription_id,
+                    amount_minor=amount_minor,
+                    owner_share_minor=owner_share_minor,
+                    platform_fee_minor=platform_fee_minor,
+                    currency=currency,
+                    from_status=_normalise_status(_get(subscription, "status")),
+                    attempts=attempt,
+                )
 
     # ── 3. The transition, the period, the history row (Reqs 11.4, 11.5, 11.6, 11.12). ──
     if not state.transition_written:
@@ -1064,6 +1129,41 @@ def _read_subscription(supabase: Any, subscription_id: str) -> Optional[Mapping[
             f"the subscription read for {subscription_id} did not complete: {exc}"
         ) from exc
     return dict(rows[0]) if rows else None
+
+
+def _read_settlement_id(
+    supabase: Any, *, reference: str, is_reversal: bool
+) -> Optional[str]:
+    """The existing Settlement_Record's id for ``(provider_reference, is_reversal)``, if any.
+
+    MKT-03's resumption path only: read back the row ``uq_settlement_reference_reversal`` found
+    when a redelivery's own insert reported a duplicate, so the RECORDED/REVERSED result this
+    call goes on to return names the Settlement that actually carries the money instead of a
+    freshly generated id nothing refers to. ``find_settled_payment`` is not reused here because
+    it is hardcoded to ``is_reversal=False``; this needs either.
+    """
+    try:
+        response = (
+            supabase.table(SETTLEMENT_TABLE)
+            .select("id")
+            .eq("provider_reference", reference)
+            .eq("is_reversal", is_reversal)
+            .execute()
+        )
+        rows = _rows(response)
+    except SettlementPersistenceError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - re-raised as the defined outcome, never swallowed
+        raise SettlementPersistenceError(
+            f"reading back the existing settlement for {reference} did not complete: {exc}"
+        ) from exc
+    # The predicate is restated in the process, for the same reason ``find_settled_payment``
+    # restates ``is_reversal`` on its own rows: a double that lost one of the two ``.eq``
+    # filters must not let a reversal's row answer for its own payment, or the other way round.
+    for row in rows:
+        if bool(_get(row, "is_reversal")) == bool(is_reversal):
+            return _as_text(_get(row, "id"))
+    return None
 
 
 def find_settled_payment(
@@ -1845,6 +1945,46 @@ async def _audit_duplicate_ignored(
         reason=(
             "this provider reference has already been settled, so the redelivery added no "
             "settlement record and extended no period"
+        ),
+        metadata=_audit_metadata(
+            provider_reference=reference,
+            provider=provider,
+            subscription_id=subscription_id,
+            amount_minor=amount_minor,
+            currency=currency,
+            is_reversal=is_reversal,
+            constraint=SETTLEMENT_REFERENCE_UNIQUE_CONSTRAINT,
+        ),
+        required=True,
+    )
+
+
+async def _audit_duplicate_resumed(
+    *,
+    reference: str,
+    subscription_id: str,
+    provider: str,
+    amount_minor: int,
+    currency: str,
+    is_reversal: bool,
+) -> None:
+    """``MARKETPLACE_SETTLEMENT_DUPLICATE_RESUMED`` (MKT-03).
+
+    Written when a redelivery's own ledger insert found a row an EARLIER process already wrote,
+    and the Subscription's fresh state showed the transition that should have followed it never
+    landed. Distinct from ``MARKETPLACE_SETTLEMENT_DUPLICATE_IGNORED``, which an operator reads as
+    "nothing to see" - this line says a payment was found recorded but unactivated, and names
+    which provider reference it was, so "how often does this happen" is answerable without
+    reconstructing it from the transition history.
+    """
+    await _write_audit(
+        "MARKETPLACE_SETTLEMENT_DUPLICATE_RESUMED",
+        reference=reference,
+        subscription_id=subscription_id,
+        reason=(
+            "this provider reference was already recorded in the ledger by an earlier attempt "
+            "that did not finish; the Subscription's transition and entitlement are being "
+            "completed now rather than left stuck behind an already-written settlement row"
         ),
         metadata=_audit_metadata(
             provider_reference=reference,

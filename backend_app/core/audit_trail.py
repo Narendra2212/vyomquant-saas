@@ -871,6 +871,10 @@ class StrategyAuditAction(Enum):
     MARKETPLACE_SETTLEMENT_UNMATCHED = "marketplace_settlement_unmatched"
     MARKETPLACE_SETTLEMENT_MISMATCHED = "marketplace_settlement_mismatched"
     MARKETPLACE_SETTLEMENT_DUPLICATE_IGNORED = "marketplace_settlement_duplicate_ignored"
+    # MKT-03: a redelivery whose ledger row already existed, but whose transition/entitlement
+    # had not -- distinct from DUPLICATE_IGNORED (nothing left to do) so an operator can tell
+    # "a stuck settlement was just completed" from "there was nothing to see here".
+    MARKETPLACE_SETTLEMENT_DUPLICATE_RESUMED = "marketplace_settlement_duplicate_resumed"
     MARKETPLACE_SETTLEMENT_PERSIST_FAILED = "marketplace_settlement_persist_failed"
     EXECUTION_ENVIRONMENT_MISMATCH = "execution_environment_mismatch"
     PAPER_SIMULATOR_MISCONFIGURED = "paper_simulator_misconfigured"

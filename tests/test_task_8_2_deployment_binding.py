@@ -702,7 +702,15 @@ class TestGapPolicyIsDelegated:
 
 
 class TestExecutionConfig:
-    def test_the_designs_fields_are_kept(self):
+    def test_the_designs_fields_are_known_but_none_of_them_are_enforced_yet(self):
+        """DEPLOY-01: every one of design.md's five fields is validated and stored into the
+        strategy_deployments row, but no execution path (BotRunner, ExecutionGuard,
+        order_control) reads any of them -- a deployment with max_order_notional=1000 runs
+        with exactly the same order-size ceiling as one with no execution_config at all.
+        Supplying a real value for ANY of them is now refused rather than silently stored,
+        the same choice strategy_service.assert_deploy_params_applicable already makes for
+        capital/trade_size_pct/stop_loss_pct/max_drawdown_pct.
+        """
         payload = {
             "max_order_notional": 1000,
             "max_open_positions": 2,
@@ -710,11 +718,29 @@ class TestExecutionConfig:
             "order_timeout_seconds": 30,
             "retry_policy": {"attempts": 3},
         }
-        assert db.normalise_execution_config(payload) == payload
         assert set(payload) == set(db.EXECUTION_CONFIG_FIELDS)
+
+        with pytest.raises(db.DeployRejected) as exc:
+            db.normalise_execution_config(payload)
+        assert exc.value.code == "EXECUTION_CONFIG_NOT_ENFORCED"
+        assert set(exc.value.details["not_enforced_fields"]) == set(payload)
+
+    def test_each_known_field_is_refused_on_its_own(self):
+        """Every field individually, not just all five together, so a caller cannot slip one
+        past by setting the others to None."""
+        for field in db.EXECUTION_CONFIG_FIELDS:
+            with pytest.raises(db.DeployRejected) as exc:
+                db.normalise_execution_config({field: "x"})
+            assert exc.value.code == "EXECUTION_CONFIG_NOT_ENFORCED"
+            assert exc.value.details["not_enforced_fields"] == [field]
 
     def test_none_is_an_empty_document_not_a_refusal(self):
         assert db.normalise_execution_config(None) == {}
+
+    def test_an_empty_object_is_kept_as_an_empty_document(self):
+        """A caller that sends execution_config={} (no field set at all) is not refused --
+        only a field with a real, non-None value is."""
+        assert db.normalise_execution_config({}) == {}
 
     def test_an_unknown_field_is_refused_rather_than_dropped(self):
         with pytest.raises(db.DeployRejected) as exc:
@@ -954,7 +980,11 @@ class TestBindingIsWrittenAsOneRow:
                 "mode": "live",
                 "exchange_account_id": ACCOUNT_ID,
                 "risk_config_id": RISK_ID,
-                "execution_config": {"max_open_positions": 2},
+                # DEPLOY-01: a real execution_config value is refused (see TestExecutionConfig)
+                # until something actually enforces it -- {} proves the column is still
+                # carried on the row, without asserting the unenforced-limit behavior this
+                # test isn't about.
+                "execution_config": {},
             },
             environment="live",
         )
@@ -962,7 +992,7 @@ class TestBindingIsWrittenAsOneRow:
         assert row["version_id"] == _version()["id"]
         assert row["exchange_account_id"] == ACCOUNT_ID
         assert row["risk_config_id"] == RISK_ID
-        assert row["execution_config"] == {"max_open_positions": 2}
+        assert row["execution_config"] == {}
         assert row["mode"] == "live"
         assert row["dag_hash"] == _version()["dag_hash"]
         # ... and it is ONE row.

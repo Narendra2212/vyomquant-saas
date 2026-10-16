@@ -370,7 +370,7 @@ class MarginMonitor:
         self.warning_issued = False
         self.margin_call_issued = False
     
-    def check_margin_health(self, metrics: MarginMetrics) -> Dict[str, Any]:
+    async def check_margin_health(self, metrics: MarginMetrics) -> Dict[str, Any]:
         """
         STEP 5.8: Check margin health and take action if needed.
         
@@ -433,33 +433,35 @@ class MarginMonitor:
         )
         
         result["status"] = "liquidation_risk"
-        reduced_positions = self._forced_position_reduction()
+        reduced_positions = await self._forced_position_reduction()
         result["positions_reduced"] = reduced_positions
         result["action"] = "forced_reduction"
         
         return result
     
-    def _forced_position_reduction(self) -> List[Dict[str, Any]]:
+    async def _forced_position_reduction(self) -> List[Dict[str, Any]]:
         """
         STEP 5.8: Automatically reduce positions to improve margin level.
-        
+
         Strategy:
         1. Find largest position by notional value
-        2. Reduce by REDUCTION_PERCENTAGE (25%)
+        2. Close it (there is no partial-close method on PortfolioManager yet --
+           see PM-01's `action: "full_close"` below, which is honest about this
+           rather than logging a 25% figure that never actually happens)
         3. Recalculate margin
         4. Repeat until margin_level > MARGIN_CALL_THRESHOLD (125%)
         5. Stop after MAX_REDUCTION_ITERATIONS
-        
+
         Returns:
             List of reduced positions with details
         """
         reduced = []
-        
+
         for iteration in range(self.MAX_REDUCTION_ITERATIONS):
             # Get current margin metrics
-            metrics = self.pm.get_margin_metrics()
+            metrics = await self.pm.get_margin_metrics()
             margin_level = metrics.margin_level
-            
+
             # Check if we're back to safe levels
             if margin_level >= self.MARGIN_CALL_THRESHOLD:
                 logger.info(
@@ -467,113 +469,77 @@ class MarginMonitor:
                     f"{iteration} reduction iterations"
                 )
                 break
-            
+
             # Find largest position by absolute notional value
             largest_position = None
             largest_notional = Decimal('0')
-            
+
             for position in self.pm.positions.values():
                 if not position.is_open:
                     continue
-                
+
                 notional = abs(position.market_value)
                 if notional > largest_notional:
                     largest_notional = notional
                     largest_position = position
-            
+
             if not largest_position:
                 logger.warning("No open positions to reduce")
                 break
-            
-            # Calculate reduction size (25% of position)
+
             current_size = largest_position.quantity
-            reduce_by = current_size * self.REDUCTION_PERCENTAGE
-            new_size = current_size - reduce_by
-            
-            if new_size <= 0:
-                # Close entire position
-                logger.critical(
-                    f"🚨 FORCED CLOSE: {largest_position.id} "
-                    f"({largest_position.symbol} {largest_position.side}) "
-                    f"size={current_size}, notional={largest_notional}"
+
+            # PM-01: PortfolioManager has no partial-close method today, so every
+            # iteration fully closes the largest position regardless of
+            # REDUCTION_PERCENTAGE -- this used to compute a 25% reduction size and
+            # then log it as if it had been applied, while actually closing the
+            # whole position every time. The log and the result dict's "action"
+            # field now both say what actually happens: a full close.
+            logger.critical(
+                f"🚨 FORCED CLOSE: {largest_position.id} "
+                f"({largest_position.symbol} {largest_position.side}) "
+                f"size={current_size}, notional={largest_notional} "
+                f"(no partial-close support -- closing the entire position)"
+            )
+
+            try:
+                close_price = self.pm.current_prices.get(
+                    largest_position.symbol,
+                    largest_position.current_price
                 )
-                
-                try:
-                    # Use current market price for close
-                    close_price = self.pm.current_prices.get(
-                        largest_position.symbol, 
-                        largest_position.current_price
-                    )
-                    
-                    closed_position = self.pm.close_position(
-                        position_id=largest_position.id,
-                        close_price=close_price,
-                        reason="forced_liquidation"
-                    )
-                    
-                    reduced.append({
-                        "position_id": largest_position.id,
-                        "symbol": largest_position.symbol,
-                        "side": largest_position.side,
-                        "action": "full_close",
-                        "size_reduced": str(current_size),
-                        "realized_pnl": str(closed_position.realized_pnl),
-                    })
-                    
-                    self.reduction_count += 1
-                    
-                except Exception as e:
-                    logger.error(f"Failed to force close position: {e}")
-                    break
-            else:
-                # Partial reduction - close 25% of position
-                logger.critical(
-                    f"🚨 FORCED REDUCTION: {largest_position.id} "
-                    f"({largest_position.symbol} {largest_position.side}) "
-                    f"reducing by 25% ({reduce_by} units)"
+
+                closed_position = await self.pm.close_position(
+                    position_id=largest_position.id,
+                    exit_price=close_price,
+                    reason="forced_liquidation"
                 )
-                
-                # Note: This requires a partial close method
-                # For now, we close the entire position to guarantee safety
-                try:
-                    close_price = self.pm.current_prices.get(
-                        largest_position.symbol,
-                        largest_position.current_price
-                    )
-                    
-                    # Execute complete position closure for full risk isolation
-                    closed_position = self.pm.close_position(
-                        position_id=largest_position.id,
-                        close_price=close_price,
-                        reason="forced_reduction"
-                    )
-                    
-                    reduced.append({
-                        "position_id": largest_position.id,
-                        "symbol": largest_position.symbol,
-                        "side": largest_position.side,
-                        "action": "full_close",
-                        "size_reduced": str(current_size),
-                        "realized_pnl": str(closed_position.realized_pnl),
-                    })
-                    
-                    self.reduction_count += 1
-                    
-                except Exception as e:
-                    logger.error(f"Failed to reduce position: {e}")
-                    break
-        
+
+                reduced.append({
+                    "position_id": largest_position.id,
+                    "symbol": largest_position.symbol,
+                    "side": largest_position.side,
+                    "action": "full_close",
+                    "size_reduced": str(current_size),
+                    "realized_pnl": str(closed_position.realized_pnl),
+                })
+
+                self.reduction_count += 1
+
+            except Exception as e:
+                logger.error(f"Failed to force close position: {e}")
+                break
+
         return reduced
     
-    def get_margin_status(self) -> Dict[str, Any]:
+    async def get_margin_status(self) -> Dict[str, Any]:
         """
         Get current margin status summary.
-        
+
         Returns:
             Dict with margin status and history
         """
-        metrics = self.pm.get_margin_metrics()
-        
+        metrics = await self.pm.get_margin_metrics()
+
         return {
             "margin_level": str(metrics.margin_level),
             "margin_used": str(metrics.margin_used),
@@ -942,16 +908,20 @@ class PortfolioSnapshotSystem:
         """
         self.sequence_number += 1
         timestamp = datetime.now()
-        
-        # Get margin metrics
-        margin_metrics = self.pm.get_margin_metrics()
-        
-        # Get exposure metrics
-        exposure_metrics = self.pm.get_exposure_metrics()
-        
-        # Get PnL summary
-        pnl_summary = self.pm.get_pnl_summary()
-        
+
+        # PM-01: create_snapshot is called both from inside open_position/
+        # close_position (which already hold self.pm's lock) and, via
+        # check_auto_snapshot, from update_prices after it releases that lock. It
+        # uses the `_locked` variants directly rather than `await self.pm.
+        # get_margin_metrics()` etc. -- those public methods acquire self.pm's
+        # lock themselves and are async, but this method is a plain synchronous
+        # read with no await points, so it never needs its own await/lock here
+        # either way; calling the public async methods without awaiting them
+        # (the pre-fix bug) returned unexecuted coroutine objects instead of data.
+        margin_metrics = self.pm._get_margin_metrics_locked()
+        exposure_metrics = self.pm._get_exposure_metrics_locked()
+        pnl_summary = self.pm._get_pnl_summary_locked()
+
         # Serialize positions
         positions = []
         open_count = 0
@@ -976,14 +946,26 @@ class PortfolioSnapshotSystem:
         # Calculate checksum for integrity
         state_string = f"{timestamp}{self.sequence_number}{self.pm.total_capital}{open_count}"
         checksum = hashlib.sha256(state_string.encode()).hexdigest()[:16]
-        
+
+        # PM-01: PortfolioManager itself has no available_capital/used_capital --
+        # those live per-allocation (StrategyAllocation.available_capital/
+        # used_capital). self.pm.available_capital/used_capital never existed and
+        # raised AttributeError on every snapshot attempt; the portfolio-level
+        # totals are the sum across every registered strategy's allocation.
+        portfolio_available_capital = sum(
+            (a.available_capital for a in self.pm.allocations.values()), Decimal('0')
+        )
+        portfolio_used_capital = sum(
+            (a.used_capital for a in self.pm.allocations.values()), Decimal('0')
+        )
+
         snapshot = PortfolioSnapshot(
             snapshot_id=f"snap_{timestamp.strftime('%Y%m%d_%H%M%S')}_{self.sequence_number}",
             timestamp=timestamp,
             sequence_number=self.sequence_number,
             total_capital=self.pm.total_capital,
-            available_capital=self.pm.available_capital,
-            used_capital=self.pm.used_capital,
+            available_capital=portfolio_available_capital,
+            used_capital=portfolio_used_capital,
             positions=positions,
             position_count=len(positions),
             open_position_count=open_count,
@@ -993,7 +975,7 @@ class PortfolioSnapshotSystem:
             margin_used=margin_metrics.margin_used,
             margin_available=margin_metrics.margin_available,
             margin_level=margin_metrics.margin_level,
-            total_exposure=exposure_metrics.total_exposure,
+            total_exposure=exposure_metrics.gross_exposure,
             symbol_exposure=exposure_metrics.symbol_exposure,
             strategy_exposure=exposure_metrics.strategy_exposure,
             trigger_reason=trigger_reason,
@@ -1786,7 +1768,59 @@ class PortfolioManager:
             )
             
             return allocation
-    
+
+    def validate_consistency(self) -> Dict[str, Any]:
+        """Self-check internal invariants after a position mutation.
+
+        PM-01: open_position and close_position both called
+        `self.validate_consistency()` already, but it was never defined anywhere
+        on this class -- AttributeError on every single position open or close,
+        before any of this module's other bugs were even reached. Plain sync
+        method with no lock of its own: both call sites already hold self._lock
+        when they call this.
+        """
+        errors: List[str] = []
+
+        for strategy_id, allocation in self.allocations.items():
+            reconciled = (allocation.used_capital + allocation.available_capital).quantize(Decimal("0.01"))
+            expected = allocation.allocated_capital.quantize(Decimal("0.01"))
+            if reconciled != expected:
+                errors.append(
+                    f"strategy {strategy_id}: used_capital + available_capital "
+                    f"({reconciled}) != allocated_capital ({expected})"
+                )
+            if allocation.available_capital < 0:
+                errors.append(
+                    f"strategy {strategy_id}: available_capital is negative "
+                    f"({allocation.available_capital})"
+                )
+
+        for symbol, position_ids in self.open_positions.items():
+            for position_id in position_ids:
+                position = self.positions.get(position_id)
+                if position is None:
+                    errors.append(f"open_positions[{symbol}] references unknown position {position_id}")
+                elif not position.is_open:
+                    errors.append(f"open_positions[{symbol}] still lists closed position {position_id}")
+                elif position.symbol != symbol:
+                    errors.append(
+                        f"position {position_id} filed under open_positions[{symbol}] "
+                        f"but its symbol is {position.symbol}"
+                    )
+
+        for strategy_id, position_ids in self.strategy_positions.items():
+            for position_id in position_ids:
+                position = self.positions.get(position_id)
+                if position is None:
+                    errors.append(f"strategy_positions[{strategy_id}] references unknown position {position_id}")
+                elif position.strategy_id != strategy_id:
+                    errors.append(
+                        f"position {position_id} filed under strategy_positions[{strategy_id}] "
+                        f"but belongs to {position.strategy_id}"
+                    )
+
+        return {"is_valid": len(errors) == 0, "errors": errors}
+
     async def open_position(
         self,
         strategy_id: str,
@@ -1828,7 +1862,7 @@ class PortfolioManager:
             # ═══════════════════════════════════════════════════════════════════
             # STEP 5.6: EXPOSURE LIMIT CHECK
             # ═══════════════════════════════════════════════════════════════════
-            exposure_check = self._check_exposure_limits(
+            exposure_check = self._check_exposure_limits_locked(
                 strategy_id=strategy_id,
                 symbol=symbol,
                 side=side,
@@ -1917,7 +1951,7 @@ class PortfolioManager:
             
             # Cancel positions if needed
             for cancel in resolution.get("cancellations", []):
-                await self.close_position(
+                await self._close_position_locked(
                     cancel["position_id"],
                     entry_price,  # Use current price for now
                     reason=cancel["reason"],
@@ -1974,109 +2008,129 @@ class PortfolioManager:
     ) -> Optional[Position]:
         """Close an existing position with idempotency check."""
         async with self._lock:
-            if position_id not in self.positions:
-                return None
-            
-            position = self.positions[position_id]
-            
-            if not position.is_open:
-                return position
-            
-            # ═══════════════════════════════════════════════════════════════════
-            # IDEMPOTENCY CHECK: Prevent double PnL from duplicate executions
-            # ═══════════════════════════════════════════════════════════════════
-            if execution_id:
-                if execution_id in self._applied_executions:
-                    logger.warning(
-                        f"PORTFOLIO_IDEMPOTENT_SKIP: execution_id={execution_id} "
-                        f"already applied to portfolio",
-                        extra={
-                            "event": "PORTFOLIO_IDEMPOTENT_SKIP",
-                            "execution_id": execution_id,
-                            "position_id": position_id,
-                            "action": "close_position",
-                        }
-                    )
-                    return position
-                
-                # Track execution_id to prevent future duplicates
-                self._applied_executions.add(execution_id)
-                # Add to position history
-                position.execution_ids.append(execution_id)
-            
-            # Close position
-            position.close(exit_price)
-            
-            # Update allocation
-            if position.strategy_id in self.allocations:
-                allocation = self.allocations[position.strategy_id]
-                released_capital = position.quantity * position.entry_price
-                allocation.used_capital -= released_capital
-                allocation.available_capital += released_capital
-                
-                # Update PnL
-                allocation.total_pnl += position.realized_pnl
-                if position.realized_pnl > 0:
-                    allocation.win_count += 1
-                else:
-                    allocation.loss_count += 1
-            
-            # Update tracking
-            self.open_positions[position.symbol].discard(position_id)
-            
-            logger.info(
-                f"Closed position: {position_id} | "
-                f"PnL: ${position.realized_pnl:,.2f} | Reason: {reason}"
+            return await self._close_position_locked(
+                position_id, exit_price, reason=reason, execution_id=execution_id
             )
-            
-            # STEP 5.7: Record realized PnL in engine
-            self.pnl_engine.record_realized_pnl(
-                position_id=position_id,
-                strategy_id=position.strategy_id,
-                symbol=position.symbol,
-                realized_pnl=position.realized_pnl,
-                close_price=position.exit_price,
-                timestamp=position.exit_time
-            )
-            
-            # STEP 5.9: Log trade for audit trail
-            self.trade_history.log_trade(
-                position_id=position_id,
-                strategy_id=position.strategy_id,
-                symbol=position.symbol,
-                side=position.side,
-                entry_price=position.entry_price,
-                exit_price=position.exit_price,
-                size=position.quantity,
-                realized_pnl=position.realized_pnl,
-                entry_time=position.entry_time,
-                exit_time=position.exit_time,
-                close_reason=reason,
-            )
-            
-            # STEP 5.10: Create snapshot after trade for recovery
-            self.snapshot_system.create_snapshot(trigger_reason="trade")
-            
-            # STEP 5.4: Validate portfolio consistency after trade
-            consistency_result = self.validate_consistency()
-            if not consistency_result["is_valid"]:
-                logger.error(
-                    f"🚨 INCONSISTENCY DETECTED after closing position {position_id}: "
-                    f"{consistency_result['errors']}"
-                )
-            
-            # Notify callbacks
-            for callback in self.position_callbacks:
-                try:
-                    if asyncio.iscoroutinefunction(callback):
-                        await callback(position, "closed")
-                    else:
-                        callback(position, "closed")
-                except Exception as e:
-                    logger.error(f"Position callback error: {e}")
-            
+
+    async def _close_position_locked(
+        self,
+        position_id: str,
+        exit_price: Decimal,
+        reason: str = "manual",
+        execution_id: Optional[str] = None,
+    ) -> Optional[Position]:
+        """Body of close_position for a caller that already holds self._lock.
+
+        PM-01: open_position's own conflict-resolution cancellation step, and
+        MarginMonitor's forced liquidation, both need to close a position while
+        the caller already holds self._lock -- calling `await self.close_position(...)`
+        from there would try to acquire the same lock a second time and hang
+        forever. This stays `async` (unlike the other _locked helpers) because it
+        still needs to await any async position callbacks below.
+        """
+        if position_id not in self.positions:
+            return None
+
+        position = self.positions[position_id]
+
+        if not position.is_open:
             return position
-    
+
+        # ═══════════════════════════════════════════════════════════════════
+        # IDEMPOTENCY CHECK: Prevent double PnL from duplicate executions
+        # ═══════════════════════════════════════════════════════════════════
+        if execution_id:
+            if execution_id in self._applied_executions:
+                logger.warning(
+                    f"PORTFOLIO_IDEMPOTENT_SKIP: execution_id={execution_id} "
+                    f"already applied to portfolio",
+                    extra={
+                        "event": "PORTFOLIO_IDEMPOTENT_SKIP",
+                        "execution_id": execution_id,
+                        "position_id": position_id,
+                        "action": "close_position",
+                    }
+                )
+                return position
+
+            # Track execution_id to prevent future duplicates
+            self._applied_executions.add(execution_id)
+            # Add to position history
+            position.execution_ids.append(execution_id)
+
+        # Close position
+        position.close(exit_price)
+
+        # Update allocation
+        if position.strategy_id in self.allocations:
+            allocation = self.allocations[position.strategy_id]
+            released_capital = position.quantity * position.entry_price
+            allocation.used_capital -= released_capital
+            allocation.available_capital += released_capital
+
+            # Update PnL
+            allocation.total_pnl += position.realized_pnl
+            if position.realized_pnl > 0:
+                allocation.win_count += 1
+            else:
+                allocation.loss_count += 1
+
+        # Update tracking
+        self.open_positions[position.symbol].discard(position_id)
+
+        logger.info(
+            f"Closed position: {position_id} | "
+            f"PnL: ${position.realized_pnl:,.2f} | Reason: {reason}"
+        )
+
+        # STEP 5.7: Record realized PnL in engine
+        self.pnl_engine.record_realized_pnl(
+            position_id=position_id,
+            strategy_id=position.strategy_id,
+            symbol=position.symbol,
+            realized_pnl=position.realized_pnl,
+            close_price=position.exit_price,
+            timestamp=position.exit_time
+        )
+
+        # STEP 5.9: Log trade for audit trail
+        self.trade_history.log_trade(
+            position_id=position_id,
+            strategy_id=position.strategy_id,
+            symbol=position.symbol,
+            side=position.side,
+            entry_price=position.entry_price,
+            exit_price=position.exit_price,
+            size=position.quantity,
+            realized_pnl=position.realized_pnl,
+            entry_time=position.entry_time,
+            exit_time=position.exit_time,
+            close_reason=reason,
+        )
+
+        # STEP 5.10: Create snapshot after trade for recovery
+        self.snapshot_system.create_snapshot(trigger_reason="trade")
+
+        # STEP 5.4: Validate portfolio consistency after trade
+        consistency_result = self.validate_consistency()
+        if not consistency_result["is_valid"]:
+            logger.error(
+                f"🚨 INCONSISTENCY DETECTED after closing position {position_id}: "
+                f"{consistency_result['errors']}"
+            )
+
+        # Notify callbacks
+        for callback in self.position_callbacks:
+            try:
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(position, "closed")
+                else:
+                    callback(position, "closed")
+            except Exception as e:
+                logger.error(f"Position callback error: {e}")
+
+        return position
+
     async def update_prices(self, prices: Dict[str, Decimal]):
         """
         Update market prices and recalculate PnL.
@@ -2088,14 +2142,14 @@ class PortfolioManager:
             # Convert all prices to Decimal
             decimal_prices = {symbol: to_decimal(price) for symbol, price in prices.items()}
             self.current_prices.update(decimal_prices)
-            
+
             timestamp = datetime.now()
-            
+
             for position in self.positions.values():
                 if position.is_open and position.symbol in decimal_prices:
                     # Update position price
                     position.update_price(decimal_prices[position.symbol])
-                    
+
                     # STEP 5.7: Update unrealized PnL in engine
                     self.pnl_engine.update_unrealized_pnl(
                         position_id=position.id,
@@ -2104,19 +2158,26 @@ class PortfolioManager:
                         unrealized_pnl=position.unrealized_pnl,
                         timestamp=timestamp
                     )
-            
-            # STEP 5.8: Check margin health after price update
-            margin_metrics = self.get_margin_metrics()
-            margin_check = self.margin_monitor.check_margin_health(margin_metrics)
-            
-            if margin_check["status"] == "liquidation_risk":
-                logger.critical(
-                    f"🚨 LIQUIDATION PROTECTION ACTIVATED: "
-                    f"{len(margin_check['positions_reduced'])} positions reduced"
-                )
-            
-            # STEP 5.10: Auto-snapshot check for recovery
-            self.snapshot_system.check_auto_snapshot()
+
+        # PM-01: margin health check (and the forced liquidation it may trigger) is
+        # deliberately OUTSIDE the lock above. check_margin_health calls back into
+        # this manager's own get_margin_metrics/close_position, which each acquire
+        # self._lock themselves -- still holding it here would deadlock on the very
+        # first nested acquire. Price updates on open positions are already durably
+        # applied above; this is a sequential follow-up read+action, not something
+        # that must be atomic with it.
+        # STEP 5.8: Check margin health after price update
+        margin_metrics = await self.get_margin_metrics()
+        margin_check = await self.margin_monitor.check_margin_health(margin_metrics)
+
+        if margin_check["status"] == "liquidation_risk":
+            logger.critical(
+                f"🚨 LIQUIDATION PROTECTION ACTIVATED: "
+                f"{len(margin_check['positions_reduced'])} positions reduced"
+            )
+
+        # STEP 5.10: Auto-snapshot check for recovery
+        self.snapshot_system.check_auto_snapshot()
     
     async def _check_exposure_limits(
         self,
@@ -2128,116 +2189,138 @@ class PortfolioManager:
     ) -> Dict[str, Any]:
         """
         STEP 5.6: Check exposure limits before opening a position.
-        
+
         Validates:
         1. Per-position size limits (max_position_size, max_position_notional)
         2. Per-symbol exposure limits (max_symbol_exposure, max_symbol_exposure_pct)
         3. Portfolio-wide limits (max_total_exposure, max_total_exposure_pct, leverage)
-        
+
         Returns:
             Dict with: passes (bool), limit_type, limit_value, requested, current
         """
         async with self._lock:
-            limits = self.exposure_limits
-            new_notional = quantity * entry_price
-            
-            # Calculate current exposures
-            current_symbol_exposure = Decimal('0')
-            for pos_id in self.open_positions.get(symbol, set()):
-                position = self.positions.get(pos_id)
-                if position and position.is_open:
-                    current_symbol_exposure += abs(position.market_value)
-            
-            current_total_exposure = Decimal('0')
-            for position in self.positions.values():
-                if position.is_open:
-                    current_total_exposure += abs(position.market_value)
-            
-            new_total_exposure = current_total_exposure + new_notional
-            new_symbol_exposure = current_symbol_exposure + new_notional
-            
-            # CHECK 1: Per-position limits
-            if limits.max_position_size and quantity > limits.max_position_size:
-                return {
-                    "passes": False,
-                    "limit_type": "max_position_size",
-                    "limit_value": limits.max_position_size,
-                    "requested": quantity,
-                    "current": current_symbol_exposure
-                }
-            
-            if limits.max_position_notional and new_notional > limits.max_position_notional:
-                return {
-                    "passes": False,
-                    "limit_type": "max_position_notional",
-                    "limit_value": limits.max_position_notional,
-                    "requested": new_notional,
-                    "current": current_symbol_exposure
-                }
-            
-            # CHECK 2: Per-symbol limits
-            if limits.max_symbol_exposure and new_symbol_exposure > limits.max_symbol_exposure:
-                return {
-                    "passes": False,
-                    "limit_type": "max_symbol_exposure",
-                    "limit_value": limits.max_symbol_exposure,
-                    "requested": new_symbol_exposure,
-                    "current": current_symbol_exposure
-                }
-            
-            if limits.max_symbol_exposure_pct:
-                max_symbol_value = self.total_capital * (limits.max_symbol_exposure_pct / 100)
-                if new_symbol_exposure > max_symbol_value:
-                    return {
-                        "passes": False,
-                        "limit_type": "max_symbol_exposure_pct",
-                        "limit_value": limits.max_symbol_exposure_pct,
-                        "requested": new_symbol_exposure,
-                        "current": current_symbol_exposure
-                    }
-            
-            # CHECK 3: Portfolio-wide limits
-            if limits.max_total_exposure and new_total_exposure > limits.max_total_exposure:
-                return {
-                    "passes": False,
-                    "limit_type": "max_total_exposure",
-                    "limit_value": limits.max_total_exposure,
-                    "requested": new_total_exposure,
-                    "current": current_total_exposure
-                }
-            
-            if limits.max_total_exposure_pct:
-                max_total_value = self.total_capital * (limits.max_total_exposure_pct / 100)
-                if new_total_exposure > max_total_value:
-                    return {
-                        "passes": False,
-                        "limit_type": "max_total_exposure_pct",
-                        "limit_value": limits.max_total_exposure_pct,
-                        "requested": new_total_exposure,
-                        "current": current_total_exposure
-                    }
-            
-            # CHECK 4: Leverage limits
-            if limits.max_gross_leverage and self.total_capital > 0:
-                new_gross_leverage = new_total_exposure / self.total_capital
-                if new_gross_leverage > limits.max_gross_leverage:
-                    return {
-                        "passes": False,
-                        "limit_type": "max_gross_leverage",
-                        "limit_value": limits.max_gross_leverage,
-                        "requested": new_gross_leverage,
-                        "current": current_total_exposure / self.total_capital if self.total_capital > 0 else Decimal('0')
-                    }
-            
-            # All checks passed
+            return self._check_exposure_limits_locked(
+                strategy_id=strategy_id,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                entry_price=entry_price,
+            )
+
+    def _check_exposure_limits_locked(
+        self,
+        strategy_id: str,
+        symbol: str,
+        side: str,
+        quantity: Decimal,
+        entry_price: Decimal
+    ) -> Dict[str, Any]:
+        """Body of _check_exposure_limits for a caller that already holds self._lock.
+
+        PM-01: open_position already holds self._lock when it needs this check, so
+        it must call this directly rather than `await self._check_exposure_limits(...)`,
+        which would try to acquire the same lock a second time and hang forever.
+        """
+        limits = self.exposure_limits
+        new_notional = quantity * entry_price
+
+        # Calculate current exposures
+        current_symbol_exposure = Decimal('0')
+        for pos_id in self.open_positions.get(symbol, set()):
+            position = self.positions.get(pos_id)
+            if position and position.is_open:
+                current_symbol_exposure += abs(position.market_value)
+
+        current_total_exposure = Decimal('0')
+        for position in self.positions.values():
+            if position.is_open:
+                current_total_exposure += abs(position.market_value)
+
+        new_total_exposure = current_total_exposure + new_notional
+        new_symbol_exposure = current_symbol_exposure + new_notional
+
+        # CHECK 1: Per-position limits
+        if limits.max_position_size and quantity > limits.max_position_size:
             return {
-                "passes": True,
-                "limit_type": None,
-                "limit_value": None,
+                "passes": False,
+                "limit_type": "max_position_size",
+                "limit_value": limits.max_position_size,
+                "requested": quantity,
+                "current": current_symbol_exposure
+            }
+
+        if limits.max_position_notional and new_notional > limits.max_position_notional:
+            return {
+                "passes": False,
+                "limit_type": "max_position_notional",
+                "limit_value": limits.max_position_notional,
                 "requested": new_notional,
                 "current": current_symbol_exposure
             }
-    
+
+        # CHECK 2: Per-symbol limits
+        if limits.max_symbol_exposure and new_symbol_exposure > limits.max_symbol_exposure:
+            return {
+                "passes": False,
+                "limit_type": "max_symbol_exposure",
+                "limit_value": limits.max_symbol_exposure,
+                "requested": new_symbol_exposure,
+                "current": current_symbol_exposure
+            }
+
+        if limits.max_symbol_exposure_pct:
+            max_symbol_value = self.total_capital * (limits.max_symbol_exposure_pct / 100)
+            if new_symbol_exposure > max_symbol_value:
+                return {
+                    "passes": False,
+                    "limit_type": "max_symbol_exposure_pct",
+                    "limit_value": limits.max_symbol_exposure_pct,
+                    "requested": new_symbol_exposure,
+                    "current": current_symbol_exposure
+                }
+
+        # CHECK 3: Portfolio-wide limits
+        if limits.max_total_exposure and new_total_exposure > limits.max_total_exposure:
+            return {
+                "passes": False,
+                "limit_type": "max_total_exposure",
+                "limit_value": limits.max_total_exposure,
+                "requested": new_total_exposure,
+                "current": current_total_exposure
+            }
+
+        if limits.max_total_exposure_pct:
+            max_total_value = self.total_capital * (limits.max_total_exposure_pct / 100)
+            if new_total_exposure > max_total_value:
+                return {
+                    "passes": False,
+                    "limit_type": "max_total_exposure_pct",
+                    "limit_value": limits.max_total_exposure_pct,
+                    "requested": new_total_exposure,
+                    "current": current_total_exposure
+                }
+
+        # CHECK 4: Leverage limits
+        if limits.max_gross_leverage and self.total_capital > 0:
+            new_gross_leverage = new_total_exposure / self.total_capital
+            if new_gross_leverage > limits.max_gross_leverage:
+                return {
+                    "passes": False,
+                    "limit_type": "max_gross_leverage",
+                    "limit_value": limits.max_gross_leverage,
+                    "requested": new_gross_leverage,
+                    "current": current_total_exposure / self.total_capital if self.total_capital > 0 else Decimal('0')
+                }
+
+        # All checks passed
+        return {
+            "passes": True,
+            "limit_type": None,
+            "limit_value": None,
+            "requested": new_notional,
+            "current": current_symbol_exposure
+        }
+
     async def set_exposure_limits(self, limits: ExposureLimits):
         """
         STEP 5.6: Set exposure limits for risk control.
@@ -2257,145 +2340,189 @@ class PortfolioManager:
     async def get_margin_metrics(self) -> MarginMetrics:
         """
         STEP 5.8: Calculate current margin metrics.
-        
+
         Tracks:
         - margin_used: Total margin required for open positions
         - margin_available: Remaining margin capacity
         - margin_level: Equity / Used Margin (safety ratio)
-        
+
         Returns:
             MarginMetrics with current margin status
         """
         async with self._lock:
-            metrics = MarginMetrics()
-            
-            # Calculate total position value (used as proxy for margin required)
-            total_position_value = Decimal('0')
-            for position in self.positions.values():
-                if position.is_open:
-                    total_position_value += abs(position.market_value)
-            
-            # Calculate equity (total capital + unrealized PnL)
-            unrealized_pnl = sum(
-                p.unrealized_pnl for p in self.positions.values() if p.is_open
-            )
-            equity = self.total_capital + unrealized_pnl
-            
-            # Assume 10% margin requirement for simplicity (adjust as needed)
-            margin_required_pct = Decimal('0.10')
-            
-            metrics.margin_used = total_position_value * margin_required_pct
-            metrics.initial_margin_required = metrics.margin_used
-            metrics.maintenance_margin_required = metrics.margin_used * Decimal('0.8')
-            
-            # Available margin
-            metrics.margin_available = equity - metrics.margin_used
-            
-            # Margin utilization percentage
-            if equity > 0:
-                metrics.margin_utilization_pct = metrics.margin_used / equity
-            
-            # Margin level (safety ratio): Equity / Used Margin
-            if metrics.margin_used > 0:
-                metrics.margin_level = equity / metrics.margin_used
-            else:
-                metrics.margin_level = Decimal('999')  # Infinite if no margin used
-            
-            # Status flags
-            metrics.margin_call_warning = metrics.margin_level < Decimal('1.25')
-            metrics.near_liquidation = metrics.margin_level < Decimal('1.10')
-            
-            return metrics
+            return self._get_margin_metrics_locked()
+
+    def _get_margin_metrics_locked(self) -> MarginMetrics:
+        """Body of get_margin_metrics for a caller that already holds self._lock.
+
+        HY/PM-01: asyncio.Lock is not re-entrant -- a caller that already holds
+        self._lock (e.g. get_portfolio_summary, update_prices) must call this
+        directly instead of `await self.get_margin_metrics()`, which would try to
+        acquire the same lock a second time and hang forever.
+        """
+        metrics = MarginMetrics()
+
+        # Calculate total position value (used as proxy for margin required)
+        total_position_value = Decimal('0')
+        for position in self.positions.values():
+            if position.is_open:
+                total_position_value += abs(position.market_value)
+
+        # Calculate equity (total capital + unrealized PnL)
+        unrealized_pnl = sum(
+            p.unrealized_pnl for p in self.positions.values() if p.is_open
+        )
+        equity = self.total_capital + unrealized_pnl
+
+        # Assume 10% margin requirement for simplicity (adjust as needed)
+        margin_required_pct = Decimal('0.10')
+
+        metrics.margin_used = total_position_value * margin_required_pct
+        metrics.initial_margin_required = metrics.margin_used
+        metrics.maintenance_margin_required = metrics.margin_used * Decimal('0.8')
+
+        # Available margin
+        metrics.margin_available = equity - metrics.margin_used
+
+        # Margin utilization percentage
+        if equity > 0:
+            metrics.margin_utilization_pct = metrics.margin_used / equity
+
+        # Margin level (safety ratio): Equity / Used Margin
+        if metrics.margin_used > 0:
+            metrics.margin_level = equity / metrics.margin_used
+        else:
+            metrics.margin_level = Decimal('999')  # Infinite if no margin used
+
+        # Status flags
+        metrics.margin_call_warning = metrics.margin_level < Decimal('1.25')
+        metrics.near_liquidation = metrics.margin_level < Decimal('1.10')
+
+        return metrics
     
     async def get_exposure_metrics(self) -> ExposureMetrics:
         """Calculate current exposure metrics."""
         async with self._lock:
-            metrics = ExposureMetrics()
-            
-            
-            # Calculate required margin
-            total_notional = 0.0
-            for position in self.positions.values():
-                if position.is_open:
-                    total_notional += position.market_value
-            
-            # Assume 10% initial margin, 5% maintenance
-            metrics.initial_margin_required = total_notional * 0.1
-            metrics.maintenance_margin_required = total_notional * 0.05
-            
-            # Current margin usage (simplified)
-            metrics.margin_used = metrics.initial_margin_required
-            metrics.margin_available = self.total_capital - metrics.margin_used
-            
-            if self.total_capital > 0:
-                metrics.margin_utilization_pct = metrics.margin_used / self.total_capital
-            
-            # Margin level
-            if metrics.margin_used > 0:
-                metrics.margin_level = self.total_capital / metrics.margin_used
-            
-            # Warnings
-            metrics.margin_call_warning = metrics.margin_level < metrics.margin_call_threshold
-            metrics.near_liquidation = metrics.margin_level < metrics.liquidation_threshold
-            
-            return metrics
+            return self._get_exposure_metrics_locked()
+
+    def _get_exposure_metrics_locked(self) -> ExposureMetrics:
+        """Body of get_exposure_metrics for a caller that already holds self._lock.
+
+        PM-01: this used to build an ExposureMetrics() instance and then set/read
+        margin-shaped fields on it (margin_used, margin_level, margin_call_threshold,
+        ...) that ExposureMetrics does not declare -- a copy-paste of
+        _get_margin_metrics_locked's logic onto the wrong dataclass. Reading
+        metrics.margin_call_threshold before anything had ever set it raised
+        AttributeError on every call with margin_used <= 0, i.e. on an empty
+        portfolio -- the ordinary starting state. Rewritten to actually populate
+        ExposureMetrics' own declared fields (symbol/strategy exposure, gross/net/
+        long/short exposure, leverage, concentration), which is also the shape
+        get_portfolio_summary and create_snapshot already assume when they read
+        .symbol_exposure / .strategy_exposure / .gross_exposure off the result.
+        """
+        metrics = ExposureMetrics()
+
+        symbol_exposure: Dict[str, Decimal] = {}
+        strategy_exposure: Dict[str, Decimal] = {}
+        long_exposure = Decimal('0')
+        short_exposure = Decimal('0')
+
+        for position in self.positions.values():
+            if not position.is_open:
+                continue
+            notional = abs(position.market_value)
+            symbol_exposure[position.symbol] = symbol_exposure.get(position.symbol, Decimal('0')) + notional
+            strategy_exposure[position.strategy_id] = (
+                strategy_exposure.get(position.strategy_id, Decimal('0')) + notional
+            )
+            if position.side == "long":
+                long_exposure += notional
+            else:
+                short_exposure += notional
+
+        metrics.symbol_exposure = symbol_exposure
+        metrics.strategy_exposure = strategy_exposure
+        metrics.long_exposure = long_exposure
+        metrics.short_exposure = short_exposure
+        metrics.gross_exposure = long_exposure + short_exposure
+        metrics.net_exposure = long_exposure - short_exposure
+
+        if self.total_capital > 0:
+            metrics.gross_leverage = metrics.gross_exposure / self.total_capital
+            metrics.net_leverage = metrics.net_exposure / self.total_capital
+
+        if metrics.gross_exposure > 0:
+            metrics.max_symbol_concentration = max(symbol_exposure.values()) / metrics.gross_exposure
+            metrics.max_strategy_concentration = max(strategy_exposure.values()) / metrics.gross_exposure
+
+        return metrics
     
     async def get_pnl_summary(self) -> PortfolioPnL:
         """
         STEP 5.7: Calculate real-time PnL summary using PnL engine.
-        
+
         Returns accurate real-time performance with:
         - Realized PnL: From closed positions
         - Unrealized PnL: From open positions (updated on price changes)
         - Total PnL: Sum of realized + unrealized
         """
         async with self._lock:
-            summary = PortfolioPnL()
-            
-            # STEP 5.7: Get real-time PnL from engine
-            pnl_state = self.pnl_engine.get_current_pnl_state()
-            
-            # Set portfolio-level PnL
-            summary.total_realized_pnl = Decimal(pnl_state["portfolio"]["realized_pnl"])
-            summary.unrealized_pnl = Decimal(pnl_state["portfolio"]["unrealized_pnl"])
-            summary.total_pnl = Decimal(pnl_state["portfolio"]["total_pnl"])
-            
-            # Set strategy breakdown
-            for strategy_id, pnl_data in pnl_state["by_strategy"].items():
-                strategy_total = Decimal(pnl_data["realized"]) + Decimal(pnl_data["unrealized"])
-                summary.strategy_pnl[strategy_id] = strategy_total
-            
-            # Set symbol breakdown
-            for symbol, pnl_data in pnl_state["by_symbol"].items():
-                symbol_total = Decimal(pnl_data["realized"]) + Decimal(pnl_data["unrealized"])
-                summary.symbol_pnl[symbol] = symbol_total
-            
-            # Calculate percentages
-            if self.total_capital > 0:
-                summary.total_pnl_pct = summary.total_pnl / self.total_capital
-                summary.unrealized_pnl_pct = summary.unrealized_pnl / self.total_capital
-            
-            # Win rate calculation
-            for allocation in self.allocations.values():
-                summary.win_count += allocation.win_count
-                summary.loss_count += allocation.loss_count
-            
-            total_trades = summary.win_count + summary.loss_count
-            if total_trades > 0:
-                summary.win_rate = summary.win_count / total_trades
-            
-            # Update timestamps
-            summary.last_update_time = datetime.now()
-            summary.last_price_update = self.pnl_engine.daily_pnl_reset_time
-            
-            return summary
+            return self._get_pnl_summary_locked()
+
+    def _get_pnl_summary_locked(self) -> PortfolioPnL:
+        """Body of get_pnl_summary for a caller that already holds self._lock."""
+        summary = PortfolioPnL()
+
+        # STEP 5.7: Get real-time PnL from engine
+        pnl_state = self.pnl_engine.get_current_pnl_state()
+
+        # Set portfolio-level PnL
+        summary.total_realized_pnl = Decimal(pnl_state["portfolio"]["realized_pnl"])
+        summary.unrealized_pnl = Decimal(pnl_state["portfolio"]["unrealized_pnl"])
+        summary.total_pnl = Decimal(pnl_state["portfolio"]["total_pnl"])
+
+        # Set strategy breakdown
+        for strategy_id, pnl_data in pnl_state["by_strategy"].items():
+            strategy_total = Decimal(pnl_data["realized"]) + Decimal(pnl_data["unrealized"])
+            summary.strategy_pnl[strategy_id] = strategy_total
+
+        # Set symbol breakdown
+        for symbol, pnl_data in pnl_state["by_symbol"].items():
+            symbol_total = Decimal(pnl_data["realized"]) + Decimal(pnl_data["unrealized"])
+            summary.symbol_pnl[symbol] = symbol_total
+
+        # Calculate percentages
+        if self.total_capital > 0:
+            summary.total_pnl_pct = summary.total_pnl / self.total_capital
+            summary.unrealized_pnl_pct = summary.unrealized_pnl / self.total_capital
+
+        # Win rate calculation
+        for allocation in self.allocations.values():
+            summary.win_count += allocation.win_count
+            summary.loss_count += allocation.loss_count
+
+        total_trades = summary.win_count + summary.loss_count
+        if total_trades > 0:
+            summary.win_rate = summary.win_count / total_trades
+
+        # Update timestamps
+        summary.last_update_time = datetime.now()
+        summary.last_price_update = self.pnl_engine.daily_pnl_reset_time
+
+        return summary
     
     async def get_portfolio_summary(self) -> Dict[str, Any]:
-        """Get complete portfolio summary."""
+        """Get complete portfolio summary.
+
+        PM-01: calls the `_locked` variants directly rather than
+        `await self.get_exposure_metrics()` etc. -- those public methods acquire
+        self._lock themselves, and asyncio.Lock is not re-entrant, so calling them
+        while already holding the lock here would deadlock forever.
+        """
         async with self._lock:
-            exposure_metrics = await self.get_exposure_metrics()
-            margin_metrics = await self.get_margin_metrics()
-            pnl_summary = await self.get_pnl_summary()
+            exposure_metrics = self._get_exposure_metrics_locked()
+            margin_metrics = self._get_margin_metrics_locked()
+            pnl_summary = self._get_pnl_summary_locked()
             return {
                 "total_capital": self.total_capital,
                 "strategies": len(self.allocations),
@@ -2538,7 +2665,7 @@ async def register_strategy_endpoint(request: StrategyRegistrationRequest):
     """Register a strategy with capital allocation."""
     manager = get_portfolio_manager()
     
-    allocation = manager.register_strategy(
+    allocation = await manager.register_strategy(
         strategy_id=request.strategy_id,
         allocation_pct=request.allocation_pct,
         priority=request.priority,
@@ -2596,8 +2723,8 @@ async def close_position_endpoint(position_id: str, request: ClosePositionReques
 async def update_prices_endpoint(request: PriceUpdateRequest):
     """Update market prices."""
     manager = get_portfolio_manager()
-    manager.update_prices(request.prices)
-    
+    await manager.update_prices(request.prices)
+
     return {"updated_symbols": len(request.prices)}
 
 
@@ -2612,7 +2739,7 @@ async def get_portfolio_detailed_summary():
     duplicate route registration with routers/portfolio.py.
     """
     manager = get_portfolio_manager()
-    return manager.get_portfolio_summary()
+    return await manager.get_portfolio_summary()
 
 
 
@@ -2620,14 +2747,14 @@ async def get_portfolio_detailed_summary():
 async def get_exposure_metrics():
     """Get exposure metrics."""
     manager = get_portfolio_manager()
-    return manager.get_exposure_metrics().to_dict()
+    return (await manager.get_exposure_metrics()).to_dict()
 
 
 @router.get("/margin")
 async def get_margin_metrics():
     """Get margin usage metrics."""
     manager = get_portfolio_manager()
-    return manager.get_margin_metrics().to_dict()
+    return (await manager.get_margin_metrics()).to_dict()
 
 
 @router.get("/margin/health")
@@ -2638,8 +2765,8 @@ async def check_margin_health():
     Returns current margin level and any warnings or actions taken.
     """
     manager = get_portfolio_manager()
-    metrics = manager.get_margin_metrics()
-    health = manager.margin_monitor.check_margin_health(metrics)
+    metrics = await manager.get_margin_metrics()
+    health = await manager.margin_monitor.check_margin_health(metrics)
     return health
 
 
@@ -2651,14 +2778,14 @@ async def get_margin_status():
     Includes current metrics, thresholds, and historical data.
     """
     manager = get_portfolio_manager()
-    return manager.margin_monitor.get_margin_status()
+    return await manager.margin_monitor.get_margin_status()
 
 
 @router.get("/pnl")
 async def get_pnl_summary():
     """Get PnL summary."""
     manager = get_portfolio_manager()
-    return manager.get_pnl_summary().to_dict()
+    return (await manager.get_pnl_summary()).to_dict()
 
 
 @router.get("/trades/history")

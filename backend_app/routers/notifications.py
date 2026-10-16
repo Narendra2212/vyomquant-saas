@@ -8,6 +8,7 @@ Enforces multi-tenant data isolation and IDOR protection.
 import asyncio
 import inspect
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -76,11 +77,63 @@ class NotificationSettingsModel(BaseModel):
 
 # ══════════════════════════════════════════════════════════════════════════
 # IN-MEMORY RESILIENT STORAGE FOR DEV / TEST / DB-DECOUPLING
+#
+# HY-04: this used to be a plain, unbounded dict -- one entry retained forever for
+# every notification ever created in this process's lifetime, across every tenant,
+# whether or not it was also durably persisted to Supabase (`list_notifications` and
+# friends below read Supabase FIRST and only fall back to this dict when Supabase has
+# nothing, so a persisted entry's in-memory copy is pure, unbounded-growth dead
+# weight). The idempotency check also scanned every single entry on every single
+# notification created (`for existing_id, existing_data in
+# _in_memory_notifications.items(): ...`), so it got slower as the unbounded dict
+# grew, not just memory-hungry.
+#
+# Fixed with: (1) a hard cap (_MAX_IN_MEMORY_NOTIFICATIONS, env-overridable), evicting
+# the OLDEST entries once exceeded -- plain dicts preserve insertion order (Python
+# 3.7+) and no code here ever re-inserts an existing key, so the first key is reliably
+# the oldest; (2) an O(1) idempotency index (`_idempotency_index`) keyed by
+# `(user_id, idempotency_key)`, replacing the full-dict scan, kept in sync on insert,
+# eviction and delete.
 # ══════════════════════════════════════════════════════════════════════════
 
 _notifications_lock = threading.Lock()
 _in_memory_notifications: Dict[str, Dict[str, Any]] = {}
 _in_memory_settings: Dict[str, Dict[str, Any]] = {}
+
+#: Each entry is a handful of short strings/dicts -- a few hundred bytes -- so 5,000
+#: is a low-single-digit-MB ceiling, not a capacity promise. This is a FALLBACK cache,
+#: not the source of truth (Supabase is, when reachable); the cap exists to turn
+#: unbounded growth into bounded, oldest-first data loss, never into an OOM.
+_MAX_IN_MEMORY_NOTIFICATIONS: int = int(os.environ.get("MAX_IN_MEMORY_NOTIFICATIONS", "5000"))
+
+#: (user_id, idempotency_key) -> notification_id. O(1) replacement for the full-dict
+#: scan the idempotency check used to do on every create.
+_idempotency_index: Dict[tuple, str] = {}
+
+
+def _idempotency_index_key(notif: Dict[str, Any]) -> Optional[tuple]:
+    key = (notif.get("metadata") or {}).get("idempotency_key")
+    if not key:
+        return None
+    return (notif.get("user_id"), key)
+
+
+def _forget_notification_locked(notification_id: str) -> None:
+    """Remove a notification and its idempotency index entry. Caller holds the lock."""
+    notif = _in_memory_notifications.pop(notification_id, None)
+    if notif is None:
+        return
+    idx_key = _idempotency_index_key(notif)
+    if idx_key is not None and _idempotency_index.get(idx_key) == notification_id:
+        del _idempotency_index[idx_key]
+
+
+def _evict_oldest_until_within_capacity_locked() -> None:
+    """Caller holds the lock. Evicts the OLDEST entries (insertion order) until the
+    store is back at or under _MAX_IN_MEMORY_NOTIFICATIONS."""
+    while len(_in_memory_notifications) > _MAX_IN_MEMORY_NOTIFICATIONS:
+        oldest_id = next(iter(_in_memory_notifications))
+        _forget_notification_locked(oldest_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -99,12 +152,9 @@ async def create_notification(
     idempotency_key = (notification.metadata or {}).get("idempotency_key")
     if idempotency_key:
         with _notifications_lock:
-            for existing_id, existing_data in _in_memory_notifications.items():
-                if (
-                    existing_data.get("user_id") == notification.user_id
-                    and existing_data.get("metadata", {}).get("idempotency_key") == idempotency_key
-                ):
-                    return existing_id
+            existing_id = _idempotency_index.get((notification.user_id, idempotency_key))
+            if existing_id is not None and existing_id in _in_memory_notifications:
+                return existing_id
 
     notification_id = f"notif_{uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -138,6 +188,9 @@ async def create_notification(
 
     with _notifications_lock:
         _in_memory_notifications[notification_id] = data
+        if idempotency_key:
+            _idempotency_index[(notification.user_id, idempotency_key)] = notification_id
+        _evict_oldest_until_within_capacity_locked()
 
     # Real-time WebSocket delivery
     if ws_manager:
@@ -365,7 +418,7 @@ async def delete_notification(
             notif = _in_memory_notifications[notification_id]
             if notif.get("user_id") != user_id:
                 raise HTTPException(status_code=404, detail="Notification not found")
-            del _in_memory_notifications[notification_id]
+            _forget_notification_locked(notification_id)
             found = True
 
     if not found:
@@ -395,6 +448,6 @@ async def delete_all_notifications(
     with _notifications_lock:
         keys_to_delete = [k for k, v in _in_memory_notifications.items() if v.get("user_id") == user_id]
         for k in keys_to_delete:
-            del _in_memory_notifications[k]
+            _forget_notification_locked(k)
 
     return {"status": "ok", "message": "All notifications deleted"}

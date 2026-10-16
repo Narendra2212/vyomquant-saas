@@ -50,6 +50,25 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture
+def admin_client():
+    """API-07: /api/system/* and /health/services are gated behind get_admin_user now --
+    this file's own assertions about what they report still need an authenticated admin
+    caller to reach them at all."""
+    from fastapi.testclient import TestClient
+
+    from backend_app.core.dependencies import get_admin_user
+    from backend_app.main import app
+
+    app.dependency_overrides[get_admin_user] = lambda: {
+        "id": "admin-1", "app_metadata": {"role": "admin"},
+    }
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
 def _up(name: str, required: bool = True) -> R.DependencyReport:
     return R.DependencyReport(name, R.UP, required, "reachable")
 
@@ -270,7 +289,7 @@ def test_liveness_does_not_consult_any_dependency():
 # ── 4. no hardcoded HEALTHY remains ───────────────────────────────────────
 
 
-def test_system_readiness_no_longer_returns_hardcoded_healthy(client, monkeypatch):
+def test_system_readiness_no_longer_returns_hardcoded_healthy(admin_client, monkeypatch):
     async def _db_down():
         return R.ReadinessReport(
             ready=False, dependencies=(_down("database"), _up("redis")), checked_at="x")
@@ -278,7 +297,7 @@ def test_system_readiness_no_longer_returns_hardcoded_healthy(client, monkeypatc
     import backend_app.core.readiness as mod
     monkeypatch.setattr(mod, "evaluate_readiness", _db_down)
 
-    resp = client.get("/api/system/readiness")
+    resp = admin_client.get("/api/system/readiness")
 
     assert resp.status_code == 503
     body = resp.json()
@@ -286,7 +305,7 @@ def test_system_readiness_no_longer_returns_hardcoded_healthy(client, monkeypatc
     assert body["dependencies"]["database"]["state"] == R.DOWN
 
 
-def test_system_dependencies_reports_measured_state(client, monkeypatch):
+def test_system_dependencies_reports_measured_state(admin_client, monkeypatch):
     async def _mixed():
         return R.ReadinessReport(
             ready=False,
@@ -298,7 +317,7 @@ def test_system_dependencies_reports_measured_state(client, monkeypatch):
     import backend_app.core.readiness as mod
     monkeypatch.setattr(mod, "evaluate_readiness", _mixed)
 
-    resp = client.get("/api/system/dependencies")
+    resp = admin_client.get("/api/system/dependencies")
 
     # A diagnostic, not a gate: always 200.
     assert resp.status_code == 200
@@ -329,13 +348,13 @@ def test_no_health_endpoint_contains_a_hardcoded_healthy_literal():
         )
 
 
-def test_health_services_admits_it_is_a_boot_snapshot(client):
+def test_health_services_admits_it_is_a_boot_snapshot(admin_client):
     """It is written once at startup and never refreshed.
 
     The fix available without re-architecting four non-WorkerBase services is to stop
     presenting boot state as live state.
     """
-    resp = client.get("/health/services")
+    resp = admin_client.get("/health/services")
 
     assert resp.status_code == 200
     body = resp.json()

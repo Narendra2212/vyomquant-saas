@@ -41,6 +41,7 @@ from backend_app.routers.notifications import (
     create_notification,
     _in_memory_notifications,
     _notifications_lock,
+    _idempotency_index,
 )
 from backend_app.core.notification_dispatcher import dispatch_user_notification
 
@@ -50,9 +51,11 @@ def clean_notifications_state():
     """Ensure clean notification memory state between test runs."""
     with _notifications_lock:
         _in_memory_notifications.clear()
+        _idempotency_index.clear()
     yield
     with _notifications_lock:
         _in_memory_notifications.clear()
+        _idempotency_index.clear()
 
 
 @pytest.mark.asyncio

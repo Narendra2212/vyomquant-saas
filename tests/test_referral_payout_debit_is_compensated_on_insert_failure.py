@@ -149,9 +149,12 @@ def harness(monkeypatch):
         "payout_insert": "ok",
     }
 
-    # The handler takes a 30s Redis lock. Without Redis it already fails open
-    # (lock_acquired = True), but it would first attempt a real connection, so the
-    # manager is replaced outright to keep the test hermetic and fast.
+    # The handler takes a 30s Redis lock. A real connection attempt would make this
+    # test slow and non-hermetic regardless of outcome, so the manager is replaced
+    # outright with a fake whose `set()` always succeeds (REF-01: a lock-acquisition
+    # ERROR now fails CLOSED, not open -- this fake never errors, so that path is not
+    # what this file is testing; see tests/test_ref01_payout_lock_fails_closed.py and
+    # referral.py's own comment at the lock site for that regression's own coverage).
     import backend_app.core.cache as cache_mod
 
     fake_redis = MagicMock()

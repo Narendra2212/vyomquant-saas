@@ -10,7 +10,15 @@ def test_noop_services_report_not_implemented(monkeypatch):
         "pnl_engine": "ACTIVE", "reconciliation_scheduler": "ACTIVE",
         "_captured_at": "2026-01-01T00:00:00+00:00",
     })
-    body = TestClient(main.app).get("/health/services").json()
+    # API-07: /health/services is gated behind get_admin_user now.
+    from backend_app.core.dependencies import get_admin_user
+    main.app.dependency_overrides[get_admin_user] = lambda: {
+        "id": "admin-1", "app_metadata": {"role": "admin"},
+    }
+    try:
+        body = TestClient(main.app).get("/health/services").json()
+    finally:
+        main.app.dependency_overrides.clear()
     assert body["services"]["consistency_checker"] == "NOT_IMPLEMENTED"
     assert body["services"]["reconciliation_scheduler"] == "NOT_IMPLEMENTED"
     assert body["services"]["order_watchdog"] == "ACTIVE"

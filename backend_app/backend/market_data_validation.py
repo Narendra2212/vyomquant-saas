@@ -111,6 +111,7 @@ Validation Pipeline:
 """
 import asyncio
 import logging
+import os
 import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -254,17 +255,38 @@ class DataQualityReport:
         }
 
 
+#: DATA-02: the z-score outlier gate rejects a whole window if ANY single bar exceeds this
+#: many standard deviations -- so for a window of N bars, the probability of at least one
+#: false-positive rises with N even under perfectly well-behaved data (at N=500, a per-point
+#: threshold calibrated for a single comparison at z=3 rejects roughly 3 windows in 4 purely by
+#: chance). Raised from 3.0 to a value that keeps the window-level false-positive rate low
+#: across the window sizes this platform actually requests (per-point P(|Z|>5) ~ 5.7e-7 under a
+#: normal model, so even a 10,000-bar window's overall false-positive probability stays under
+#: 1%). Still env-overridable for a future recalibration against real historical return
+#: distributions (the audit's own remaining ask -- this value is a principled default, not a
+#: result of fitting real market data, which this sandbox has none of).
+Z_SCORE_THRESHOLD_DEFAULT = float(os.environ.get("MARKET_DATA_Z_SCORE_THRESHOLD", "5.0"))
+
+#: DATA-02: the same whole-window-rejects-on-any-point problem applies to the (non-default)
+#: IQR method -- 1.5xIQR is the textbook "mild outlier" boxplot fence, which flags roughly 0.7%
+#: of normally-distributed points, i.e. ~6 points in a 900-bar window on pure chance alone. 3.0 is
+#: the textbook "extreme outlier" fence instead (empirically confirmed, while fixing this
+#: finding, to clear realistic log-return windows across many random draws where 1.5-2.5 did
+#: not). Also env-overridable for the same future-recalibration reason as the z-score threshold.
+IQR_MULTIPLIER_DEFAULT = float(os.environ.get("MARKET_DATA_IQR_MULTIPLIER", "3.0"))
+
+
 @dataclass
 class ValidationConfig:
     """Configuration for data validation."""
     # Quality thresholds
     min_quality_score: float = 70.0
     max_gap_minutes: float = 5.0
-    
+
     # Outlier detection
     outlier_method: OutlierMethod = OutlierMethod.Z_SCORE
-    z_score_threshold: float = 3.0
-    iqr_multiplier: float = 1.5
+    z_score_threshold: float = field(default_factory=lambda: Z_SCORE_THRESHOLD_DEFAULT)
+    iqr_multiplier: float = field(default_factory=lambda: IQR_MULTIPLIER_DEFAULT)
     percent_change_threshold: float = 0.05  # 5%
     
     # Gap handling - HARD GATE: reject gaps instead of interpolating
@@ -439,60 +461,73 @@ class OutlierDetector:
         return df, issues
     
     @classmethod
+    def _log_returns(cls, series: pd.Series) -> pd.Series:
+        """Bar-to-bar log-returns: ``log(x_t / x_{t-1})``.
+
+        DATA-02: price and volume are both non-stationary, multiplicative-by-nature series --
+        they trend/drift (price) or swing across orders of magnitude (volume, which is
+        approximately log-normal) by construction. A z-score or IQR test against the raw
+        LEVEL's own mean/quantiles measures "how far this point is from a mean the trend or the
+        burst itself moved", which has nothing to do with whether any individual bar is actually
+        anomalous -- it rejects ordinary trending price action and ordinary volume bursts as a
+        matter of course. Log-returns are the standard transform that makes both roughly
+        stationary: additive percent-change still leaves volume's heavy right tail fat enough to
+        trip a z-score test on perfectly ordinary bursts (empirically confirmed while fixing this
+        finding), where the log transform does not.
+        """
+        return np.log(series).diff().dropna()
+
+    @classmethod
     def _z_score_filter(cls, df: pd.DataFrame, threshold: float) -> int:
-        """Filter outliers using Z-score."""
-        outlier_count = 0
-        method = "UNKNOWN"
-        symbol = "UNKNOWN"
+        """Filter outliers using Z-score, computed over bar-to-bar log-returns (see
+        :meth:`_log_returns`), not the raw price/volume level."""
         for col in ["close", "volume"]:
             if col not in df.columns:
                 continue
-            
-            series = df[col].dropna()
-            if len(series) < 3:
+
+            returns = cls._log_returns(df[col])
+            if len(returns) < 3:
                 continue
-            
-            z_scores = np.abs(stats.zscore(series))
+
+            z_scores = np.abs(stats.zscore(returns))
             outliers = z_scores > threshold
-            
+
             if outliers.any():
                 raise DataValidationError(
-                    f"Found {len(outliers)} outliers in {col} using {method} "
-                    f"for {symbol}. Dataset rejected - no synthetic data allowed."
+                    f"Found {int(outliers.sum())} outliers in {col} log-returns using z_score "
+                    f"for UNKNOWN. Dataset rejected - no synthetic data allowed."
                 )
-        
-        return int(outlier_count)
-    
+
+        return 0
+
     @classmethod
     def _iqr_filter(cls, df: pd.DataFrame, multiplier: float) -> int:
-        """Filter outliers using IQR method."""
-        outlier_count = 0
-        method = "UNKNOWN"
-        symbol = "UNKNOWN"
+        """Filter outliers using the IQR method, computed over bar-to-bar log-returns (see
+        :meth:`_log_returns`), not the raw price/volume level."""
         for col in ["close", "volume"]:
             if col not in df.columns:
                 continue
-            
-            series = df[col].dropna()
-            if len(series) < 4:
+
+            returns = cls._log_returns(df[col])
+            if len(returns) < 4:
                 continue
-            
-            q1 = series.quantile(0.25)
-            q3 = series.quantile(0.75)
+
+            q1 = returns.quantile(0.25)
+            q3 = returns.quantile(0.75)
             iqr = q3 - q1
-            
+
             lower = q1 - multiplier * iqr
             upper = q3 + multiplier * iqr
-            
-            outliers = (series < lower) | (series > upper)
-            
+
+            outliers = (returns < lower) | (returns > upper)
+
             if outliers.any():
                 raise DataValidationError(
-                    f"Found {len(outliers)} outliers in {col} using {method} "
-                    f"for {symbol}. Dataset rejected - no synthetic data allowed."
+                    f"Found {int(outliers.sum())} outliers in {col} log-returns using iqr "
+                    f"for UNKNOWN. Dataset rejected - no synthetic data allowed."
                 )
-        
-        return int(outlier_count)
+
+        return 0
     
     @classmethod
     def _percent_change_filter(cls, df: pd.DataFrame, threshold: float) -> int:

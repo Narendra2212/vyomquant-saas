@@ -119,11 +119,17 @@ def test_health_comprehensive_endpoint():
 
 
 def test_health_services_endpoint():
-    res = client.get("/health/services")
+    # API-07: /health/services now requires admin auth (previously public).
+    res = client.get("/health/services", headers=get_admin_auth_headers())
     assert res.status_code == 200
     data = res.json()
     assert "status" in data
     assert "services" in data
+
+
+def test_health_services_endpoint_requires_admin():
+    res = client.get("/health/services")
+    assert res.status_code in (401, 403)
 
 
 def test_prometheus_metrics_endpoint():

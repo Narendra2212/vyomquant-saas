@@ -203,7 +203,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search, Users, ArrowRight, Cpu, ArrowLeft, Flame, Trophy, Info, Clock,
 } from 'lucide-react';
@@ -492,6 +492,10 @@ const priceOf = (listing) => {
 
 const StrategyMarketplace = () => {
   const navigate = useNavigate();
+  // MKT-05: `?listing_id=<id>&intent=deploy` opens that Listing's detail directly on mount,
+  // so a subscriber arriving from a "you're subscribed" redirect lands on the deploy form
+  // rather than having to search the catalogue again for the Listing they just paid for.
+  const [searchParams] = useSearchParams();
   const [view, setView] = useState('browse');
 
   // Data states
@@ -517,6 +521,14 @@ const StrategyMarketplace = () => {
   const [notice, setNotice] = useState(null);
   const [cloneLoading, setCloneLoading] = useState(false);
   const [subscribeLoading, setSubscribeLoading] = useState(false);
+
+  // MKT-05: the deploy form's own fields. All three are optional on the request
+  // (routers/library.py's DeployMarketplaceStrategyRequest), so an empty value is sent as
+  // absent rather than coerced into a default this page would be inventing.
+  const [deploySymbol, setDeploySymbol] = useState('');
+  const [deployTimeframe, setDeployTimeframe] = useState('');
+  const [deployCapital, setDeployCapital] = useState('');
+  const [deployLoading, setDeployLoading] = useState(false);
 
   /*
     ── THE ENTITLEMENT GATES ────────────────────────────────────────────────────────────────
@@ -807,6 +819,25 @@ const StrategyMarketplace = () => {
     loadSubscription(selectedListingId);
   }, [listingState, selectedListingId, loadSubscription]);
 
+  /**
+   * MKT-05: `?listing_id=<id>&intent=deploy` opens that Listing on mount.
+   *
+   * Read once, on mount, not re-read on every `searchParams` change: a trader who then
+   * browses elsewhere and comes back to `view === 'browse'` must not be yanked back into
+   * the Listing the URL still names. `listing_id` alone (no `intent`) is deliberately not
+   * enough to trigger this — the open-on-load behaviour is for the deploy hand-off
+   * specifically, not a general "link to any listing" feature this page does not otherwise
+   * have.
+   */
+  useEffect(() => {
+    const listingId = searchParams.get('listing_id');
+    const intent = searchParams.get('intent');
+    if (listingId && intent === 'deploy') {
+      loadDetail(listingId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Clone Flow
   const handleClone = async (strat) => {
     const listingId = strat?.listing_id;
@@ -890,6 +921,39 @@ const StrategyMarketplace = () => {
       notify('error', errorMessage(err, 'Failed to create checkout session.'));
     } finally {
       setSubscribeLoading(false);
+    }
+  };
+
+  // Deploy Flow (MKT-05)
+  //
+  // The subscriber-safe path: `api.library.deploy` binds a new `strategy_deployments` row to
+  // the OWNER's current version without copying its logic. It always runs as PAPER today —
+  // there is no live-trading path for a marketplace Listing in this backend yet, so this
+  // button never risks real capital regardless of what the trader enters below.
+  const handleDeploy = async (strat) => {
+    const listingId = strat?.listing_id;
+    if (!listingId) return;
+    setDeployLoading(true);
+    try {
+      const body = {};
+      if (deploySymbol.trim()) body.symbol = deploySymbol.trim();
+      if (deployTimeframe.trim()) body.timeframe = deployTimeframe.trim();
+      if (deployCapital.trim()) {
+        const capital = Number(deployCapital);
+        if (Number.isFinite(capital) && capital >= 0) body.capital = capital;
+      }
+
+      const result = await api.library.deploy(listingId, body);
+      const message = typeof result?.message === 'string' && result.message
+        ? result.message
+        : 'Deployment created. It runs as a paper session.';
+      notify('success', message);
+      navigate('/app/paper-trading');
+    } catch (err) {
+      console.error(err);
+      notify('error', errorMessage(err, 'Failed to deploy this strategy.'));
+    } finally {
+      setDeployLoading(false);
     }
   };
 
@@ -1386,6 +1450,69 @@ const StrategyMarketplace = () => {
             </div>
 
             {renderSubscriptionIndicator()}
+
+            {/* MKT-05: the deploy form. Only reachable once a subscription is held -- the
+                backend's own `entitlement_resolver.resolve` is the actual gate; this is the
+                one working UI path to reach it, which this finding records had no path at
+                all before. Runs as a PAPER session (routers/library.py hard-codes
+                environment="paper" for this path today), never live. */}
+            {isSubscribed && (
+              <div
+                className="flex flex-col gap-3 pt-6 border-t border-line-default"
+                data-testid="deploy-panel"
+              >
+                <SectionHeader
+                  level={3}
+                  title="Deploy this strategy"
+                  subtitle="Runs as a paper session against the owner's current version. Every field below is optional."
+                />
+                <div className="flex flex-wrap gap-3">
+                  <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                    Symbol
+                    <input
+                      type="text"
+                      value={deploySymbol}
+                      onChange={(e) => setDeploySymbol(e.target.value)}
+                      placeholder="BTC/USDT"
+                      disabled={deployLoading}
+                      className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                    Timeframe
+                    <input
+                      type="text"
+                      value={deployTimeframe}
+                      onChange={(e) => setDeployTimeframe(e.target.value)}
+                      placeholder="1h"
+                      disabled={deployLoading}
+                      className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                    Capital
+                    <input
+                      type="number"
+                      min="0"
+                      value={deployCapital}
+                      onChange={(e) => setDeployCapital(e.target.value)}
+                      placeholder="10000"
+                      disabled={deployLoading}
+                      className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                    />
+                  </label>
+                </div>
+                <CommandButton
+                  intent="primary"
+                  icon={ArrowRight}
+                  loading={deployLoading}
+                  loadingLabel="Deploying"
+                  onClick={() => handleDeploy(strat)}
+                >
+                  Deploy
+                </CommandButton>
+              </div>
+            )}
 
             {/* Owner-supplied description, rendered as a text child */}
             <div className="text-body text-content-primary leading-relaxed max-w-4xl whitespace-pre-line">
