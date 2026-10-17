@@ -55,11 +55,17 @@ resource "aws_security_group" "redis" {
     security_groups = [data.aws_security_group.ecs_tasks.id]
   }
 
+  # CI-05: was open to 0.0.0.0/0. A managed ElastiCache node has no legitimate reason to
+  # originate a connection to the public internet; restricted to the real existing VPC's
+  # own CIDR (10.0.0.0/16, matching this file's own data "aws_subnet" blocks above:
+  # 10.0.128.0/20 and 10.0.144.0/20 both fall within it) -- intra-VPC only, which still
+  # covers anything AWS's own managed replication/backup machinery needs.
   egress {
+    description = "Intra-VPC only"
     protocol    = "-1"
     from_port   = 0
     to_port     = 0
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["10.0.0.0/16"]
   }
 }
 

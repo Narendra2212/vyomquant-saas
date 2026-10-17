@@ -1,0 +1,13 @@
+# CI-05: aws_security_group.ecs_tasks' egress is open to 0.0.0.0/0 (security_groups.tf),
+# and is deliberately NOT narrowed. ECS tasks need to reach Supabase, the payment providers
+# (Razorpay/Stripe) and every exchange ccxt talks to -- all at IP ranges this account does
+# not control and cannot practically enumerate by CIDR. Narrowing this blind risks silently
+# breaking live production connectivity, which this remediation effort has consistently
+# avoided elsewhere (see INF-02, SEC-17) by designing against real evidence rather than
+# guessing. Reviewed and explicitly accepted rather than left as an undocumented failure;
+# revisit if/when real VPC Flow Log data makes a precise destination list possible.
+#
+# The other three security groups this same check used to flag (alb, and both redis
+# groups, in security_groups.tf and redis-only/main.tf) are fixed for real, not ignored --
+# see their own inline comments.
+AWS-0104

@@ -35,11 +35,18 @@ resource "aws_security_group" "alb" {
     prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
   }
 
+  # CI-05: was open to 0.0.0.0/0. An ALB's only legitimate egress target is the backend it
+  # forwards requests to and returns responses from, which lives inside this VPC -- it has
+  # no reason to originate a connection anywhere else. Restricted to the VPC's own CIDR
+  # rather than ecs_tasks' security group specifically: that group's own ingress already
+  # references this ALB's security group (line below), so referencing it back here would
+  # create a circular resource dependency terraform plan refuses outright.
   egress {
+    description = "To backends inside this VPC"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.vpc_cidr]
   }
 }
 
@@ -69,6 +76,11 @@ resource "aws_security_group" "ecs_tasks" {
     self        = true
   }
 
+  # CI-05: was open to 0.0.0.0/0. ECS tasks genuinely need broad internet egress --
+  # Supabase, the payment providers (Razorpay/Stripe) and every exchange ccxt talks to are
+  # all at IP ranges this account does not control and cannot practically enumerate -- so
+  # this one is not narrowed here. See terraform/.trivyignore for the explicit, reviewed
+  # exception this is accepted under, rather than leaving an undocumented CRITICAL finding.
   egress {
     protocol    = "-1"
     from_port   = 0
@@ -90,10 +102,15 @@ resource "aws_security_group" "redis" {
     security_groups = [aws_security_group.ecs_tasks.id]
   }
 
+  # CI-05: was open to 0.0.0.0/0. A managed ElastiCache node has no legitimate reason to
+  # originate a connection to the public internet; restricted to this VPC's own CIDR
+  # (intra-VPC only), which still covers anything AWS's own managed replication/backup
+  # machinery needs without opening a path to anywhere on the internet.
   egress {
+    description = "Intra-VPC only"
     protocol    = "-1"
     from_port   = 0
     to_port     = 0
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.vpc_cidr]
   }
 }
