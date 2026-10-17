@@ -181,7 +181,7 @@ def main():
         "backend_app/backend/dag_worker.py",
         "backend_app/backend/master_executor.py",
         "backend_app/workers/command_worker.py",
-        "backend_app/tee/main.py",
+        # backend_app/tee/main.py deleted (RT-23): confirmed-dead code, never deployed.
         "backend_app/mds/main.py"
     ]
     

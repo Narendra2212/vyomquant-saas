@@ -276,7 +276,6 @@ def _start_bot_calls(path: Path) -> List[ast.Call]:
     ]
 
 
-TEE_MAIN = REPO_ROOT / "backend_app" / "tee" / "main.py"
 COMMAND_WORKER = REPO_ROOT / "backend_app" / "workers" / "command_worker.py"
 
 #: Every module that starts a bot. Enumerated so a NEW one has to be added here, which is
@@ -292,7 +291,13 @@ COMMAND_WORKER = REPO_ROOT / "backend_app" / "workers" / "command_worker.py"
 #: its deploy and resume handlers delegate to `StrategyService.deploy_version`, whose own call
 #: site is covered here. tests/test_rt03_legacy_deploy_route_uses_canonical_deploy.py pins that
 #: it stays that way.
-CALL_SITE_FILES = (STRATEGY_SERVICE, TEE_MAIN, COMMAND_WORKER)
+#:
+#: RT-23: `tee/main.py` is no longer in this list either -- it was deleted as confirmed-dead
+#: code (crashed on import, never actually deployed per real AWS evidence; see its own
+#: ledger entry and tests/test_ml_node_detection_is_one_vocabulary.py::
+#: TestTheTeeGateIsUnreachable). It is no longer a start_bot call site to guard because it no
+#: longer exists at all.
+CALL_SITE_FILES = (STRATEGY_SERVICE, COMMAND_WORKER)
 
 
 @pytest.mark.parametrize("path", CALL_SITE_FILES, ids=lambda p: p.name)
@@ -357,13 +362,17 @@ def test_deploy_version_derives_the_mode_from_the_binding():
         )
 
 
-@pytest.mark.parametrize("path", (TEE_MAIN, COMMAND_WORKER), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", (COMMAND_WORKER,), ids=lambda p: p.name)
 def test_the_command_driven_paths_take_the_mode_from_the_command(path: Path):
     """A published ``start_bot`` command must carry its own mode, and be refused without it.
 
-    These two consume a Redis command rather than resolving a binding, so the mode has to
-    travel in the payload. What they must NOT do is read it with a default — that is
+    This consumes a Redis command rather than resolving a binding, so the mode has to
+    travel in the payload. What it must NOT do is read it with a default — that is
     precisely the shape of the original defect, one layer out.
+
+    RT-23: this used to also cover tee/main.py, a second command-driven start_bot call
+    site. That module is deleted as confirmed-dead code (see CALL_SITE_FILES' own
+    comment above) -- command_worker.py remains the one live consumer of this queue.
     """
     source = path.read_text(encoding="utf-8", errors="replace")
     calls = _start_bot_calls(path)

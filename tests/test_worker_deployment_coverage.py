@@ -67,11 +67,14 @@ KNOWN_UNHOSTED = {
     "ReconciliationWorker": (
         "Instantiated as a module-level singleton (reconciliation_worker.py line 779) "
         "and exposed via get_reconciliation_worker(), but that accessor is never "
-        "called outside tests and scripts and .start() is never invoked. Most likely "
-        "superseded by backend_app/tee/main.py's own reconciler_loop(), which does run "
-        "under the tee ECS service - the README describes a consolidation that removed "
-        "duplicated execution engines. Confirm it is genuinely orphaned, then delete "
-        "it; an unhosted reconciler that looks live is worse than no reconciler."
+        "called outside tests and scripts and .start() is never invoked. This entry "
+        "used to hypothesise it was superseded by backend_app/tee/main.py's own "
+        "reconciler_loop(), 'which does run under the tee ECS service' - RT-23 "
+        "confirmed via real AWS evidence that no ECS service for tee ever actually "
+        "existed, so that premise was wrong, and tee/main.py is now deleted as "
+        "confirmed-dead code regardless. ReconciliationWorker's own orphaned status is "
+        "unaffected by that correction and remains to be confirmed before deleting it; "
+        "an unhosted reconciler that looks live is worse than no reconciler."
     ),
 }
 

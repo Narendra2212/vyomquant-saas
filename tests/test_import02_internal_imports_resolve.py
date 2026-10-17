@@ -15,9 +15,13 @@ from unittest.mock import AsyncMock, MagicMock
 ROOT = Path(__file__).resolve().parents[1]
 
 # Known, tracked offenders - do not add to this set; fix the import instead.
+#
+# IMPORT-01's own entry (backend_app/tee/main.py -> backend_app.core.fleet_manager) is
+# removed, not fixed in the usual sense: RT-23 deleted tee/main.py as confirmed-dead
+# code rather than supplying the missing fleet_manager target. The import no longer
+# exists to be broken.
 KNOWN_BROKEN = {
     ("backend_app/backend/position_engine.py", "backend_app.core.models.trade_history"),  # IMPORT-03
-    ("backend_app/tee/main.py", "backend_app.core.fleet_manager"),                          # IMPORT-01
 }
 
 
