@@ -445,6 +445,20 @@ jobs:
           pip install -r requirements-dev.txt
           pip install pytest pytest-asyncio
 
+      # `auth.users`/`auth.uid()` are Supabase platform tables this job's bare
+      # postgres:17-alpine container does not have. None of this repo's alembic
+      # revisions create them -- in real Supabase they already exist -- but
+      # `tests/test_atomic_order_cancellation_fix.py`'s `_seeded_tenant` fixture (and
+      # `profiles`'s own FK to `auth.users`) needs them before any INSERT. Using
+      # `--only-substrate` here (rather than the Provisioning job's full
+      # `--create-substrate` run) creates exactly that shim and nothing else -- it does
+      # not touch this job's own target revision below, which deliberately stops at the
+      # branchpoint rather than going to head.
+      - name: Create auth substrate (auth.users, auth.uid())
+        run: |
+          python scripts/provision_database.py \
+            --dsn "$DATABASE_URL" --apply --create-substrate --only-substrate
+
       # `backend_app/alembic/env.py` reads DATABASE_URL from the environment and feeds it
       # to `sqlalchemy.url`, so no ini edit is needed. Stops at the branchpoint -- see the
       # block comment above for why `head` is not reachable on an empty database.

@@ -507,6 +507,10 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="execute (default is dry run)")
     ap.add_argument("--create-substrate", action="store_true",
                     help="create the Supabase-like roles and auth.uid(); non-Supabase targets only")
+    ap.add_argument("--only-substrate", action="store_true",
+                    help="apply --create-substrate and stop; skip steps 0/0b/1/3/4 and alembic. "
+                         "For a job that provisions its own schema (e.g. a specific alembic "
+                         "revision) and only needs auth.users/auth.uid() to exist first.")
     ap.add_argument("--skip-alembic", action="store_true")
     ap.add_argument("--i-understand-this-is-remote", action="store_true")
     args = ap.parse_args()
@@ -549,6 +553,12 @@ def main() -> int:
         else:
             print("  would apply")
         print()
+
+    if args.only_substrate:
+        if not args.create_substrate:
+            _refuse("--only-substrate without --create-substrate would do nothing.")
+        print("--only-substrate: stopping here (steps 0/0b/1/3/4 and alembic not run).")
+        return 0
 
     with conn.cursor() as cur:
         already = _applied(cur)
