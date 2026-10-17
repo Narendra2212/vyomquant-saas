@@ -11,3 +11,18 @@
 # groups, in security_groups.tf and redis-only/main.tf) are fixed for real, not ignored --
 # see their own inline comments.
 AWS-0104
+
+# CI-05 / SEC-17: alb.tf's aws_lb_listener.http has no HTTPS counterpart when
+# enable_custom_domain=false (the default). This is NOT an unexamined gap: the resource's
+# own lifecycle.precondition already refuses to apply at all in a prod/production
+# environment unless enable_custom_domain=true, specifically so this exact scenario cannot
+# reach a real production apply by accident (see alb.tf's own SC-7 comment). SEC-17's own
+# ledger entry already investigated the real, currently-deployed ALB in depth: it has no
+# HTTPS listener either, CloudFront terminates TLS at the edge for all real traffic, and
+# SEC-17's own fix already restricted the ALB's security group so only CloudFront's edge
+# network can reach it directly -- the plaintext CloudFront-to-origin hop this finding is
+# ultimately about is the specific, already-identified residual SEC-17's own text names
+# ("leaves CloudFront-to-origin traffic as HTTP... until that deeper fix lands"). The real
+# fix needs an actual domain name and ACM certificate, a business/ops decision this
+# repository cannot make for itself. Reviewed and explicitly accepted, not silently ignored.
+AWS-0054
