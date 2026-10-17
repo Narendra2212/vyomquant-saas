@@ -35,7 +35,17 @@ resource "aws_ecs_task_definition" "api" {
         }
       ]
       environment = [
-        { name = "ENV", value = var.environment }
+        { name = "ENV", value = var.environment },
+        # BILL-02: confirmed via real AWS access (CloudFront distribution EEOXECPHQ8SR0 has
+        # an ALB origin with /api/*, /ws/*, /health*, /metrics*, /openapi.json cache behaviors
+        # forwarding to this service) that production sits behind CloudFront + this ALB, two
+        # appending proxies -- and confirmed the real running task definition (vyomquant-api:214)
+        # already carries TRUSTED_PROXY_HOPS=2, not the code's own fail-safe default of 1.
+        # Declared here so a future terraform-driven redeploy of this task definition cannot
+        # silently drop back to the default and start misattributing/rejecting every genuine
+        # Stripe/Razorpay webhook. See backend_app/routers/billing.py's own
+        # _TRUSTED_PROXY_HOPS_DEFAULT comment and this finding's ledger entry for the evidence.
+        { name = "TRUSTED_PROXY_HOPS", value = "2" }
       ]
       secrets = [
         {
