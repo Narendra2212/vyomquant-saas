@@ -1815,6 +1815,19 @@
       "verification_level": "production CI (real GitHub Actions job logs, run 39051999222)",
       "production_verified": false,
       "remaining_action": "Triage each failure cluster separately: (1) confirm whether test_single_execution_pipeline.py's 3 failures and test_simulated_orders_reach_the_simulator.py's 2 failures share the same missing-execution_records-table root cause as CI-08, fixable the same way; (2) root-cause the venue-boundary status-label mismatch in test_trade04_live_order_gate_at_venue_boundary.py -- this touches RT-15/RT-21's already-closed live-trading gating work, so confirm it is not a regression; (3) determine whether the 'Name or service not known' 500s are a genuine missing-error-handling defect (the route should catch a DNS failure and answer 502/503, not 500) or an artifact of this CI runner having no network route to whatever host is being resolved; (4) root-cause why the real-Redis cache manager's `set` returns False in test_webhook_duplicate_delivery_real_redis.py -- check the captured warning log per the test's own failure message. This PR gates DEPLOY-02 the same as CI-05..CI-08 did, since 01-pr-check.yml's overall conclusion is what 03-deploy.yml's require_tests_passed.py checks."
+    },
+    {
+      "id": "CI-10",
+      "priority": "P1",
+      "severity": "High",
+      "component": "CI/CD",
+      "title": "staging/provisioning_snapshot.json (the schema-drift baseline) was stale against legitimate schema additions from this remediation effort, blocking the Provisioning job for the first time it ever reached that step",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "dc69259",
+      "evidence": "Real GitHub Actions run on main (39057184692, job 117468091105, commit 8ed9467 -- PR #26's merge): 'Fail on schema drift from the committed baseline' step (scripts/verify_schema_drift.py) printed RESULT: DRIFTED. The DRIFT section's own 'NOT IN this repository' / 'MISSING from the database' rows were all additions this remediation effort legitimately made but never re-baselined: the payment_methods_app_select/payment_methods_app_delete policies (TENANT-01, migration 047), trg_guard_profiles_platform_columns (SEC-07), append-only triggers on order_audit_log/signal_audit_log/trade_history, bot_ownership_claims/fee_records/referral_obligations policies, and related privilege grants. None of this had ever been caught before because the Provisioning job could not reach this step until CI-05/CI-06/CI-07 unblocked the jobs ahead of it in the same run -- this is the same 'first real execution surfaces an invisible gap' pattern as CI-08/CI-09, in the baseline-bookkeeping layer rather than application code. Regenerated the baseline the way the script itself intends -- `python scripts/verify_provisioning.py`, not a hand edit of the JSON -- against a real throwaway local Postgres instance (pgserver), reproducing the full real flow: provision an empty database from repository source twice and compare. Both runs matched on all 16 compared dimensions (tables=94, fks=123, policies=197, functions=45, triggers=71), confirming the provisioning process is still idempotent. As a second, independent check (not part of the regeneration script itself), ran scripts/verify_schema_drift.py's own comparison logic against a THIRD fresh database and the new baseline: RESULT: NO DRIFT.",
+      "verification_level": "root-caused against a real GitHub Actions job log; regenerated and re-verified locally via a throwaway Postgres instance through the repository's own provisioning + drift-check scripts (not hand-edited); not yet re-confirmed on a real CI run",
+      "production_verified": false,
+      "remaining_action": "Get this pushed and merged alongside CI-08/CI-09, then confirm on the next real CI run that the Provisioning job's schema-drift step reports NO DRIFT."
     }
   ]
 }
