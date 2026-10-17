@@ -60,3 +60,48 @@ def test_the_failure_message_names_every_unprotected_table(capsys):
     assert "leaky_table" in out
     assert "also_leaky" in out
     assert "FAILED" in out
+
+
+# ---------------------------------------------------------------------------
+# DB-04: partition_privileged_tables, the allowlist filter this check needed before it
+# could be wired into CI without failing on plans/plan_features/plan_limits/
+# plan_prices/plan_migration_mapping -- public pricing-catalog data with no customer
+# identity, which 999_privilege_hardening.sql's own narrower backstop already
+# correctly leaves unflagged.
+# ---------------------------------------------------------------------------
+
+def test_an_allowlisted_table_is_set_aside_not_checked():
+    mod = _load()
+    rows = [("plans", False), ("profiles", True)]
+    checked, allowlisted = mod.partition_privileged_tables(rows)
+    assert checked == [("profiles", True)]
+    assert allowlisted == [("plans", False)]
+
+
+def test_an_allowlisted_table_without_rls_does_not_fail_the_check():
+    """The actual bug this fix closes: before this, running the script at all against
+    a real, fully-provisioned database failed on exactly this table set."""
+    mod = _load()
+    rows = [(name, False) for name in sorted(mod.PUBLIC_CATALOG_TABLES)]
+    checked, allowlisted = mod.partition_privileged_tables(rows)
+    assert checked == []
+    assert mod.evaluate_privilege_hardening(checked) is True
+
+
+def test_a_non_allowlisted_table_without_rls_still_fails_even_alongside_allowlisted_ones():
+    """The allowlist narrows what is checked; it must not widen what passes. A real
+    customer table slipping in beside the catalog tables must still fail."""
+    mod = _load()
+    rows = [("plans", False), ("new_customer_table", False)]
+    checked, allowlisted = mod.partition_privileged_tables(rows)
+    assert mod.evaluate_privilege_hardening(checked) is False
+
+
+def test_the_allowlist_is_exactly_the_five_known_public_catalog_tables():
+    """Pins the set itself, so a silent addition (or removal) is a visible diff, not a
+    behaviour change nobody reviewed -- adding a table here is a product decision per
+    this module's own comment, not something that should drift unnoticed."""
+    mod = _load()
+    assert mod.PUBLIC_CATALOG_TABLES == frozenset({
+        "plans", "plan_features", "plan_limits", "plan_prices", "plan_migration_mapping",
+    })
