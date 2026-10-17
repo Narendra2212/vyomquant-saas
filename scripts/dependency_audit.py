@@ -161,7 +161,6 @@ LOCAL_BACKEND_MODULES = {
     'state_persistence',
     'dashboard_aggregation_service',
     'websocket_manager',
-    'ws_server',
     'metrics_exporter',
     'health_checks',
     'trading_worker',

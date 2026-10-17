@@ -1699,6 +1699,15 @@ class DAGEventLoop:
         # for any other consumer this spec does not cover. 23.7 retires the
         # channel for THIS traffic, not the channel.
         #
+        # WS-01 (launch-readiness remediation) surveyed that "any other consumer"
+        # for the half of it that was ever actually deployed: ``ws_server.py``, the
+        # dedicated service that fanned ``EventPublisher``'s Redis publish back out
+        # to a client. Confirmed dead (zero production callers, no frontend ever
+        # pointed at it) and deleted. ``EventPublisher`` itself is kept, unused in
+        # production, purely because this method's own regression suite
+        # (test_task_14_3_legacy_broadcast_retired.py) still verifies this method
+        # never calls back into it.
+        #
         # NOTHING IS PUBLISHED IN ITS PLACE HERE. This is the LEGACY emission
         # branch - the one ``attach_signal_path`` bypasses entirely - and it
         # holds no deployment identity, so it has no ``signal.{deployment_id}``

@@ -391,6 +391,62 @@ jobs:
             --query "Distribution.Status" \
             --output text
       # ════════════════════════════════════════════════════════════════════
+      #  CI-03: FE/BE VERSION-MATCH IS REPORTED, NOT JUST MADE POSSIBLE
+      # ════════════════════════════════════════════════════════════════════
+      #
+      # WHY THIS STEP EXISTS. The backend already exposes GET /api/release.json
+      # ({"sha", "built_at"} baked in at image build time) and this workflow already stamps
+      # dist/release.json with the exact same shape -- so "does the deployed frontend match
+      # the deployed backend" has been ANSWERABLE since backend_app/main.py's release.json
+      # endpoints were added, but nothing ever asked the question. This step asks it, every
+      # deploy, and makes the answer visible in the log.
+      #
+      # NON-BLOCKING, DELIBERATELY. 02/03 (API) and 06 (this workflow) are two fully
+      # independent deploy pipelines by design -- a frontend-only change (copy, styling, a
+      # client-side fix) has no reason to wait on a backend deploy, and vice versa. Failing
+      # this build on every SHA mismatch would effectively force every frontend deploy to
+      # trail the backend's, which is not what CI-03 asked for (the finding was "no GATE on
+      # an untested frontend", already closed by the test-passed requirement above -- not
+      # "frontend and backend must always carry the same commit"). So a mismatch is reported
+      # loudly, not failed on: this is the alerting signal the prior pass's remaining_action
+      # named, not a merge of the two pipelines.
+      #
+      # /api/release.json, NOT /release.json. The real CloudFront distribution only proxies
+      # /api/*, /ws/*, /health*, /metrics* and /openapi.json to the ALB origin; a bare
+      # /release.json falls through to the default S3 behaviour and returns THIS SAME
+      # deploy's own dist/release.json, which would make the comparison vacuously pass
+      # against itself regardless of what the backend is actually running. /api/release.json
+      # is the one path this step can use.
+      - name: Compare deployed frontend and backend versions
+        run: |
+          echo "=== FE/BE release provenance ==="
+
+          FE_SHA=$(python3 -c "import json;print(json.load(open('algo22-terminal/dist/release.json'))['sha'])" 2>/dev/null || echo "<unreadable>")
+          echo "Frontend (this deploy)    : sha=$FE_SHA"
+
+          BE_RELEASE=$(curl -sS --max-time 15 "https://app.vyomquant.in/api/release.json" || echo "")
+          if [ -z "$BE_RELEASE" ]; then
+            echo "Backend (currently live)  : <unreachable - could not fetch /api/release.json>"
+            echo "⚠️  Could not compare - the backend's release endpoint did not respond."
+            echo "    Not failing the deploy on this alone: a transient network blip here"
+            echo "    should not block a frontend-only release."
+            exit 0
+          fi
+
+          BE_SHA=$(echo "$BE_RELEASE" | python3 -c "import json,sys;print(json.load(sys.stdin).get('sha','<missing>'))" 2>/dev/null || echo "<unparseable>")
+          echo "Backend (currently live)  : sha=$BE_SHA"
+          echo ""
+
+          if [ "$FE_SHA" = "$BE_SHA" ]; then
+            echo "✅ Frontend and backend are running the same commit."
+          else
+            echo "ℹ️  Frontend and backend are on DIFFERENT commits ($FE_SHA vs $BE_SHA)."
+            echo "    This is expected when only one side has a change to ship -- 02/03 and"
+            echo "    06 deploy independently by design. Not a failure; a visibility signal"
+            echo "    for whoever is debugging a behaviour that depends on both sides"
+            echo "    agreeing (e.g. a new API field the UI expects)."
+          fi
+      # ════════════════════════════════════════════════════════════════════
       #  THE WEBSOCKET HANDSHAKE IS EXERCISED, NOT ASSUMED
       # ════════════════════════════════════════════════════════════════════
       #

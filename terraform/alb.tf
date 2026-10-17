@@ -180,35 +180,12 @@ resource "aws_lb_listener_rule" "api_rule" {
   }
 }
 
-resource "aws_lb_target_group" "websocket" {
-  name        = "vyomquant-ws-tg-${var.environment}"
-  port        = 8002
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
-  target_type = "ip"
-
-  health_check {
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
-    timeout             = 5
-    interval            = 30
-    path                = "/health/live"
-    matcher             = "200"
-  }
-}
-
-resource "aws_lb_listener_rule" "websocket_rule" {
-  listener_arn = var.enable_custom_domain ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn
-  priority     = 90
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.websocket.arn
-  }
-
-  condition {
-    path_pattern {
-      values = ["/ws/*"]
-    }
-  }
-}
+# WS-01: the dedicated websocket service (ws_server.py), its Dockerfile, and the terraform
+# resources that would have run it as a live AWS service (this target group + listener rule,
+# and ecs.tf's aws_ecs_task_definition.websocket/aws_ecs_service.websocket) are removed.
+# Confirmed via real AWS access (not guessed): DescribeTargetGroups/DescribeListeners on the
+# real vyomquant-alb show only vyomquant-api-tg and vyomquant-web-tg -- no websocket target
+# group or /ws/* listener rule has ever been applied, so nothing here could have had live
+# traffic. The real realtime path is api_ws/ws_manager.py's ConnectionManager, in-process
+# inside the API service; CloudFront's own /ws/* cache behavior already forwards to the API
+# target group via the ALB's default action, which is what actually serves it today.

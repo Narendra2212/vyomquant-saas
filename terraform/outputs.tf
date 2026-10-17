@@ -33,11 +33,6 @@ output "api_endpoint" {
   value       = var.enable_custom_domain ? "https://${var.domain_name}/api" : "http://${aws_lb.main.dns_name}/api"
 }
 
-output "websocket_endpoint" {
-  description = "The endpoint for WebSockets"
-  value       = var.enable_custom_domain ? "wss://${var.domain_name}/ws" : "ws://${aws_lb.main.dns_name}/ws"
-}
-
 output "alerts_topic_arn" {
   description = "OPS-01: SNS topic that every production alarm notifies. Subscribe a pager / chat integration here."
   value       = aws_sns_topic.alerts.arn

@@ -35,7 +35,17 @@ resource "aws_ecs_task_definition" "api" {
         }
       ]
       environment = [
-        { name = "ENV", value = var.environment }
+        { name = "ENV", value = var.environment },
+        # BILL-02: confirmed via real AWS access (CloudFront distribution EEOXECPHQ8SR0 has
+        # an ALB origin with /api/*, /ws/*, /health*, /metrics*, /openapi.json cache behaviors
+        # forwarding to this service) that production sits behind CloudFront + this ALB, two
+        # appending proxies -- and confirmed the real running task definition (vyomquant-api:214)
+        # already carries TRUSTED_PROXY_HOPS=2, not the code's own fail-safe default of 1.
+        # Declared here so a future terraform-driven redeploy of this task definition cannot
+        # silently drop back to the default and start misattributing/rejecting every genuine
+        # Stripe/Razorpay webhook. See backend_app/routers/billing.py's own
+        # _TRUSTED_PROXY_HOPS_DEFAULT comment and this finding's ledger entry for the evidence.
+        { name = "TRUSTED_PROXY_HOPS", value = "2" }
       ]
       secrets = [
         {
@@ -268,99 +278,9 @@ resource "aws_ecs_service" "mds" {
   }
 }
 
-# WebSocket Task
-resource "aws_ecs_task_definition" "websocket" {
-  family                   = "vyomquant-websocket-${var.environment}"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = 512
-  memory                   = 1024
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn
-
-  container_definitions = jsonencode([
-    {
-      name      = "websocket"
-      image     = "vyomquant-websocket:latest" # ECR URL goes here
-      essential = true
-      portMappings = [
-        {
-          containerPort = 8002
-          hostPort      = 8002
-          protocol      = "tcp"
-        }
-      ]
-      environment = [
-        { name = "ENV", value = var.environment }
-      ]
-      secrets = [
-        {
-          name      = "DATABASE_URL"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/database_url"
-        },
-        {
-          name      = "SUPABASE_SERVICE_ROLE_KEY"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_service_role_key"
-        },
-        {
-          name      = "SUPABASE_ANON_KEY"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_anon_key"
-        },
-        {
-          name      = "SUPABASE_JWT_SECRET"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/supabase_jwt_secret"
-        },
-        {
-          name      = "MASTER_ENCRYPTION_KEYS"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/master_encryption_keys"
-        },
-        {
-          name      = "CREDENTIAL_VAULT_SALT"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/credential_vault_salt"
-        },
-        {
-          name      = "JWT_SECRET"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/${var.environment}/jwt_secret"
-        }
-      ]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.ecs.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "websocket"
-        }
-      }
-    }
-  ])
-}
-
-resource "aws_ecs_service" "websocket" {
-  name            = "vyomquant-websocket-service-${var.environment}"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.websocket.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    security_groups  = [aws_security_group.ecs_tasks.id]
-    subnets          = aws_subnet.private[*].id
-    assign_public_ip = false
-  }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.websocket.arn
-    container_name   = "websocket"
-    container_port   = 8002
-  }
-
-  deployment_circuit_breaker {
-    enable   = true
-    rollback = true
-  }
-
-  depends_on = [aws_lb_listener.http]
-}
+# WS-01: the dedicated websocket task definition/service are removed along with ws_server.py
+# itself (deleted this remediation effort) and alb.tf's matching target group/listener rule --
+# see the comment there for the real-AWS evidence that none of this ever had live traffic.
 
 # Simulator Task (Staging/Paper Trading Only)
 resource "aws_ecs_task_definition" "simulator" {
