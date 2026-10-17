@@ -141,6 +141,7 @@ algo22.db
 aerora_fallback.db
 test_*.db
 test_*.db-journal
+dump.rdb
 
 # ── LOGS ─────────────────────────────────────────────────────────────────────
 *.log
