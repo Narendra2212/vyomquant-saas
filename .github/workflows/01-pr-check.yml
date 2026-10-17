@@ -646,6 +646,19 @@ jobs:
       - name: Run every database security and integrity probe
         run: python staging/run_all_probes.py
 
+      # DB-04: scripts/post_migration_validation.py existed, was tested, and was
+      # correct, but nothing in CI ever actually called it -- its catalog-driven
+      # privilege-hardening check (broader than 999_privilege_hardening.sql's own
+      # narrower, already-wired backstop above) was written and inert. Wired in here,
+      # against the same fully-provisioned real Postgres this job already set up; the
+      # script also re-checks table/column/RPC existence and re-exports schema
+      # metadata, none of which this session found reason to doubt when run manually
+      # against a real replica with the same provisioning this job performs.
+      - name: Run the catalog-driven privilege-hardening and schema validation script
+        run: |
+          mkdir -p reports
+          python scripts/post_migration_validation.py
+
       - name: Run the PostgreSQL-only test lane
         run: |
           pytest tests/test_tenant_isolation_rls_postgres.py \

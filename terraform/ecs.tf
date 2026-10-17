@@ -120,51 +120,22 @@ resource "aws_ecs_service" "api" {
   depends_on = [aws_lb_listener.http]
 }
 
-# TEE Task
-resource "aws_ecs_task_definition" "tee" {
-  family                   = "vyomquant-tee-${var.environment}"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = 1024
-  memory                   = 2048
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn
-
-  container_definitions = jsonencode([
-    {
-      name      = "tee"
-      image     = "vyomquant-tee:latest"
-      essential = true
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.ecs.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "tee"
-        }
-      }
-    }
-  ])
-}
-
-resource "aws_ecs_service" "tee" {
-  name            = "vyomquant-tee-service-${var.environment}"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.tee.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    security_groups  = [aws_security_group.ecs_tasks.id]
-    subnets          = aws_subnet.private[*].id
-    assign_public_ip = false
-  }
-
-  deployment_circuit_breaker {
-    enable   = true
-    rollback = true
-  }
-}
+# RT-23: the TEE task definition and service that used to live here are deleted, not
+# just left undeployed. backend_app/tee/main.py crashed on import
+# (`from backend_app.core.fleet_manager import get_fleet_manager` -- that module and
+# symbol never existed) and real AWS evidence (gathered the same session as this
+# deletion) confirmed zero ECS services for it had ever actually been created --
+# nothing in production referenced these two resources. command_worker.py already
+# consumes the same COMMAND_STREAM='command_queue' start_bot/stop_bot surface this was
+# meant to cover, and is itself deployed and tested; repairing tee/main.py's import
+# without also giving it a genuinely separate queue would have made both processes
+# consume the same command, a live double-execution hazard against real exchange
+# accounts (documented, not hypothetical: see tests/test_ml_node_detection_is_one_
+# vocabulary.py::TestTheTeeGateIsUnreachable and this finding's own ledger entry,
+# RT-23, for the full investigation). If a genuinely separate execution lane is wanted
+# later, it needs its own queue/consumer-group and the same safety wiring RT-15/16/21
+# already gave the rest of live execution -- a deliberate design decision, not a
+# one-line repair, so it is not reconstructed here.
 
 # Auto Scaling for API Service
 resource "aws_appautoscaling_target" "api_target" {

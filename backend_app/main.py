@@ -504,12 +504,20 @@ async def lifespan(app: FastAPI):
         logger.warning(f" PlanExpirySweep: INACTIVE — {e}")
 
     # ── RT-08: resume deployments the database says are running ────────────
-    # Runs in the background so a slow venue cannot delay readiness. Skipped when bots are
-    # delegated to a separate runtime (USE_TEE). Live deployments are only resumed when the
-    # operator opted in (RESUME_LIVE_DEPLOYMENTS); otherwise their rows are marked failed.
+    # Runs in the background so a slow venue cannot delay readiness. Live deployments are
+    # only resumed when the operator opted in (RESUME_LIVE_DEPLOYMENTS); otherwise their
+    # rows are marked failed.
+    #
+    # RT-23: this used to also skip when USE_TEE was set, deferring resumption to a
+    # separate runtime (backend_app/tee/main.py). That module is deleted -- it crashed on
+    # import and real AWS evidence confirmed it was never actually deployed -- so the
+    # branch this guarded is now permanently unreachable rather than conditionally
+    # skipped. No production behaviour changes: USE_TEE was never set to "true" anywhere
+    # in this deployment (nothing could have consumed it), so this path already ran
+    # unconditionally in practice.
     global _resume_task
     try:
-        if os.environ.get("USE_TEE", "false").lower() != "true" and getattr(app_state, "fleet", None):
+        if getattr(app_state, "fleet", None):
             from backend_app.backend.deployment_runtime import \
                 resume_running_deployments
             _resume_task = asyncio.create_task(resume_running_deployments(app_state.fleet))

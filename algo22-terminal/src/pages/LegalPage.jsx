@@ -256,13 +256,12 @@ const DOCUMENTS = Object.freeze([
     title: "Terms of Service",
     body: (
       <>
-        <SectionHeading>1. Beta Service & Paper Trading Only</SectionHeading>
-        <p className="mb-3">The Beta Service is provided solely for testing, evaluation, and paper trading purposes.</p>
+        <SectionHeading>1. Beta Service</SectionHeading>
+        <p className="mb-3">The Beta Service is provided for testing, evaluation, and trading purposes.</p>
         {/* `listStyleType: 'square'` is kept as the bullet glyph these two clauses have
             always had; it is neither a colour nor a size, and Tailwind declares no square
             marker utility. `pl-5` is the same 20px, on the spacing scale. */}
         <ul className="mb-4 pl-5 text-content-secondary" style={{ listStyleType: "square" }}>
-          <li><strong>NO REAL MONETARY TRANSACTIONS OR DEPLOYMENTS</strong>: You acknowledge that the Beta Service uses simulated balances and does not perform live trades on real exchange accounts.</li>
           <li><strong>AS-IS BASIS</strong>: Provided on an "AS IS" and "AS AVAILABLE" basis.</li>
         </ul>
         <SectionHeading>2. Eligibility & Accounts</SectionHeading>

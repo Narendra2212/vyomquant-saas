@@ -1,11 +1,17 @@
 """
 tests/test_ml_node_detection_is_one_vocabulary.py
 
-Four gates ask "does this strategy contain a model node, and therefore need a trained
-model?" and three of them ask it with a narrower vocabulary than the fourth, so a node
-typed ``ml_dl`` or ``ml_model`` satisfies one gate and is invisible to the other three.
+Three gates ask "does this strategy contain a model node, and therefore need a trained
+model?" and two of them ask it with a narrower vocabulary than the third, so a node
+typed ``ml_dl`` or ``ml_model`` satisfies one gate and is invisible to the other two.
 
-THE FOUR SITES
+(A fourth site, ``backend_app/tee/main.py``'s own TEE start gate, existed when this file
+was first written. RT-23 deleted that module as confirmed-dead code -- it crashed on
+import and was never actually deployed, see its own ledger entry -- so it is no longer
+one of the sites this file has to keep in agreement. ``TestTheTeeGateIsUnreachable``
+below now documents the deletion rather than an import failure.)
+
+THE THREE SITES
 ``backend_app/routers/strategies.py`` declares the full set and uses it::
 
     _LEGACY_ML_NODE_TYPES: frozenset = frozenset({"ml", "dl", "ml_dl", "ml_model"})
@@ -14,18 +20,17 @@ THE FOUR SITES
         ...
         if node_type in _LEGACY_ML_NODE_TYPES:
 
-The other three each inline a two-element list:
+The other two each inline a two-element list:
 
     backend_app/backend/strategy_service.py   deploy_strategy
     backend_app/routers/library.py            clone_strategy
-    backend_app/tee/main.py                   the TEE start gate
 
         ml_nodes = [n for n in nodes if n.get("type", "").lower() in ["ml", "dl"]]
 
-Each of those four then refuses when it finds model nodes and the strategy has no
+Each of those three then refuses when it finds model nodes and the strategy has no
 ``ml_model_path``. So a strategy whose model node is spelled ``ml_dl`` is refused by the
-router's deploy and resume paths and waved through by the service's deploy path, the
-library clone path and the TEE start path -- three of the four.
+router's deploy and resume paths and waved through by the service's deploy path and the
+library clone path -- two of the three.
 
 WHY THE SUPERSET IS THE ANSWER, AND WHY IT IS SAFE
 The router's set is not arbitrary: the comment beside it explains that these are the
@@ -42,13 +47,12 @@ four gates exist to catch -- and the router already refuses them on its own path
 inconsistency is what is novel, not the refusal.
 
 ONE SHARED DEFINITION, BELOW THE ROUTERS
-The set now lives in ``backend_app/backend/ml_node_types.py``, which the routers, the
-service and the TEE all import. It could not stay in ``routers/strategies.py``:
-``strategy_service`` is imported BY the routers, so a router-level constant would invert
-the dependency, and ``tee/main.py`` has no business importing a FastAPI router at all. It
+The set now lives in ``backend_app/backend/ml_node_types.py``, which the routers and the
+service both import. It could not stay in ``routers/strategies.py``: ``strategy_service``
+is imported BY the routers, so a router-level constant would invert the dependency. It
 is a module with no heavy imports on purpose -- ``ml_models`` would have been the topical
-home, but it probes for tensorflow, joblib and friends at import time, and a clone or a
-TEE start should not pay for that to answer a question about four strings.
+home, but it probes for tensorflow, joblib and friends at import time, and a clone should
+not pay for that to answer a question about four strings.
 """
 
 from __future__ import annotations
@@ -67,11 +71,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 EXPECTED_SPELLINGS = frozenset({"ml", "dl", "ml_dl", "ml_model"})
 
 #: Every place that asks the "is this a model node?" question.
+#: backend_app/tee/main.py was a fourth site until RT-23 deleted it as confirmed-dead
+#: code (see TestTheTeeGateIsUnreachable below for why) -- removed from this tuple
+#: along with it, since a parametrized check against a path that no longer exists
+#: would fail for the wrong reason.
 GATE_SITES = (
     "backend_app/routers/strategies.py",
     "backend_app/backend/strategy_service.py",
     "backend_app/routers/library.py",
-    "backend_app/tee/main.py",
 )
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -278,81 +285,61 @@ class TestAnMlDlNodeIsSeenEverywhere:
 
 
 # ---------------------------------------------------------------------------
-# 4. One of the four gates is unreachable, and this file must not overclaim
+# 4. The fourth gate is gone, not merely unreachable -- RT-23
 # ---------------------------------------------------------------------------
 
 
 class TestTheTeeGateIsUnreachable:
-    """``backend_app/tee/main.py`` cannot be imported, so its gate never runs.
+    """``backend_app/tee/main.py`` no longer exists.
 
-    Found while verifying the unification above, and recorded here because without it
-    this file would claim four gates now agree when only three of them are reachable.
+    Originally recorded here as "cannot be imported": ``tee/main.py`` line 11 called
+    ``from backend_app.core.fleet_manager import get_fleet_manager``, a module and symbol
+    that never existed, so importing it raised ``ModuleNotFoundError`` before any of its
+    code (including the vocabulary fix the rest of this file is about) ever ran.
 
-    ``tee/main.py`` line 11 is::
+    RT-23 investigated further and found the import failure was the SMALLER problem.
+    ``backend_app/workers/command_worker.py`` -- a separate, already-deployed, tested
+    process -- consumes the exact same ``COMMAND_STREAM = 'command_queue'`` and handles
+    the same ``start_bot``/``stop_bot`` actions ``tee/main.py`` would have. Redis streams
+    let multiple consumer groups each read every message, so naively repairing the broken
+    import (supplying a ``get_fleet_manager`` that did not exist) would not have made this
+    gate reachable in isolation -- it would have made both processes independently
+    consume every start_bot/stop_bot command, a live double-execution hazard against real
+    exchange accounts, on top of being unauthorised feature work on an execution path.
+    Confirmed via real AWS evidence (gathered the same session this deletion landed in)
+    that no ECS service for it had ever actually existed in production either -- nothing
+    was deployed to even carry the risk forward. So it was deleted: the module, its
+    Dockerfile (``Dockerfile.tee``), and its Terraform ECS resources
+    (``aws_ecs_task_definition.tee`` / ``aws_ecs_service.tee``).
 
-        from backend_app.core.fleet_manager import get_fleet_manager
-
-    ``backend_app/core/fleet_manager.py`` does not exist -- the module lives at
-    ``backend_app/backend/fleet_manager.py`` -- and ``get_fleet_manager`` is not defined
-    there either, so there is no correct target to repoint the import at. Importing the
-    module raises ``ModuleNotFoundError`` before any of its code runs, and no test
-    anywhere imports ``backend_app.tee``.
-
-    NOT FIXED. This is not a mistyped path with an obvious destination: supplying
-    ``get_fleet_manager`` means deciding what the TEE's fleet handle should be, which is
-    reconstructing a process entrypoint that publishes ``start_bot`` commands. That is
-    feature work on an execution path, not a cleanup. The vocabulary change made to that
-    file is correct and takes effect the moment the module becomes importable.
-
-    ``routers/strategies.py`` reads ``USE_TEE`` and publishes a ``start_bot`` command when
-    it is set, so a deployment with ``USE_TEE=true`` has a producer and no consumer.
+    NOT rebuilt as a separate lane. That remains a real, deliberate design decision this
+    repository's own standing mandate declines to make unilaterally: if a genuinely
+    separate execution lane from ``command_worker.py`` is wanted later, it needs its own
+    queue/consumer-group (never ``command_queue``) and the same safety wiring RT-15/16/21
+    already gave the rest of live execution, not a one-line import repair.
     """
 
-    def test_the_tee_module_cannot_be_imported(self):
-        import importlib
-
-        with pytest.raises(ModuleNotFoundError) as caught:
-            importlib.import_module("backend_app.tee.main")
-
-        assert "fleet_manager" in str(caught.value), (
-            f"backend_app.tee.main now fails to import for a different reason: "
-            f"{caught.value}. If it imports cleanly, delete this test -- its gate is "
-            f"reachable and the unification above covers four live gates, not three."
+    def test_the_tee_module_no_longer_exists(self):
+        assert not (ROOT / "backend_app" / "tee").exists(), (
+            "backend_app/tee has reappeared. If it was reintroduced as a genuinely "
+            "separate execution lane (its own queue/consumer-group, not command_queue), "
+            "update this test and this class's docstring to match; if it is the same "
+            "dead module come back, delete it again."
         )
 
-    def test_the_module_it_imports_does_not_exist(self):
-        assert not (ROOT / "backend_app" / "core" / "fleet_manager.py").is_file(), (
-            "backend_app/core/fleet_manager.py now exists; re-check whether the TEE "
-            "gate is reachable"
+    def test_dockerfile_tee_no_longer_exists(self):
+        assert not (ROOT / "Dockerfile.tee").is_file()
+
+    def test_command_worker_is_the_one_live_consumer_of_the_command_queue(self):
+        """The fact that made the TEE repair dangerous rather than merely incomplete:
+        a second consumer of the same queue command_worker.py already serves."""
+        worker = ROOT / "backend_app" / "workers" / "command_worker.py"
+        assert worker.is_file(), (
+            "backend_app/workers/command_worker.py is gone -- re-verify RT-23's "
+            "reasoning before assuming TEE staying deleted is still safe to assert here"
         )
-
-    def test_and_the_symbol_does_not_exist_at_the_other_path_either(self):
-        """So there is no one-line repoint available, which is why this is not fixed."""
-        backend_fleet = ROOT / "backend_app" / "backend" / "fleet_manager.py"
-        assert backend_fleet.is_file(), "backend_app/backend/fleet_manager.py is gone"
-
-        tree = ast.parse(backend_fleet.read_text(encoding="utf-8", errors="replace"))
-        names = {
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        } | {
-            target.id
-            for node in tree.body
-            if isinstance(node, ast.Assign)
-            for target in node.targets
-            if isinstance(target, ast.Name)
-        }
-
-        assert "get_fleet_manager" not in names, (
-            "get_fleet_manager now exists in backend_app/backend/fleet_manager.py, so "
-            "the TEE import has a correct target and repointing it is a real fix"
+        source = worker.read_text(encoding="utf-8", errors="replace")
+        assert "command_queue" in source or "COMMAND_STREAM" in source, (
+            "command_worker.py no longer references the command queue by this name -- "
+            "re-verify RT-23's reasoning"
         )
-
-    def test_the_tee_file_still_uses_the_shared_vocabulary(self):
-        """The change is correct and dormant; it must not be reverted as 'dead code'."""
-        source = (ROOT / "backend_app" / "tee" / "main.py").read_text(
-            encoding="utf-8", errors="replace"
-        )
-        assert "detect_ml_nodes" in source
-        assert not _inlined_narrow_lists(ROOT / "backend_app" / "tee" / "main.py")
