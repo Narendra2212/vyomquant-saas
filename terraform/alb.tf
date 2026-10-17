@@ -180,6 +180,61 @@ resource "aws_lb_listener_rule" "api_rule" {
   }
 }
 
+# API-07: /metrics (the Prometheus scrape endpoint) was reachable with zero authentication,
+# both via CloudFront's own /metrics* cache behavior and directly via this ALB's
+# internet-facing public DNS name -- confirmed via real AWS access (DescribeRules showed no
+# path-based rule existed at all before this). A CloudFront-only fix would not have closed
+# the direct-ALB path, so the gate lives here, the one layer every request passes through
+# regardless of entry point. Applied directly via elbv2 CreateRule (not through this
+# unapplied terraform source -- no existing resource in this account has ever been imported
+# into terraform state, so a real `terraform apply` of this file would try to recreate
+# everything from scratch; see INF-02). This resource documents the real, live rules.
+# Verified end to end: /metrics without the header -> 403; with it -> 200; every other path
+# (e.g. /health) unaffected. The real secret value lives in Secrets Manager
+# (vyomquant/production/metrics_scrape_token), never in source.
+resource "aws_lb_listener_rule" "metrics_allow_with_token" {
+  listener_arn = var.enable_custom_domain ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn
+  priority     = 5
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/metrics*"]
+    }
+  }
+
+  condition {
+    http_header {
+      http_header_name = "X-Metrics-Token"
+      values           = [var.metrics_scrape_token]
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "metrics_deny_without_token" {
+  listener_arn = var.enable_custom_domain ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn
+  priority     = 6
+
+  action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Forbidden"
+      status_code  = "403"
+    }
+  }
+
+  condition {
+    path_pattern {
+      values = ["/metrics*"]
+    }
+  }
+}
+
 # WS-01: the dedicated websocket service (ws_server.py), its Dockerfile, and the terraform
 # resources that would have run it as a live AWS service (this target group + listener rule,
 # and ecs.tf's aws_ecs_task_definition.websocket/aws_ecs_service.websocket) are removed.

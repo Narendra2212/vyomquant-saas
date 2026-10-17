@@ -85,3 +85,9 @@ variable "github_repository" {
   type        = string
   default     = "Narendra2212/vyomquant-saas"
 }
+
+variable "metrics_scrape_token" {
+  description = "API-07: shared-secret header value (X-Metrics-Token) the ALB listener rule requires on /metrics*. The real value lives in Secrets Manager (vyomquant/<environment>/metrics_scrape_token) and the real scraper's own scrape_config, never in source -- this variable has no default on purpose."
+  type        = string
+  sensitive   = true
+}

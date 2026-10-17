@@ -88,44 +88,52 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────────────
-#  CI-02: GitHub Actions OIDC deploy role -- NOT YET WIRED UP, see remaining steps below
+#  CI-02: GitHub Actions OIDC deploy role -- ROLE CREATED, workflows NOT YET SWITCHED OVER
 # ──────────────────────────────────────────────────────────────────────────────────────
 #
-# .github/workflows/02-build.yml and 03-deploy.yml authenticate to AWS with
+# .github/workflows/02-build.yml and 03-deploy.yml still authenticate to AWS with
 # secrets.AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY -- a long-lived IAM user access key
-# that never expires on its own and is not scoped to GitHub Actions at all. If it leaks
-# (logged by accident, a compromised runner, a dependency that exfiltrates env vars), the
-# credential is valid everywhere it was granted, forever, until someone notices and
-# rotates it by hand.
+# that never expires on its own and is not scoped to GitHub Actions at all.
 #
-# These two resources are the role side of the fix: a role any workflow run FROM THIS
-# REPOSITORY's main/master branches can assume via GitHub's own OIDC token (an
-# `AssumeRoleWithWebIdentity` STS session, scoped and short-lived, nothing standing). They
-# are deliberately NOT referenced by any workflow yet -- this sandbox has no real AWS
-# credentials to `terraform apply` them with, and switching 02-build.yml/03-deploy.yml's
-# `aws-actions/configure-aws-credentials@v4` step over to `role-to-assume` before the role
-# actually exists in AWS would break every build and deploy outright. A dedicated session
-# with real AWS access should, in order:
-#   1. `terraform apply` this (creates the OIDC provider + role, costs nothing on its own).
-#   2. Point both workflows' `configure-aws-credentials@v4` step at
-#      `role-to-assume: aws_iam_role.github_actions_deploy.arn` instead of
-#      `aws-access-key-id`/`aws-secret-access-key`, and add `permissions: id-token: write`
-#      to 03-deploy.yml's jobs (02-build.yml already declares it, unused until now).
-#   3. Watch both workflows go green against the role at least once, THEN delete the
-#      long-lived IAM user access key from AWS IAM and from the repo's
-#      `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` GitHub secrets.
-# The IAM policy below is scoped to what scripts/ecs_deploy_and_diagnose.py and
-# 02-build.yml's own `aws ecr`/`docker push` steps actually call (grepped both for every
-# `aws ecs`/`aws ecr`/`aws logs` subcommand) -- review and tighten further before step 1
-# if this account's real IAM boundary conventions call for narrower resource ARNs than
-# `ecs:DescribeServices`/`UpdateService`/`RegisterTaskDefinition` allow (those three do not
-# support resource-level restriction in IAM at all, per AWS's own service authorization
-# reference).
-resource "aws_iam_openid_connect_provider" "github_actions" {
-  url            = "https://token.actions.githubusercontent.com"
-  client_id_list = ["sts.amazonaws.com"]
-  # thumbprint_list intentionally omitted: AWS has verified GitHub's OIDC endpoint
-  # certificate chain automatically, without a pinned thumbprint, since October 2022.
+# The OIDC PROVIDER already existed in this account before this role was created --
+# confirmed via real AWS access (ListOpenIDConnectProviders/GetOpenIDConnectProvider) to
+# belong to a different project ("deeptech-outreach") that shares this AWS account. GitHub's
+# OIDC issuer URL is identical for every account/repo, so AWS allows only ONE such provider
+# account-wide -- a `resource "aws_iam_openid_connect_provider"` here would either fail with
+# EntityAlreadyExists or, worse, give terraform ownership of a resource another team
+# depends on. Referenced as a `data` source instead -- read-only, no risk of terraform ever
+# trying to modify or destroy it.
+#
+# The role itself was created directly via `iam:CreateRole`/`PutRolePolicy` (not through a
+# `terraform apply` of this file -- no resource in this account has ever been imported into
+# terraform state, so a real apply here would try to recreate the VPC, ALB, etc. from
+# scratch; see INF-02). This resource documents the real, live role.
+#
+# Fixed a real bug while creating it: the permissions policy's `iam:PassRole` resource list
+# below used to reference `aws_iam_role.ecs_task_execution_role.arn` /
+# `aws_iam_role.ecs_task_role.arn` -- names this terraform has never actually applied. The
+# REAL running task definition's own executionRoleArn/taskRoleArn (confirmed via
+# DescribeTaskDefinition) is `arn:aws:iam::273709947018:role/ecsTaskExecutionRole`, the
+# generic AWS-console-default name, not either of terraform's own. PassRole scoped to the
+# terraform names would have granted the role no usable permission at all once a workflow
+# tried to register a task definition against the role that's actually in use -- fixed to
+# reference the real ARN directly.
+#
+# Remaining, deliberately NOT done yet, each needing its own verification gate:
+#   1. Point both workflows' `configure-aws-credentials@v4` step at
+#      `role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production`
+#      instead of `aws-access-key-id`/`aws-secret-access-key`, and add
+#      `permissions: id-token: write` to 03-deploy.yml's jobs (02-build.yml already declares
+#      it, unused until now).
+#   2. Watch both workflows go green against the role at least once -- a real CI run, not
+#      something to simulate.
+#   3. ONLY once step 2 is confirmed green, delete the long-lived IAM user access key from
+#      AWS IAM and from the repo's `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` GitHub
+#      secrets. That access key is also what every AWS call in this remediation effort has
+#      been authenticating with -- deleting it before step 2 is confirmed would cut off the
+#      very credential being used to verify the switch, with no way to undo it from here.
+data "aws_iam_openid_connect_provider" "github_actions" {
+  url = "https://token.actions.githubusercontent.com"
 }
 
 resource "aws_iam_role" "github_actions_deploy" {
@@ -137,7 +145,7 @@ resource "aws_iam_role" "github_actions_deploy" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = aws_iam_openid_connect_provider.github_actions.arn
+          Federated = data.aws_iam_openid_connect_provider.github_actions.arn
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
@@ -207,8 +215,10 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
         Effect = "Allow"
         Action = ["iam:PassRole"]
         Resource = [
-          aws_iam_role.ecs_task_execution_role.arn,
-          aws_iam_role.ecs_task_role.arn,
+          # The REAL role in use (see the header comment above) -- not
+          # aws_iam_role.ecs_task_execution_role.arn/ecs_task_role.arn, which this
+          # terraform has never actually applied.
+          "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
         ]
       },
       {
