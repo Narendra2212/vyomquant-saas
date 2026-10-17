@@ -145,6 +145,7 @@ PACKAGE_NAME_MAPPINGS = {
     'opentelemetry': 'opentelemetry-api',
     'prometheus_client': 'prometheus-client',
     'sentry_sdk': 'sentry-sdk',
+    'psycopg2': 'psycopg2-binary',
 }
 
 # Local backend modules that should not be reported as undeclared

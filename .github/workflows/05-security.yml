@@ -117,6 +117,12 @@ jobs:
         run: mkdir -p reports
 
       # The gate. CRITICAL only, so it blocks on something that is unambiguously wrong.
+      # CI-05: trivyignores points at the one explicit, reviewed exception this scan
+      # carries (terraform/.trivyignore, AWS-0104 on aws_security_group.ecs_tasks' egress
+      # only -- the other three security groups this same check used to flag are fixed for
+      # real in source, not ignored). NOT verified against a real trivy binary in this
+      # sandbox (same limitation this entry's own ledger note names) -- review on this
+      # workflow's first real run after this change.
       - name: Trivy IaC scan — terraform/ (blocking, CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -126,6 +132,7 @@ jobs:
           format: 'table'
           exit-code: '1'
           severity: 'CRITICAL'
+          trivyignores: 'terraform/.trivyignore'
           hide-progress: true
 
       - name: Trivy IaC scan — aerora_quant_platform/infrastructure/ (blocking, CRITICAL)
