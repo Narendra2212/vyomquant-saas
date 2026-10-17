@@ -508,9 +508,19 @@ def main() -> int:
     ap.add_argument("--create-substrate", action="store_true",
                     help="create the Supabase-like roles and auth.uid(); non-Supabase targets only")
     ap.add_argument("--only-substrate", action="store_true",
-                    help="apply --create-substrate and stop; skip steps 0/0b/1/3/4 and alembic. "
-                         "For a job that provisions its own schema (e.g. a specific alembic "
-                         "revision) and only needs auth.users/auth.uid() to exist first.")
+                    help="apply --create-substrate (and --also-step0, if given) and stop; "
+                         "skip steps 0b/1/3/4 and alembic. For a job that provisions its own "
+                         "schema (e.g. a specific alembic revision) and only needs the "
+                         "platform substrate -- and optionally the pre-existing tables 020 "
+                         "declares -- to exist first.")
+    ap.add_argument("--also-step0", action="store_true",
+                    help="with --only-substrate, also apply STEP 0 "
+                         "(020_declare_pre_existing_tables.sql: profiles, strategies, "
+                         "processed_orders) before stopping. These are declared, not "
+                         "created by any alembic revision, because real production has "
+                         "always had them from before alembic was introduced -- a job whose "
+                         "own alembic target is earlier than head needs them the same way "
+                         "it needs the auth substrate.")
     ap.add_argument("--skip-alembic", action="store_true")
     ap.add_argument("--i-understand-this-is-remote", action="store_true")
     args = ap.parse_args()
@@ -557,7 +567,14 @@ def main() -> int:
     if args.only_substrate:
         if not args.create_substrate:
             _refuse("--only-substrate without --create-substrate would do nothing.")
-        print("--only-substrate: stopping here (steps 0/0b/1/3/4 and alembic not run).")
+        if args.also_step0:
+            with conn.cursor() as cur:
+                already = _applied(cur)
+            print("STEP 0 — 020_declare_pre_existing_tables.sql (first, despite its number)")
+            print(f"  {STEP0_FILE.name}: "
+                  f"{_apply_sql(conn, STEP0_FILE, 'step0', not args.apply, already)}")
+            print()
+        print("--only-substrate: stopping here (steps 0b/1/3/4 and alembic not run).")
         return 0
 
     with conn.cursor() as cur:

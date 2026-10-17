@@ -449,15 +449,24 @@ jobs:
       # postgres:17-alpine container does not have. None of this repo's alembic
       # revisions create them -- in real Supabase they already exist -- but
       # `tests/test_atomic_order_cancellation_fix.py`'s `_seeded_tenant` fixture (and
-      # `profiles`'s own FK to `auth.users`) needs them before any INSERT. Using
-      # `--only-substrate` here (rather than the Provisioning job's full
-      # `--create-substrate` run) creates exactly that shim and nothing else -- it does
-      # not touch this job's own target revision below, which deliberately stops at the
-      # branchpoint rather than going to head.
-      - name: Create auth substrate (auth.users, auth.uid())
+      # `profiles`'s own FK to `auth.users`) needs them before any INSERT.
+      #
+      # `--also-step0` is the second half of that same fixture: it also inserts into
+      # `public.profiles`, which -- like `auth.users` -- predates this repository's
+      # alembic history in real production and so is declared (not created by any
+      # revision) in `020_declare_pre_existing_tables.sql`. Confirmed via a real CI run
+      # (job 117474514312) that --only-substrate alone was not enough: the fixture's
+      # first INSERT (auth.users) succeeded but its second (profiles) failed with
+      # `relation "public.profiles" does not exist`, the next layer of the same gap.
+      #
+      # Using `--only-substrate --also-step0` here (rather than the Provisioning job's
+      # full `--create-substrate` run) creates exactly these two things and nothing
+      # else -- it does not touch this job's own target revision below, which
+      # deliberately stops at the branchpoint rather than going to head.
+      - name: Create auth substrate + declare pre-existing tables (auth.users, profiles)
         run: |
           python scripts/provision_database.py \
-            --dsn "$DATABASE_URL" --apply --create-substrate --only-substrate
+            --dsn "$DATABASE_URL" --apply --create-substrate --also-step0 --only-substrate
 
       # `backend_app/alembic/env.py` reads DATABASE_URL from the environment and feeds it
       # to `sqlalchemy.url`, so no ini edit is needed. Stops at the branchpoint -- see the
