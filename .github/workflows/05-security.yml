@@ -135,16 +135,20 @@ jobs:
           trivyignores: 'terraform/.trivyignore'
           hide-progress: true
 
-      - name: Trivy IaC scan — aerora_quant_platform/infrastructure/ (blocking, CRITICAL)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: 'fs'
-          scan-ref: 'aerora_quant_platform/infrastructure'
-          scanners: 'misconfig,secret'
-          format: 'table'
-          exit-code: '1'
-          severity: 'CRITICAL'
-          hide-progress: true
+      # CI-06 follow-up: this step used to scan 'aerora_quant_platform/infrastructure'.
+      # That path is listed in .gitignore (line 242) -- it is deliberately never committed
+      # to this repository, so a CI runner's checkout can structurally never contain it,
+      # regardless of any fix on either side. It has never appeared anywhere in this
+      # repository's git history either (`git log --all -- aerora_quant_platform/
+      # infrastructure` returns nothing). It sat conclusion=skipped behind the terraform/
+      # scan's own perpetual failure for this entire remediation effort, so nobody ever
+      # saw it actually run -- the moment the terraform/ scan above first succeeded for
+      # real (this session), this step ran for the first time ever and failed immediately
+      # with `lstat ...: no such file or directory`, not a real misconfiguration. This
+      # job's own header comment (above) frames its entire scope as the ~20 .tf files
+      # under terraform/ -- there was never a second real, scannable IaC directory this
+      # step could have covered from CI. Removed rather than left permanently failing on
+      # a path no CI checkout can ever contain.
 
       # The report. Everything down to MEDIUM, non-blocking, kept as an artifact so the
       # backlog is visible and can be ratcheted down rather than discovered later.
@@ -171,7 +175,8 @@ jobs:
   #  CI-04: FULL-TREE SECRET SCAN
   # ════════════════════════════════════════════════════════════════════════════════════
   #
-  # iac-scan above only ever pointed its `secret` scanner at terraform/ and
+  # iac-scan above only ever pointed its `secret` scanner at terraform/ and (historically;
+  # see that job's own CI-06-follow-up comment for why the latter was removed)
   # aerora_quant_platform/infrastructure/ -- that job's own SC-29 comment explains why a
   # repo-wide scan was deferred: deliberate fake-credential fixtures live under tests/ (a
   # fake EC private key, a PEM header, fake Stripe/Razorpay test keys, ...), and a scanner
