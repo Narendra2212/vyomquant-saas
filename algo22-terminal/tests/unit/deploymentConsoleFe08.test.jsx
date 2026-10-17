@@ -47,7 +47,7 @@ const { mockPost, mockGet } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock('../../src/api', () => ({ post: mockPost, get: mockGet }));
+vi.mock('../../src/api', () => ({ post: mockPost, get: mockGet, isAuthenticated: () => false }));
 
 import DeploymentConsole from '../../src/components/DeploymentConsole';
 
