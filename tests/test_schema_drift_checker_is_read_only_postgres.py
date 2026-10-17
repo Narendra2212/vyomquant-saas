@@ -292,9 +292,20 @@ def test_the_read_only_assertion_is_reachable_from_the_cli():
     )
     assert "server   :" in proc.stdout, "the script did not report the server version"
     # And the credential is not in the output.
+    #
+    # The real GitHub Actions run of the "PostgreSQL-only test lane" job (the first
+    # time this test ever executed in CI -- it sat behind CI-05/06/07/10's own
+    # unblocking) uses AERORA_TEST_DATABASE_URL=postgresql://postgres:postgres@...,
+    # so `password` is the literal string "postgres" -- which is also a substring of
+    # "postgresql" (the URL scheme) and of "postgres" (the default database name),
+    # both of which `redact()` legitimately prints. A bare `password not in
+    # proc.stdout` check is therefore unsound whenever the password happens to
+    # collide with either: it would fail on a redacted, credential-free banner. The
+    # actual leak this guards against looks like `user:PASSWORD@host` in the output,
+    # so check for that pattern specifically rather than the bare password string.
     if "@" in TEST_DATABASE_URL:
         userinfo = TEST_DATABASE_URL.split("//", 1)[1].split("@", 1)[0]
         if ":" in userinfo:
             password = userinfo.split(":", 1)[1]
             if password:
-                assert password not in proc.stdout, "the CLI leaked the password"
+                assert f"{userinfo}@" not in proc.stdout, "the CLI leaked the credential"

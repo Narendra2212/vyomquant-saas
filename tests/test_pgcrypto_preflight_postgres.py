@@ -129,8 +129,26 @@ def test_the_preflight_fails_when_gen_random_bytes_is_absent(engine):
     assert definition, "cannot run State B: gen_random_bytes has no definition to restore"
 
     try:
-        with engine.begin() as conn:
-            conn.execute(text("DROP FUNCTION IF EXISTS public.gen_random_bytes(integer)"))
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("DROP FUNCTION IF EXISTS public.gen_random_bytes(integer)"))
+        except Exception as exc:
+            # A real pgcrypto extension (CI's postgres:17-alpine, now that CI-10 made
+            # it genuinely installed rather than this repo's non-cryptographic
+            # fallback shim) OWNS this function, so the bare DROP is refused outright
+            # -- DependentObjectsStillExist, not a silent no-op. That is the same
+            # "cannot produce State B non-destructively here" case the `still_there`
+            # check below already expects; dropping the extension to get there would
+            # itself be the destructive, not-available-everywhere action that check's
+            # own skip message rules out.
+            if "DependentObjectsStillExist" in type(exc).__name__ or "pgcrypto" in str(exc):
+                pytest.skip(
+                    "gen_random_bytes is owned by a real pgcrypto extension that "
+                    "refuses to drop just the function, so it comes from a real "
+                    "pgcrypto extension in a schema this test will not uninstall. "
+                    "State B cannot be produced non-destructively here."
+                )
+            raise
 
         with engine.begin() as conn:
             still_there = conn.execute(
