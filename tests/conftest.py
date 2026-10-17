@@ -119,8 +119,20 @@ _REDIS_SINGLETON_SEAMS = (
 
 @pytest.fixture(scope="session", autouse=True)
 def _sqlite_lane_schema_bootstrap():
-    """Create every ORM table on the SQLite fallback file, once per test session."""
-    from backend_app.core.database import Base, engine
+    """Create every ORM table on the SQLite fallback file, once per test session.
+
+    `01-pr-check.yml`'s `frontend-build` job runs `tests/test_no_secrets_in_bundle.py`
+    (-m frontend_bundle) in a Python environment that installs only pytest -- it scans
+    the already-built JS bundle for leaked secrets and has no business with the
+    database, so it never installs sqlalchemy. Autouse means every collected test
+    requests this fixture, so the import has to be optional the same way
+    `_restore_shared_redis_singleton` above makes its own: a test that does not import
+    the backend at all should not be made to.
+    """
+    try:
+        from backend_app.core.database import Base, engine
+    except Exception:
+        return
 
     if "sqlite" not in str(engine.url):
         return
