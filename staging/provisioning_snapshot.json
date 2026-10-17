@@ -13858,6 +13858,9 @@
  ],
  "extensions": [
   [
+   "pgcrypto"
+  ],
+  [
    "plpgsql"
   ]
  ],
@@ -14480,14 +14483,64 @@
  ],
  "functions": [
   [
+   "armor",
+   "bytea",
+   false
+  ],
+  [
+   "armor",
+   "bytea, text[], text[]",
+   false
+  ],
+  [
    "create_referral_code_for_user",
    "user_uuid uuid",
+   false
+  ],
+  [
+   "crypt",
+   "text, text",
+   false
+  ],
+  [
+   "dearmor",
+   "text",
    false
   ],
   [
    "decrement_available_discount",
    "target_user_id uuid",
    true
+  ],
+  [
+   "decrypt",
+   "bytea, bytea, text",
+   false
+  ],
+  [
+   "decrypt_iv",
+   "bytea, bytea, bytea, text",
+   false
+  ],
+  [
+   "digest",
+   "bytea, text",
+   false
+  ],
+  [
+   "digest",
+   "text, text",
+   false
+  ],
+  [
+   "encrypt",
+   "bytea, bytea, text",
+   false
+  ],
+  [
+   "encrypt_iv",
+   "bytea, bytea, bytea, text",
+   false
   ],
   [
    "fn_get_library_recent_ratings",
@@ -14506,7 +14559,22 @@
   ],
   [
    "gen_random_bytes",
-   "n integer",
+   "integer",
+   false
+  ],
+  [
+   "gen_random_uuid",
+   "",
+   false
+  ],
+  [
+   "gen_salt",
+   "text",
+   false
+  ],
+  [
+   "gen_salt",
+   "text, integer",
    false
   ],
   [
@@ -14527,6 +14595,16 @@
   [
    "guard_strategy_deployments_browser_roles",
    "",
+   false
+  ],
+  [
+   "hmac",
+   "bytea, bytea, text",
+   false
+  ],
+  [
+   "hmac",
+   "text, text, text",
    false
   ],
   [
@@ -14607,6 +14685,106 @@
   [
    "paper_session_guard",
    "",
+   false
+  ],
+  [
+   "pgp_armor_headers",
+   "text, OUT key text, OUT value text",
+   false
+  ],
+  [
+   "pgp_key_id",
+   "bytea",
+   false
+  ],
+  [
+   "pgp_pub_decrypt",
+   "bytea, bytea",
+   false
+  ],
+  [
+   "pgp_pub_decrypt",
+   "bytea, bytea, text",
+   false
+  ],
+  [
+   "pgp_pub_decrypt",
+   "bytea, bytea, text, text",
+   false
+  ],
+  [
+   "pgp_pub_decrypt_bytea",
+   "bytea, bytea",
+   false
+  ],
+  [
+   "pgp_pub_decrypt_bytea",
+   "bytea, bytea, text",
+   false
+  ],
+  [
+   "pgp_pub_decrypt_bytea",
+   "bytea, bytea, text, text",
+   false
+  ],
+  [
+   "pgp_pub_encrypt",
+   "text, bytea",
+   false
+  ],
+  [
+   "pgp_pub_encrypt",
+   "text, bytea, text",
+   false
+  ],
+  [
+   "pgp_pub_encrypt_bytea",
+   "bytea, bytea",
+   false
+  ],
+  [
+   "pgp_pub_encrypt_bytea",
+   "bytea, bytea, text",
+   false
+  ],
+  [
+   "pgp_sym_decrypt",
+   "bytea, text",
+   false
+  ],
+  [
+   "pgp_sym_decrypt",
+   "bytea, text, text",
+   false
+  ],
+  [
+   "pgp_sym_decrypt_bytea",
+   "bytea, text",
+   false
+  ],
+  [
+   "pgp_sym_decrypt_bytea",
+   "bytea, text, text",
+   false
+  ],
+  [
+   "pgp_sym_encrypt",
+   "text, text",
+   false
+  ],
+  [
+   "pgp_sym_encrypt",
+   "text, text, text",
+   false
+  ],
+  [
+   "pgp_sym_encrypt_bytea",
+   "bytea, text",
+   false
+  ],
+  [
+   "pgp_sym_encrypt_bytea",
+   "bytea, text, text",
    false
   ],
   [
