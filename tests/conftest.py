@@ -87,6 +87,46 @@ _REDIS_SINGLETON_SEAMS = (
 )
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  SQLITE LANE SCHEMA BOOTSTRAP
+#
+#  API-05 (commit 9ae0cd7) removed `Base.metadata.create_all(bind=engine)` from
+#  `main.py`'s import-time path -- correctly: it was a third schema-management
+#  mechanism alongside the numbered SQL migrations and Alembic, and it ran as an
+#  unconditional side effect of merely importing the module. But before that removal,
+#  some test files build a `TestClient(app)` and so DO import `main.py`, which is how
+#  the SQLite fallback file (`algo22.db`) ever got its tables -- nothing else in this
+#  suite ever created them. Once the call was gone, every SQLite-lane test that drives
+#  a real engine through `backend_app.core.database.SessionLocal()` directly (not
+#  through the app) was left with an empty database on a fresh checkout.
+#
+#  This never showed up locally because a developer's scratch `algo22.db` already had
+#  tables from before the removal, and it never showed up in CI because CI-06's
+#  dependency-audit bug meant the Unit & Integration Tests and Execution Tests jobs had
+#  never actually executed on this branch until now -- the same "first real run
+#  surfaces an invisible gap" pattern as CI-08, which hit the identical problem (no
+#  `auth.users`) on the PostgreSQL lane's own job and fixed it by provisioning the
+#  substrate explicitly rather than relying on an import-time side effect.
+#
+#  Scoped to the SQLite fallback specifically, never a real database: the PostgreSQL
+#  lane (`AERORA_TEST_DATABASE_URL` set) already provisions its schema from the real
+#  migrations before pytest runs (see 01-pr-check.yml's `database-tests` job), and
+#  running `create_all` there would be redundant at best and, per API-05's own
+#  reasoning, wrong in principle for any environment with real migrations to apply
+#  instead.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sqlite_lane_schema_bootstrap():
+    """Create every ORM table on the SQLite fallback file, once per test session."""
+    from backend_app.core.database import Base, engine
+
+    if "sqlite" not in str(engine.url):
+        return
+    Base.metadata.create_all(bind=engine)
+
+
 @pytest.fixture(autouse=True)
 def _restore_shared_redis_singleton():
     """Restore the shared Redis manager's injection seams after every test.
