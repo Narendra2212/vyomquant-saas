@@ -169,7 +169,7 @@ BEGIN
     ) THEN
         CREATE POLICY "payment_methods_app_select" ON public.payment_methods
             FOR SELECT TO payment_methods_app
-            USING (auth.uid() = user_id);
+            USING ((auth.uid())::text = user_id);
     END IF;
 
     IF NOT EXISTS (
@@ -180,7 +180,7 @@ BEGIN
     ) THEN
         CREATE POLICY "payment_methods_app_delete" ON public.payment_methods
             FOR DELETE TO payment_methods_app
-            USING (auth.uid() = user_id);
+            USING ((auth.uid())::text = user_id);
     END IF;
 END $$;
 
