@@ -34,9 +34,16 @@ import inspect
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request, Query)
 from backend_app.core.rate_limit import limiter
-# F-20: get_db retained ONLY for PaymentMethodModel display endpoints.
+# F-20: Session retained ONLY for PaymentMethodModel display endpoints.
 # Subscription tiers and invoice state are stored exclusively in Supabase.
 from sqlalchemy.orm import Session
+
+# TENANT-01: get_payment_methods / delete_payment_method use this, not core.database's
+# get_db. get_db connects as the table owner (every DSN in this repo does), which is
+# exempt from row security regardless of FORCE -- see
+# backend_app/migrations/047_tenant01_restricted_payment_methods_role.sql for why a
+# second, genuinely restricted connection was needed instead of a flag on this one.
+from backend_app.core.restricted_db import get_payment_methods_db
 
 # MARKETPLACE SETTLEMENT (task 19.2). ``settlement_service`` is the one Settlement_Record writer
 # and the only path that may set ``library_subscriptions.status='active'``; ``money`` owns the
@@ -54,7 +61,6 @@ from backend_app.core.webhook_idempotency import (
     mark_webhook_completed,
     release_webhook_processing,
 )
-from backend_app.core.database import get_db
 from backend_app.core.realtime_sync import RealtimeSync
 from backend_app.core.models import AddPaymentMethodRequest, PaymentMethodModel
 from backend_app.core.schemas import CheckoutRequest, RazorpayVerificationRequest
@@ -2089,7 +2095,7 @@ async def get_invoices(
 async def get_payment_methods(
     request: Request,
     user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_payment_methods_db),
 ):
     cache_key = f"billing:payment_methods:{user['id']}"
     try:
@@ -3473,7 +3479,7 @@ async def add_payment_method(
 async def delete_payment_method(
     method_id: str,
     user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_payment_methods_db),
 ):
     """Delete a stored instrument. The lookup stays; its miss now names why the table is empty.
 
