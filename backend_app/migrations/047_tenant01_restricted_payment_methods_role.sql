@@ -159,17 +159,49 @@ GRANT SELECT, DELETE ON public.payment_methods TO payment_methods_app;
 -- Two policies, not one `FOR ALL`, because `FOR ALL` would also silently permit INSERT
 -- and UPDATE the moment anyone granted them later -- the policy should not be more
 -- permissive than the two commands this role is actually granted.
+--
+-- THE PREDICATE IS BUILT DYNAMICALLY, NOT HARDCODED, BECAUSE THIS COLUMN'S REAL TYPE
+-- GENUINELY DIFFERS BETWEEN ENVIRONMENTS (DB-ALM-02's own subject matter, hit for real
+-- here): the real production database's payment_methods.user_id is `character varying`
+-- (alembic's BUG-049/d4e5f6a7b8c9 has never actually run there -- alembic_version is
+-- stuck at d97ffff9c3bb, long before it). scripts/provision_database.py's own
+-- `--create-substrate` path (what CI's fresh-schema job runs) explicitly runs `alembic
+-- upgrade head`, which DOES apply BUG-049, converting the same column to `uuid` on that
+-- fresh build. A single hardcoded cast direction is therefore wrong in one of the two
+-- real environments this migration must run in -- confirmed by this exact failure on
+-- this exact file's first real CI run (`operator does not exist: text = uuid`,
+-- 01-pr-check.yml's Provisioning job). Checking the live type and casting the uuid side
+-- (auth.uid()) when the column is already uuid, or the column side to text otherwise,
+-- makes this migration correct in both shapes rather than correct in only the one this
+-- session happened to test against first.
 DO $$
+DECLARE
+    user_id_type text;
+    select_qual  text;
+    delete_qual  text;
 BEGIN
+    SELECT data_type INTO user_id_type
+      FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'payment_methods' AND column_name = 'user_id';
+
+    IF user_id_type = 'uuid' THEN
+        select_qual := 'auth.uid() = user_id';
+        delete_qual := 'auth.uid() = user_id';
+    ELSE
+        select_qual := '(auth.uid())::text = user_id';
+        delete_qual := '(auth.uid())::text = user_id';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1 FROM pg_policies
          WHERE schemaname = 'public'
            AND tablename  = 'payment_methods'
            AND policyname = 'payment_methods_app_select'
     ) THEN
-        CREATE POLICY "payment_methods_app_select" ON public.payment_methods
-            FOR SELECT TO payment_methods_app
-            USING ((auth.uid())::text = user_id);
+        EXECUTE format(
+            'CREATE POLICY "payment_methods_app_select" ON public.payment_methods '
+            'FOR SELECT TO payment_methods_app USING (%s)', select_qual
+        );
     END IF;
 
     IF NOT EXISTS (
@@ -178,9 +210,10 @@ BEGIN
            AND tablename  = 'payment_methods'
            AND policyname = 'payment_methods_app_delete'
     ) THEN
-        CREATE POLICY "payment_methods_app_delete" ON public.payment_methods
-            FOR DELETE TO payment_methods_app
-            USING ((auth.uid())::text = user_id);
+        EXECUTE format(
+            'CREATE POLICY "payment_methods_app_delete" ON public.payment_methods '
+            'FOR DELETE TO payment_methods_app USING (%s)', delete_qual
+        );
     END IF;
 END $$;
 
