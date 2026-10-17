@@ -1305,12 +1305,33 @@ async def health_ready():
 # actually needs. "unknown" (the Dockerfile ARG's own default) means the image was built
 # without passing --build-arg, e.g. a local `docker build` outside this CI pipeline, not a
 # broken endpoint.
-@app.get("/release.json", tags=["System"])
-async def release_info():
+#
+# Registered at BOTH /release.json and /api/release.json. The real production CloudFront
+# distribution (confirmed against the live account, not just terraform source) only proxies
+# /api/*, /ws/*, /health*, /metrics* and /openapi.json to the ALB; every other path -- this
+# includes a bare /release.json -- falls through to CloudFront's default behaviour, which
+# serves the FRONTEND's own static dist/release.json from S3. So on the real public domain,
+# GET https://<domain>/release.json can only ever return the frontend's own stamp -- the
+# backend's endpoint at that exact path is unreachable through the real routing, silently
+# defeating the FE/BE version-match comparison this pair of endpoints exists for. The /api/
+# alias is what 06-frontend-deploy.yml's new comparison step (added alongside this) actually
+# fetches; the bare /release.json stays for direct-to-backend callers (local dev, a health
+# dashboard hitting the ALB/task directly) where no such collision exists.
+def _release_info() -> dict:
     return {
         "sha": os.environ.get("GIT_SHA", "unknown"),
         "built_at": os.environ.get("BUILT_AT", "unknown"),
     }
+
+
+@app.get("/release.json", tags=["System"])
+async def release_info():
+    return _release_info()
+
+
+@app.get("/api/release.json", tags=["System"])
+async def release_info_api():
+    return _release_info()
 
 
 @app.get("/api/system/trading-capabilities", tags=["System"])
