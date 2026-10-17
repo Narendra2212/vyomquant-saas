@@ -1789,6 +1789,19 @@
       "verification_level": "production CI (root-caused against a real GitHub Actions job log this session)",
       "production_verified": true,
       "remaining_action": "None -- the step is removed, and nothing else in this workflow or any other references this path (grepped the whole 05-security.yml file after the edit)."
+    },
+    {
+      "id": "CI-08",
+      "priority": "P1",
+      "severity": "High",
+      "component": "CI/CD",
+      "title": "01-pr-check.yml's Database Tests (PostgreSQL) job never created the auth.users/auth.uid() substrate, so tests/test_atomic_order_cancellation_fix.py's autouse fixture failed on every run",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "1d10e97",
+      "evidence": "Root-caused against the real job log for run 39051999222 (PR #23's merge commit, job_id 117452877623, 'Database Tests (PostgreSQL)'): pytest summary `23 passed, 1 deselected, 16 warnings, 3 errors`, all 3 errors in tests/test_atomic_order_cancellation_fix.py (test_atomic_order_cancellation, test_concurrent_order_cancellation, test_order_cancellation_idempotency), each `sqlalchemy.exc.ProgrammingError: relation \"auth.users\" does not exist` on the autouse `_seeded_tenant` fixture's `INSERT INTO auth.users ...`. The job's own 'Provision schema' step only runs `alembic upgrade d97ffff9c3bb` against a bare postgres:17-alpine service container -- it never calls scripts/provision_database.py, so the Supabase-platform `auth` schema (which no alembic revision in this repo creates, correctly, since Supabase provides it) never exists here, unlike the separate 'Provisioning the full schema from repository source' job which runs `provision_database.py --create-substrate`. Confirmed the fixture's own docstring states the exact dependency: 'auth.users is seeded first ... because profiles.id references it.' Fixed by adding a new `--only-substrate` flag to provision_database.py (applies the existing SUBSTRATE_DDL -- auth.users, auth.uid(), auth.role(), auth.jwt(), the anon/authenticated/service_role roles -- and returns before steps 0/0b/1/3/4 and before invoking alembic at all) and a new CI step in the database-tests job that runs it immediately before the existing 'Provision schema' step. Deliberately NOT reusing the Provisioning job's plain `--create-substrate` invocation here: that job's own ALEMBIC_TARGET is 'head', but this job deliberately stops alembic at the d97ffff9c3bb branchpoint to mirror real production's stuck alembic_version (see TENANT-01/CI-05's migration-047 finding) -- `--only-substrate` creates exactly the platform shim and nothing that would touch or assume this job's own target revision. Verified locally with a throwaway pgserver instance before committing: `--only-substrate` creates auth.users/auth.uid()/auth.role()/auth.jwt(), the fixture's own `INSERT INTO auth.users` succeeds immediately afterward, and `public.profiles` / `public.schema_migrations` (the numbered-SQL-set and tracking tables) are confirmed NOT created -- i.e. the new flag only adds the substrate, nothing else, and does not risk interfering with this job's own alembic step that runs right after it.",
+      "verification_level": "root-caused against a real GitHub Actions job log; fix verified locally via a throwaway pgserver instance (both the substrate's own creation and that nothing beyond it was created); not yet re-confirmed on a real CI run",
+      "production_verified": false,
+      "remaining_action": "Get this fix merged and confirm on the next real CI run that the Database Tests (PostgreSQL) job's 3 previously-failing tests now pass, and that nothing else in that job regresses (the alembic step immediately after --only-substrate still targets d97ffff9c3bb and is unchanged)."
     }
   ]
 }
