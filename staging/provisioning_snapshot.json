@@ -171,6 +171,94 @@
    "NEVER"
   ],
   [
+   "bot_ownership_claims",
+   "claimed_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "bot_ownership_claims",
+   "heartbeat_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "bot_ownership_claims",
+   "owner_token",
+   "uuid",
+   "",
+   "NO",
+   "gen_random_uuid()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "bot_ownership_claims",
+   "released_at",
+   "timestamp with time zone",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "bot_ownership_claims",
+   "state",
+   "text",
+   "",
+   "NO",
+   "'STARTING'::text",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "bot_ownership_claims",
+   "symbol",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "bot_ownership_claims",
+   "user_id",
+   "uuid",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "bot_ownership_claims",
+   "worker_name",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
    "copilot_messages",
    "content",
    "text",
@@ -1155,6 +1243,204 @@
    "uuid",
    "",
    "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "execution_records",
+   "venue_order_id",
+   "character varying",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "created_at",
+   "timestamp without time zone",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "exchange_id",
+   "character varying",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "execution_id",
+   "character varying",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "fee_amount",
+   "character varying",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "fee_asset",
+   "character varying",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "fee_id",
+   "character varying",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "fee_pct",
+   "character varying",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "fee_type",
+   "USER-DEFINED",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "gross_pnl",
+   "character varying",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "net_pnl",
+   "character varying",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "order_id",
+   "character varying",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "position_id",
+   "character varying",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "side",
+   "character varying",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "status",
+   "USER-DEFINED",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "symbol",
+   "character varying",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "tenant_id",
+   "uuid",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "fee_records",
+   "trade_volume",
+   "character varying",
+   "",
+   "NO",
    "",
    "NO",
    "",
@@ -2383,10 +2669,98 @@
   ],
   [
    "library_subscriptions",
+   "updated_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "library_subscriptions",
    "user_id",
    "uuid",
    "",
    "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "market_data_source_measurements",
+   "id",
+   "uuid",
+   "",
+   "NO",
+   "gen_random_uuid()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "market_data_source_measurements",
+   "measured",
+   "boolean",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "market_data_source_measurements",
+   "payload",
+   "jsonb",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "market_data_source_measurements",
+   "recorded_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "market_data_source_measurements",
+   "recorded_by",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "market_data_source_measurements",
+   "source",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "market_data_source_measurements",
+   "window_seconds",
+   "double precision",
+   "",
+   "YES",
    "",
    "NO",
    "",
@@ -4169,6 +4543,281 @@
    "uuid",
    "",
    "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "audit_id",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "average_price",
+   "numeric",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "client_order_id",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "decision_reason",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "error_message",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "event_type",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "exchange_id",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "exchange_order_id",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "exchange_response",
+   "jsonb",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "execution_id",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "fee",
+   "numeric",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "filled_amount",
+   "numeric",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "metadata",
+   "jsonb",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "occurred_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "order_type",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "price",
+   "numeric",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "recorded_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "remaining_amount",
+   "numeric",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "side",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "signal",
+   "jsonb",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "size",
+   "numeric",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "status",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "strategy_id",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "symbol",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "order_audit_log",
+   "user_id",
+   "uuid",
+   "",
+   "YES",
    "",
    "NO",
    "",
@@ -7091,6 +7740,17 @@
   ],
   [
    "profiles",
+   "cancel_at_period_end",
+   "boolean",
+   "",
+   "NO",
+   "false",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "profiles",
    "created_at",
    "timestamp with time zone",
    "",
@@ -7201,6 +7861,28 @@
   ],
   [
    "profiles",
+   "next_billing_date",
+   "timestamp with time zone",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "profiles",
+   "payment_provider",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "profiles",
    "plan_limit_overrides",
    "jsonb",
    "",
@@ -7245,6 +7927,17 @@
   ],
   [
    "profiles",
+   "subscription_status",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "profiles",
    "subscription_tier",
    "text",
    "",
@@ -7258,6 +7951,17 @@
    "profiles",
    "telegram_id",
    "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "profiles",
+   "trial_end_date",
+   "timestamp with time zone",
    "",
    "YES",
    "",
@@ -7641,6 +8345,17 @@
   ],
   [
    "referral_commissions",
+   "currency",
+   "text",
+   "",
+   "NO",
+   "'USD'::text",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_commissions",
    "id",
    "uuid",
    "",
@@ -7772,6 +8487,193 @@
    "NEVER"
   ],
   [
+   "referral_obligations",
+   "commission_amount",
+   "numeric",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "commission_rate",
+   "numeric",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "created_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "currency",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "detail",
+   "jsonb",
+   "",
+   "NO",
+   "'{}'::jsonb",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "obligation_id",
+   "uuid",
+   "",
+   "NO",
+   "gen_random_uuid()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "payment_amount",
+   "numeric",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "provider",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "provider_payment_id",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "reason_code",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "referred_id",
+   "uuid",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "referrer_id",
+   "uuid",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "reversed_at",
+   "timestamp with time zone",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "settled_at",
+   "timestamp with time zone",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "status",
+   "text",
+   "",
+   "NO",
+   "'unresolved'::text",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "subscription_tier",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_obligations",
+   "updated_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
    "referral_payouts",
    "amount_usd",
    "numeric",
@@ -7789,6 +8691,17 @@
    "",
    "YES",
    "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_payouts",
+   "currency",
+   "text",
+   "",
+   "NO",
+   "'USD'::text",
    "NO",
    "",
    "NEVER"
@@ -8097,6 +9010,17 @@
    "",
    "YES",
    "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "referral_wallets",
+   "currency",
+   "text",
+   "",
+   "NO",
+   "'USD'::text",
    "NO",
    "",
    "NEVER"
@@ -8542,6 +9466,127 @@
    "NEVER"
   ],
   [
+   "safety_control_audit",
+   "action",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "audit_id",
+   "uuid",
+   "",
+   "NO",
+   "gen_random_uuid()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "authorization_source",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "control",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "detail",
+   "jsonb",
+   "",
+   "NO",
+   "'{}'::jsonb",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "operator_email",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "operator_id",
+   "uuid",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "outcome",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "reason",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "recorded_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "safety_control_audit",
+   "triggered_by",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
    "schema_migrations",
    "applied_at",
    "timestamp with time zone",
@@ -8657,6 +9702,83 @@
    "uuid",
    "",
    "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "signal_audit_log",
+   "audit_id",
+   "uuid",
+   "",
+   "NO",
+   "gen_random_uuid()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "signal_audit_log",
+   "event_type",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "signal_audit_log",
+   "payload",
+   "jsonb",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "signal_audit_log",
+   "recorded_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "signal_audit_log",
+   "signal_id",
+   "uuid",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "signal_audit_log",
+   "strategy_id",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "signal_audit_log",
+   "user_id",
+   "uuid",
+   "",
+   "YES",
    "",
    "NO",
    "",
@@ -10000,6 +11122,17 @@
    "",
    "YES",
    "0",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "strategy_deployments",
+   "close_requested_at",
+   "timestamp with time zone",
+   "",
+   "YES",
+   "",
    "NO",
    "",
    "NEVER"
@@ -11402,6 +12535,138 @@
    "NEVER"
   ],
   [
+   "trade_history",
+   "close_reason",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "closed_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "entry_price",
+   "numeric",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "exit_price",
+   "numeric",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "realized_pnl",
+   "numeric",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "recorded_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "side",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "size",
+   "numeric",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "strategy_id",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "symbol",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "tenant_id",
+   "uuid",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "trade_history",
+   "trade_id",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
    "training_governance_decisions",
    "approved_epochs",
    "integer",
@@ -12489,12 +13754,86 @@
    "NO",
    "",
    "NEVER"
+  ],
+  [
+   "webhook_events",
+   "completed_at",
+   "timestamp with time zone",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "webhook_events",
+   "created_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "webhook_events",
+   "event_id",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "webhook_events",
+   "id",
+   "bigint",
+   "",
+   "NO",
+   "nextval('webhook_events_id_seq'::regclass)",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "webhook_events",
+   "provider",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "webhook_events",
+   "status",
+   "text",
+   "",
+   "NO",
+   "'processing'::text",
+   "NO",
+   "",
+   "NEVER"
   ]
  ],
  "enum_types": [
   [
    "executionstatus",
    "PENDING,EXECUTING,COMPLETED,FAILED,UNKNOWN"
+  ],
+  [
+   "feestatus",
+   "PENDING,DEDUCTED,REBATED"
+  ],
+  [
+   "feetype",
+   "MAKER,TAKER,FUNDING,LIQUIDATION,WITHDRAWAL,DEPOSIT"
   ],
   [
    "mismatch_severity_enum",
@@ -12587,6 +13926,16 @@
    "execution_records",
    "fk_execution_records_tenant_id",
    "FOREIGN KEY (tenant_id) REFERENCES profiles(id) ON DELETE CASCADE"
+  ],
+  [
+   "fee_records",
+   "fee_records_execution_id_fkey",
+   "FOREIGN KEY (execution_id) REFERENCES execution_records(execution_id)"
+  ],
+  [
+   "fee_records",
+   "fee_records_position_id_fkey",
+   "FOREIGN KEY (position_id) REFERENCES positions(position_id)"
   ],
   [
    "fills",
@@ -13136,6 +14485,11 @@
    false
   ],
   [
+   "decrement_available_discount",
+   "target_user_id uuid",
+   true
+  ],
+  [
    "fn_get_library_recent_ratings",
    "p_library_id uuid, p_limit integer",
    true
@@ -13157,6 +14511,21 @@
   ],
   [
    "generate_unique_referral_code",
+   "",
+   false
+  ],
+  [
+   "guard_entitlement_tables_service_only",
+   "",
+   false
+  ],
+  [
+   "guard_profiles_platform_columns",
+   "",
+   false
+  ],
+  [
+   "guard_strategy_deployments_browser_roles",
    "",
    false
   ],
@@ -13216,6 +14585,11 @@
    false
   ],
   [
+   "order_audit_log_append_only",
+   "",
+   false
+  ],
+  [
    "paper_append_only_guard",
    "",
    false
@@ -13238,7 +14612,12 @@
   [
    "process_referral_commission",
    "p_referred_id uuid, p_payment_id character varying, p_subscription_tier character varying, p_payment_amount_usd numeric",
-   false
+   true
+  ],
+  [
+   "record_referral_obligation",
+   "p_provider text, p_provider_payment_id text, p_referred_id uuid, p_payment_amount numeric, p_currency text, p_subscription_tier text, p_reason_code text, p_detail jsonb",
+   true
   ],
   [
    "reject_immutable_version_update",
@@ -13248,6 +14627,21 @@
   [
    "reverse_referral_commission",
    "p_payment_id character varying, p_reversal_reason text",
+   false
+  ],
+  [
+   "reverse_referral_obligation",
+   "p_provider text, p_provider_payment_id text, p_reason text",
+   true
+  ],
+  [
+   "signal_audit_log_append_only",
+   "",
+   false
+  ],
+  [
+   "trade_history_append_only",
+   "",
    false
   ],
   [
@@ -13331,6 +14725,21 @@
    "block_registry_snapshots",
    "block_registry_snapshots_pkey",
    "CREATE UNIQUE INDEX block_registry_snapshots_pkey ON public.block_registry_snapshots USING btree (registry_version)"
+  ],
+  [
+   "bot_ownership_claims",
+   "idx_bot_claims_heartbeat",
+   "CREATE INDEX idx_bot_claims_heartbeat ON public.bot_ownership_claims USING btree (heartbeat_at)"
+  ],
+  [
+   "bot_ownership_claims",
+   "idx_bot_claims_worker",
+   "CREATE INDEX idx_bot_claims_worker ON public.bot_ownership_claims USING btree (worker_name)"
+  ],
+  [
+   "bot_ownership_claims",
+   "pk_bot_ownership_claims",
+   "CREATE UNIQUE INDEX pk_bot_ownership_claims ON public.bot_ownership_claims USING btree (user_id, symbol)"
   ],
   [
    "copilot_messages",
@@ -13569,6 +14978,11 @@
   ],
   [
    "execution_records",
+   "idx_execution_records_venue_order_id",
+   "CREATE INDEX idx_execution_records_venue_order_id ON public.execution_records USING btree (venue_order_id) WHERE (venue_order_id IS NOT NULL)"
+  ],
+  [
+   "execution_records",
    "ix_execution_records_order_id",
    "CREATE INDEX ix_execution_records_order_id ON public.execution_records USING btree (order_id)"
   ],
@@ -13581,6 +14995,41 @@
    "execution_records",
    "ix_execution_records_tenant_id",
    "CREATE INDEX ix_execution_records_tenant_id ON public.execution_records USING btree (tenant_id)"
+  ],
+  [
+   "fee_records",
+   "fee_records_pkey",
+   "CREATE UNIQUE INDEX fee_records_pkey ON public.fee_records USING btree (fee_id)"
+  ],
+  [
+   "fee_records",
+   "idx_fee_records_execution",
+   "CREATE INDEX idx_fee_records_execution ON public.fee_records USING btree (execution_id)"
+  ],
+  [
+   "fee_records",
+   "idx_fee_records_position",
+   "CREATE INDEX idx_fee_records_position ON public.fee_records USING btree (position_id)"
+  ],
+  [
+   "fee_records",
+   "idx_fee_records_tenant_symbol",
+   "CREATE INDEX idx_fee_records_tenant_symbol ON public.fee_records USING btree (tenant_id, symbol)"
+  ],
+  [
+   "fee_records",
+   "idx_fee_records_type",
+   "CREATE INDEX idx_fee_records_type ON public.fee_records USING btree (fee_type)"
+  ],
+  [
+   "fee_records",
+   "ix_fee_records_order_id",
+   "CREATE INDEX ix_fee_records_order_id ON public.fee_records USING btree (order_id)"
+  ],
+  [
+   "fee_records",
+   "ix_fee_records_tenant_id",
+   "CREATE INDEX ix_fee_records_tenant_id ON public.fee_records USING btree (tenant_id)"
   ],
   [
    "fills",
@@ -13756,6 +15205,16 @@
    "library_subscriptions",
    "library_subscriptions_user_library_idx",
    "CREATE UNIQUE INDEX library_subscriptions_user_library_idx ON public.library_subscriptions USING btree (library_id, user_id)"
+  ],
+  [
+   "market_data_source_measurements",
+   "idx_market_data_source_measurements_latest",
+   "CREATE INDEX idx_market_data_source_measurements_latest ON public.market_data_source_measurements USING btree (source, recorded_at DESC)"
+  ],
+  [
+   "market_data_source_measurements",
+   "market_data_source_measurements_pkey",
+   "CREATE UNIQUE INDEX market_data_source_measurements_pkey ON public.market_data_source_measurements USING btree (id)"
   ],
   [
    "marketplace_analytics",
@@ -14001,6 +15460,21 @@
    "notifications",
    "notifications_pkey",
    "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (id)"
+  ],
+  [
+   "order_audit_log",
+   "idx_order_audit_log_execution",
+   "CREATE INDEX idx_order_audit_log_execution ON public.order_audit_log USING btree (execution_id, occurred_at)"
+  ],
+  [
+   "order_audit_log",
+   "idx_order_audit_log_user_time",
+   "CREATE INDEX idx_order_audit_log_user_time ON public.order_audit_log USING btree (user_id, occurred_at DESC)"
+  ],
+  [
+   "order_audit_log",
+   "order_audit_log_pkey",
+   "CREATE UNIQUE INDEX order_audit_log_pkey ON public.order_audit_log USING btree (audit_id)"
   ],
   [
    "order_lifecycle_transitions",
@@ -14389,6 +15863,11 @@
   ],
   [
    "profiles",
+   "idx_profiles_plan_period_end",
+   "CREATE INDEX idx_profiles_plan_period_end ON public.profiles USING btree (next_billing_date) WHERE ((payment_provider = 'razorpay'::text) AND (subscription_tier <> 'free'::text))"
+  ],
+  [
+   "profiles",
    "idx_profiles_preferred_currency",
    "CREATE INDEX idx_profiles_preferred_currency ON public.profiles USING btree (preferred_currency)"
   ],
@@ -14511,6 +15990,46 @@
    "referral_commissions",
    "referral_commissions_pkey",
    "CREATE UNIQUE INDEX referral_commissions_pkey ON public.referral_commissions USING btree (id)"
+  ],
+  [
+   "referral_commissions",
+   "uq_referral_commission_payment",
+   "CREATE UNIQUE INDEX uq_referral_commission_payment ON public.referral_commissions USING btree (payment_id) WHERE (payment_id IS NOT NULL)"
+  ],
+  [
+   "referral_obligations",
+   "idx_referral_obligations_currency",
+   "CREATE INDEX idx_referral_obligations_currency ON public.referral_obligations USING btree (currency)"
+  ],
+  [
+   "referral_obligations",
+   "idx_referral_obligations_outstanding",
+   "CREATE INDEX idx_referral_obligations_outstanding ON public.referral_obligations USING btree (created_at DESC) WHERE (status = ANY (ARRAY['unresolved'::text, 'payable'::text]))"
+  ],
+  [
+   "referral_obligations",
+   "idx_referral_obligations_referred",
+   "CREATE INDEX idx_referral_obligations_referred ON public.referral_obligations USING btree (referred_id)"
+  ],
+  [
+   "referral_obligations",
+   "idx_referral_obligations_referrer",
+   "CREATE INDEX idx_referral_obligations_referrer ON public.referral_obligations USING btree (referrer_id)"
+  ],
+  [
+   "referral_obligations",
+   "idx_referral_obligations_status_created",
+   "CREATE INDEX idx_referral_obligations_status_created ON public.referral_obligations USING btree (status, created_at DESC)"
+  ],
+  [
+   "referral_obligations",
+   "referral_obligations_pkey",
+   "CREATE UNIQUE INDEX referral_obligations_pkey ON public.referral_obligations USING btree (obligation_id)"
+  ],
+  [
+   "referral_obligations",
+   "uq_referral_obligation_event",
+   "CREATE UNIQUE INDEX uq_referral_obligation_event ON public.referral_obligations USING btree (provider, provider_payment_id)"
   ],
   [
    "referral_payouts",
@@ -14688,6 +16207,31 @@
    "CREATE UNIQUE INDEX risk_settings_audit_pkey ON public.risk_settings_audit USING btree (id)"
   ],
   [
+   "safety_control_audit",
+   "idx_safety_control_audit_control_time",
+   "CREATE INDEX idx_safety_control_audit_control_time ON public.safety_control_audit USING btree (control, recorded_at DESC)"
+  ],
+  [
+   "safety_control_audit",
+   "idx_safety_control_audit_operator",
+   "CREATE INDEX idx_safety_control_audit_operator ON public.safety_control_audit USING btree (operator_id)"
+  ],
+  [
+   "safety_control_audit",
+   "idx_safety_control_audit_recorded_at",
+   "CREATE INDEX idx_safety_control_audit_recorded_at ON public.safety_control_audit USING btree (recorded_at DESC)"
+  ],
+  [
+   "safety_control_audit",
+   "idx_safety_control_audit_refused",
+   "CREATE INDEX idx_safety_control_audit_refused ON public.safety_control_audit USING btree (control, recorded_at DESC) WHERE (outcome = 'REFUSED'::text)"
+  ],
+  [
+   "safety_control_audit",
+   "safety_control_audit_pkey",
+   "CREATE UNIQUE INDEX safety_control_audit_pkey ON public.safety_control_audit USING btree (audit_id)"
+  ],
+  [
    "schema_migrations",
    "schema_migrations_pkey",
    "CREATE UNIQUE INDEX schema_migrations_pkey ON public.schema_migrations USING btree (filename)"
@@ -14701,6 +16245,21 @@
    "security_logs",
    "security_logs_pkey",
    "CREATE UNIQUE INDEX security_logs_pkey ON public.security_logs USING btree (id)"
+  ],
+  [
+   "signal_audit_log",
+   "idx_signal_audit_log_signal",
+   "CREATE INDEX idx_signal_audit_log_signal ON public.signal_audit_log USING btree (signal_id, recorded_at)"
+  ],
+  [
+   "signal_audit_log",
+   "idx_signal_audit_log_user_time",
+   "CREATE INDEX idx_signal_audit_log_user_time ON public.signal_audit_log USING btree (user_id, recorded_at DESC)"
+  ],
+  [
+   "signal_audit_log",
+   "signal_audit_log_pkey",
+   "CREATE UNIQUE INDEX signal_audit_log_pkey ON public.signal_audit_log USING btree (audit_id)"
   ],
   [
    "signal_events",
@@ -14959,8 +16518,8 @@
   ],
   [
    "strategy_deployments",
-   "uq_strategy_deployments_one_live",
-   "CREATE UNIQUE INDEX uq_strategy_deployments_one_live ON public.strategy_deployments USING btree (strategy_id) WHERE ((status)::text = ANY ((ARRAY['deploying'::character varying, 'deployed'::character varying, 'pending'::character varying, 'queued'::character varying, 'starting'::character varying, 'restarting'::character varying, 'running'::character varying, 'active'::character varying, 'paused'::character varying])::text[]))"
+   "uq_strategy_deployments_one_live_per_user",
+   "CREATE UNIQUE INDEX uq_strategy_deployments_one_live_per_user ON public.strategy_deployments USING btree (user_id, strategy_id) WHERE ((status)::text = ANY ((ARRAY['deploying'::character varying, 'deployed'::character varying, 'pending'::character varying, 'queued'::character varying, 'starting'::character varying, 'restarting'::character varying, 'running'::character varying, 'active'::character varying, 'paused'::character varying])::text[]))"
   ],
   [
    "strategy_limits",
@@ -15188,6 +16747,26 @@
    "CREATE UNIQUE INDEX ticket_comments_pkey ON public.ticket_comments USING btree (id)"
   ],
   [
+   "trade_history",
+   "idx_trade_history_strategy",
+   "CREATE INDEX idx_trade_history_strategy ON public.trade_history USING btree (tenant_id, strategy_id)"
+  ],
+  [
+   "trade_history",
+   "idx_trade_history_tenant_symbol",
+   "CREATE INDEX idx_trade_history_tenant_symbol ON public.trade_history USING btree (tenant_id, symbol)"
+  ],
+  [
+   "trade_history",
+   "idx_trade_history_tenant_time",
+   "CREATE INDEX idx_trade_history_tenant_time ON public.trade_history USING btree (tenant_id, closed_at DESC)"
+  ],
+  [
+   "trade_history",
+   "trade_history_pkey",
+   "CREATE UNIQUE INDEX trade_history_pkey ON public.trade_history USING btree (trade_id)"
+  ],
+  [
    "training_governance_decisions",
    "idx_tgd_refusals",
    "CREATE INDEX idx_tgd_refusals ON public.training_governance_decisions USING btree (reason, created_at DESC) WHERE (decision = 'REFUSED'::text)"
@@ -15311,6 +16890,21 @@
    "waitlist",
    "waitlist_pkey",
    "CREATE UNIQUE INDEX waitlist_pkey ON public.waitlist USING btree (id)"
+  ],
+  [
+   "webhook_events",
+   "idx_webhook_events_created_at",
+   "CREATE INDEX idx_webhook_events_created_at ON public.webhook_events USING btree (status, created_at) WHERE (status = 'processing'::text)"
+  ],
+  [
+   "webhook_events",
+   "uq_webhook_events_provider_event",
+   "CREATE UNIQUE INDEX uq_webhook_events_provider_event ON public.webhook_events USING btree (provider, event_id)"
+  ],
+  [
+   "webhook_events",
+   "webhook_events_pkey",
+   "CREATE UNIQUE INDEX webhook_events_pkey ON public.webhook_events USING btree (id)"
   ]
  ],
  "policies": [
@@ -15349,6 +16943,24 @@
    "SELECT",
    "true",
    ""
+  ],
+  [
+   "bot_ownership_claims",
+   "bot_claims_owner_access",
+   "PERMISSIVE",
+   "authenticated",
+   "ALL",
+   "(auth.uid() = user_id)",
+   "(auth.uid() = user_id)"
+  ],
+  [
+   "bot_ownership_claims",
+   "bot_claims_service_role",
+   "PERMISSIVE",
+   "service_role",
+   "ALL",
+   "true",
+   "true"
   ],
   [
    "copilot_messages",
@@ -15477,6 +17089,24 @@
    "((auth.uid() = user_id) OR (auth.uid() = tenant_id))"
   ],
   [
+   "fee_records",
+   "fee_records_owner_access",
+   "PERMISSIVE",
+   "authenticated",
+   "SELECT",
+   "(auth.uid() = tenant_id)",
+   ""
+  ],
+  [
+   "fee_records",
+   "fee_records_service_role",
+   "PERMISSIVE",
+   "service_role",
+   "ALL",
+   "true",
+   "true"
+  ],
+  [
    "fills",
    "fills_owner_access",
    "PERMISSIVE",
@@ -15600,7 +17230,7 @@
    "authenticated",
    "UPDATE",
    "(author_id = auth.uid())",
-   ""
+   "(author_id = auth.uid())"
   ],
   [
    "library_subscription_transitions",
@@ -16189,6 +17819,24 @@
   ],
   [
    "payment_methods",
+   "payment_methods_app_delete",
+   "PERMISSIVE",
+   "payment_methods_app",
+   "DELETE",
+   "(auth.uid() = user_id)",
+   ""
+  ],
+  [
+   "payment_methods",
+   "payment_methods_app_select",
+   "PERMISSIVE",
+   "payment_methods_app",
+   "SELECT",
+   "(auth.uid() = user_id)",
+   ""
+  ],
+  [
+   "payment_methods",
    "payment_methods_owner_access",
    "PERMISSIVE",
    "authenticated",
@@ -16348,6 +17996,24 @@
    "SELECT",
    "(referrer_id = auth.uid())",
    ""
+  ],
+  [
+   "referral_obligations",
+   "referral_obligations_owner_select",
+   "PERMISSIVE",
+   "authenticated",
+   "SELECT",
+   "(referrer_id = auth.uid())",
+   ""
+  ],
+  [
+   "referral_obligations",
+   "referral_obligations_service_role",
+   "PERMISSIVE",
+   "service_role",
+   "ALL",
+   "true",
+   "true"
   ],
   [
    "referral_payouts",
@@ -16528,6 +18194,15 @@
    "SELECT",
    "((auth.uid())::text = (user_id)::text)",
    ""
+  ],
+  [
+   "safety_control_audit",
+   "safety_control_audit_service_role",
+   "PERMISSIVE",
+   "service_role",
+   "ALL",
+   "true",
+   "true"
   ],
   [
    "security_logs",
@@ -17024,6 +18699,11 @@
    "registry_version"
   ],
   [
+   "bot_ownership_claims",
+   "pk_bot_ownership_claims",
+   "symbol,user_id"
+  ],
+  [
    "copilot_messages",
    "copilot_messages_pkey",
    "id"
@@ -17064,6 +18744,11 @@
    "execution_id"
   ],
   [
+   "fee_records",
+   "fee_records_pkey",
+   "fee_id"
+  ],
+  [
    "fills",
    "fills_pkey",
    "id"
@@ -17096,6 +18781,11 @@
   [
    "library_subscriptions",
    "library_subscriptions_pkey",
+   "id"
+  ],
+  [
+   "market_data_source_measurements",
+   "market_data_source_measurements_pkey",
    "id"
   ],
   [
@@ -17157,6 +18847,11 @@
    "notifications",
    "notifications_pkey",
    "id"
+  ],
+  [
+   "order_audit_log",
+   "order_audit_log_pkey",
+   "audit_id"
   ],
   [
    "order_lifecycle_transitions",
@@ -17299,6 +18994,11 @@
    "id"
   ],
   [
+   "referral_obligations",
+   "referral_obligations_pkey",
+   "obligation_id"
+  ],
+  [
    "referral_payouts",
    "referral_payouts_pkey",
    "id"
@@ -17334,6 +19034,11 @@
    "id"
   ],
   [
+   "safety_control_audit",
+   "safety_control_audit_pkey",
+   "audit_id"
+  ],
+  [
    "schema_migrations",
    "schema_migrations_pkey",
    "filename"
@@ -17342,6 +19047,11 @@
    "security_logs",
    "security_logs_pkey",
    "id"
+  ],
+  [
+   "signal_audit_log",
+   "signal_audit_log_pkey",
+   "audit_id"
   ],
   [
    "signal_events",
@@ -17404,6 +19114,11 @@
    "id"
   ],
   [
+   "trade_history",
+   "trade_history_pkey",
+   "trade_id"
+  ],
+  [
    "training_governance_decisions",
    "training_governance_decisions_pkey",
    "id"
@@ -17431,6 +19146,11 @@
   [
    "waitlist",
    "waitlist_pkey",
+   "id"
+  ],
+  [
+   "webhook_events",
+   "webhook_events_pkey",
    "id"
   ]
  ],
@@ -17591,6 +19311,46 @@
    "UPDATE"
   ],
   [
+   "bot_ownership_claims",
+   "authenticated",
+   "SELECT"
+  ],
+  [
+   "bot_ownership_claims",
+   "service_role",
+   "DELETE"
+  ],
+  [
+   "bot_ownership_claims",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "bot_ownership_claims",
+   "service_role",
+   "REFERENCES"
+  ],
+  [
+   "bot_ownership_claims",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "bot_ownership_claims",
+   "service_role",
+   "TRIGGER"
+  ],
+  [
+   "bot_ownership_claims",
+   "service_role",
+   "TRUNCATE"
+  ],
+  [
+   "bot_ownership_claims",
+   "service_role",
+   "UPDATE"
+  ],
+  [
    "copilot_messages",
    "authenticated",
    "DELETE"
@@ -17813,42 +19573,12 @@
   [
    "deployment_permissions",
    "anon",
-   "DELETE"
-  ],
-  [
-   "deployment_permissions",
-   "anon",
-   "INSERT"
-  ],
-  [
-   "deployment_permissions",
-   "anon",
-   "SELECT"
-  ],
-  [
-   "deployment_permissions",
-   "anon",
-   "UPDATE"
-  ],
-  [
-   "deployment_permissions",
-   "authenticated",
-   "DELETE"
-  ],
-  [
-   "deployment_permissions",
-   "authenticated",
-   "INSERT"
-  ],
-  [
-   "deployment_permissions",
-   "authenticated",
    "SELECT"
   ],
   [
    "deployment_permissions",
    "authenticated",
-   "UPDATE"
+   "SELECT"
   ],
   [
    "deployment_permissions",
@@ -18107,6 +19837,41 @@
   ],
   [
    "execution_records",
+   "service_role",
+   "UPDATE"
+  ],
+  [
+   "fee_records",
+   "service_role",
+   "DELETE"
+  ],
+  [
+   "fee_records",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "fee_records",
+   "service_role",
+   "REFERENCES"
+  ],
+  [
+   "fee_records",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "fee_records",
+   "service_role",
+   "TRIGGER"
+  ],
+  [
+   "fee_records",
+   "service_role",
+   "TRUNCATE"
+  ],
+  [
+   "fee_records",
    "service_role",
    "UPDATE"
   ],
@@ -18378,22 +20143,7 @@
   [
    "library_strategies",
    "anon",
-   "DELETE"
-  ],
-  [
-   "library_strategies",
-   "anon",
-   "INSERT"
-  ],
-  [
-   "library_strategies",
-   "anon",
    "SELECT"
-  ],
-  [
-   "library_strategies",
-   "anon",
-   "UPDATE"
   ],
   [
    "library_strategies",
@@ -18403,17 +20153,7 @@
   [
    "library_strategies",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "library_strategies",
-   "authenticated",
    "SELECT"
-  ],
-  [
-   "library_strategies",
-   "authenticated",
-   "UPDATE"
   ],
   [
    "library_strategies",
@@ -18488,42 +20228,12 @@
   [
    "library_subscriptions",
    "anon",
-   "DELETE"
-  ],
-  [
-   "library_subscriptions",
-   "anon",
-   "INSERT"
-  ],
-  [
-   "library_subscriptions",
-   "anon",
-   "SELECT"
-  ],
-  [
-   "library_subscriptions",
-   "anon",
-   "UPDATE"
-  ],
-  [
-   "library_subscriptions",
-   "authenticated",
-   "DELETE"
-  ],
-  [
-   "library_subscriptions",
-   "authenticated",
-   "INSERT"
-  ],
-  [
-   "library_subscriptions",
-   "authenticated",
    "SELECT"
   ],
   [
    "library_subscriptions",
    "authenticated",
-   "UPDATE"
+   "SELECT"
   ],
   [
    "library_subscriptions",
@@ -18561,6 +20271,41 @@
    "UPDATE"
   ],
   [
+   "market_data_source_measurements",
+   "service_role",
+   "DELETE"
+  ],
+  [
+   "market_data_source_measurements",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "market_data_source_measurements",
+   "service_role",
+   "REFERENCES"
+  ],
+  [
+   "market_data_source_measurements",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "market_data_source_measurements",
+   "service_role",
+   "TRIGGER"
+  ],
+  [
+   "market_data_source_measurements",
+   "service_role",
+   "TRUNCATE"
+  ],
+  [
+   "market_data_source_measurements",
+   "service_role",
+   "UPDATE"
+  ],
+  [
    "marketplace_analytics",
    "service_role",
    "DELETE"
@@ -18594,11 +20339,6 @@
    "marketplace_analytics",
    "service_role",
    "UPDATE"
-  ],
-  [
-   "marketplace_backtest_evidence",
-   "authenticated",
-   "INSERT"
   ],
   [
    "marketplace_backtest_evidence",
@@ -18704,11 +20444,6 @@
    "marketplace_listings",
    "service_role",
    "UPDATE"
-  ],
-  [
-   "marketplace_price_evaluations",
-   "authenticated",
-   "INSERT"
   ],
   [
    "marketplace_price_evaluations",
@@ -19141,6 +20876,41 @@
    "UPDATE"
   ],
   [
+   "order_audit_log",
+   "service_role",
+   "DELETE"
+  ],
+  [
+   "order_audit_log",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "order_audit_log",
+   "service_role",
+   "REFERENCES"
+  ],
+  [
+   "order_audit_log",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "order_audit_log",
+   "service_role",
+   "TRIGGER"
+  ],
+  [
+   "order_audit_log",
+   "service_role",
+   "TRUNCATE"
+  ],
+  [
+   "order_audit_log",
+   "service_role",
+   "UPDATE"
+  ],
+  [
    "order_lifecycle_transitions",
    "anon",
    "DELETE"
@@ -19293,17 +21063,7 @@
   [
    "paper_accounts",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "paper_accounts",
-   "authenticated",
    "SELECT"
-  ],
-  [
-   "paper_accounts",
-   "authenticated",
-   "UPDATE"
   ],
   [
    "paper_accounts",
@@ -19343,11 +21103,6 @@
   [
    "paper_balance_events",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "paper_balance_events",
-   "authenticated",
    "SELECT"
   ],
   [
@@ -19374,11 +21129,6 @@
    "paper_balance_events",
    "service_role",
    "TRUNCATE"
-  ],
-  [
-   "paper_equity_snapshots",
-   "authenticated",
-   "INSERT"
   ],
   [
    "paper_equity_snapshots",
@@ -19413,11 +21163,6 @@
   [
    "paper_events",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "paper_events",
-   "authenticated",
    "SELECT"
   ],
   [
@@ -19448,11 +21193,6 @@
   [
    "paper_fills",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "paper_fills",
-   "authenticated",
    "SELECT"
   ],
   [
@@ -19479,11 +21219,6 @@
    "paper_fills",
    "service_role",
    "TRUNCATE"
-  ],
-  [
-   "paper_market_events",
-   "authenticated",
-   "INSERT"
   ],
   [
    "paper_market_events",
@@ -19518,17 +21253,7 @@
   [
    "paper_metrics",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "paper_metrics",
-   "authenticated",
    "SELECT"
-  ],
-  [
-   "paper_metrics",
-   "authenticated",
-   "UPDATE"
   ],
   [
    "paper_metrics",
@@ -19608,17 +21333,7 @@
   [
    "paper_orders",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "paper_orders",
-   "authenticated",
    "SELECT"
-  ],
-  [
-   "paper_orders",
-   "authenticated",
-   "UPDATE"
   ],
   [
    "paper_orders",
@@ -19658,17 +21373,7 @@
   [
    "paper_positions",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "paper_positions",
-   "authenticated",
    "SELECT"
-  ],
-  [
-   "paper_positions",
-   "authenticated",
-   "UPDATE"
   ],
   [
    "paper_positions",
@@ -19748,17 +21453,7 @@
   [
    "paper_sessions",
    "authenticated",
-   "INSERT"
-  ],
-  [
-   "paper_sessions",
-   "authenticated",
    "SELECT"
-  ],
-  [
-   "paper_sessions",
-   "authenticated",
-   "UPDATE"
   ],
   [
    "paper_sessions",
@@ -19794,11 +21489,6 @@
    "paper_sessions",
    "service_role",
    "UPDATE"
-  ],
-  [
-   "paper_trades",
-   "authenticated",
-   "INSERT"
   ],
   [
    "paper_trades",
@@ -20288,32 +21978,12 @@
   [
    "profiles",
    "anon",
-   "DELETE"
-  ],
-  [
-   "profiles",
-   "anon",
-   "INSERT"
-  ],
-  [
-   "profiles",
-   "anon",
    "SELECT"
   ],
   [
    "profiles",
    "anon",
    "UPDATE"
-  ],
-  [
-   "profiles",
-   "authenticated",
-   "DELETE"
-  ],
-  [
-   "profiles",
-   "authenticated",
-   "INSERT"
   ],
   [
    "profiles",
@@ -20586,6 +22256,26 @@
    "UPDATE"
   ],
   [
+   "referral_obligations",
+   "authenticated",
+   "SELECT"
+  ],
+  [
+   "referral_obligations",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "referral_obligations",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "referral_obligations",
+   "service_role",
+   "UPDATE"
+  ],
+  [
    "referral_payouts",
    "anon",
    "DELETE"
@@ -21111,6 +22801,16 @@
    "UPDATE"
   ],
   [
+   "safety_control_audit",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "safety_control_audit",
+   "service_role",
+   "SELECT"
+  ],
+  [
    "security_logs",
    "anon",
    "DELETE"
@@ -21182,6 +22882,41 @@
   ],
   [
    "security_logs",
+   "service_role",
+   "UPDATE"
+  ],
+  [
+   "signal_audit_log",
+   "service_role",
+   "DELETE"
+  ],
+  [
+   "signal_audit_log",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "signal_audit_log",
+   "service_role",
+   "REFERENCES"
+  ],
+  [
+   "signal_audit_log",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "signal_audit_log",
+   "service_role",
+   "TRIGGER"
+  ],
+  [
+   "signal_audit_log",
+   "service_role",
+   "TRUNCATE"
+  ],
+  [
+   "signal_audit_log",
    "service_role",
    "UPDATE"
   ],
@@ -22047,6 +23782,41 @@
   ],
   [
    "ticket_comments",
+   "service_role",
+   "UPDATE"
+  ],
+  [
+   "trade_history",
+   "service_role",
+   "DELETE"
+  ],
+  [
+   "trade_history",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "trade_history",
+   "service_role",
+   "REFERENCES"
+  ],
+  [
+   "trade_history",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "trade_history",
+   "service_role",
+   "TRIGGER"
+  ],
+  [
+   "trade_history",
+   "service_role",
+   "TRUNCATE"
+  ],
+  [
+   "trade_history",
    "service_role",
    "UPDATE"
   ],
@@ -22387,6 +24157,41 @@
   ],
   [
    "waitlist",
+   "service_role",
+   "UPDATE"
+  ],
+  [
+   "webhook_events",
+   "service_role",
+   "DELETE"
+  ],
+  [
+   "webhook_events",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "webhook_events",
+   "service_role",
+   "REFERENCES"
+  ],
+  [
+   "webhook_events",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "webhook_events",
+   "service_role",
+   "TRIGGER"
+  ],
+  [
+   "webhook_events",
+   "service_role",
+   "TRUNCATE"
+  ],
+  [
+   "webhook_events",
    "service_role",
    "UPDATE"
   ]
@@ -22563,6 +24368,136 @@
    "step1"
   ],
   [
+   "migrations/022_fix_library_subscriptions_updated_at.sql",
+   "604b5aaac46a4b7e0caad30600ce917a0da5e1cc2355ab94284815f0746e1534",
+   "step1"
+  ],
+  [
+   "migrations/023_remediate_privilege_escalation.sql",
+   "918f268ec7ab7936205cc365f848782be92c5bbfb0d0db43454bc9e3e8db4e63",
+   "step1"
+  ],
+  [
+   "migrations/024_remediate_referral_double_commission.sql",
+   "2ff5958a1026523b6ca22dfa4f5d4874fe7059511541c7ce71885c4835e33b1d",
+   "step1"
+  ],
+  [
+   "migrations/025_work03_bot_ownership_claims.sql",
+   "3dec123362075bd4282536603bf5093893fc4909c171a5180481e685effc6e74",
+   "step1"
+  ],
+  [
+   "migrations/026_fee_records_row_level_security.sql",
+   "588e6b6d010f4602f148c19112bb05cb04ac4ea16f782899f920bcfbfea67f96",
+   "step1"
+  ],
+  [
+   "migrations/027_referral_ledger_currency.sql",
+   "26b6e82d4bd8ed620cffda992de76ff31b98690d0a93d3de113b7652cabc7c83",
+   "step1"
+  ],
+  [
+   "migrations/028_safety_control_audit.sql",
+   "953089a10af73bd85a59df79192e8041b607bcafce8a00e2172ea26d62afc5e4",
+   "step1"
+  ],
+  [
+   "migrations/029_referral_obligations.sql",
+   "60f94f12befabd8f005c7c655469c3676e2659a3ddf846fa3adfcad5134206e8",
+   "step1"
+  ],
+  [
+   "migrations/030_execution_venue_order_id.sql",
+   "d7d4d06a115b9019f5bb2f288ad691448b1c8b2592f0a6bc9da433027355c911",
+   "step1"
+  ],
+  [
+   "migrations/031_fee_records_fee_pct_nullable.sql",
+   "9632a2548c6773bb81385722004f0f057dc81870ebec2c5add96f2285adc443e",
+   "step1"
+  ],
+  [
+   "migrations/032_referral_payouts_terminal_evidence.sql",
+   "8d7a3249cec57787b4a5642c61dcc972564f481a28e6439029b7d6bba3074fca",
+   "step1"
+  ],
+  [
+   "migrations/033_profiles_platform_column_guard.sql",
+   "78e02b9d8763f7a4e75c4370861bca5b41f168f5dbbdaf1c5116444b58c6bac8",
+   "step1"
+  ],
+  [
+   "migrations/034_strategy_deployments_browser_role_guard.sql",
+   "89d03f5027940e379637ba22afcdea33ca608a6888151b6d738003294e742294",
+   "step1"
+  ],
+  [
+   "migrations/035_marketplace_entitlement_tables_service_only.sql",
+   "08efd46c379614086d8c8c673d695318f7748c48cf1bdc3601e5418f487cc760",
+   "step1"
+  ],
+  [
+   "migrations/036_order_audit_log_durable.sql",
+   "e750355836b84950198e8b0a1744a664dd6022ca886b7de804feb692d90fc8af",
+   "step1"
+  ],
+  [
+   "migrations/037_profiles_billing_period_columns.sql",
+   "fc81f0db8d92f3531ae53509f14f887a35b131cf0107c0c688dd9582e80c5520",
+   "step1"
+  ],
+  [
+   "migrations/038_strategy_deployments_close_request.sql",
+   "7de22004f5868116e0e6949af61c1b1d29777d3d0848d8bb920f53745a60ba8d",
+   "step1"
+  ],
+  [
+   "migrations/039_market_data_source_measurements.sql",
+   "a5ecd5efb0ee6ebda93474efd204b82018cc297b72a803199c709754306784d2",
+   "step1"
+  ],
+  [
+   "migrations/040_trade_history_durable.sql",
+   "ce0fafed773856a8b2b2c6e5b5c389286f27c730ee5c847780871db1af332c50",
+   "step1"
+  ],
+  [
+   "migrations/041_decrement_available_discount.sql",
+   "40bc2f46e786193754949a1ead7f24100e8b6eac3de363c15c3b93a14bded263",
+   "step1"
+  ],
+  [
+   "migrations/042_marketplace_evidence_service_role_only_write.sql",
+   "e02b048e852cfaaefdd295de058b5c4e9a40f5338f3d62483abc4c61a9e11fe6",
+   "step1"
+  ],
+  [
+   "migrations/043_paper_trading_service_role_only_write.sql",
+   "772d309441b695297c2ef87530cebc1d7b35d956a46ff54798e1bcea7a94c6d6",
+   "step1"
+  ],
+  [
+   "migrations/044_mkt04_rekey_live_deployment_uniqueness.sql",
+   "c0eb3c6e8c0877c94e369cc4115836198f57d9ac91d97951a3fc06e5f56f0f51",
+   "step1"
+  ],
+  [
+   "migrations/045_sec03_durable_webhook_events.sql",
+   "47e273ade4045cf809e61e4b69c1f38551de85246ebf792ad185c1c85bc1bc08",
+   "step1"
+  ],
+  [
+   "migrations/046_signal_audit_log.sql",
+   "4811be75a4416b63b1a4994cdab5fe19f439a96045c357740f177a60d5820afb",
+   "step1"
+  ],
+  [
+   "migrations/047_tenant01_restricted_payment_methods_role.sql",
+   "af9ec37bdc09460638dd3ac7ecbe243aaa1fb159c79730efb47cd51d13f4fb9a",
+   "step1"
+  ],
+  [
    "migrations/add_billing_currency_and_dag_hash.sql",
    "4b2ac2899820d0a43407671ab4b4648af994d98210a66347c6c05a022740719f",
    "step1"
@@ -22660,6 +24595,11 @@
    false
   ],
   [
+   "bot_ownership_claims",
+   true,
+   false
+  ],
+  [
    "copilot_messages",
    true,
    false
@@ -22700,6 +24640,11 @@
    false
   ],
   [
+   "fee_records",
+   true,
+   false
+  ],
+  [
    "fills",
    true,
    false
@@ -22731,6 +24676,11 @@
   ],
   [
    "library_subscriptions",
+   true,
+   false
+  ],
+  [
+   "market_data_source_measurements",
    true,
    false
   ],
@@ -22791,6 +24741,11 @@
   ],
   [
    "notifications",
+   true,
+   false
+  ],
+  [
+   "order_audit_log",
    true,
    false
   ],
@@ -22935,6 +24890,11 @@
    false
   ],
   [
+   "referral_obligations",
+   true,
+   false
+  ],
+  [
    "referral_payouts",
    true,
    false
@@ -22970,12 +24930,22 @@
    false
   ],
   [
+   "safety_control_audit",
+   true,
+   false
+  ],
+  [
    "schema_migrations",
    false,
    false
   ],
   [
    "security_logs",
+   true,
+   false
+  ],
+  [
+   "signal_audit_log",
    true,
    false
   ],
@@ -23040,6 +25010,11 @@
    false
   ],
   [
+   "trade_history",
+   true,
+   false
+  ],
+  [
    "training_governance_decisions",
    true,
    false
@@ -23068,11 +25043,19 @@
    "waitlist",
    true,
    false
+  ],
+  [
+   "webhook_events",
+   true,
+   false
   ]
  ],
  "sequences": [
   [
    "reconciliation_mismatches_id_seq"
+  ],
+  [
+   "webhook_events_id_seq"
   ]
  ],
  "tables": [
@@ -23089,6 +25072,10 @@
    "postgres"
   ],
   [
+   "bot_ownership_claims",
+   "postgres"
+  ],
+  [
    "copilot_messages",
    "postgres"
   ],
@@ -23121,6 +25108,10 @@
    "postgres"
   ],
   [
+   "fee_records",
+   "postgres"
+  ],
+  [
    "fills",
    "postgres"
   ],
@@ -23146,6 +25137,10 @@
   ],
   [
    "library_subscriptions",
+   "postgres"
+  ],
+  [
+   "market_data_source_measurements",
    "postgres"
   ],
   [
@@ -23194,6 +25189,10 @@
   ],
   [
    "notifications",
+   "postgres"
+  ],
+  [
+   "order_audit_log",
    "postgres"
   ],
   [
@@ -23309,6 +25308,10 @@
    "postgres"
   ],
   [
+   "referral_obligations",
+   "postgres"
+  ],
+  [
    "referral_payouts",
    "postgres"
   ],
@@ -23337,11 +25340,19 @@
    "postgres"
   ],
   [
+   "safety_control_audit",
+   "postgres"
+  ],
+  [
    "schema_migrations",
    "postgres"
   ],
   [
    "security_logs",
+   "postgres"
+  ],
+  [
+   "signal_audit_log",
    "postgres"
   ],
   [
@@ -23393,6 +25404,10 @@
    "postgres"
   ],
   [
+   "trade_history",
+   "postgres"
+  ],
+  [
    "training_governance_decisions",
    "postgres"
   ],
@@ -23415,6 +25430,10 @@
   [
    "waitlist",
    "postgres"
+  ],
+  [
+   "webhook_events",
+   "postgres"
   ]
  ],
  "triggers": [
@@ -23427,6 +25446,11 @@
    "deployment_permissions",
    "trg_deployment_permissions_updated_at",
    "update_deployment_permissions_updated_at"
+  ],
+  [
+   "deployment_permissions",
+   "trg_guard_deployment_permissions_service_only",
+   "guard_entitlement_tables_service_only"
   ],
   [
    "exchange_connections",
@@ -23462,6 +25486,11 @@
    "library_subscription_transitions",
    "trg_library_subscription_transitions_updated_at",
    "marketplace_touch_updated_at"
+  ],
+  [
+   "library_subscriptions",
+   "trg_guard_library_subscriptions_service_only",
+   "guard_entitlement_tables_service_only"
   ],
   [
    "library_subscriptions",
@@ -23547,6 +25576,16 @@
    "marketplace_subscription_allowed_transitions",
    "trg_marketplace_subscription_allowed_transitions_updated_at",
    "marketplace_touch_updated_at"
+  ],
+  [
+   "order_audit_log",
+   "trg_order_audit_log_no_truncate",
+   "order_audit_log_append_only"
+  ],
+  [
+   "order_audit_log",
+   "trg_order_audit_log_no_update_delete",
+   "order_audit_log_append_only"
   ],
   [
    "paper_accounts",
@@ -23664,6 +25703,11 @@
    "trigger_create_referral_code"
   ],
   [
+   "profiles",
+   "trg_guard_profiles_platform_columns",
+   "guard_profiles_platform_columns"
+  ],
+  [
    "referral_profiles",
    "trg_referral_profiles_updated_at",
    "update_referral_profiles_updated_at"
@@ -23679,6 +25723,16 @@
    "update_updated_at_column"
   ],
   [
+   "signal_audit_log",
+   "trg_signal_audit_log_no_truncate",
+   "signal_audit_log_append_only"
+  ],
+  [
+   "signal_audit_log",
+   "trg_signal_audit_log_no_update_delete",
+   "signal_audit_log_append_only"
+  ],
+  [
    "signals",
    "trigger_update_signals_updated_at",
    "update_signals_updated_at"
@@ -23687,6 +25741,11 @@
    "strategy_backtests",
    "update_strategy_backtests_updated_at",
    "update_updated_at_column"
+  ],
+  [
+   "strategy_deployments",
+   "trg_guard_strategy_deployments_browser_roles",
+   "guard_strategy_deployments_browser_roles"
   ],
   [
    "strategy_deployments",
@@ -23722,6 +25781,16 @@
    "strategy_versions",
    "update_strategy_versions_updated_at",
    "update_updated_at_column"
+  ],
+  [
+   "trade_history",
+   "trg_trade_history_no_truncate",
+   "trade_history_append_only"
+  ],
+  [
+   "trade_history",
+   "trg_trade_history_no_update_delete",
+   "trade_history_append_only"
   ]
  ],
  "unique_and_check_constraints": [
@@ -23730,6 +25799,18 @@
    "chk_brs_descriptors_shape",
    "c",
    "CHECK (((jsonb_typeof(descriptors) = 'object'::text) AND (jsonb_typeof((descriptors -> 'blocks'::text)) = 'array'::text) AND ((descriptors ->> 'registry_version'::text) = registry_version)))"
+  ],
+  [
+   "bot_ownership_claims",
+   "chk_bot_claim_state",
+   "c",
+   "CHECK ((state = ANY (ARRAY['STARTING'::text, 'ACTIVE'::text, 'STOPPING'::text])))"
+  ],
+  [
+   "bot_ownership_claims",
+   "chk_bot_claim_symbol_nonempty",
+   "c",
+   "CHECK ((length(btrim(symbol)) > 0))"
   ],
   [
    "copilot_messages",
@@ -24231,9 +26312,75 @@
   ],
   [
    "referral_commissions",
+   "chk_referral_commissions_currency_usd",
+   "c",
+   "CHECK ((currency = 'USD'::text))"
+  ],
+  [
+   "referral_commissions",
    "referral_commissions_status_check",
    "c",
    "CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'approved'::character varying, 'paid'::character varying, 'reversed'::character varying])::text[])))"
+  ],
+  [
+   "referral_obligations",
+   "chk_referral_obligations_amount_positive",
+   "c",
+   "CHECK ((payment_amount > (0)::numeric))"
+  ],
+  [
+   "referral_obligations",
+   "chk_referral_obligations_commission_coherent",
+   "c",
+   "CHECK ((((commission_amount IS NULL) AND (commission_rate IS NULL)) OR ((commission_amount >= (0)::numeric) AND (commission_rate IS NOT NULL))))"
+  ],
+  [
+   "referral_obligations",
+   "chk_referral_obligations_currency_format",
+   "c",
+   "CHECK ((currency ~ '^[A-Z]{3}$'::text))"
+  ],
+  [
+   "referral_obligations",
+   "chk_referral_obligations_provider_not_blank",
+   "c",
+   "CHECK (((btrim(provider) <> ''::text) AND (btrim(provider_payment_id) <> ''::text)))"
+  ],
+  [
+   "referral_obligations",
+   "chk_referral_obligations_reason_not_blank",
+   "c",
+   "CHECK ((btrim(reason_code) <> ''::text))"
+  ],
+  [
+   "referral_obligations",
+   "chk_referral_obligations_status",
+   "c",
+   "CHECK ((status = ANY (ARRAY['unresolved'::text, 'payable'::text, 'settled'::text, 'reversed'::text, 'refused'::text])))"
+  ],
+  [
+   "referral_obligations",
+   "chk_referral_obligations_terminal_timestamps",
+   "c",
+   "CHECK ((((status <> 'settled'::text) OR (settled_at IS NOT NULL)) AND ((status <> 'reversed'::text) OR (reversed_at IS NOT NULL))))"
+  ],
+  [
+   "referral_obligations",
+   "uq_referral_obligation_event",
+   "u",
+   "UNIQUE (provider, provider_payment_id)"
+  ],
+  [
+   "referral_payouts",
+   "chk_referral_payouts_currency_usd",
+   "c",
+   "CHECK ((currency = 'USD'::text))"
+  ],
+  [
+   "referral_payouts",
+   "chk_referral_payouts_terminal_evidence",
+   "c",
+   "CHECK ((((status)::text <> 'completed'::text) OR (processed_at IS NOT NULL)))"
   ],
   [
    "referral_payouts",
@@ -24279,6 +26426,12 @@
   ],
   [
    "referral_wallets",
+   "chk_referral_wallets_currency_usd",
+   "c",
+   "CHECK ((currency = 'USD'::text))"
+  ],
+  [
+   "referral_wallets",
    "uq_referral_wallets_user",
    "u",
    "UNIQUE (user_id)"
@@ -24294,6 +26447,36 @@
    "risk_settings_user_id_key",
    "u",
    "UNIQUE (user_id)"
+  ],
+  [
+   "safety_control_audit",
+   "chk_safety_control_audit_action",
+   "c",
+   "CHECK ((action = ANY (ARRAY['ACTIVATE'::text, 'DEACTIVATE'::text])))"
+  ],
+  [
+   "safety_control_audit",
+   "chk_safety_control_audit_outcome",
+   "c",
+   "CHECK ((outcome = ANY (ARRAY['APPLIED'::text, 'REFUSED'::text])))"
+  ],
+  [
+   "safety_control_audit",
+   "chk_safety_control_audit_reason_not_blank",
+   "c",
+   "CHECK ((btrim(reason) <> ''::text))"
+  ],
+  [
+   "safety_control_audit",
+   "chk_safety_control_audit_triggered_by_not_blank",
+   "c",
+   "CHECK ((btrim(triggered_by) <> ''::text))"
+  ],
+  [
+   "signal_audit_log",
+   "signal_audit_log_event_type_check",
+   "c",
+   "CHECK ((event_type = ANY (ARRAY['created'::text, 'risk_decision'::text, 'order'::text, 'execution'::text])))"
   ],
   [
    "signals",
@@ -24456,6 +26639,18 @@
    "waitlist_email_key",
    "u",
    "UNIQUE (email)"
+  ],
+  [
+   "webhook_events",
+   "chk_webhook_events_status",
+   "c",
+   "CHECK ((status = ANY (ARRAY['processing'::text, 'completed'::text])))"
+  ],
+  [
+   "webhook_events",
+   "uq_webhook_events_provider_event",
+   "u",
+   "UNIQUE (provider, event_id)"
   ]
  ]
 }
