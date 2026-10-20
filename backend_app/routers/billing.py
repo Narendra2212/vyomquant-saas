@@ -2755,15 +2755,9 @@ async def stripe_webhook(
                     try:
                         sb = _background_sb()
                         sb.rpc("process_referral_commission", {
-                            # MONEY-01 follow-up: the installed function's second
-                            # parameter is named p_referred_user_id, not p_referred_id
-                            # (confirmed against the live catalogue -- CREATE OR REPLACE
-                            # FUNCTION cannot rename a parameter without DROP FUNCTION
-                            # first, so the database side keeps this name). PostgREST
-                            # resolves a dict-based .rpc() call by NAME, so a mismatch
-                            # here made every call fail with "function not found" --
-                            # caught by the except below and logged, never raised --
-                            # which is why this path shows zero successful credits.
+                            # BILL-07: the installed function names this param
+                            # p_referred_user_id, not p_referred_id -- see that
+                            # ledger entry for why (PostgREST matches by name).
                             "p_referred_user_id": user_id,
                             "p_payment_id": payment_id,
                             "p_subscription_tier": _tier,
