@@ -207,18 +207,26 @@ async def delete_account(
     # The one step that must land. Not caught: a profile that was never anonymised and
     # never frozen is not a deleted account, and the caller must see this as a failure
     # rather than a success with a quiet asterisk.
-    anonymised_fields = {
-        "username": None,
-        "display_name": "Deleted User",
-        "avatar_url": None,
-        "bio": None,
-        "telegram_id": None,
-        "email": f"deleted-{user_id}@deleted.invalid",
-        "full_name": None,
-        "is_frozen": True,
-    }
+    # Inlined (not assigned to a variable first) so the schema-drift guard
+    # (tests/test_schema_table_reference_drift.py) can resolve this literal dict against
+    # `profiles`' declared columns statically, the same way every other UPDATE in this
+    # codebase is checked.
     response = (
-        supabase.table("profiles").update(anonymised_fields).eq("id", user_id).execute()
+        supabase.table("profiles")
+        .update(
+            {
+                "username": None,
+                "display_name": "Deleted User",
+                "avatar_url": None,
+                "bio": None,
+                "telegram_id": None,
+                "email": f"deleted-{user_id}@deleted.invalid",
+                "full_name": None,
+                "is_frozen": True,
+            }
+        )
+        .eq("id", user_id)
+        .execute()
     )
     updated_rows = getattr(response, "data", None) or []
     if not updated_rows:
