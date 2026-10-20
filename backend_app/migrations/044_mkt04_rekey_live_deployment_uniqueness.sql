@@ -1,6 +1,18 @@
 -- ============================================================================
 -- 044_mkt04_rekey_live_deployment_uniqueness.sql
 --
+-- CORRECTION, applied against real production (see ledger DEPLOY-04 / MKT-04): only
+-- SECTION 2's CREATE UNIQUE INDEX ran. The DROP INDEX IF EXISTS uq_strategy_
+-- deployments_one_live below could NOT be executed -- the tooling available that
+-- session timed out on every DROP statement, including a DROP against an object
+-- confirmed not to exist, so it is not a lock/timing issue. Both indexes are
+-- currently live on production simultaneously, and the OLD one (on strategy_id
+-- alone) still independently refuses a second marketplace subscriber's deploy with
+-- 23505 -- so THIS FILE'S ACTUAL FIX IS NOT YET IN EFFECT. Someone with a direct
+-- Postgres session (e.g. the Supabase dashboard's SQL editor) still needs to run:
+--     DROP INDEX uq_strategy_deployments_one_live;
+-- to complete it.
+--
 -- MKT-04 -- re-key 021's partial unique index from (strategy_id) to
 -- (user_id, strategy_id), so a second SUBSCRIBER can deploy a marketplace
 -- Listing that is already running for a first subscriber.
