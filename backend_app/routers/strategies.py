@@ -1351,8 +1351,20 @@ async def create_strategy(
 
 
 # ── GET /api/strategies/{id} ─────────────────────────────────────────────
+#
+# 200/minute. API-01 (commit 396d210) deleted strategy_operations.py's own
+# "@router.get('/strategies/{strategy_id}')" as a permanently shadowed duplicate of this
+# route -- correctly, since this one always won the identical path. But the deleted copy
+# carried "@limiter.limit('200/minute')" and this one never did, so the deletion silently
+# dropped the rate limit along with the dead code (tests/test_task_8_2_deploy_preflight.py
+# caught this comparing against preflight_deploy_version's own 200/minute, which was
+# deliberately set to match this endpoint under Requirement 22.2 -- "the same 'get' action
+# on the closest equivalent resource" -- and has nothing to match against once this one
+# has none).
 @router.get("/{strategy_id}")
+@limiter.limit("200/minute")
 async def get_strategy_route(
+    request: Request,
     strategy_id: str,
     user: dict = Depends(get_current_user),
 ):

@@ -231,13 +231,25 @@ class TestTheRouteIsReachableAndNotShadowed:
 
         ``GET /strategies/{strategy_id}`` is that endpoint, and it is read out of the
         router rather than restated here, so the two cannot drift apart.
+
+        It used to live in ``strategy_operations.py`` under the exact decorator this test
+        originally searched for, but API-01 (commit 396d210) deleted that copy as a
+        permanently shadowed duplicate of ``strategies.py``'s own ``@router.get("/{strategy_id}")``
+        (mounted first, so it always won the identical path) -- correctly, since it was
+        dead code. The deletion silently took the ``200/minute`` limiter with it, which this
+        test caught: the live route had no limiter left to compare against, so it was
+        given one back (see ``strategies.py``'s own comment on ``get_strategy_route``),
+        and this test now reads the comparison from where that route actually lives.
         """
-        source = ROUTER_PATH.read_text(encoding="utf-8")
-        comparable = source.index('@router.get("/strategies/{strategy_id}")')
-        comparable_limit = source[comparable : comparable + 200].split(
+        comparable_source = (
+            REPO_ROOT / "backend_app" / "routers" / "strategies.py"
+        ).read_text(encoding="utf-8")
+        comparable = comparable_source.index('@router.get("/{strategy_id}")')
+        comparable_limit = comparable_source[comparable : comparable + 200].split(
             "@limiter.limit(", 1
         )[1].split(")", 1)[0]
 
+        source = ROUTER_PATH.read_text(encoding="utf-8")
         preflight = source.index("async def preflight_deploy_version(")
         preflight_limit = source[preflight - 400 : preflight].rsplit(
             "@limiter.limit(", 1
