@@ -214,7 +214,12 @@ EXPECTED_BACKTEST_IMPORTERS: FrozenSet[Tuple[str, int, str]] = frozenset(
             "backend_app.backend.backtest_runtime",
         ),
         ("backend_app/routers/strategies.py", 0, "backend_app.backend.backtest_runtime"),
-        ("backend_app/routers/strategies.py", 1, "backend_app.backend.backtest_runtime"),
+        # The depth-1 occurrence (a second, duplicate import of this module in the same
+        # file) is gone -- confirmed strategies.py now imports backend_app.backend.
+        # backtest_runtime exactly once (line 46). Shrunk deliberately per this class's own
+        # docstring instruction, not merged blindly: a prior dead-code removal (the same
+        # shadowed-duplicate-route-handler class API-01 found elsewhere) correctly took the
+        # redundant second import with it.
         (
             "backend_app/routers/strategy_operations.py",
             0,
