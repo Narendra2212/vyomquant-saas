@@ -671,6 +671,38 @@ _KEY_VALUE_IN_TEXT_RE = re.compile(
     re.VERBOSE,
 )
 
+#: A bare ``%``-style logging conversion specifier (``%s``, ``%r``, ``%-10.2f``, ``%%``, ...),
+#: and nothing else.
+#:
+#: WHY THIS EXISTS. `logging.Logger.critical(fmt, *args)` and friends are lazy: `record.msg`
+#: stays the literal, unsubstituted format string (`"authorization_source=%s"`) until a handler
+#: calls `record.getMessage()`, which does `msg % self.args`. `RedactingLogFilter` runs BEFORE
+#: that substitution, so `_redact_key_values_in_text` was seeing the placeholder token itself as
+#: the "value" to inspect -- and for any denied key (`authorization_source` matches the
+#: `authorization` entry in SECRET_KEY_NAMES as a contiguous token subsequence) it replaced that
+#: token with `[redacted]`, deleting one of `record.msg`'s conversion specifiers while
+#: `record.args` -- redacted separately, item by item, never shortened -- kept its original
+#: length. `record.getMessage()` then raised `TypeError: not all arguments converted during
+#: string formatting`, turning a logging call into a crash.
+#:
+#: Measured via `tests/test_role_granularity_and_audit.py::test_kill_switch_succeeds_for_operator_with_valid_reason`:
+#: `core/safety_audit.py`'s `record_safety_transition` is documented to "never raise into the
+#: caller" specifically so a database outage during a platform kill-switch activation cannot turn
+#: into a 500 telling the operator the halt failed when it actually succeeded (see that module's
+#: docstring). Its own "the write failed, here is the record for recovery" critical log -- the
+#: exact fallback that contract depends on -- logs `authorization_source=%s`, so the one case
+#: this filter is supposed to make safer (an audit write failing) was the one guaranteed to crash
+#: it instead.
+#:
+#: Skipping a bare specifier costs nothing: a REAL secret passed as a lazy `%s` argument was never
+#: visible to this key-value scanner anyway, because it lives in `record.args`, not in the
+#: `record.msg` text this function inspects -- `_redact_log_record` redacts `record.args` through
+#: `_redact_value`'s pattern matching, separately, below. This only stops the scanner from
+#: mistaking its own lack of a value yet for one.
+_BARE_PERCENT_SPEC_RE = re.compile(
+    r"^%[#0\-+ ]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[diouxXeEfFgGcrsa%]$"
+)
+
 #: How deep :func:`redact` will walk. Deeper than the error catalogue's bound because a log record
 #: is not sent to a client and a paper event payload is legitimately nested; bounded all the same,
 #: because an unbounded walk in a logging path is a way to hang a process.
@@ -698,15 +730,19 @@ def _redact_key_values_in_text(text: str) -> str:
         match = _KEY_VALUE_IN_TEXT_RE.search(text, position)
         if match is None:
             break
-        if not is_denied_key(match.group("key")):
+        value = match.group("value")
+        if not is_denied_key(match.group("key")) or _BARE_PERCENT_SPEC_RE.match(value):
             # Keep the key as written and resume AT its separator, so a deny-listed pair inside
             # what would have been this pair's value is still reached.
+            #
+            # A bare `%s`/`%r`/... specifier is treated the same as a non-denied key: it is not a
+            # value yet (see `_BARE_PERCENT_SPEC_RE`'s docstring), so there is nothing here to
+            # redact, and a real value appearing later in the text must still be found.
             resume = match.start("gap")
             pieces.append(text[position:resume])
             position = resume
             continue
         quote = match.group("quote")
-        value = match.group("value")
         if value[:1] in ('"', "'") and value[-1:] == value[:1]:
             replacement = f"{value[0]}{REDACTED_PLACEHOLDER}{value[0]}"
         else:
