@@ -170,6 +170,58 @@ def _restore_shared_redis_singleton():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  DEEP REDIS MANAGER SINGLETON — CROSS-EVENT-LOOP LEAK
+#
+#  `SharedRedisManager._ensure_manager()` (backend_app/core/cache/redis_manager.py)
+#  unconditionally calls `get_redis_manager()` from a SEPARATE module,
+#  `backend_app.backend.redis_manager`. That module keeps its own module-level
+#  `_redis_manager` global holding a `RedisManager` whose `._cache`/`._queue`/
+#  `._events` are real `redis.asyncio` connections bound to whichever event loop was
+#  running when `.initialize()` first succeeded. `get_redis_manager()`'s fast path
+#  (`if _redis_manager is not None and _redis_manager._connected: return
+#  _redis_manager`) hands that same object back without re-initializing as long as
+#  `._connected` stays True — which it does forever, since nothing ever calls
+#  `.close()` or flips it back to False on its own.
+#
+#  pytest-asyncio gives each async test function a fresh event loop by default
+#  (`asyncio_default_test_loop_scope=function`). The fixture above already resets
+#  `SharedRedisManager`'s own seams, including its `_redis_manager` attribute, but
+#  that only forces `_ensure_manager()` to call `get_redis_manager()` again — it does
+#  nothing about `get_redis_manager()`'s OWN module-level cache one layer down, so the
+#  second test in a process gets handed the first test's connections, bound to a loop
+#  that has since closed. Every write then fails ("Cache SET failed for '...': Event
+#  loop is closed") and callers that check the return value turn that into a hard
+#  failure rather than a silent no-op. See `tests/test_webhook_duplicate_delivery_real_redis.py`.
+#
+#  Restoring to a snapshot (like the fixture above) would be wrong here: the snapshot
+#  taken before a test with a live connection is exactly the stale object the next
+#  test must not receive. The only valid states across a loop boundary are "freshly
+#  initialized in the current loop" or "not yet initialized" — so this always resets
+#  to the latter rather than restoring a prior value.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(autouse=True)
+def _reset_deep_redis_manager_singleton():
+    """Force `backend_app.backend.redis_manager.get_redis_manager()` to reinitialize
+    in each test's own event loop instead of handing back a connection bound to a
+    previous test's already-closed loop."""
+    try:
+        import backend_app.backend.redis_manager as deep_redis
+    except Exception:
+        # A test that does not import the backend at all should not be made to.
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        deep_redis._redis_manager = None
+        deep_redis._get_manager_lock = None
+        deep_redis._get_manager_last_failed = 0.0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  EVENT-LOOP INSTALLATION GUARD
 #
 #  `asyncio.run()` does not only run a coroutine. On exit it closes its loop and
