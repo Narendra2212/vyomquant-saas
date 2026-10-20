@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -160,12 +161,19 @@ class ConnectionSharder:
     def get_shard_for_user(self, user_id: str) -> int:
         """
         Get shard ID for a user (deterministic).
-        
+
         Uses consistent hashing to distribute users evenly.
         """
-        # Simple hash-based sharding
-        hash_value = hash(user_id)
-        shard_id = abs(hash_value) % self.num_shards
+        # Python's built-in hash() is randomized per process (PYTHONHASHSEED), so the
+        # same user_id would hash to a different shard on every worker/process restart --
+        # the opposite of the "a user always connects to the same shard" guarantee this
+        # class exists for, and the root cause of test_shard_distribution's intermittent
+        # failure (CI-09 investigation: a deterministic set of 1000 user_ids landed
+        # outside the +/-20% tolerance purely because that run's hash seed happened to
+        # skew the distribution). hashlib's digest is stable across processes and
+        # interpreter restarts, so it is the only correct choice for a sharding key.
+        hash_value = int(hashlib.sha256(user_id.encode("utf-8")).hexdigest(), 16)
+        shard_id = hash_value % self.num_shards
         return shard_id
     
     def get_instance_id(self, shard_id: int) -> str:
