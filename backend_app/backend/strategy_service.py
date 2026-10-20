@@ -1860,6 +1860,12 @@ class StrategyService:
                     raise db_binding.DeployRejected(
                         "RUNTIME_BLUEPRINT_NOT_STARTABLE", str(exc), http_status=422
                     ) from exc
+                # DEPLOY-01: the legacy evaluator reaches the SAME BotRunner._inner_loop
+                # execution-config gate the graph evaluator does, so this binding's
+                # execution_config travels with the legacy blueprint too, not only the
+                # graph one.
+                if isinstance(raw_blueprint, dict):
+                    return {**raw_blueprint, "execution_config": dict(binding.execution_config or {})}
                 return raw_blueprint
             try:
                 return dep_runtime.build_runtime_blueprint(
@@ -1871,6 +1877,7 @@ class StrategyService:
                     exchange_id=binding.exchange_id,
                     mode=binding.mode,
                     market_type=binding.market_type,
+                    execution_config=binding.execution_config,
                 )
             except dep_runtime.RuntimeBlueprintError as exc:
                 raise db_binding.DeployRejected(

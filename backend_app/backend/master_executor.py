@@ -19,8 +19,8 @@ import asyncio
 import logging
 import os
 import time
-from decimal import Decimal
-from typing import Optional, Tuple
+from decimal import Decimal, InvalidOperation
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -98,6 +98,113 @@ def settle_exposure(*, side: str, qty: Decimal, previous_exposure: Decimal, resu
     else:
         new_exposure = max(Decimal("0"), (previous_exposure - filled_qty).quantize(Decimal("0.00000001")))
     return filled_qty, new_exposure
+
+
+def evaluate_deployment_execution_limits(
+    execution_config: Dict[str, Any],
+    *,
+    side: str,
+    qty: Decimal,
+    price: Decimal,
+    current_exposure: Decimal,
+    is_reduce_only: bool,
+) -> Optional[str]:
+    """DEPLOY-01: the per-deployment limits ``execution_config`` actually carries, consulted
+    at order-construction time, immediately before a signal becomes a submitted order.
+
+    Returns ``None`` when the order may proceed, or a human-readable refusal reason when it
+    may not -- the same shape the risk manager's own trade-request check returns, so the
+    caller (``BotRunner._inner_loop``) ``continue``s on either exactly as it already does
+    for a non-``APPROVED`` risk verdict.
+
+    WHAT THIS ENFORCES, AND WHY ONLY THESE TWO
+    -------------------------------------------
+    ``deployment_binding.ENFORCED_EXECUTION_CONFIG_FIELDS`` names exactly the two fields
+    this function reads: ``max_order_notional`` and ``max_open_positions``. The other three
+    published fields (``slippage_tolerance_bps``, ``order_timeout_seconds``,
+    ``retry_policy``) have no corresponding mechanism on this platform's order path
+    (``ExecutionEngine.execute_with_idempotency`` is a market-only, synchronous submit with
+    no slippage-tolerance check, no per-order timeout and no retry policy to hand a value
+    to), so ``deployment_binding.normalise_execution_config`` continues to refuse them at
+    deploy time rather than silently storing a limit nothing would apply.
+
+    EMPTY ``execution_config`` IS A COMPLETE NO-OP
+    -----------------------------------------------
+    Every ``if ... is not None`` below is a no-op for an absent key, so a deployment that
+    never set ``execution_config`` (the overwhelming majority, and every deployment that
+    predates DEPLOY-01) is evaluated identically to before this function existed -- it
+    always returns ``None`` for such a deployment and nothing it does changes.
+
+    ``max_order_notional`` -- REFUSE, NOT CLAMP
+    --------------------------------------------
+    Matches ``ExecutionGuard._validate_order_size``'s own disposition for the identical
+    situation (an order whose notional exceeds a configured ceiling): BLOCK the order
+    entirely rather than silently resize it to fit. Silently clamping would execute a
+    DIFFERENT, smaller order than the strategy's signal asked for, with no record that a
+    substitution happened -- the same "approximation nobody asked for" this platform avoids
+    everywhere else (``deployment_runtime``'s own module docstring states the identical
+    rule for sizing: "a size that cannot be computed is not replaced by a default").
+
+    Skipped for a reduce-only signal (``is_reduce_only``): a position-reducing order is not
+    the risk this cap exists to bound, the same reasoning
+    ``ExecutionGuard.validate_trade``'s ``reduce_only`` skip and
+    ``routers/orders.py``'s cancel/close-all endpoints already apply to their own
+    capital-dependent checks.
+
+    ``max_open_positions`` -- THE DEPLOYMENT'S OWN POSITION COUNT, NOT THE ACCOUNT'S
+    -----------------------------------------------------------------------------------
+    One ``BotRunner`` is one ``(user, symbol, strategy)`` and
+    ``deployment_binding.resolve_binding_market`` refuses a version whose plan reads more
+    than one market (``MARKET_AMBIGUOUS``), so a single deployment can hold AT MOST ONE net
+    position -- ``current_exposure > 0`` (holding) or not (flat). ``max_open_positions`` is
+    therefore evaluated against that 0-or-1 count, not against the user's whole account
+    (which ``paper_trading_service.place_order`` already caps separately, from
+    ``risk_settings.max_positions`` -- a different, pre-existing, account-wide limit this
+    function does not duplicate or override).
+
+    That makes this cap a genuine but NARROW lever given the current architecture: at
+    ``max_open_positions=0`` it refuses the deployment's only possible entry (effectively
+    "this deployment may observe but never open a position"); at any value >= 1 it can
+    never refuse an opening order, because the deployment can never hold more than one
+    position to begin with. This is stated plainly rather than oversold: the field is
+    genuinely consulted, and the value it is checked against is accurate for THIS
+    deployment, but a deployment that wants a cap that binds above zero needs a
+    multi-position execution model this codebase does not have yet.
+    """
+    if is_reduce_only:
+        return None
+
+    max_notional = execution_config.get("max_order_notional")
+    if max_notional is not None:
+        try:
+            cap = Decimal(str(max_notional))
+            notional = Decimal(str(qty)) * Decimal(str(price))
+        except (InvalidOperation, TypeError, ValueError):
+            cap = None
+            notional = None
+        if cap is not None and notional is not None and cap > 0 and notional > cap:
+            return (
+                f"max_order_notional exceeded: order notional {notional} > "
+                f"deployment cap {cap} (execution_config.max_order_notional)"
+            )
+
+    max_positions = execution_config.get("max_open_positions")
+    if max_positions is not None and str(side).lower().strip() in ("buy", "long"):
+        try:
+            cap_positions = int(max_positions)
+        except (TypeError, ValueError):
+            cap_positions = None
+        if cap_positions is not None:
+            currently_open = 1 if Decimal(str(current_exposure)) > 0 else 0
+            # Opening the deployment's one possible position: flat now, about to buy.
+            if currently_open == 0 and currently_open >= cap_positions:
+                return (
+                    f"max_open_positions exceeded: this deployment already holds "
+                    f"{currently_open} open position(s) >= cap {cap_positions} "
+                    f"(execution_config.max_open_positions)"
+                )
+
+    return None
 
 
 class BotRunner:
@@ -178,6 +285,17 @@ class BotRunner:
         self.exchange_id = strategy_blueprint.get("exchange_id")
         if not self.exchange_id:
             raise ValueError("exchange_id must be provided in strategy blueprint")
+
+        # DEPLOY-01: this deployment's own execution_config, threaded in by
+        # `deployment_runtime.build_runtime_blueprint` from the binding
+        # (`deployment_binding.normalise_execution_config`'s output). Absent on every
+        # blueprint built before DEPLOY-01 and on a legacy (non-DeploymentBinding) deploy,
+        # in which case this is `{}` and `evaluate_deployment_execution_limits` is a
+        # complete no-op -- no regression to the pre-existing behaviour.
+        raw_execution_config = strategy_blueprint.get("execution_config")
+        self.execution_config: Dict[str, Any] = (
+            dict(raw_execution_config) if isinstance(raw_execution_config, dict) else {}
+        )
 
         # ── ML block ─────────────────────────────────────────────────────
         self.ml_model_path = strategy_blueprint.get("ml_model_path")
@@ -572,6 +690,27 @@ class BotRunner:
 
                 # ── FIX ME-3: is_reduce_only from explicit payload field ──
                 is_reduce = order_payload.get("reduce_only", False)
+
+                # ── DEPLOY-01: per-deployment execution_config limits ─────
+                # Consulted BEFORE the risk-engine check and before any order_id/lock is
+                # minted, so a refusal here costs nothing and looks exactly like a
+                # non-APPROVED risk verdict to everything downstream (same `continue`).
+                # See `evaluate_deployment_execution_limits`'s own docstring for what it
+                # does and does not enforce.
+                execution_limit_reason = evaluate_deployment_execution_limits(
+                    self.execution_config,
+                    side=str(order_payload.get("side", "")),
+                    qty=Decimal(str(order_payload.get("qty", 0))),
+                    price=Decimal(str(price)),
+                    current_exposure=self.recovered_exposure_coins,
+                    is_reduce_only=is_reduce,
+                )
+                if execution_limit_reason is not None:
+                    logger.warning(
+                        f"Bot {self.user_id}/{self.symbol}: order refused by this "
+                        f"deployment's execution_config -- {execution_limit_reason}"
+                    )
+                    continue
 
                 # ── Risk check ────────────────────────────────────────────
                 # Get real-time risk metrics from telemetry
