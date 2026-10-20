@@ -128,6 +128,57 @@ class TestEntitlementsRealStatus:
             source = f.read()
         assert 'cancel_at_period_end = bool(row.get("cancel_at_period_end"' in source
 
+    def test_a_cancelled_profile_row_is_what_the_endpoint_answers(self):
+        """TEST-01 follow-up: the claim above, proven over the real endpoint.
+
+        The two source-text checks above only prove the handler's TEXT mentions reading
+        ``subscription_status``/``cancel_at_period_end`` off the ``profiles`` row — they would
+        still pass if the handler read the row and then ignored it, because every mock used
+        elsewhere in this suite for the entitlements endpoint (``make_supabase_mock``'s own
+        defaults, and every other file's profile double) happens to set
+        ``subscription_status="active"`` and ``cancel_at_period_end=False`` — exactly the
+        handler's hardcoded fallback values. A regression that deleted the DB read entirely and
+        always returned the hardcoded defaults would make every behavioural test in this
+        codebase pass right alongside it.
+
+        So this drives the real route with a row that disagrees with the fallback in both
+        fields, plus a distinguishing ``next_billing_date``/``billing_interval``, and asserts the
+        RESPONSE carries the row's values, not the handler's defaults.
+        """
+        from fastapi.testclient import TestClient
+
+        from backend_app.core.dependencies import get_current_user, get_request_supabase
+        from backend_app.main import app
+
+        user = make_user(status="past_due", cancel_at_period_end=True)
+        sb = make_supabase_mock(
+            tier="free", status="past_due", cancel_at_period_end=True
+        )
+        # `make_supabase_mock`'s profile row already carries a `next_billing_date` that differs
+        # from `None`, the handler's own fallback — reused here rather than restated.
+
+        app.dependency_overrides[get_current_user] = lambda: user
+        app.dependency_overrides[get_request_supabase] = lambda: sb
+        try:
+            response = TestClient(app).get(
+                "/api/billing/entitlements", headers={"Authorization": "Bearer tok_test"}
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["subscription_status"] == "past_due", (
+            f"the row says 'past_due' but the endpoint answered "
+            f"{body.get('subscription_status')!r} — the handler's hardcoded fallback, "
+            f"'active', or the DB read is no longer reaching the response"
+        )
+        assert body["cancel_at_period_end"] is True, (
+            "the row says cancel_at_period_end=True but the endpoint answered "
+            f"{body.get('cancel_at_period_end')!r}"
+        )
+        assert body["renewal_date"] == "2026-09-24T00:00:00"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 2-3. Cancel / Resume endpoints exist and are rate-limited
