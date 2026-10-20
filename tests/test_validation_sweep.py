@@ -1476,6 +1476,27 @@ _ENVIRONMENT_GAP_ROUTE_KEYS = frozenset(
         "billing.create_portal_session",
         "billing.cancel_subscription",
         "billing.resume_subscription",
+        # `strategy_operations.pause_deployment`/`resume_deployment`/`stop_deployment` --
+        # the comment above already named these three as "verified" on the same evidence
+        # as `cancel_training_job`, but the verification was never actually added here.
+        # Confirmed directly: all three call `_transition_deployment_endpoint`, which
+        # resolves `get_strategy_service()` -- a bare module-level singleton
+        # (`backend_app/backend/strategy_service.py`'s `StrategyService()`), never a
+        # FastAPI dependency this sweep's `client` fixture could override.
+        "strategy_operations.pause_deployment",
+        "strategy_operations.resume_deployment",
+        "strategy_operations.stop_deployment",
+        # `strategy_operations.delete_backtest` -- same shape, one layer over:
+        # `get_backtest_service()` is the identical bare-singleton pattern
+        # (`backend_app/backend/backtest_service.py`'s `BacktestService()`).
+        "strategy_operations.delete_backtest",
+        # `strategies.create` and `signals.replay_signal_trace` -- each defines its OWN
+        # module-level `_sb(user)` that calls `create_request_supabase_async(token)`
+        # directly, the exact `copilot.delete_copilot_session` pattern this set's own
+        # comment already describes, just under a different router's helper of the same
+        # name and shape.
+        "strategies.create",
+        "signals.replay_signal_trace",
     }
 )
 
