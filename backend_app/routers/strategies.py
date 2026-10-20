@@ -2000,18 +2000,30 @@ async def delete_strategy(
     return result
 
 
-async def _deploy_current_version_paper(user: dict, strategy_id: str) -> Dict[str, Any]:
+async def _deploy_current_version_paper(
+    user: dict, strategy_id: str, supplied_params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Deploy a strategy's current version in PAPER mode through the canonical service.
 
     The single place the legacy ``/deploy`` and ``/resume`` routes start a runtime (RT-03).
     Raises ``HTTPException`` for every refusal; returns the service's outcome on success.
+
+    ``supplied_params`` is checked against ``DEPLOY_PARAMS_NOT_APPLIED`` (``capital``,
+    ``trade_size_pct``, ``stop_loss_pct``, ``max_drawdown_pct``) before anything else runs.
+    These four were the whole reason ``StrategyService.deploy_strategy`` -- the route this
+    one replaced (RT-03) -- refused rather than silently discarded them: a caller who sets
+    a stop-loss and has it dropped ends up with a live bot running with none, which is
+    worse than an error. That refusal did not travel with the replacement until now; see
+    tests/test_deploy_strategy_accepts_only_what_it_applies.py.
     """
     from backend_app.backend.deployment_binding import (BindingRequest,
                                                         DeployRejected)
-    from backend_app.backend.strategy_service import (DeployPrerequisiteError,
-                                                      get_strategy_service)
+    from backend_app.backend.strategy_service import (
+        DeployParameterNotApplicable, DeployPrerequisiteError,
+        assert_deploy_params_applicable, get_strategy_service)
 
     try:
+        assert_deploy_params_applicable(supplied_params or {})
         service = await get_strategy_service()
         strategy = await service.get_strategy(user, strategy_id)
         version_row = (strategy or {}).get("version") or {}
@@ -2031,6 +2043,11 @@ async def _deploy_current_version_paper(user: dict, strategy_id: str) -> Dict[st
         )
     except HTTPException:
         raise
+    except DeployParameterNotApplicable as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "DEPLOY_PARAMETER_NOT_APPLICABLE", "message": str(e)},
+        )
     except DeployRejected as e:
         raise HTTPException(status_code=e.http_status, detail=e.to_detail())
     except DeployPrerequisiteError as e:
@@ -2125,7 +2142,7 @@ async def deploy_bot(
     # carried a Requirement 13 binding; a live deployment is made through
     # POST /api/strategy-operations/strategies/{id}/versions/{version}/deploy.
     # Regression: tests/test_rt03_legacy_deploy_route_uses_canonical_deploy.py
-    outcome = await _deploy_current_version_paper(user, strategy_id)
+    outcome = await _deploy_current_version_paper(user, strategy_id, supplied_params=body)
 
     asyncio.create_task(
         ws_mgr.broadcast_user(
