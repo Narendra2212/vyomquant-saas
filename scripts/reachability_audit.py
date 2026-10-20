@@ -31,6 +31,32 @@ def is_excluded(filepath: str) -> bool:
     return False
 
 
+def _add_with_ancestors(imports: Set[str], dotted: str) -> None:
+    """Add a dotted module path AND every ancestor package path it implies.
+
+    Real Python import semantics: `import a.b.c` (or `from a.b.c import X`)
+    always loads a/__init__.py, then a/b/__init__.py, then a/b/c.py, in that
+    order -- the parent packages are imported implicitly even though their
+    own dotted names never appear literally in the source. The previous
+    version of this function only recorded the literal dotted strings it
+    found in the AST, so a file that writes `from backend_app.api.auth_router
+    import router` was credited with reaching `backend_app.api.auth_router`
+    but NOT with reaching `backend_app.api` or `backend_app` themselves --
+    nothing in this codebase happens to write a bare `import backend_app` or
+    `from backend_app import api`, so those package `__init__.py` files were
+    flagged as unreachable dead code even though something imports a module
+    three levels underneath them. Expanding every import into its full
+    ancestor chain models the real loading behavior and fixes that whole
+    false-positive class in one place, rather than special-casing
+    `__init__.py` filenames in the reporting step.
+    """
+    if not dotted:
+        return
+    parts = dotted.split('.')
+    for i in range(1, len(parts) + 1):
+        imports.add('.'.join(parts[:i]))
+
+
 def extract_imports_from_file(filepath: str, module_name: str) -> Set[str]:
     """Extract all absolute and resolved-relative imports from a file."""
     imports = set()
@@ -43,7 +69,7 @@ def extract_imports_from_file(filepath: str, module_name: str) -> Set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.add(alias.name)
+                _add_with_ancestors(imports, alias.name)
         elif isinstance(node, ast.ImportFrom):
             mod = node.module or ''
             level = node.level
@@ -57,9 +83,10 @@ def extract_imports_from_file(filepath: str, module_name: str) -> Set[str]:
                 else:
                     mod = mod
             if mod:
-                imports.add(mod)
+                _add_with_ancestors(imports, mod)
             for alias in node.names:
-                imports.add(f"{mod}.{alias.name}")
+                if mod:
+                    _add_with_ancestors(imports, f"{mod}.{alias.name}")
     return imports
 
 
@@ -93,15 +120,30 @@ def run_reachability(start_files: List[str], base_dir: str, root_pkg: str) -> Se
         mod_name = rel_path.replace('.py', '').replace(os.sep, '.')
         if mod_name.endswith('.__init__'):
             mod_name = mod_name[:-9]
-            
+
+        # Loading ANY module -- whether this file was reached via another
+        # file's import statement, or is itself a root entry point run as
+        # `python -m a.b.c` -- always loads every ancestor package's
+        # __init__.py first (a/__init__.py, then a/b/__init__.py, ...).
+        # This must be derived from the file's own path, not just from the
+        # import statements found inside OTHER files, so that a package
+        # whose only "importer" is an entry point run via `python -m` (e.g.
+        # backend_app/workers/__init__.py, reached only because
+        # marketplace_expiry_worker.py is a deploy-target root, never via a
+        # literal `from backend_app import workers` anywhere) is still
+        # correctly marked reachable.
+        ancestor_imports: Set[str] = set()
+        _add_with_ancestors(ancestor_imports, mod_name)
+
         imports = extract_imports_from_file(current_file, mod_name)
-        
+        imports |= ancestor_imports
+
         for imp in imports:
             if imp.startswith(root_pkg):
                 resolved = resolve_module_to_file(imp, base_dir)
                 if resolved and resolved not in visited_files and resolved not in queue:
                     queue.append(resolved)
-                    
+
     return visited_files
 
 
@@ -176,11 +218,45 @@ def main():
     
     base_dir = "."
     target_pkg = "backend_app"
+    # Entry points are every module actually invoked as a deployment target,
+    # not just backend_app/main.py's FastAPI app. Each one below is backed by
+    # a concrete, grep-able deploy/ops reference -- a static import graph walk
+    # from main.py alone misses anything only ever launched as its own
+    # process (`python -m <module>`, a worker container, a standalone image).
+    # Sourced from: terraform/ecs.tf's `worker_definitions` locals block (ECS
+    # Fargate task commands), the root Dockerfile*/docker-compose.yml (local
+    # dev + the one non-ECS standalone image), and `python -m`/CMD
+    # invocations grepped across the repo's deploy/ops tooling.
+    #
+    # deploy-archive/ is DELIBERATELY NOT a source of entry points here:
+    # deploy-archive/README.md states in its own header that none of its
+    # k8s/, railway/ or docker-compose/ configs are in active production use
+    # ("The sole canonical production deployment target is AWS ECS Fargate
+    # via Terraform") -- treating a module as reachable only because an
+    # archived, superseded deploy config still names it would mask real dead
+    # code (e.g. backend_app/backend/execution_worker.py and
+    # portfolio_worker.py, named only in deploy-archive/docker-compose/
+    # docker-compose.workers.yml, correctly still flagged below).
     entrypoints = [
         "backend_app/main.py",
+        # terraform/ecs.tf worker_definitions.dag + docker-compose.workers.yml (archived, same module)
         "backend_app/backend/dag_worker.py",
         "backend_app/backend/master_executor.py",
+        # terraform/ecs.tf worker_definitions.command
         "backend_app/workers/command_worker.py",
+        # terraform/ecs.tf worker_definitions.backtest: `python -m backend_app.worker`
+        "backend_app/worker.py",
+        # terraform/ecs.tf worker_definitions.marketplace_expiry: `python -m
+        # backend_app.workers.marketplace_expiry_worker` -- this is HY-02's own
+        # confirmed false positive (deployed today; see tests/test_no_new_unhosted_workers.py).
+        "backend_app/workers/marketplace_expiry_worker.py",
+        # terraform/ecs.tf worker_definitions.training + docker-compose.yml's
+        # `training-worker` service: `python -m backend_app.backend.training_worker`
+        "backend_app/backend/training_worker.py",
+        # Dockerfile.simulator COPYs this exact file into its own standalone
+        # image and runs it directly (not imported via the backend_app
+        # package at all in that image, but it IS the deployed artifact).
+        "backend_app/backend/exchange_simulator.py",
         # backend_app/tee/main.py deleted (RT-23): confirmed-dead code, never deployed.
         "backend_app/mds/main.py"
     ]
