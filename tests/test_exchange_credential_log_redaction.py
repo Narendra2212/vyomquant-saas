@@ -376,11 +376,22 @@ class TestExchangeExecutorConnectFailureDoesNotLeakTheSecretInTheLog:
     def test_a_connect_failure_whose_exception_embeds_the_secret_is_redacted(self, caplog):
         from backend_app.backend import exchange_executor as ex_module
 
+        # sandbox=False: EXCH-01 (added after this test) gates `connect()`'s sandbox
+        # branch on `verify_sandbox_endpoint`, which reads the real ccxt client's `urls`
+        # against a per-venue fingerprint measured by
+        # `staging/probe_exch01_sandbox_endpoints.py` -- `_FakeCCXTExchange` below has no
+        # such `urls`, so with sandbox=True the connection is refused by EXCH-01's gate
+        # before `fetch_balance()` ever runs, and this test's own scenario (a secret
+        # embedded in that call's exception message) is never reached. That gate guards
+        # the sandbox-only branch of `connect()` (see `exchange_executor.py`'s "EXCH-01:
+        # PROVE THE SANDBOX, DO NOT ANNOUNCE IT" block); `fetch_balance()` and its
+        # `_handle_ccxt_error`-mediated logging, which is what this test is actually
+        # about, run unconditionally afterward either way.
         executor = ex_module.CCXTExchangeExecutor(
             exchange_id="binance",
             api_key=FAKE_API_KEY,
             api_secret=FAKE_API_SECRET,
-            sandbox=True,
+            sandbox=False,
         )
 
         fake_ccxt_module = MagicMock()
