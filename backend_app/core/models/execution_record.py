@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional, Tuple, List
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, validator
-from sqlalchemy import JSON, Column, DateTime
+from sqlalchemy import JSON, Column, DateTime, and_, or_
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy import Index, String, bindparam, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -75,6 +75,68 @@ def submission_may_have_reached_venue(record: Any) -> bool:
         return getattr(record, "submitted_at", None) is not None
     except Exception:  # noqa: BLE001 - refuse rather than propagate into a retry grant
         return True
+
+
+#: DUP-01. Classification label (and `exchange_status` marker) for a row that reached
+#: `CONFIRMATION_LOST_AFTER_SECONDS` of real wall-clock time since it was submitted, with
+#: every renewed venue lookup still unable to confirm OR deny that the order reached the
+#: venue. Written by `give_up_on_unresolved_submission`, and read back by
+#: `is_venue_confirmation_lost` so this terminal row can be told apart from an ordinary
+#: determinate rejection (plain `FAILED`) or a still-being-worked ambiguity (`UNKNOWN`).
+RECOVERY_CONFIRMATION_LOST = "confirmation_lost"
+
+#: DUP-01. How long an `ambiguous_submission` row may sit `UNKNOWN` -- repeatedly
+#: re-queried by `OrderWatchdog.recheck_unresolved_submissions`, never confirmed and never
+#: denied by the venue -- before the platform stops treating "could not be asked" as a
+#: transient condition and gives up, moving the row to the defined terminal state
+#: `give_up_on_unresolved_submission` writes.
+#:
+#: Deliberately far longer than `RECOVERY_STALE_AFTER_SECONDS` (900s), which only decides
+#: whether an `EXECUTING` row is looked at AT ALL for the first time. This threshold
+#: decides whether the SAME lookup, retried on every pass over `classify_unresolved_
+#: submissions` in the meantime, has had a realistic chance for a transient fault -- a
+#: rate limit, a momentary network partition, a venue outage -- to clear. 24 hours
+#: (86400s) is this codebase's own existing convention for a durable "give up" horizon
+#: elsewhere (`core/fill_deduplication_manager.py`'s fill-dedup TTL family,
+#: `core/redis_cluster.py`'s idempotency TTL, `core/webhook_idempotency.py`'s processing
+#: TTL), reused here rather than inventing a new number with no precedent.
+#:
+#: WHY THIS MATTERS SPECIFICALLY FOR COINBASE AND KRAKEN (DUP-01's named venues).
+#: `exchange_executor.py`'s venue mapping records that coinbase overwrites our
+#: `clientOrderId` and kraken never receives one at all, so for exactly these two venues a
+#: transient lookup failure and a STRUCTURAL inability to ever confirm an order are
+#: indistinguishable from a single attempt. The only way to tell them apart without
+#: fabricating a venue capability neither exchange has is to keep trying for a long time
+#: before concluding that trying again will not help either -- never to assume, from one
+#: failed lookup, that giving up is safe.
+CONFIRMATION_LOST_AFTER_SECONDS = 86400
+
+
+def is_venue_confirmation_lost(record: Any) -> bool:
+    """True when *record* is the DUP-01 "gave up after a long wait" terminal state.
+
+    A plain `status == FAILED` check cannot tell this apart from an ordinary determinate
+    rejection (a venue that definitively answered "no such order"), and the two must be
+    treated identically everywhere that decides whether a retry is safe or a symbol
+    freeze should continue -- so this reads the one field the transition actually writes
+    a marker into (`exchange_status`), rather than adding a new `ExecutionStatus` member
+    that every other status-aware code path in this application would need to learn
+    about.
+
+    THIS IS NOT A CLAIM THAT THE ORDER NEVER REACHED THE VENUE. It is the opposite: it is
+    the signal that the platform could not establish either answer and stopped trying.
+    Every caller that reads this marker must treat the row exactly as it would treat
+    `UNKNOWN` for safety purposes -- see `has_unresolved_submission` (continues the
+    symbol freeze) and `submission_may_have_reached_venue` (already refuses retry for any
+    non-`COMPLETED` status with `submitted_at` set, so this needed no change there).
+    """
+    try:
+        if getattr(record, "status", None) != ExecutionStatus.FAILED:
+            return False
+        detail = getattr(record, "exchange_status", None) or ""
+        return RECOVERY_CONFIRMATION_LOST in str(detail)
+    except Exception:  # noqa: BLE001 - an unreadable record is not evidence either way
+        return False
 
 
 def generate_execution_id(
@@ -652,18 +714,37 @@ class ExecutionRecordRepository:
         return str(symbol or "").replace("-", "").replace("/", "").replace("_", "").upper()
 
     def has_unresolved_submission(self, tenant_id: UUID, symbol: str) -> bool:
-        """RT-17: does this tenant hold an UNKNOWN submission for *symbol*?
+        """RT-17: does this tenant hold an UNKNOWN (or DUP-01 confirmation-lost) submission
+        for *symbol*?
 
         An UNKNOWN row means the venue may hold an order the platform cannot see. Until it
         is adjudicated (``resolve_stale_execution`` / OrderWatchdog) a new order for the same
         symbol must not be sent. Symbols are compared normalised (BTC/USDT == BTC-USDT ==
         BTCUSDT). Raises on a database error; the caller fails closed.
+
+        DUP-01. ALSO matches a row `give_up_on_unresolved_submission` moved to `FAILED`
+        with the `RECOVERY_CONFIRMATION_LOST` marker. That transition exists so a row
+        does not sit silently in a status whose name does not say automated resolution
+        was attempted and exhausted -- it is NOT a claim that the order never reached the
+        venue, and the one thing that must never happen is for this new, more legible
+        label to accidentally be SAFER to retry against than plain `UNKNOWN` was. Filtering
+        on `exchange_status` with `LIKE` rather than importing `is_venue_confirmation_lost`
+        keeps this a single SQL round trip instead of one query plus a Python pass over
+        every FAILED row for this tenant.
         """
         rows = (
             self.db.query(ExecutionRecordModel.symbol)
             .filter(
                 ExecutionRecordModel.tenant_id == tenant_id,
-                ExecutionRecordModel.status == ExecutionStatus.UNKNOWN,
+                or_(
+                    ExecutionRecordModel.status == ExecutionStatus.UNKNOWN,
+                    and_(
+                        ExecutionRecordModel.status == ExecutionStatus.FAILED,
+                        ExecutionRecordModel.exchange_status.like(
+                            f"%{RECOVERY_CONFIRMATION_LOST}%"
+                        ),
+                    ),
+                ),
             )
             .all()
         )
@@ -1450,13 +1531,23 @@ class ExecutionRecordRepository:
         classification: str,
         detail: str,
         order_id: Optional[str] = None,
+        from_status: ExecutionStatus = ExecutionStatus.EXECUTING,
     ) -> bool:
-        """Move one adjudicated stale row to a terminal-or-unresolved status.
+        """Move one adjudicated row from *from_status* to a terminal-or-unresolved status.
 
-        TRADE-07. Transitions ONLY from `EXECUTING`, in one statement, so two concurrent
-        recovery workers cannot both act on the same row and so a row that a live worker
-        has meanwhile completed is left alone. That is what makes the state change
-        transactionally consistent with the lifecycle rather than racing it.
+        TRADE-07. Transitions ONLY from *from_status* (default `EXECUTING`), in one
+        statement, so two concurrent recovery workers cannot both act on the same row and
+        so a row that moved on since it was classified is left alone. That is what makes
+        the state change transactionally consistent with the lifecycle rather than racing
+        it.
+
+        DUP-01. `from_status` is the one addition: `_adjudicate_ambiguous_execution` is
+        shared by two populations now -- `classify_stale_executions`' `EXECUTING` rows on
+        a first attempt, and `classify_unresolved_submissions`' `UNKNOWN` rows on a
+        renewed one -- and every branch below that gets a venue ANSWER (not merely "still
+        no answer") needs to persist it, whichever population called it in. The default
+        preserves every pre-existing call site exactly; only a caller that passes
+        `from_status=ExecutionStatus.UNKNOWN` changes which population this can move.
 
         The permitted destinations are deliberately narrow:
 
@@ -1508,11 +1599,12 @@ class ExecutionRecordRepository:
                            updated_at = CURRENT_TIMESTAMP
                      WHERE execution_id = :execution_id
                        AND tenant_id = :tenant_id
-                       AND upper(status::text) = 'EXECUTING'
+                       AND upper(status::text) = :from_status
                     RETURNING execution_id
                 """).bindparams(bindparam("tenant_id", type_=PG_UUID(as_uuid=True))),
                 {
                     "status": status.name,
+                    "from_status": from_status.name,
                     # TRADE-12: `venue_order_id`, not `order_id`. What a venue
                     # reconciliation returns is the EXCHANGE's identifier, and `order_id`
                     # is foreign-keyed to this platform's own `orders` table -- so writing
@@ -1530,9 +1622,9 @@ class ExecutionRecordRepository:
             self.db.commit()
             if updated is None:
                 logger.info(
-                    "TRADE-07: execution %s was no longer EXECUTING when recovery tried "
-                    "to resolve it; another worker or a live completion got there first. "
-                    "Left alone.", execution_id,
+                    "TRADE-07: execution %s was no longer %s when recovery tried to "
+                    "resolve it; another worker or a live completion got there first. "
+                    "Left alone.", execution_id, from_status.name,
                 )
                 return False
             logger.warning(
@@ -1545,6 +1637,179 @@ class ExecutionRecordRepository:
             logger.critical(
                 "TRADE-07: failed to resolve stale execution %s (%s: %s). The row stays "
                 "EXECUTING, which is the safe direction: it will be re-adjudicated.",
+                execution_id, exc.__class__.__name__, exc,
+            )
+            return False
+
+    def classify_unresolved_submissions(
+        self,
+        tenant_id: Optional[UUID] = None,
+        *,
+        confirmation_lost_after_seconds: Optional[int] = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Find `UNKNOWN` rows with no venue order id whose lookup window has run out.
+
+        DUP-01. THE POPULATION `OrderWatchdog.recheck_unresolved_submissions` ADJUDICATES.
+        -----------------------------------------------------------------------------------
+        `_adjudicate_ambiguous_execution` already tried once (reached from
+        `classify_stale_executions`'s `ambiguous_submission` population) and could not
+        confirm or deny that the order reached the venue -- `order_id IS NULL`. This
+        query returns only the rows where that attempt is now old enough
+        (`submitted_at < now() - confirmation_lost_after_seconds`, default
+        `CONFIRMATION_LOST_AFTER_SECONDS`) that giving the venue more silent time has
+        stopped being the honest default; `OrderWatchdog` is expected to try the lookup
+        again before deciding anything from this alone.
+
+        EXCLUDES, DELIBERATELY:
+        * Any row with `order_id` set. That is POSITIVE evidence the venue holds an order
+          (filled, or still resting -- see `_adjudicate_ambiguous_execution`'s "still open
+          at the venue" branch) and must never be downgraded to a give-up state.
+        * Any row not currently `UNKNOWN`. In particular a row already moved to `FAILED`
+          by `give_up_on_unresolved_submission` is terminal and is not re-offered here.
+
+        Read-only -- deciding and acting are separated exactly as `classify_stale_
+        executions` separates them, so a run can be inspected, logged and tested without a
+        venue. PostgreSQL-only for the same reason: `make_interval` is PostgreSQL-specific,
+        and returning nothing on every other dialect is the fail-safe -- no classification
+        means no transition, never a wrong one.
+        """
+        threshold = (
+            CONFIRMATION_LOST_AFTER_SECONDS
+            if confirmation_lost_after_seconds is None
+            else int(confirmation_lost_after_seconds)
+        )
+        dialect = self.db.bind.dialect.name if self.db and self.db.bind else "sqlite"
+        if dialect != "postgresql":
+            logger.warning(
+                "DUP-01: unresolved-submission recheck is PostgreSQL-only; dialect is "
+                "%s, so no rows were classified and none will be given up on.", dialect,
+            )
+            return []
+
+        params: Dict[str, Any] = {"threshold": threshold, "limit": int(limit)}
+        tenant_clause = ""
+        if tenant_id is not None:
+            tenant_clause = " AND tenant_id = :tenant_id"
+            params["tenant_id"] = tenant_id
+
+        statement = text(f"""
+            SELECT execution_id,
+                   tenant_id,
+                   symbol,
+                   side,
+                   size,
+                   price,
+                   exchange_id,
+                   order_id,
+                   submitted_at,
+                   created_at,
+                   EXTRACT(EPOCH FROM (now() - submitted_at)) AS age_seconds
+              FROM execution_records
+             WHERE status = 'UNKNOWN'
+               AND order_id IS NULL
+               AND submitted_at IS NOT NULL
+               AND submitted_at < now() - make_interval(secs => :threshold)
+               {tenant_clause}
+             ORDER BY submitted_at ASC
+             LIMIT :limit
+        """)  # nosec B608 - tenant_clause is a fixed literal, not interpolated input
+        if tenant_id is not None:
+            statement = statement.bindparams(
+                bindparam("tenant_id", type_=PG_UUID(as_uuid=True))
+            )
+
+        rows = self.db.execute(statement, params).fetchall()
+
+        classified: list[dict] = []
+        for row in rows:
+            classified.append({
+                "execution_id": row.execution_id,
+                "tenant_id": row.tenant_id,
+                "symbol": row.symbol,
+                "side": row.side,
+                "size": row.size,
+                "price": row.price,
+                "exchange_id": row.exchange_id,
+                "order_id": row.order_id,
+                "submitted_at": row.submitted_at,
+                "created_at": row.created_at,
+                "age_seconds": float(row.age_seconds or 0),
+                "classification": self.RECOVERY_AMBIGUOUS_SUBMISSION,
+            })
+        return classified
+
+    def give_up_on_unresolved_submission(
+        self,
+        execution_id: str,
+        tenant_id: UUID,
+        *,
+        detail: str,
+    ) -> bool:
+        """Move one `UNKNOWN` row, with no venue order id, to the DUP-01 give-up state.
+
+        The ONLY destination this method may write is `FAILED` with the
+        `RECOVERY_CONFIRMATION_LOST` marker folded into `exchange_status` -- unlike
+        `resolve_stale_execution`, which arbitrates between three outcomes for a
+        different population, this one encodes a single decision ("time is up and there
+        is still no answer") so there is nothing to validate a `status` argument against.
+
+        Transitions ONLY from `UNKNOWN` with `order_id IS NULL`, in one statement, for the
+        same reason `resolve_stale_execution` is scoped to `EXECUTING`: a row that
+        meanwhile acquired a venue order id (the "still open/filled at the venue" branch
+        of `_adjudicate_ambiguous_execution` running concurrently, or a live completion)
+        has become POSITIVE evidence of a real order and must never be downgraded to
+        FAILED by a worker that is still looking at the old, order-id-less snapshot of it.
+        That race is closed by the `WHERE` clause itself, not by locking: the UPDATE
+        simply matches zero rows once either condition stops holding.
+
+        `has_unresolved_submission` already matches this new row (status FAILED +
+        `exchange_status` marker) exactly as it matches UNKNOWN, so this call never
+        unfreezes a symbol it was freezing a moment before -- it only renames the frozen
+        state to one that says automated resolution was attempted and gave up.
+        """
+        try:
+            updated = self.db.execute(
+                text("""
+                    UPDATE execution_records
+                       SET status = 'FAILED',
+                           last_exchange_sync = CURRENT_TIMESTAMP,
+                           exchange_status = :detail,
+                           updated_at = CURRENT_TIMESTAMP
+                     WHERE execution_id = :execution_id
+                       AND tenant_id = :tenant_id
+                       AND upper(status::text) = 'UNKNOWN'
+                       AND order_id IS NULL
+                    RETURNING execution_id
+                """).bindparams(bindparam("tenant_id", type_=PG_UUID(as_uuid=True))),
+                {
+                    "detail": f"{RECOVERY_CONFIRMATION_LOST}: {detail}"[:500],
+                    "execution_id": execution_id,
+                    "tenant_id": tenant_id,
+                },
+            ).fetchone()
+            self.db.commit()
+            if updated is None:
+                logger.info(
+                    "DUP-01: execution %s was no longer UNKNOWN-with-no-order-id when "
+                    "the confirmation-lost give-up tried to resolve it; another worker "
+                    "or a live completion got there first. Left alone.", execution_id,
+                )
+                return False
+            logger.critical(
+                "DUP-01: execution %s moved to FAILED/%s after exhausting venue "
+                "confirmation attempts (%s). This is NOT a claim the order never "
+                "reached the venue -- it means the platform could not establish either "
+                "answer and stopped trying. Manual reconciliation required.",
+                execution_id, RECOVERY_CONFIRMATION_LOST, detail,
+            )
+            return True
+        except Exception as exc:
+            self.db.rollback()
+            logger.critical(
+                "DUP-01: failed to record confirmation-lost give-up for execution %s "
+                "(%s: %s). The row stays UNKNOWN, which is the safe direction: it will "
+                "be re-examined.",
                 execution_id, exc.__class__.__name__, exc,
             )
             return False

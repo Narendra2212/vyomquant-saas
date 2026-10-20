@@ -154,6 +154,7 @@ import inspect
 import logging
 import time
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from backend_app.backend.market_data_contract import (
@@ -228,6 +229,31 @@ EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = (
     "slippage_tolerance_bps",
     "order_timeout_seconds",
     "retry_policy",
+)
+
+#: DEPLOY-01. ``max_order_notional`` and ``max_open_positions`` are now consulted at
+#: order-construction time, in ``BotRunner._inner_loop``
+#: (``evaluate_deployment_execution_limits``), via ``execution_config`` threaded through
+#: ``deployment_runtime.build_runtime_blueprint`` into the runtime blueprint. They are
+#: therefore REMOVED from :data:`UNENFORCED_EXECUTION_CONFIG_FIELDS` below.
+#:
+#: ``slippage_tolerance_bps``, ``order_timeout_seconds`` and ``retry_policy`` are NOT: the
+#: order path this platform has (``ExecutionEngine.execute_with_idempotency`` /
+#: ``exchange_executor.place_order``, both market-only - see
+#: ``deployment_runtime.EXECUTABLE_ORDER_TYPES``) has no slippage-tolerance check, no
+#: configurable order timeout and no retry policy to hand a value to, so a value for any of
+#: them would still be stored and silently not in force. Left refused rather than wired to
+#: a larger structural change attempted under time pressure.
+ENFORCED_EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = (
+    "max_order_notional",
+    "max_open_positions",
+)
+
+#: The fields ``normalise_execution_config`` still refuses outright when supplied with a
+#: real (non-``None``) value, because no execution path reads them yet. Public (like
+#: :data:`EXECUTION_CONFIG_FIELDS`) so a test iterates this set rather than restating it.
+UNENFORCED_EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = tuple(
+    field for field in EXECUTION_CONFIG_FIELDS if field not in ENFORCED_EXECUTION_CONFIG_FIELDS
 )
 
 #: How long a "columns are absent" verdict is trusted before it is re-probed, so applying
@@ -488,18 +514,30 @@ def normalise_execution_config(raw: Any) -> Dict[str, Any]:
             {"unknown_fields": unknown, "known_fields": list(EXECUTION_CONFIG_FIELDS)},
         )
 
-    # DEPLOY-01: every field :data:`EXECUTION_CONFIG_FIELDS` names is validated and stored
-    # into the strategy_deployments row, but grepping the whole execution path (BotRunner,
-    # ExecutionGuard, order_control) turns up no reader for any of them -- a deployment with
-    # max_order_notional=1000 runs with exactly the same order-size ceiling as one with no
-    # execution_config at all. That is the UNKNOWN_FIELD refusal above's own stated reason
-    # for refusing a key ("the limit it expresses would not be in force"), applied
-    # inconsistently: a KNOWN field with the same property was silently accepted instead.
-    # Refused here too, not silently stored, until a real enforcement path exists --
-    # the same choice strategy_service.assert_deploy_params_applicable already makes for
+    # DEPLOY-01, ORIGINAL STATE: every field :data:`EXECUTION_CONFIG_FIELDS` names was
+    # validated and stored into the strategy_deployments row, but grepping the whole
+    # execution path (BotRunner, ExecutionGuard, order_control) turned up no reader for
+    # any of them -- a deployment with max_order_notional=1000 ran with exactly the same
+    # order-size ceiling as one with no execution_config at all. That was the UNKNOWN_FIELD
+    # refusal above's own stated reason for refusing a key ("the limit it expresses would
+    # not be in force"), applied inconsistently: a KNOWN field with the same property was
+    # silently accepted instead.
+    #
+    # DEPLOY-01, CURRENT STATE: ``max_order_notional`` and ``max_open_positions`` are now
+    # genuinely consulted at order-construction time
+    # (``master_executor.evaluate_deployment_execution_limits``, called from
+    # ``BotRunner._inner_loop`` with the execution_config threaded through
+    # ``deployment_runtime.build_runtime_blueprint``) and are therefore REMOVED from the
+    # refusal below. ``slippage_tolerance_bps``, ``order_timeout_seconds`` and
+    # ``retry_policy`` still name no reader -- see
+    # :data:`UNENFORCED_EXECUTION_CONFIG_FIELDS` for exactly why each of those three is
+    # still refused -- and stay refused here, not silently stored, the same choice
+    # strategy_service.assert_deploy_params_applicable already makes for
     # capital/trade_size_pct/stop_loss_pct/max_drawdown_pct (DEPLOY_PARAMS_NOT_APPLIED).
     supplied_but_not_enforced = sorted(
-        str(k) for k in raw if str(k) in EXECUTION_CONFIG_FIELDS and raw[k] is not None
+        str(k)
+        for k in raw
+        if str(k) in UNENFORCED_EXECUTION_CONFIG_FIELDS and raw[k] is not None
     )
     if supplied_but_not_enforced:
         raise DeployRejected(
@@ -513,10 +551,80 @@ def normalise_execution_config(raw: Any) -> Dict[str, Any]:
             {
                 "not_enforced_fields": supplied_but_not_enforced,
                 "known_fields": list(EXECUTION_CONFIG_FIELDS),
+                "enforced_fields": list(ENFORCED_EXECUTION_CONFIG_FIELDS),
             },
         )
 
+    # ``max_order_notional`` and ``max_open_positions`` are now real limits a BotRunner
+    # consults on every tick, so a value this platform cannot actually enforce (a negative
+    # notional, a non-numeric position cap) must be refused HERE rather than stored and
+    # discovered as a no-op at the first tick -- the same "err toward refusing" this
+    # module's docstring states for every other gate it owns.
+    if "max_order_notional" in raw and raw["max_order_notional"] is not None:
+        _assert_positive_number(raw["max_order_notional"], "max_order_notional")
+    if "max_open_positions" in raw and raw["max_open_positions"] is not None:
+        _assert_positive_int(raw["max_open_positions"], "max_open_positions")
+
     return {str(key): raw[key] for key in EXECUTION_CONFIG_FIELDS if key in raw}
+
+
+def _assert_positive_number(value: Any, field: str) -> None:
+    """``value`` is a finite number > 0, or :class:`DeployRejected`.
+
+    ``bool`` is explicitly excluded even though ``isinstance(True, int)`` holds in Python --
+    a caller who sent ``true`` almost certainly did not mean "a 1-unit notional cap".
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be a positive number; got "
+            f"{type(value).__name__} {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+    try:
+        numeric = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} is not a readable number: {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+    if not numeric.is_finite() or numeric <= 0:
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be a positive, finite number; got {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+
+
+def _assert_positive_int(value: Any, field: str) -> None:
+    """``value`` is a non-negative whole number, or :class:`DeployRejected`.
+
+    ``0`` is accepted deliberately: ``evaluate_deployment_execution_limits`` treats a
+    deployment's open-position count as 0 or 1 (one symbol per deployment - 13.4/13.5's
+    own market-ambiguity gate forbids more), so ``max_open_positions=0`` is the one value
+    at which this cap actually refuses anything (a deployment that may never open its
+    single position). A negative count is meaningless and refused.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be a whole number >= 0; got "
+            f"{type(value).__name__} {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+    if isinstance(value, float) and not value.is_integer():
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be a whole number; got {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
+    if int(value) < 0:
+        raise DeployRejected(
+            "EXECUTION_CONFIG_INVALID_FIELD",
+            f"execution_config.{field} must be >= 0; got {value!r}.",
+            {"field": field, "value": repr(value)},
+        )
 
 
 def _requested_gap_strategy(raw: Any) -> Optional[GapHandlingStrategy]:
@@ -2135,6 +2243,8 @@ __all__ = [
     "DeploymentBinding",
     "EXCHANGE_ACCOUNT_TABLES",
     "EXECUTION_CONFIG_FIELDS",
+    "ENFORCED_EXECUTION_CONFIG_FIELDS",
+    "UNENFORCED_EXECUTION_CONFIG_FIELDS",
     "RISK_CONFIG_TABLE",
     "UNCHECKED",
     "account_exchange_id",

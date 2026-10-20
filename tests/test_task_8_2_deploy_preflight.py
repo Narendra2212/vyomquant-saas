@@ -541,14 +541,16 @@ class TestTheRefusalsThatAreAboutTheRequest:
         assert condition["code"] == "EXECUTION_CONFIG_UNKNOWN_FIELD"
 
     def test_a_known_but_unenforced_execution_config_field_is_a_reported_condition(self):
-        """DEPLOY-01: max_order_notional is a published field, but nothing in the execution
-        path reads it yet -- a value here is refused at preflight, the same as an unknown
-        field, rather than reported as passing and silently discarded on deploy."""
+        """DEPLOY-01: slippage_tolerance_bps is a published field, but nothing in the
+        execution path reads it (there is no slippage-tolerance check on this platform's
+        order path) -- a value here is refused at preflight, the same as an unknown field,
+        rather than reported as passing and silently discarded on deploy."""
+        assert "slippage_tolerance_bps" in db.UNENFORCED_EXECUTION_CONFIG_FIELDS
         response = _get(
             _sb(),
             params={
                 **_passing_params(),
-                "execution_config": '{"max_order_notional": 500}',
+                "execution_config": '{"slippage_tolerance_bps": 25}',
             },
         )
 
@@ -558,6 +560,23 @@ class TestTheRefusalsThatAreAboutTheRequest:
         assert condition["status"] == db.CONDITION_FAILED
         assert condition["code"] == "EXECUTION_CONFIG_NOT_ENFORCED"
         assert body["deployable"] is False
+
+    def test_max_order_notional_now_passes_preflight_instead_of_being_refused(self):
+        """DEPLOY-01's second fix: max_order_notional is now really enforced
+        (master_executor.evaluate_deployment_execution_limits), so preflight reports it as
+        PASSING rather than as the EXECUTION_CONFIG_NOT_ENFORCED failure it used to be."""
+        assert "max_order_notional" in db.ENFORCED_EXECUTION_CONFIG_FIELDS
+        response = _get(
+            _sb(),
+            params={
+                **_passing_params(),
+                "execution_config": '{"max_order_notional": 500}',
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        condition = _condition(response.json(), "execution_config")
+        assert condition["status"] == db.CONDITION_PASSED, condition
 
     def test_an_unauthenticated_caller_gets_no_condition_data(self):
         """Requirement 22.4: no strategy data on an authorization failure."""

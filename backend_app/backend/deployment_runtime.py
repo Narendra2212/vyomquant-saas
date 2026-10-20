@@ -94,6 +94,7 @@ def build_runtime_blueprint(
     mode: str,
     market_type: Optional[str] = None,
     paper_fallback_exchange: Optional[str] = None,
+    execution_config: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """The blueprint ``fleet.start_bot`` is given for one deployment.
 
@@ -102,6 +103,15 @@ def build_runtime_blueprint(
     ``DEFAULT_EXCHANGE`` -- the same rule ``routers/paper_trading._paper_venue`` applies to
     Paper_Sessions (the caller chooses the market, the operator chooses the feed). A LIVE
     deployment never falls back: it must carry the venue of its account.
+
+    ``execution_config`` (DEPLOY-01) is the binding's own
+    ``deployment_binding.normalise_execution_config`` output -- ``{}`` when the deployment
+    set none. It travels in the blueprint because that is the one object ``BotRunner``
+    already receives at construction (``strategy_blueprint``) carrying everything else
+    per-deployment (``deployment_id``, ``exchange_id``, ``mode``); see
+    ``master_executor.evaluate_deployment_execution_limits`` for where it is consulted. An
+    absent or empty ``execution_config`` is a no-op, so every deployment that never set
+    these fields behaves exactly as before.
 
     Raises:
         RuntimeBlueprintError: no graph, no symbol/timeframe, or no venue.
@@ -154,6 +164,7 @@ def build_runtime_blueprint(
         "current_version": _text(version_row.get("version")) or "1.0",
         "mode": str(mode),
         "market_type": _text(market_type),
+        "execution_config": dict(execution_config or {}),
     }
     return runtime
 
@@ -199,6 +210,11 @@ async def rebuild_for_resume(
         exchange_id=row.get("exchange_id"),
         mode=mode,
         market_type=market.get("market_type"),
+        # DEPLOY-01: a resumed deployment (after a restart) must keep the SAME execution
+        # limits it was deployed with, not the empty default -- the row itself carries
+        # them (``strategy_deployments.execution_config``, absent entirely on a database
+        # where 004e is unapplied, hence ``.get`` rather than a required key).
+        execution_config=row.get("execution_config"),
     )
     return blueprint, mode != "live"
 

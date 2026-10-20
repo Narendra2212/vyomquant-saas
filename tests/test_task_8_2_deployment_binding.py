@@ -702,37 +702,47 @@ class TestGapPolicyIsDelegated:
 
 
 class TestExecutionConfig:
-    def test_the_designs_fields_are_known_but_none_of_them_are_enforced_yet(self):
+    def test_the_designs_fields_are_known_but_three_of_them_are_still_not_enforced(self):
         """DEPLOY-01: every one of design.md's five fields is validated and stored into the
-        strategy_deployments row, but no execution path (BotRunner, ExecutionGuard,
-        order_control) reads any of them -- a deployment with max_order_notional=1000 runs
-        with exactly the same order-size ceiling as one with no execution_config at all.
-        Supplying a real value for ANY of them is now refused rather than silently stored,
-        the same choice strategy_service.assert_deploy_params_applicable already makes for
-        capital/trade_size_pct/stop_loss_pct/max_drawdown_pct.
+        strategy_deployments row. Two of them (max_order_notional, max_open_positions) are
+        now genuinely consulted at order-construction time
+        (master_executor.evaluate_deployment_execution_limits, threaded in via
+        deployment_runtime.build_runtime_blueprint) and so are no longer refused here. The
+        remaining three name no reader on this platform's order path and are refused rather
+        than silently stored, the same choice strategy_service.assert_deploy_params_applicable
+        already makes for capital/trade_size_pct/stop_loss_pct/max_drawdown_pct.
         """
         payload = {
-            "max_order_notional": 1000,
-            "max_open_positions": 2,
             "slippage_tolerance_bps": 15,
             "order_timeout_seconds": 30,
             "retry_policy": {"attempts": 3},
         }
-        assert set(payload) == set(db.EXECUTION_CONFIG_FIELDS)
+        assert set(payload) == set(db.UNENFORCED_EXECUTION_CONFIG_FIELDS)
+        assert set(db.UNENFORCED_EXECUTION_CONFIG_FIELDS) < set(db.EXECUTION_CONFIG_FIELDS)
 
         with pytest.raises(db.DeployRejected) as exc:
             db.normalise_execution_config(payload)
         assert exc.value.code == "EXECUTION_CONFIG_NOT_ENFORCED"
         assert set(exc.value.details["not_enforced_fields"]) == set(payload)
 
-    def test_each_known_field_is_refused_on_its_own(self):
-        """Every field individually, not just all five together, so a caller cannot slip one
-        past by setting the others to None."""
-        for field in db.EXECUTION_CONFIG_FIELDS:
+    def test_each_still_unenforced_field_is_refused_on_its_own(self):
+        """Every still-unenforced field individually, not just all three together, so a
+        caller cannot slip one past by setting the others to None."""
+        for field in db.UNENFORCED_EXECUTION_CONFIG_FIELDS:
             with pytest.raises(db.DeployRejected) as exc:
                 db.normalise_execution_config({field: "x"})
             assert exc.value.code == "EXECUTION_CONFIG_NOT_ENFORCED"
             assert exc.value.details["not_enforced_fields"] == [field]
+
+    def test_each_enforced_field_is_accepted_with_a_valid_value(self):
+        """DEPLOY-01's second fix: these two no longer raise at all with a real, valid
+        value."""
+        assert db.normalise_execution_config({"max_order_notional": 1000}) == {
+            "max_order_notional": 1000
+        }
+        assert db.normalise_execution_config({"max_open_positions": 2}) == {
+            "max_open_positions": 2
+        }
 
     def test_none_is_an_empty_document_not_a_refusal(self):
         assert db.normalise_execution_config(None) == {}
