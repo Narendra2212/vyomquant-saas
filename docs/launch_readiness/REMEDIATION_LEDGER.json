@@ -1893,6 +1893,19 @@
       "verification_level": "Bumped aiohttp 3.14.3 -> 3.14.4 in requirements-base.txt. This codebase's only aiohttp usage is aiohttp.ClientSession (never aiohttp.web), matching this package's existing triage convention in .kiro/specs/production-launch-hardening/dependency-triage.md section 4. Verified via pip install --upgrade, pip-audit with CI's exact --ignore-vuln list (clean), and 162 real-call-site tests. Opened as standalone PR #36 (merged) and, per the babysit rules' porting requirement, cherry-picked the same commit onto PR #35 directly (da7f443) rather than leaving #35 waiting on #36 to merge first.",
       "production_verified": false,
       "remaining_action": ""
+    },
+    {
+      "id": "WS-02",
+      "priority": "P3",
+      "severity": "Low",
+      "component": "WebSocket Cluster / Sharding",
+      "title": "ConnectionSharder.get_shard_for_user used Python's per-process-randomized hash(), breaking its own 'a user always connects to the same shard' guarantee across worker processes",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "1c0e222",
+      "evidence": "Surfaced as the first red 01 PR Check on main since DEPLOY-02's fix landed -- a push carrying only ledger JSON/CSV changes (commit 2f63af6, PR #43) could not have caused a real regression, so the failure was investigated rather than assumed to be unrelated noise. tests/test_websocket_cluster.py::test_shard_distribution failed with 'Shard 0 has 197 users, expected ~250' (tolerance +/-20% of 250, i.e. 200-300). Root-caused to backend_app/backend/websocket_cluster.py::ConnectionSharder.get_shard_for_user calling Python's built-in hash() on the user_id string -- CPython randomizes string hashing per process via PYTHONHASHSEED (on by default since 3.3, to resist hash-flooding DoS), so the exact same 1000 deterministic user_ids land in different shards on every process start; this run's seed happened to skew shard 0 outside tolerance. This is not merely a flaky test: the method's own docstring promises 'a user always connects to the same shard', which is false across any two processes with different hash seeds -- i.e. any two gunicorn workers in a real deployment. Confirmed ConnectionSharder has no other call site anywhere in backend_app/ (grepped the whole tree), so nothing live is currently mis-routed -- same 'built, tested, never wired in' pattern this ledger documents elsewhere (RT-11, HY-02) -- but the class exists and is tested as working correctness, not test-only scaffolding, so the gap is real for whenever it is wired in.",
+      "verification_level": "Fixed by hashing with hashlib.sha256 instead of hash() -- stable across processes and interpreter restarts. Verified directly: the same two user_ids resolve to the same shard under PYTHONHASHSEED=1/2/3 after the fix (varied before it), and tests/test_websocket_cluster.py passes 12/12 under five different hash seeds (0-4), where it was previously seed-dependent.",
+      "production_verified": false,
+      "remaining_action": ""
     }
   ]
 }
