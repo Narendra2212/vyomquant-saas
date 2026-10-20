@@ -304,3 +304,64 @@ def test_a_funding_fee_keeps_its_deterministic_idempotency_key(db, seeded):
         "record_funding_fee's id now carries a random component, which defeats its "
         "per-period idempotency"
     )
+
+
+def test_a_replayed_funding_fee_is_actually_refused_by_the_real_primary_key(db, seeded):
+    """TEST-01 follow-up: the claim above, proven against a real database.
+
+    The source-text assertion above would still pass if `record_funding_fee` kept the
+    right-looking f-string but something upstream (a changed column type, a dropped
+    primary-key constraint, a migration that made `fee_id` non-unique) stopped the
+    database from actually refusing the second insert. This drives the real call twice,
+    against the real Postgres this file is gated on, and asserts the SECOND call is the
+    one that fails — a `sqlalchemy.exc.IntegrityError` from the primary-key violation,
+    with the first fee's row left exactly as it was.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy.exc import IntegrityError
+
+    import backend_app.core.position_model as _pm
+    from backend_app.backend.fee_engine import FeeEngine
+
+    tenant, _execution_id = seeded
+    position_id = f"pos_p10dfund_{_uuid.uuid4().hex[:10]}"
+    db.add(
+        _pm.PositionModel(
+            position_id=position_id,
+            tenant_id=tenant,
+            strategy_id="p10d-funding",
+            symbol="BTC/USDT",
+            side=_pm.PositionSide.LONG,
+            size="1",
+            avg_entry_price="60000",
+        )
+    )
+    db.flush()
+
+    first = _run(
+        FeeEngine(db).record_funding_fee(
+            position_id=position_id,
+            symbol="BTC/USDT",
+            fee_amount=Decimal("1.50"),
+            fee_asset="USDT",
+            exchange_id="binance",
+            funding_period="2026-05-02-0800",
+            auto_commit=False,
+        )
+    )
+    db.flush()
+    assert first.fee_id == f"fee_funding_{position_id}_2026-05-02-0800"
+
+    with pytest.raises(IntegrityError):
+        _run(
+            FeeEngine(db).record_funding_fee(
+                position_id=position_id,
+                symbol="BTC/USDT",
+                fee_amount=Decimal("1.50"),
+                fee_asset="USDT",
+                exchange_id="binance",
+                funding_period="2026-05-02-0800",
+                auto_commit=False,
+            )
+        )
