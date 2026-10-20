@@ -1,5 +1,6 @@
 {
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. The backtest handler gained ONE additive FastAPI dependency parameter, `_quota=Depends(check_backtest_quota)`, and lost none. Backtests are now a monthly allowance (Free 10, Trader 100, Pro Quant 500, Business 1500) and were previously ungated and unmetered. The dependency reserves one run before the job is enqueued; it changes no request field, no response field and no execution behaviour for a caller within their allowance. A caller over it receives 403 with a structured `BACKTEST_LIMIT_REACHED` refusal.",
+  "_baseline_note_rl02_strategy_detail_rate_limit_restored": "RL-02 AUTHORISES the added `@limiter.limit(\"200/minute\")` decorator and `request: Request` parameter on GET /api/strategies/{strategy_id} (backend_app/routers/strategies.py::get_strategy_route). API-01 correctly deleted a shadowed duplicate of this route that strategies.py's own live handler always won over by registration order -- but the deleted duplicate carried this exact rate limit, which never travelled to the live handler, leaving it callable at an unbounded rate. This is a restoration of a protection that briefly existed, not a new behavioural surface: the route's response shape, status codes and auth requirement are unchanged. Evidence: commit c931a43, tests/test_task_8_2_deploy_preflight.py (42 passed, was 41 passed + 1 failed).",
   "api_call_count": 6,
   "api_calls": [
     {
@@ -200,11 +201,15 @@
       "handlers": [
         {
           "decorators": [
-            "router.get('/{strategy_id}')"
+            "router.get('/{strategy_id}')",
+            "limiter.limit('200/minute')"
           ],
           "handler": "get_strategy_route",
           "module": "backend_app.routers.strategies",
           "parameters": {
+            "request": {
+              "annotation": "Request"
+            },
             "strategy_id": {
               "annotation": "str"
             },

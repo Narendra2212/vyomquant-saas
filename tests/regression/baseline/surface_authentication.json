@@ -1,4 +1,5 @@
 {
+  "_baseline_note_auth01_signout_revokes_session": "AUTH-01 AUTHORISES the added `signOut` entry in `supabase_auth_calls`. The /signout endpoint (backend_app/routers/auth.py) used to build an anonymous, never-authenticated-as-the-caller Supabase client and call its plain `sign_out()` -- a no-op, since that client never held a session to begin with, so the caller's refresh token stayed valid indefinitely despite a 200 response. The fix calls `service_client.auth.admin.sign_out(jwt=..., scope=\"global\")` instead, which actually revokes the caller's own session server-side by JWT. This is a NEW, real network call where there effectively was none before (the old call never reached Supabase in any observable way) -- not a removal, rename, retype or re-meaning of anything already recorded. Evidence: commit b3701ba, tests/test_auth01_signout_revokes_the_real_session.py (4 passed).",
   "api_call_count": 0,
   "api_calls": [],
   "capture": "surface_authentication",
@@ -18,6 +19,7 @@
     "signInWithOAuth",
     "signInWithOtp",
     "signInWithPassword",
+    "signOut",
     "signUp",
     "updateUser",
     "verifyOtp"

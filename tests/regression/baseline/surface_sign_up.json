@@ -1,4 +1,5 @@
 {
+  "_baseline_note_auth01_signout_revokes_session": "AUTH-01 AUTHORISES the added `signOut` entry in `supabase_auth_calls`. The /signout endpoint (backend_app/routers/auth.py) used to build an anonymous, never-authenticated-as-the-caller Supabase client and call its plain `sign_out()` -- a no-op, since that client never held a session to begin with, so the caller's refresh token stayed valid indefinitely despite a 200 response. The fix calls `service_client.auth.admin.sign_out(jwt=..., scope=\"global\")` instead, which actually revokes the caller's own session server-side by JWT. This is a NEW, real network call where there effectively was none before (the old call never reached Supabase in any observable way) -- not a removal, rename, retype or re-meaning of anything already recorded. Evidence: commit b3701ba, tests/test_auth01_signout_revokes_the_real_session.py (4 passed).",
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. This surface captures the checkout response and the backtest handler, so it carries both of the additive changes recorded on `billing_plan_checkout.json` and `surface_backtester.json`: `interval` and `price_source` on the checkout return, and the `_quota` dependency parameter on the backtest handler. The sign-up and authentication paths themselves are untouched by this change.",
   "api_call_count": 5,
   "api_calls": [
@@ -219,6 +220,7 @@
     "signInWithOAuth",
     "signInWithOtp",
     "signInWithPassword",
+    "signOut",
     "signUp",
     "verifyOtp"
   ],
