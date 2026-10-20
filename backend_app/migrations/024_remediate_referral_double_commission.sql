@@ -1,5 +1,21 @@
 -- backend_app/migrations/024_remediate_referral_double_commission.sql
 --
+-- CORRECTION, applied against real production (see ledger DEPLOY-04 / BILL-06): this
+-- file's own "installed signature" and "installed body" claims below were themselves
+-- stale by the time it was actually applied. The real production function was
+-- (p_payment_id varchar, p_referred_user_id uuid, p_subscription_tier varchar,
+-- p_payment_amount_usd numeric) -- note the SECOND parameter's name, not the first --
+-- and its wallet upsert used balance_usd/total_earned_usd, not the
+-- pending_balance_usd/lifetime_earnings_usd this file assumes throughout. The actual
+-- production fix: kept the real signature AND parameter names (CREATE OR REPLACE
+-- FUNCTION cannot rename a parameter without DROP FUNCTION first, which this file's
+-- own tooling could not run), added this file's ON CONFLICT (payment_id) guard and
+-- the uq_referral_commission_payment index exactly as declared below, used the real
+-- wallet column names, and fixed backend_app/routers/billing.py's RPC call (which was
+-- passing "p_referred_id", resolving to nothing) to use "p_referred_user_id" instead.
+-- See BILL-07's ledger entry for the full account. The SQL below is this file's
+-- ORIGINAL, as-designed version; it does not reflect what actually landed.
+--
 -- REMEDIATION PHASE, STEP 3: money / referral accounting.
 --
 -- MONEY-01. CONFIRMED, NOT SUSPECTED.
