@@ -210,6 +210,18 @@ class OrderWatchdog:
                 # this loop's 30s interval, so the work is rare rather than per-tick.
                 await self.recover_unsubmitted_executions()
 
+                # DUP-01. The population `recover_unsubmitted_executions` could not
+                # close out: rows it already moved to UNKNOWN because the venue could
+                # not be asked at all, which `classify_stale_executions` cannot see a
+                # second time -- it only selects `EXECUTING` rows, and these left that
+                # status on their first pass. Without this call such a row sat UNKNOWN
+                # forever, silently, with no further attempt and no escalation beyond
+                # the one alert already raised. Same bounded-cost reasoning as above:
+                # `classify_unresolved_submissions` is one indexed query that returns
+                # nothing in the normal case, and it only considers rows whose
+                # `submitted_at` is older than `CONFIRMATION_LOST_AFTER_SECONDS` (24h).
+                await self.recheck_unresolved_submissions()
+
                 self.checks_run += 1
                 
                 # Wait before next check
@@ -554,9 +566,90 @@ class OrderWatchdog:
                     "and will be re-examined.", row["execution_id"], exc,
                 )
 
-    async def _adjudicate_ambiguous_execution(self, repo, row: dict):
-        """Resolve one `ambiguous_submission` row against the venue. Never resubmits."""
-        from backend_app.core.models.execution_record import ExecutionStatus
+    async def recheck_unresolved_submissions(self):
+        """Give a SECOND chance -- and only once, a defined terminal one -- to rows
+        `recover_unsubmitted_executions` already gave up on once.
+
+        DUP-01. THE POPULATION THAT WAS INVISIBLE TO EVERY LATER WATCHDOG CYCLE.
+        -------------------------------------------------------------------------
+        `_adjudicate_ambiguous_execution`'s "cannot ask" and "venue lookup failed"
+        branches move a row from `EXECUTING` to `UNKNOWN` when NOTHING was learned from
+        the venue. Once there, `classify_stale_executions` can never select it again --
+        its query is `WHERE status = 'EXECUTING'` -- so nothing in this module ever
+        looked at it a second time. For coinbase and kraken specifically, where
+        `clientOrderId` is not honoured at all (`exchange_executor.py`'s venue mapping),
+        a transient lookup failure and a structural inability to ever confirm the order
+        are indistinguishable from one attempt, so that one UNKNOWN write was frequently
+        this platform's LAST word on an execution that might still be live, or might
+        never have reached the venue at all -- with nothing to tell the two apart and
+        nothing scheduled to ever try again.
+
+        THIS METHOD IS THE RETRY LOOP THAT WAS MISSING, nothing else. It re-runs the
+        exact same venue lookup (`_adjudicate_ambiguous_execution`, with
+        `from_status=UNKNOWN` so a real answer can still persist) against
+        `classify_unresolved_submissions`' population -- `UNKNOWN`, no venue order id,
+        `submitted_at` older than `CONFIRMATION_LOST_AFTER_SECONDS`. Most of the time
+        this finds nothing (the query is empty) or gets the same "still cannot ask"
+        answer and, because enough time has NOW passed, that answer becomes the DUP-01
+        give-up transition to `FAILED`/`confirmation_lost` -- a defined terminal state
+        in place of a silence with no further action scheduled against it. If the venue
+        is reachable this time, the real answer (a fill, a `not_found`, a resting order)
+        is recorded instead, exactly as it would have been on the first attempt.
+
+        NEVER RESUBMITS, for the same reason `recover_unsubmitted_executions` never does:
+        `_adjudicate_ambiguous_execution` is the single adjudicator for this population
+        and it only ever reads the venue by `clientOrderId`, never places an order.
+        """
+        from backend_app.core.models.execution_record import (
+            ExecutionRecordRepository, ExecutionStatus)
+
+        repo = ExecutionRecordRepository(self.db)
+        try:
+            candidates = repo.classify_unresolved_submissions()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("DUP-01: could not classify unresolved submissions: %s", exc)
+            return
+
+        if not candidates:
+            return
+
+        logger.warning(
+            "DUP-01: %d unresolved submission(s) have exceeded the confirmation-lost "
+            "window; re-adjudicating before giving up on any of them.", len(candidates),
+        )
+
+        for row in candidates:
+            try:
+                await self._adjudicate_ambiguous_execution(
+                    repo, row, from_status=ExecutionStatus.UNKNOWN,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "DUP-01: re-adjudication of %s failed (%s); the row stays UNKNOWN "
+                    "and will be re-examined on a later pass.", row["execution_id"], exc,
+                )
+
+    async def _adjudicate_ambiguous_execution(
+        self, repo, row: dict, *, from_status: Any = None,
+    ):
+        """Resolve one `ambiguous_submission` row against the venue. Never resubmits.
+
+        DUP-01. `from_status` tells `repo.resolve_stale_execution` which population this
+        row came from -- `classify_stale_executions`' `EXECUTING` rows on a first attempt
+        (the default, unchanged), or `classify_unresolved_submissions`' `UNKNOWN` rows on
+        a renewed one, via `recheck_unresolved_submissions`. Every branch that gets a
+        venue ANSWER forwards it so it persists regardless of which population called
+        this; only the two branches below that get NO answer at all additionally weigh
+        `row["age_seconds"]` against `CONFIRMATION_LOST_AFTER_SECONDS` to decide between
+        staying `UNKNOWN` (there is still time to try again) and giving up
+        (`give_up_on_unresolved_submission`, which only ever transitions FROM `UNKNOWN`
+        and so is unaffected by `from_status`).
+        """
+        from backend_app.core.models.execution_record import (
+            CONFIRMATION_LOST_AFTER_SECONDS, ExecutionStatus)
+
+        if from_status is None:
+            from_status = ExecutionStatus.EXECUTING
 
         execution_id = row["execution_id"]
 
@@ -582,23 +675,34 @@ class OrderWatchdog:
             )
 
         if executor is None or not hasattr(executor, "find_order_by_client_order_id"):
-            # Cannot ask. UNKNOWN, not FAILED: credentials being unavailable is not
-            # evidence that the order does not exist.
-            repo.resolve_stale_execution(
-                execution_id, row["tenant_id"],
-                status=ExecutionStatus.UNKNOWN,
-                classification=row["classification"],
-                detail=(
+            # Cannot ask at all. This is the genuinely-no-signal case: DUP-01's give-up
+            # path applies here once enough time has passed (see
+            # `_stay_unknown_or_give_up`); until then it is UNKNOWN, not FAILED, because
+            # credentials being unavailable right now is not evidence the order does not
+            # exist.
+            await self._stay_unknown_or_give_up(
+                repo, row, from_status=from_status,
+                unknown_detail=(
                     "submitted but unacknowledged, and no venue connection was available "
                     "to establish whether the order exists"
                 ),
-            )
-            await self._trigger_recovery_alert(
-                row,
-                "Order was SUBMITTED to the venue and never acknowledged, and the venue "
-                "could not be queried. It may be resting or filled. Manual "
-                "reconciliation required; the execution has been left UNKNOWN and was "
-                "NOT resubmitted.",
+                unknown_alert=(
+                    "Order was SUBMITTED to the venue and never acknowledged, and the "
+                    "venue could not be queried. It may be resting or filled. Manual "
+                    "reconciliation required; the execution has been left UNKNOWN and "
+                    "was NOT resubmitted."
+                ),
+                give_up_detail=(
+                    "no venue connection was ever available to establish whether the "
+                    "order exists, across repeated attempts"
+                ),
+                give_up_alert=(
+                    "DUP-01: no venue connection could be established for this ambiguous "
+                    "submission across repeated attempts spanning the confirmation-lost "
+                    "window. Moved to FAILED/confirmation_lost. This is NOT a claim the "
+                    "order never reached the venue -- manual reconciliation is required "
+                    "before this symbol can trade again for this tenant."
+                ),
             )
             return
 
@@ -607,21 +711,37 @@ class OrderWatchdog:
         )
 
         if not result.success:
-            repo.resolve_stale_execution(
-                execution_id, row["tenant_id"],
-                status=ExecutionStatus.UNKNOWN,
-                classification=row["classification"],
-                detail=f"venue lookup failed: {result.error_message}",
-            )
-            await self._trigger_recovery_alert(
-                row,
-                f"Order was SUBMITTED and never acknowledged, and the venue lookup "
-                f"failed ({result.error_message}). Left UNKNOWN; NOT resubmitted.",
+            # The venue genuinely could not be asked (unreachable, rate-limited,
+            # authentication failure, ...) -- as opposed to `not_found` below, which is
+            # the venue ANSWERING that it holds no such order. This is the other
+            # genuinely-no-signal case DUP-01's give-up path applies to.
+            await self._stay_unknown_or_give_up(
+                repo, row, from_status=from_status,
+                unknown_detail=f"venue lookup failed: {result.error_message}",
+                unknown_alert=(
+                    f"Order was SUBMITTED and never acknowledged, and the venue lookup "
+                    f"failed ({result.error_message}). Left UNKNOWN; NOT resubmitted."
+                ),
+                give_up_detail=(
+                    f"the venue lookup kept failing across repeated attempts spanning "
+                    f"the confirmation-lost window (most recent error: "
+                    f"{result.error_message})"
+                ),
+                give_up_alert=(
+                    f"DUP-01: the venue lookup for this ambiguous submission kept "
+                    f"failing across repeated attempts spanning the confirmation-lost "
+                    f"window (most recent error: {result.error_message}). Moved to "
+                    f"FAILED/confirmation_lost. This is NOT a claim the order never "
+                    f"reached the venue -- manual reconciliation is required before this "
+                    f"symbol can trade again for this tenant."
+                ),
             )
             return
 
         if result.status == "not_found":
-            # A definite negative from the venue. The submission did not take effect.
+            # A definite negative from the venue: it ANSWERED and has no such order. This
+            # is an actual signal, not an absence of one, so it is immediate and does not
+            # go through the age-gated give-up path above.
             repo.resolve_stale_execution(
                 execution_id, row["tenant_id"],
                 status=ExecutionStatus.FAILED,
@@ -630,12 +750,15 @@ class OrderWatchdog:
                     "the venue was queried by clientOrderId and has no such order, so "
                     "the submission did not take effect"
                 ),
+                from_status=from_status,
             )
             return
 
         venue_order_id = result.venue_order_id
         if not venue_order_id:
-            # The venue knows something but gave us no id. Not enough to record a fill.
+            # The venue knows something but gave us no id. Not enough to record a fill,
+            # and NOT eligible for the give-up path: a status without an id is partial
+            # POSITIVE evidence the order exists, which is the opposite of "no signal".
             repo.resolve_stale_execution(
                 execution_id, row["tenant_id"],
                 status=ExecutionStatus.UNKNOWN,
@@ -644,6 +767,7 @@ class OrderWatchdog:
                     f"the venue reported status {result.status!r} but returned no order "
                     f"id, so a fill cannot be attributed"
                 ),
+                from_status=from_status,
             )
             await self._trigger_recovery_alert(
                 row,
@@ -659,6 +783,7 @@ class OrderWatchdog:
                 classification=row["classification"],
                 detail=f"recovered from the venue by clientOrderId ({result.status})",
                 order_id=venue_order_id,
+                from_status=from_status,
             )
             logger.critical(
                 "TRADE-07: execution %s was FILLED at the venue and the platform did not "
@@ -680,12 +805,15 @@ class OrderWatchdog:
                 classification=row["classification"],
                 detail=f"the venue reports the order as {result.status}",
                 order_id=venue_order_id,
+                from_status=from_status,
             )
             return
 
         # Still open at the venue. This is live exposure the platform had lost track of.
         # The order id is now recorded, which moves the row into `_find_stale_orders`'
-        # population so the ordinary reconciliation loop takes it from here.
+        # population so the ordinary reconciliation loop takes it from here. NEVER
+        # eligible for the give-up path, however long this has been ambiguous: a resting
+        # order IS positive evidence of life, the opposite of "no signal".
         repo.resolve_stale_execution(
             execution_id, row["tenant_id"],
             status=ExecutionStatus.UNKNOWN,
@@ -695,6 +823,7 @@ class OrderWatchdog:
                 f"so the ordinary reconciliation path can follow it"
             ),
             order_id=venue_order_id,
+            from_status=from_status,
         )
         await self._trigger_recovery_alert(
             row,
@@ -702,6 +831,82 @@ class OrderWatchdog:
             f"platform had no record of it. This is live exposure. Its id is now "
             f"recorded; it was NOT resubmitted and NOT cancelled.",
         )
+
+    async def _stay_unknown_or_give_up(
+        self,
+        repo,
+        row: dict,
+        *,
+        from_status: Any,
+        unknown_detail: str,
+        unknown_alert: str,
+        give_up_detail: str,
+        give_up_alert: str,
+    ) -> None:
+        """DUP-01: the only two branches with genuinely NO signal from the venue.
+
+        Called exclusively from the "no executor" and "venue lookup failed" branches of
+        `_adjudicate_ambiguous_execution` -- the cases where nothing was learned, as
+        opposed to a partial or definite answer. Every other branch in that function
+        either got a real answer (`not_found`, a fill, a cancellation) or got a status
+        with no attributable id, which is partial POSITIVE evidence of life and must
+        never be treated as "no signal".
+
+        Stays `UNKNOWN` (the pre-DUP-01 behaviour, unchanged) on a row's FIRST
+        adjudication attempt (`from_status` is `EXECUTING`, i.e. this was reached from
+        `classify_stale_executions`) -- unconditionally, regardless of `age_seconds`.
+        That guard matters: `age_seconds` there is the row's age since `created_at`, and
+        a watchdog outage could let that exceed `CONFIRMATION_LOST_AFTER_SECONDS` before
+        this row was ever looked at even once. Giving up on a first look would skip the
+        state `give_up_on_unresolved_submission` requires (`UNKNOWN`) entirely and its
+        `WHERE` clause would then match nothing, silently leaving the row EXECUTING
+        forever -- worse than the defect this exists to fix. "Enough time has passed"
+        can only be measured from a row that has ALREADY been through at least one
+        exhausted lookup attempt.
+
+        Only once `from_status` is `UNKNOWN` (this was reached from
+        `classify_unresolved_submissions`, i.e. at least one prior attempt already
+        happened) does `row["age_seconds"]` -- there, time since `submitted_at`, spanning
+        every renewed attempt -- get weighed against `CONFIRMATION_LOST_AFTER_SECONDS`.
+        Under it, there is still a realistic chance a later renewed attempt resolves this
+        with an actual answer. Over it, gives up via `give_up_on_unresolved_submission` --
+        which transitions the row to `FAILED`/`confirmation_lost` only from `UNKNOWN` with
+        no venue order id, so it cannot clobber a row a concurrent worker just attached
+        positive evidence to.
+
+        If the give-up write itself did not apply (another worker already resolved the
+        row, or it raced ahead of this one), the row is left exactly as the give-up
+        method already decided -- re-asserting UNKNOWN here would just be a second,
+        redundant opinion on a row this function no longer owns.
+        """
+        from backend_app.core.models.execution_record import (
+            CONFIRMATION_LOST_AFTER_SECONDS, ExecutionStatus)
+
+        age_seconds = row.get("age_seconds") or 0
+        if (
+            from_status == ExecutionStatus.UNKNOWN
+            and age_seconds >= CONFIRMATION_LOST_AFTER_SECONDS
+            and hasattr(repo, "give_up_on_unresolved_submission")
+        ):
+            gave_up = repo.give_up_on_unresolved_submission(
+                row["execution_id"], row["tenant_id"], detail=give_up_detail,
+            )
+            if gave_up:
+                await self._trigger_recovery_alert(row, give_up_alert)
+                return
+            # The write did not apply (raced, or the row already moved). Leave it: a
+            # second UNKNOWN write below would not be re-asserting anything true about a
+            # row this attempt no longer has current information about.
+            return
+
+        repo.resolve_stale_execution(
+            row["execution_id"], row["tenant_id"],
+            status=ExecutionStatus.UNKNOWN,
+            classification=row["classification"],
+            detail=unknown_detail,
+            from_status=from_status,
+        )
+        await self._trigger_recovery_alert(row, unknown_alert)
 
     async def _trigger_recovery_alert(self, row: dict, reason: str):
         """Alert for an adjudicated stale execution.
