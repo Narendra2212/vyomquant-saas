@@ -578,17 +578,29 @@ class TestTheRealApplicationAnswersTheSameWay:
         The categories route memoises its answer in a module global, which is pre-seeded here so
         that sixty admitted requests cost sixty dictionary lookups rather than sixty reads. What
         is asserted is the sixty-first answer, and that the answer is the catalogue's code.
+
+        ``TestClient(app)``, not ``with TestClient(app) as client:``. The latter runs
+        ``main.py``'s real ``lifespan`` -- which this test does not need: the rate limiter
+        (``core/rate_limit.py``'s module-level ``Limiter``) and the ``RateLimitExceeded`` handler
+        the sibling test above asserts on are both wired at import time, not inside lifespan.
+        Running lifespan anyway means `settings.validate_required()` refuses to boot without
+        `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` -- real Supabase credentials this suite has
+        none of and a rate-limit test has no business needing -- which is exactly why CI's
+        Unit & Integration Tests job sets neither. Same reasoning
+        ``tests/test_pricing_ladder.py``'s own ``_client()`` gives for avoiding it: lifespan opens
+        resources ("the Redis, database and exchange connections this suite has none of") that a
+        route under test here never touches.
         """
         from backend_app.main import app
 
         original = library_router._CACHED_CATEGORIES
         library_router._CACHED_CATEGORIES = {"categories": []}
         try:
-            with TestClient(app) as client:
-                codes = [
-                    client.get("/api/library/categories").status_code for _ in range(60)
-                ]
-                refused = client.get("/api/library/categories")
+            client = TestClient(app)
+            codes = [
+                client.get("/api/library/categories").status_code for _ in range(60)
+            ]
+            refused = client.get("/api/library/categories")
         finally:
             library_router._CACHED_CATEGORIES = original
 
