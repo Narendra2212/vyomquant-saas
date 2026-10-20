@@ -71,7 +71,19 @@ def test_the_service_is_not_registered_in_the_application_lifespan():
     same rows concurrently.
     """
     main_src = MAIN_SRC.read_text(encoding="utf-8")
-    assert "exchange_reconciliation" not in main_src, (
+    # Strip comments before checking: RT-11's own removal of distributed_execution.router
+    # left a comment mentioning `exchange_reconciliation_engine.py` (a different module --
+    # the unstarted one under backend/distributed_execution/, not this file's
+    # backend_app/backend/exchange_reconciliation.py) as a "separate, not-yet-evaluated
+    # concern this change does not touch". That comment's text contains this test's own
+    # target substring, which made this assertion fail without a single line of code
+    # actually wiring the real service into the lifespan -- confirmed directly: no
+    # `import ... exchange_reconciliation` and no call referencing it exists in main.py,
+    # only that one comment line.
+    main_code_only = "\n".join(
+        line for line in main_src.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "exchange_reconciliation" not in main_code_only, (
         "backend_app/main.py now references exchange_reconciliation. Starting this "
         "service needs the duplicate-worker, tenant-enumeration and ghost-order-"
         "idempotency questions answered first — see this module's docstring."
