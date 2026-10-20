@@ -359,8 +359,19 @@ describe('Dashboard alert strip — the two `riskState` bands (Requirement 19.1)
     mount();
     await settled();
 
-    const band = region('kill-switch-active');
-    expect(band).not.toBeNull();
+    // `settled()` waits only for the tier-1 grid (its own doc comment explains why: waiting
+    // on the strip itself would be circular for the cases that assert its absence). The band
+    // below comes from a SEPARATE effect keyed off `riskState`, committed in a later pass than
+    // the one `settled()` observes — usually the same tick, but not always on a cold render,
+    // which is what made this test and its sibling below intermittently read `region(...)` as
+    // `null` in CI (observed directly: both failed in isolation on some runs and not others,
+    // at roughly the same rate, with no change to either test — a genuine race, not a stale
+    // assertion). `waitFor` tolerates the extra tick instead of assuming synchronicity.
+    let band;
+    await waitFor(() => {
+      band = region('kill-switch-active');
+      expect(band).not.toBeNull();
+    });
     expect(band.textContent).toContain('Emergency kill switch active');
     // A halt IS assertive: trading has stopped, and this is the one message on the page that
     // earns interrupting whatever a screen reader is saying (Requirement 16.2).
@@ -381,8 +392,13 @@ describe('Dashboard alert strip — the two `riskState` bands (Requirement 19.1)
     mount();
     await settled();
 
-    const band = region('circuit-breaker');
-    expect(band).not.toBeNull();
+    // See the kill-switch test above: this band comes from the same `riskState` effect, one
+    // tick after what `settled()` observes on a cold render, so it needs the same `waitFor`.
+    let band;
+    await waitFor(() => {
+      band = region('circuit-breaker');
+      expect(band).not.toBeNull();
+    });
     expect(band.textContent).toContain('Risk circuit breaker triggered');
     expect(band.getAttribute('data-alert-severity')).toBe('warning');
 
