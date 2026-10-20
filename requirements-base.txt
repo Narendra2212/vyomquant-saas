@@ -97,7 +97,10 @@ ccxt[async]==4.3.92
 # the C response parser's error path) are fixed by 3.14.3. Both are on the client-parsing
 # path; this codebase's aiohttp usage is exclusively aiohttp.ClientSession (no
 # aiohttp.web server). See .kiro/specs/production-launch-hardening/dependency-triage.md.
-aiohttp==3.14.3
+#
+# CVE-2026-111063 / CVE-2026-111064 (GHSA-2g87-pp6c-29x5), found by CI's pip-audit on
+# 3.14.3 itself, are fixed by 3.14.4. Same triage conclusion applies -- client-only usage.
+aiohttp==3.14.4
 toolz==0.12.1
 
 # --- Numba + Numeric stack -----------------------------------------------
