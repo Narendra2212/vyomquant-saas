@@ -40,6 +40,7 @@ vi.mock('../../src/api', () => ({
     strategies: { backtest: vi.fn(async () => ({ data: { trades: 12, total_return_pct: 4.2 } })) },
     billing: { getPlans: vi.fn(async () => ({ data: { plans: [] } })) },
   },
+  isAuthenticated: () => false,
 }));
 
 vi.mock('../../src/supabase', () => ({

@@ -1828,6 +1828,19 @@
       "verification_level": "root-caused against a real GitHub Actions job log; regenerated and re-verified locally via a throwaway Postgres instance through the repository's own provisioning + drift-check scripts (not hand-edited); not yet re-confirmed on a real CI run",
       "production_verified": false,
       "remaining_action": "Get this pushed and merged alongside CI-08/CI-09, then confirm on the next real CI run that the Provisioning job's schema-drift step reports NO DRIFT."
+    },
+    {
+      "id": "DEPLOY-03",
+      "priority": "P0",
+      "severity": "Critical",
+      "component": "Strategy Deploy / Risk Controls",
+      "title": "A caller could set capital/trade_size_pct/stop_loss_pct/max_drawdown_pct on deploy and have it silently dropped -- the live deploy path had no equivalent of the deleted route's refusal",
+      "status": "VERIFIED_FIXED",
+      "fix_commit": "46f073f",
+      "evidence": "Found while root-causing a real CI failure (job 117485524636, tests/test_deploy_strategy_accepts_only_what_it_applies.py, AttributeError: module 'strategy_operations' has no attribute 'deploy_strategy') -- not from a targeted security review, but it surfaced a real gap once traced. `strategy_operations.deploy_strategy` was correctly deleted by an earlier session's API-01 (commit 396d210) as a permanently shadowed duplicate route (routers/strategies.py was mounted first and always won the same path, so it had been dead code since the day both were added). That deletion was correct. But tracing the real, reachable deploy path -- routers.strategies.deploy_bot / resume_strategy -> _deploy_current_version_paper -> StrategyService.deploy_version -- found that `assert_deploy_params_applicable` (the refusal the dead route used to run) never travelled to the replacement. `deploy_version`'s own request model (DeploymentBindingRequest) has no field for capital/trade_size_pct/stop_loss_pct/max_drawdown_pct at all, and deploy_bot's raw request body dict was never read for them either. A caller setting a stop-loss on deploy got a 200 and had it silently dropped -- a trader who believes they set a 2% stop and gets a bot running with none, exactly the scenario assert_deploy_params_applicable exists to prevent, just one layer removed from the route this had been pinned against. assert_blueprint_startable (the deploy_strategy's OTHER protection, against deploying a blueprint that cannot start a bot) needed no equivalent fix: deploy_version already calls it directly (strategy_service.py:1858) and maps its failure through DeployRejected(http_status=422), which _deploy_current_version_paper already handles -- that protection travelled to the live route correctly. Fixed by calling assert_deploy_params_applicable in _deploy_current_version_paper before anything else runs (same ordering the deleted route used) and having deploy_bot forward its request body to it. resume_strategy's own route takes no body, so there is nothing for it to forward -- the gap only ever existed on the deploy path, not resume.",
+      "verification_level": "root-caused against a real GitHub Actions failure; verified by direct behavioral calls to the live route function (not source inspection), mocking only get_strategy_service: a supplied risk/capital parameter is refused with 422 before the service is ever reached, a zero value counts as supplied, omitting the parameters reaches the real service call unaffected",
+      "production_verified": false,
+      "remaining_action": "Get this merged and confirm on the next real CI run that test_deploy_strategy_accepts_only_what_it_applies.py's full 27 tests pass. Not yet exercised against a real deployed backend (e.g. a live POST /api/strategies/{id}/deploy with a stop_loss_pct set) -- the fix is verified at the function level, not end-to-end through a running server."
     }
   ]
 }
