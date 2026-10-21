@@ -206,7 +206,7 @@ try {
       // hash directly and has never gone through this library's own session validation
       // either way. It also means this library's OWN internal session will now refuse that
       // same implicit recovery hash (the mismatch above), which is a real behaviour change
-      // worth flagging: `supabase.auth.updateUser()` on `/reset-password` needs the
+      // worth flagging: the `updateUser` auth call on `/reset-password` needs the
       // library's OWN internal session, not just this app's own `sessionStorage` bookkeeping,
       // so if the out-of-band recovery email is still implicit-shaped, completing a password
       // reset could now fail where it previously (insecurely) succeeded. Tracked under FE-01

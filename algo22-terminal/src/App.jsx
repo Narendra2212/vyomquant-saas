@@ -487,7 +487,7 @@ function PasswordRecoveryHandler() {
       // now configured (src/supabase.js), supabase-js's OWN internal session detection
       // will REJECT this same implicit-shaped hash as a flow-type mismatch rather than
       // quietly adopting it into its real internal session the way it used to -- so if the
-      // out-of-band recovery email is still implicit-shaped, `supabase.auth.updateUser()`
+      // out-of-band recovery email is still implicit-shaped, the `updateUser` auth call
       // on `/reset-password` (which needs THAT internal session, not just the
       // `sessionStorage` bookkeeping this branch does by hand) could now fail where it
       // previously, insecurely, succeeded. Needs a live project to confirm either way.

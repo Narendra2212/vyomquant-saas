@@ -51,6 +51,7 @@ const AUTH_METHODS = [
   'signUp',                      // pages/AuthPage.jsx
   'signOut',                     // apiClient.js, components/shell/AccountMenu.jsx
   'getUser',                     // App.jsx, AccountMenu.jsx, pages/TwoFA.jsx, pages/Wizard.jsx
+  'getSession',                  // App.jsx (FE-01: useGuardedAuthToken, PasswordRecoveryHandler)
   'updateUser',                  // App.jsx, pages/UpdatePasswordPage.jsx
   'onAuthStateChange',           // apiClient.js (MODULE SCOPE), App.jsx
 ];
@@ -132,6 +133,17 @@ describe('unconfigured Supabase stand-in client', () => {
       }).not.toThrow();
       expect(data.user).toBeNull();
       expect(error).toBeInstanceOf(Error);
+    });
+
+    it('getSession returns data.session as null with no error, so a guard awaiting it settles rather than hanging', () => {
+      // FE-01: App.jsx's `useGuardedAuthToken` / `PasswordRecoveryHandler` destructure
+      // `{ data: { session } }` while possibly awaiting a PKCE exchange; with Supabase
+      // unconfigured there is no exchange and no session to report, but the call must
+      // still resolve.
+      const client = createUnconfiguredClient();
+      const { data, error } = client.auth.getSession();
+      expect(data.session).toBeNull();
+      expect(error).toBeNull();
     });
 
     it.each(['signInWithPassword', 'signInWithOtp', 'verifyOtp', 'signUp'])(
