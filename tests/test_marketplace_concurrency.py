@@ -2269,6 +2269,23 @@ class _FillRacer:
     the index exists to arbitrate. ``busy`` is a re-entrancy guard, not a lock: the competitor
     issues its own ``paper_fills`` INSERT, which would fire this seam again and recurse without
     bound.
+
+    PAPER-05 NOTE. ``apply_fill`` now commits the fill row (and the other six writes) through
+    ONE ``.rpc("paper_apply_fill_atomic", ...)`` call instead of a separate
+    ``.table("paper_fills").insert(...)`` statement, so this seam no longer fires on a real
+    PostgREST request boundary - it fires from INSIDE ``FakeSupabase._execute_rpc``'s own
+    simulation of the fill-insert-or-resume sub-step, at the same relative position (after the
+    duplicate-fill fault check, before ``_defaults``/``_enforce_unique``) the old, separate
+    statement occupied. The battery below still proves the DOUBLE arbitrates this interleaving
+    correctly, which is worth keeping: it is the cheapest, fastest check that a change to
+    ``_execute_rpc`` has not quietly broken the simulation's fidelity to the real function's
+    ordering. It does NOT, on its own, prove the REAL ``paper_apply_fill_atomic`` function
+    holds the lock it claims to hold against a REAL competing connection -
+    ``tests/test_paper05_apply_fill_atomic_postgres.py`` (see in particular
+    ``test_n_concurrent_deliveries_of_the_same_fill_event_id_admit_exactly_one``) is the test
+    that proves that, directly against PostgreSQL with no double in between. Treat the two as
+    complementary, not redundant: this battery regresses the SIMULATION, that file regresses
+    the DATABASE.
     """
 
     __slots__ = ("supabase", "session", "order", "pending", "outcomes", "busy", "released")

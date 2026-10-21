@@ -486,6 +486,22 @@ class FakeSupabase:
                 "fill_event_id": params["p_fill_event_id"],
             })
             self._fault(("insert", repo.FILLS_TABLE), payload=fill_payload)
+            # The race-forcing seam. The real `paper_apply_fill_atomic` has already
+            # committed to nothing at this point -- the fill row has not landed -- which
+            # is exactly where `before_insert` fired for the old, separate
+            # `.table("paper_fills").insert(...)` statement this one `.rpc()` call
+            # replaced (PAPER-05). A competitor released here, before the uniqueness
+            # check below, reproduces the identical interleaving: it runs its own COMPLETE
+            # `apply_fill_atomic` call (itself re-entering this method; `_FillRacer`'s own
+            # `busy` guard, not this double, is what stops that from recursing), lands its
+            # own fill row first, and the interrupted attempt's OWN insert then collides
+            # with `uq_paper_fill_event` below -- the same arbitration
+            # `tests/test_marketplace_concurrency.py`'s B2 battery measures.
+            if self.before_insert is not None:
+                hook_query = _Query(repo.FILLS_TABLE, self)
+                hook_query.op = "insert"
+                hook_query.payload = dict(fill_payload)
+                self.before_insert(self, hook_query)
             candidate = self._defaults(repo.FILLS_TABLE, fill_payload)
             try:
                 self._enforce_unique(repo.FILLS_TABLE, candidate)
