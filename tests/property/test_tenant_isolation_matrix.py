@@ -551,6 +551,107 @@ class MatrixStore(FakeSupabase):
             return _Resp(data[0] if data else None, count=len(data))
         return _Resp(data, count=len(data) if isinstance(data, list) else None)
 
+    def _execute_rpc(self, name: str, params: Dict[str, Any]) -> Any:
+        """``FakeSupabase._execute_rpc`` only knows ``paper_apply_fill_atomic`` -- this
+        matrix also drives routers that now call ``record_and_transition_settlement``
+        (``050_mkt03_settlement_atomic_transition.sql``, MKT-03). Adds that one function,
+        over the SAME generic, already-declared ``marketplace_settlements`` /
+        ``library_subscriptions`` / ``library_subscription_transitions`` row lists every
+        other operator above reads and writes through ``rows_of`` -- so a cross-tenant
+        snapshot still sees exactly what this call wrote, the same guarantee the matrix
+        gives every ``.table()`` write. Mirrors ``tests/test_settlement_service.py::
+        FakeSupabase._execute_rpc`` and ``tests/test_billing_e2e.py::_MarketplaceSupabase.
+        _execute_rpc``'s own simulation of the same real function; paper_apply_fill_atomic
+        is unchanged, delegated straight to the inherited implementation.
+        """
+        if name == "paper_apply_fill_atomic":
+            return super()._execute_rpc(name, params)
+        if name != "record_and_transition_settlement":
+            raise AssertionError(f"unexpected rpc: {name!r}")
+
+        settlements = self.rows_of("marketplace_settlements")
+        subscriptions = self.rows_of("library_subscriptions")
+        transitions = self.rows_of("library_subscription_transitions")
+
+        pair = (params["p_provider_reference"], bool(params["p_is_reversal"]))
+        existing = next(
+            (
+                row for row in settlements
+                if (row.get("provider_reference"), bool(row.get("is_reversal"))) == pair
+            ),
+            None,
+        )
+
+        inserted = False
+        if existing is None:
+            settlement_row = dict(params["p_settlement"])
+            settlement_row["subscription_id"] = params["p_subscription_id"]
+            settlement_row["provider_reference"] = params["p_provider_reference"]
+            settlement_row["is_reversal"] = params["p_is_reversal"]
+            self._fault(("insert", "marketplace_settlements"), payload=settlement_row)
+            settlements.append(settlement_row)
+            inserted = True
+        else:
+            if not params["p_proceed_if_duplicate"]:
+                return _Resp(
+                    {"settlement": dict(existing), "inserted": False, "transitioned": False}
+                )
+            settlement_row = existing
+
+        transition = params.get("p_transition")
+        if transition is None:
+            return _Resp(
+                {
+                    "settlement": dict(settlement_row),
+                    "inserted": inserted,
+                    "transitioned": False,
+                }
+            )
+
+        sub = next(
+            (row for row in subscriptions if str(row.get("id")) == str(params["p_subscription_id"])),
+            None,
+        )
+        if sub is None or sub.get("status") != params["p_expected_from_status"]:
+            raise RuntimeError(
+                "record_and_transition_settlement: subscription "
+                f"{params['p_subscription_id']} status changed under the caller "
+                f"(expected {params['p_expected_from_status']}); MK001"
+            )
+
+        update_payload = {
+            "status": transition["status"],
+            "period_start": transition.get("period_start"),
+            "period_expiry": transition.get("period_expiry"),
+            "cancelled_at": transition.get("cancelled_at"),
+        }
+        self._fault(
+            ("update", "library_subscriptions"),
+            filters=[
+                ("id", params["p_subscription_id"]),
+                ("status", params["p_expected_from_status"]),
+            ],
+            payload=update_payload,
+        )
+        sub.update(update_payload)
+        # trg_lib_subs_period_mirror (009) -- same mirror the other two doubles reproduce.
+        if update_payload["period_start"] is not None:
+            sub["started_at"] = update_payload["period_start"]
+        if update_payload["period_expiry"] is not None:
+            sub["expires_at"] = update_payload["period_expiry"]
+
+        history_row = dict(params.get("p_history") or {})
+        history_row["subscription_id"] = params["p_subscription_id"]
+        self._fault(("insert", "library_subscription_transitions"), payload=history_row)
+        transitions.append(history_row)
+
+        return _Resp({
+            "settlement": dict(settlement_row),
+            "subscription": dict(sub),
+            "inserted": inserted,
+            "transitioned": True,
+        })
+
     @staticmethod
     def _matching(rows: List[Dict[str, Any]], q: Any) -> List[Dict[str, Any]]:
         """``FakeSupabase._matching`` plus the six predicates added above.
