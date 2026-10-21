@@ -4,7 +4,26 @@
 # =======================================================================
 
 # --- FastAPI + ASGI server -----------------------------------------------
-fastapi==0.124.4
+# DEP-01 (2026-10-21): fastapi 0.124.4 ceilinged starlette at <0.51.0, so PYSEC-2026-161/248/
+# 249/2280/2281 (fixed only by starlette 1.x) could not be taken without a fastapi bump first.
+# fastapi==0.135.0 is the first fastapi release that drops the starlette version ceiling
+# entirely (starlette>=0.46.0, no upper bound) -- a prior attempt at fastapi 0.143/starlette
+# 1.8 broke route introspection AT COLLECTION TIME and was reverted (see git history / the
+# ledger's own prior evidence on this finding); 0.135.0 does not. Paired with starlette==1.3.1
+# (the floor that clears PYSEC-249, the highest of the 5 advisories), the full backend suite
+# (`pytest tests/ -q --tb=short -k "not chaos and not load" -m "not frontend_bundle"`, the
+# exact command 01-pr-check.yml's "Unit & Integration Tests" job runs) was run to completion
+# twice against these exact pins: 29 failed, 14676 passed, 724 skipped, 343 deselected, 6
+# xfailed, 3 xpassed both times, IDENTICAL to the unmodified-pins baseline run at the same
+# commit (diffed by exact test node id, zero new failures, zero resolved). Two tests broke on
+# the first pass and were fixed in the same commit (both test-only, no application code
+# changed): tests/test_badhost_path_poisoning_regression.py's deliberate CVE-2026-48710
+# tripwire fired as designed (starlette>=1.0 fixes that CVE, so the "prove it's still
+# vulnerable" premise test was flipped to assert the fix instead); and
+# tests/test_task_29_3_signal_environment_filter.py read fastapi's internal ModelField.required
+# attribute, renamed/moved to ModelField.field_info.is_required() as of fastapi 0.135.0's
+# _compat.v2 shim.
+fastapi==0.135.0
 uvicorn[standard]==0.30.6
 websockets==12.0
 # CVE-2024-53981, CVE-2026-24486, CVE-2026-42561, CVE-2026-53539 (all fixed by 0.0.30)
@@ -12,7 +31,10 @@ websockets==12.0
 # .kiro/specs/production-launch-hardening/dependency-triage.md - but the bump is free
 # (no FastAPI version ceiling on this package) and is the correct action regardless.
 python-multipart==0.0.31
-starlette==0.49.3
+# DEP-01 (2026-10-21): starlette==0.49.3 carried PYSEC-2026-161/248/249/2280/2281 (all need
+# starlette 1.x). Bumped alongside fastapi==0.135.0 above -- see that pin's own comment for
+# the full verification (two completed full-suite runs, identical failure set to baseline).
+starlette==1.3.1
 gunicorn==23.0.0
 rq==1.16.2
 

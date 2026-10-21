@@ -1106,6 +1106,21 @@ class _MarketplaceQuery:
         return self.client._execute(self)
 
 
+class _MarketplaceRpcCall:
+    """The ``.rpc(name, params).execute()`` chain shape, same as ``.table()``'s
+    ``_MarketplaceQuery`` -- executed on ``.execute()``, not on construction, since
+    nothing in this double chains a filter onto an rpc call the way it does a table op.
+    """
+
+    def __init__(self, name, params, client):
+        self.name = name
+        self.params = params
+        self.client = client
+
+    def execute(self):
+        return self.client._execute_rpc(self.name, self.params)
+
+
 class _MarketplaceUniqueViolation(Exception):
     """``uq_settlement_reference_reversal`` refusing a second row for one reference."""
 
@@ -1138,6 +1153,102 @@ class _MarketplaceSupabase:
 
     def table(self, name):
         return _MarketplaceQuery(name, self)
+
+    def rpc(self, name, params):
+        """MKT-03. ``settlement_service`` now issues one ``.rpc("record_and_transition_
+        settlement", ...)`` call for what used to be the separate
+        ``.table("marketplace_settlements").insert(...)`` and
+        ``.table("library_subscriptions").update(...)`` + ``.table("library_subscription_
+        transitions").insert(...)`` statements this double was originally written against.
+        Mirrors the real function's atomicity and the equivalent, already-correct double in
+        ``tests/test_settlement_service.py::FakeSupabase.rpc`` -- same shape, adapted to
+        this file's own four-table/_execute convention.
+        """
+        return _MarketplaceRpcCall(name, params, self)
+
+    def _execute_rpc(self, name, params):
+        if name != "record_and_transition_settlement":
+            raise RuntimeError(f"_MarketplaceSupabase.rpc: unexpected function {name!r}")
+
+        pair = (params["p_provider_reference"], bool(params["p_is_reversal"]))
+        existing = None
+        for row in self.settlements:
+            if (row.get("provider_reference"), bool(row.get("is_reversal"))) == pair:
+                existing = row
+                break
+
+        inserted = False
+        if existing is None:
+            settlement_row = dict(params["p_settlement"])
+            settlement_row["subscription_id"] = params["p_subscription_id"]
+            settlement_row["provider_reference"] = params["p_provider_reference"]
+            settlement_row["is_reversal"] = params["p_is_reversal"]
+            self.statements.append(("insert", "marketplace_settlements"))
+            self.settlements.append(settlement_row)
+            inserted = True
+        else:
+            if not params["p_proceed_if_duplicate"]:
+                return MagicMock(
+                    data={"settlement": dict(existing), "inserted": False, "transitioned": False},
+                    error=None,
+                )
+            settlement_row = existing
+
+        transition = params.get("p_transition")
+        if transition is None:
+            return MagicMock(
+                data={
+                    "settlement": dict(settlement_row),
+                    "inserted": inserted,
+                    "transitioned": False,
+                },
+                error=None,
+            )
+
+        sub = None
+        for row in self.subscriptions:
+            if str(row.get("id")) == str(params["p_subscription_id"]):
+                sub = row
+                break
+        if sub is None or sub.get("status") != params["p_expected_from_status"]:
+            raise RuntimeError(
+                "record_and_transition_settlement: subscription "
+                f"{params['p_subscription_id']} status changed under the caller "
+                f"(expected {params['p_expected_from_status']}); MK001"
+            )
+
+        update_payload = {
+            "status": transition["status"],
+            "period_start": transition.get("period_start"),
+            "period_expiry": transition.get("period_expiry"),
+            "cancelled_at": transition.get("cancelled_at"),
+        }
+        self.statements.append(("update", "library_subscriptions"))
+        sub.update(update_payload)
+        # `trg_lib_subs_period_mirror` (009) mirrors period_start/period_expiry onto
+        # started_at/expires_at whenever the former are not NULL -- the real function
+        # relies on that trigger rather than setting the mirrors itself; this double
+        # reproduces the trigger's own effect for the same reason (same convention as
+        # tests/test_settlement_service.py::FakeSupabase._execute_rpc).
+        if update_payload["period_start"] is not None:
+            sub["started_at"] = update_payload["period_start"]
+        if update_payload["period_expiry"] is not None:
+            sub["expires_at"] = update_payload["period_expiry"]
+
+        history_row = dict(params.get("p_history") or {})
+        history_row["subscription_id"] = params["p_subscription_id"]
+        self.statements.append(("insert", "library_subscription_transitions"))
+        self.transitions.append(history_row)
+
+        return MagicMock(
+            data={
+                "settlement": dict(settlement_row),
+                "subscription": dict(sub),
+                "inserted": inserted,
+                "transitioned": True,
+            },
+            error=None,
+        )
 
     def writes(self, table=None):
         """The write statements, in order, as ``(op, table)``."""

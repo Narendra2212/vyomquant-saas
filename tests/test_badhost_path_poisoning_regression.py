@@ -28,8 +28,20 @@ WHY NOT TrustedHostMiddleware
 -----------------------------
 It was considered and rejected. The ALB health check addresses the task by IP, so a Host
 allow-list would answer 400, the target would fail its health check and ECS would kill the
-task. ``scope["path"]`` needs no allow-list to keep in sync with reality. The real remedy is
-``starlette >= 1.0``, which cannot land until ``fastapi`` is upgraded (task 13.12*).
+task. ``scope["path"]`` needs no allow-list to keep in sync with reality. The real remedy was
+``starlette >= 1.0``, which could not land until ``fastapi`` was upgraded (task 13.12*).
+
+UPDATE (DEP-01, 2026-10-21): fastapi/starlette were bumped to 0.135.0/1.3.1 this session (see
+the ledger). ``starlette >= 1.0`` no longer rebuilds ``url.path`` from the Host header at all,
+so CVE-2026-48710 is fixed upstream and ``TestThePremiseTheLibraryIsStillVulnerable`` -- whose
+own docstring said "if these fail, the pinned starlette was upgraded and the workaround can be
+revisited" -- now fails exactly as it was designed to, confirming the fix landed. Revisited:
+the workaround (reading ``request.scope['path']`` instead of ``request.url.path``, asserted by
+``TestNoPathDecisionReadsThePoisonableValue`` below) is NOT being removed. It is correct
+regardless of starlette version, `scope['path']` was always the more direct source of truth,
+and leaving it in costs nothing now that it is redundant rather than load-bearing. Only this
+file's assertions, which deliberately encoded the OLD vulnerable behavior to detect this exact
+upgrade, are updated below to assert the new (fixed) behavior instead.
 """
 
 import io
@@ -71,22 +83,31 @@ def executable(rel):
     return chr(10).join([line.split("#")[0] for line in text.split(chr(10))])
 
 
-class TestThePremiseTheLibraryIsStillVulnerable:
-    """If these fail, the pinned starlette was upgraded and the workaround can be revisited."""
+class TestTheLibraryNoLongerHasThisDefect:
+    """Flipped by DEP-01 (2026-10-21): this class used to be named
+    ``TestThePremiseTheLibraryIsStillVulnerable`` and asserted the OPPOSITE of what it asserts
+    now -- that a Host header still poisoned ``url.path``, so the workaround elsewhere in this
+    tree stayed meaningful. starlette was bumped past 1.0 this session and no longer rebuilds
+    the path from the Host header at all, which is CVE-2026-48710 fixed upstream, so these
+    assertions are inverted to match. If these ever fail again, either the fix regressed
+    upstream or this pin moved below starlette 1.0 again -- in either case, restore the
+    pre-2026-10-21 assertions from git history rather than editing the message below.
+    """
 
-    def test_url_path_is_poisonable_by_the_host_header(self):
-        poisoned = URL(scope=scope_for("app.vyomquant.in/health")).path
+    def test_url_path_is_no_longer_poisonable_by_the_host_header(self):
+        intact = URL(scope=scope_for("app.vyomquant.in/health")).path
 
-        assert poisoned == "/health" + REAL_PATH, (
-            "starlette no longer rebuilds url.path from the Host header (got %r). If it was "
-            "upgraded to >= 1.0, re-read the note above main.py exception handlers." % poisoned
+        assert intact == REAL_PATH, (
+            "starlette rebuilt url.path from the Host header (got %r) -- CVE-2026-48710 may "
+            "have regressed, or this starlette pin moved below 1.0 again." % intact
         )
 
-    def test_the_poisoned_path_would_match_an_auth_skip_prefix(self):
-        """Why this mattered: a startswith over skip_paths matches for ANY route."""
-        poisoned = URL(scope=scope_for("anything/health")).path
+    def test_the_former_poison_no_longer_matches_an_auth_skip_prefix(self):
+        """Why this mattered before the fix: a startswith over skip_paths matched for ANY
+        route. Kept as a guard that the specific attack shape stays inert."""
+        intact = URL(scope=scope_for("anything/health")).path
 
-        assert poisoned.startswith("/health")
+        assert not intact.startswith("/health")
 
     def test_scope_path_is_not_poisonable(self):
         for host in ("app.vyomquant.in", "x/health", "evil.com/api/auth/login"):
@@ -117,19 +138,21 @@ class TestTheAuthSkipCannotBeReachedByAHeader:
         """The decision itself, exercised rather than grepped.
 
         Mirrors ``TenantMiddleware.dispatch``: the same prefixes, the same startswith, fed the
-        same poisoned request - and now reading the value the fix reads.
+        same (no-longer-poisonable, see TestTheLibraryNoLongerHasThisDefect above) request -
+        and reading the value the fix reads, same as it always did.
+
+        DEP-01 (2026-10-21): the "assert the attack shape still bites url.path" half of this
+        test was dropped -- it can't, post-bump, so it no longer proves anything (see the
+        class above). The load-bearing assertion, that the AUTHORITATIVE value never matches
+        a skip prefix for this request, is unchanged and still exercised.
         """
         from backend_app.core.tenant_middleware import TenantMiddleware
 
         skip_paths = TenantMiddleware(app=None).skip_paths
         scope = scope_for("anything/health")
 
-        poisonable = URL(scope=scope).path
         authoritative = scope["path"]
 
-        assert any(poisonable.startswith(p) for p in skip_paths), (
-            "the poisoned path no longer matches any skip prefix, so this test proves nothing"
-        )
         assert not any(authoritative.startswith(p) for p in skip_paths), (
             "scope[path] matched a skip prefix for %s - auth would still be skippable"
             % REAL_PATH
