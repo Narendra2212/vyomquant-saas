@@ -3,7 +3,7 @@
   "productName": "VyomQuant",
   "private": true,
   "version": "0.1.1",
-  "description": "VyomQuant — Algorithmic Trading Terminal by Aerora Dynamics",
+  "description": "VyomQuant \u2014 Algorithmic Trading Terminal by Aerora Dynamics",
   "author": "Aerora Dynamics Private Limited",
   "homepage": "https://vyomquant.in",
   "type": "module",
@@ -53,6 +53,13 @@
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^4.2.4",
     "vite": "^7.0.4",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "nanoid": "^3.3.18",
+    "source-map-js": "^1.2.2",
+    "browserslist": "^4.28.7",
+    "brace-expansion": "^5.0.12",
+    "baseline-browser-mapping": "^2.11.30"
   }
 }
