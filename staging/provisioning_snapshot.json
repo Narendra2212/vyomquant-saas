@@ -14498,6 +14498,11 @@
    false
   ],
   [
+   "create_referral_payout_request",
+   "p_user_id uuid, p_amount_usd numeric, p_payout_method text, p_payout_details jsonb",
+   true
+  ],
+  [
    "crypt",
    "text, text",
    false
@@ -14673,6 +14678,11 @@
    false
   ],
   [
+   "paper_apply_fill_atomic",
+   "p_user_id uuid, p_account_id uuid, p_order_id uuid, p_session_id uuid, p_fill_event_id text, p_expected_account_version bigint, p_expected_order_state text, p_resume_fill_id uuid, p_fill jsonb, p_account jsonb, p_balance_event jsonb, p_order jsonb, p_position jsonb, p_closed_leg jsonb, p_trade jsonb, p_equity_snapshot jsonb",
+   true
+  ],
+  [
    "paper_order_transition_guard",
    "",
    false
@@ -14793,6 +14803,11 @@
    true
   ],
   [
+   "record_and_transition_settlement",
+   "p_subscription_id uuid, p_provider_reference text, p_is_reversal boolean, p_settlement jsonb, p_proceed_if_duplicate boolean, p_expected_from_status text, p_transition jsonb, p_history jsonb",
+   true
+  ],
+  [
    "record_referral_obligation",
    "p_provider text, p_provider_payment_id text, p_referred_id uuid, p_payment_amount numeric, p_currency text, p_subscription_tier text, p_reason_code text, p_detail jsonb",
    true
@@ -14810,6 +14825,11 @@
   [
    "reverse_referral_obligation",
    "p_provider text, p_provider_payment_id text, p_reason text",
+   true
+  ],
+  [
+   "settle_referral_payout",
+   "p_payout_id uuid, p_status text, p_reference text, p_reason text",
    true
   ],
   [
@@ -24557,7 +24577,7 @@
   ],
   [
    "migrations/024_remediate_referral_double_commission.sql",
-   "2ff5958a1026523b6ca22dfa4f5d4874fe7059511541c7ce71885c4835e33b1d",
+   "f20df7b3fc468f4c59ed7c1ce39924410b8f071deb30974c44f9817fd93a57de",
    "step1"
   ],
   [
@@ -24657,7 +24677,7 @@
   ],
   [
    "migrations/044_mkt04_rekey_live_deployment_uniqueness.sql",
-   "c0eb3c6e8c0877c94e369cc4115836198f57d9ac91d97951a3fc06e5f56f0f51",
+   "52c827da7f51df1f0593334dca018bd37b15c3786ae35af5a4f90d723fcf5fdf",
    "step1"
   ],
   [
@@ -24673,6 +24693,21 @@
   [
    "migrations/047_tenant01_restricted_payment_methods_role.sql",
    "af9ec37bdc09460638dd3ac7ecbe243aaa1fb159c79730efb47cd51d13f4fb9a",
+   "step1"
+  ],
+  [
+   "migrations/048_paper05_apply_fill_atomic.sql",
+   "7d68d74d57572cde9c5189aa2a4358777914c42ab7c0600825d795b8d4989465",
+   "step1"
+  ],
+  [
+   "migrations/049_ref01_payout_atomic.sql",
+   "48e7625781c49c9841e716fc778c1d196084f2670da45f564b7308d9da541d0c",
+   "step1"
+  ],
+  [
+   "migrations/050_mkt03_settlement_atomic_transition.sql",
+   "ed79a7aad99cd2693f33c2e105fa6f34703bdd8abf19bd150ffa420e45b9f988",
    "step1"
   ],
   [
