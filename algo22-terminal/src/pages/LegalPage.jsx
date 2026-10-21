@@ -250,26 +250,79 @@ const SectionHeading = ({ tone = "brand", children }) => (
  * paragraphs and list items carry NO size class — see the header: they are at the reader's
  * own default and `--text-body` would shrink them.
  */
+/**
+ * LEGAL-01 (P1, IN_PROGRESS in the remediation ledger). This file's prior text was stub
+ * copy that materially contradicted the live product -- most seriously, a Terms of
+ * Service clause stating unconditionally that the platform "does not perform live trades
+ * on real exchange accounts" when live, real-money execution is in fact a built, gated,
+ * currently-active feature (RT-15's live_execution_gate; /api/system/trading-capabilities).
+ * An interim stopgap (commit 635d32a) removed that specific false claim without adding
+ * replacement disclosure, at the product owner's explicit instruction, pending real
+ * counsel. This revision goes further, at the product owner's explicit instruction to
+ * resolve it now rather than continue waiting on counsel: it rewrites all four documents
+ * to accurately describe what the platform actually does today -- paper trading, gated
+ * live trading, the strategy marketplace and its revenue split, the referral program,
+ * exchange API key custody, subscription billing -- and states live-trading risk
+ * explicitly rather than leaving it silent.
+ *
+ * What this is NOT: a substitute for review by a lawyer licensed in the platform's actual
+ * operating jurisdiction(s). Four facts this text cannot supply because they are not
+ * engineering facts -- the operating company's registered legal name and entity type, its
+ * registered address, which jurisdiction's law and venue govern a dispute, and whether
+ * arbitration is required -- are left as explicit bracketed placeholders below precisely
+ * so they are not silently guessed at. Financial/trading-risk disclosure requirements
+ * also vary by jurisdiction and user base (retail vs. accredited, which countries' users
+ * are accepted, local securities/commodities/virtual-asset-service-provider rules); this
+ * text aims to be an accurate, complete-as-possible description of the product's actual
+ * behavior and the risks that follow from it, not a jurisdiction-cleared legal
+ * instrument. Replace the placeholders and have counsel review before treating this as
+ * final -- LEGAL-01 stays IN_PROGRESS in the ledger until that happens.
+ */
 const DOCUMENTS = Object.freeze([
   Object.freeze({
     id: "tos",
     title: "Terms of Service",
     body: (
       <>
-        <SectionHeading>1. Beta Service</SectionHeading>
-        <p className="mb-3">The Beta Service is provided for testing, evaluation, and trading purposes.</p>
-        {/* `listStyleType: 'square'` is kept as the bullet glyph these two clauses have
-            always had; it is neither a colour nor a size, and Tailwind declares no square
-            marker utility. `pl-5` is the same 20px, on the spacing scale. */}
+        <p className="mb-4 text-content-secondary">
+          Last updated: [DATE]. These Terms of Service ("Terms") govern your access to and
+          use of VyomQuant (the "Platform", "we", "us"), operated by [COMPANY LEGAL NAME],
+          a [ENTITY TYPE] registered in [JURISDICTION] ("Company"). By creating an account
+          or using the Platform, you agree to these Terms.
+        </p>
+        <SectionHeading>1. The Service</SectionHeading>
+        <p className="mb-3">The Platform lets you build, backtest, and run algorithmic trading strategies against cryptocurrency exchanges, train and deploy machine-learning models in support of those strategies, and operate in two distinct modes:</p>
         <ul className="mb-4 pl-5 text-content-secondary" style={{ listStyleType: "square" }}>
-          <li><strong>AS-IS BASIS</strong>: Provided on an "AS IS" and "AS AVAILABLE" basis.</li>
+          <li className="mb-1"><strong>Paper trading</strong>: strategies run against simulated balances and simulated order fills. No real money moves and no order reaches a real exchange.</li>
+          <li className="mb-1"><strong>Live trading</strong>: strategies submit real orders, using your own connected exchange account and your own funds, to a real exchange. Live trading is a distinct, explicitly-enabled capability, gated separately from paper trading, and is not the default for a new strategy deployment.</li>
         </ul>
+        <p className="mb-4">The Platform also operates a <strong>strategy marketplace</strong> where creators may list strategies for other users to subscribe to, and a <strong>referral program</strong> under which an existing user may receive a commission for referring a paying subscriber. Marketplace and referral terms are addressed in Sections 5 and 6.</p>
         <SectionHeading>2. Eligibility & Accounts</SectionHeading>
-        <p className="mb-4">You are responsible for keeping your credentials (including API keys, passwords, and 2FA settings) secure.</p>
-        <SectionHeading>3. Subscription Tiers & Billing</SectionHeading>
-        <p className="mb-4">Subscriptions are billed in advance. All transactions are processed via third-party providers (Stripe, Razorpay).</p>
-        <SectionHeading>4. Prohibited Uses</SectionHeading>
-        <p className="mb-4">You agree not to reverse engineer, decompile, or attempt to extract source code.</p>
+        <p className="mb-3">You must be at least [MINIMUM AGE] years old and legally capable of entering a binding contract in your jurisdiction to use the Platform. You are responsible for keeping your credentials secure -- your account password, two-factor authentication, and any exchange API keys you connect -- and for all activity that occurs under your account, whether or not you authorized it, except to the extent caused by our own breach of these Terms.</p>
+        <p className="mb-4">You represent that connecting an exchange API key to the Platform does not violate that exchange's own terms of service, and that you are legally permitted to trade the instruments you configure a strategy to trade, in your jurisdiction.</p>
+        <SectionHeading>3. Live Trading, Specifically</SectionHeading>
+        <p className="mb-3">If you enable live trading on a strategy deployment, you are instructing the Platform to submit real orders to a real exchange, using your own exchange account and your own funds, without a human reviewing each individual order before it is sent. You retain full control over whether to enable live trading, which strategies and deployments it applies to, and the risk limits (position size, exposure, stop conditions) you configure for it; we provide the mechanism and the gating, not investment advice, and we do not place or approve any individual live order on your behalf.</p>
+        <p className="mb-4">See the Risk Disclosure tab for the risks specific to automated, live, real-money trading. Nothing in these Terms, the Platform's marketing, or any strategy description -- including a strategy's own backtest or paper-trading track record -- is a guarantee or representation that any strategy will be profitable in live trading, or that past results (simulated or real) predict future results.</p>
+        <SectionHeading>4. Subscription Tiers & Billing</SectionHeading>
+        <p className="mb-3">Paid tiers (currently Pro, Enterprise, and ML add-ons) are billed in advance on a recurring basis until cancelled. Payments are processed by third-party payment providers (Stripe, Razorpay); we do not ourselves store your full card or payment-instrument number. See the Refund Policy tab for cancellation and refund terms.</p>
+        <SectionHeading>5. Strategy Marketplace</SectionHeading>
+        <p className="mb-3">A creator who lists a strategy on the marketplace grants subscribers a license to deploy that strategy (in paper or live mode, subject to Section 3) for the duration of their subscription; the creator retains ownership of the underlying strategy logic. We do not review, endorse, or guarantee the performance, safety, or suitability of any marketplace listing. Subscribing to a listing is entirely at your own risk, subject to the same live-trading risks described in Section 3 and the Risk Disclosure tab if you choose to deploy it live.</p>
+        <p className="mb-4">Marketplace revenue is split between the creator and the Platform; the current split and any platform fee are disclosed to the creator at the time of listing.</p>
+        <SectionHeading>6. Referral Program</SectionHeading>
+        <p className="mb-4">If you participate in the referral program, you may earn a commission, calculated as a percentage of a referred user's qualifying subscription payment, under terms disclosed to you in the referral program's own interface. We may suspend or adjust the referral program, or decline to pay a commission obtained through abusive, fraudulent, or self-referral activity, at our reasonable discretion.</p>
+        <SectionHeading>7. Prohibited Uses</SectionHeading>
+        <p className="mb-3">You agree not to: reverse engineer, decompile, or attempt to extract the Platform's source code except as permitted by applicable law; use the Platform to violate any exchange's terms of service or any applicable law, including market-manipulation or sanctions law; attempt to circumvent the Platform's live-trading gating, risk limits, or rate limits; or use the Platform's infrastructure to attack, scrape, or disrupt the Platform or any connected exchange.</p>
+        <SectionHeading>8. Disclaimers & Limitation of Liability</SectionHeading>
+        <p className="mb-3">THE PLATFORM IS PROVIDED ON AN "AS IS" AND "AS AVAILABLE" BASIS, WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT. We do not warrant that the Platform will be uninterrupted, error-free, or free of bugs, and you acknowledge that a software defect, a connectivity failure, or a delayed or missed signal can cause a live trade to execute differently than intended, or not at all.</p>
+        <p className="mb-4">TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE COMPANY IS NOT LIABLE FOR TRADING LOSSES, LOST PROFITS, OR INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING FROM YOUR USE OF THE PLATFORM, INCLUDING LOSSES FROM A LIVE TRADE YOU CONFIGURED THE PLATFORM TO SUBMIT. [THIS CLAUSE MAY BE UNENFORCEABLE OR REQUIRE NARROWING IN SOME JURISDICTIONS FOR CONSUMER OR RETAIL-INVESTOR PROTECTION REASONS -- COUNSEL SHOULD REVIEW AGAINST YOUR ACTUAL USER BASE'S JURISDICTIONS.]</p>
+        <SectionHeading>9. Termination</SectionHeading>
+        <p className="mb-3">You may stop using the Platform and close your account at any time. We may suspend or terminate your account for violation of these Terms, suspected fraud or abuse, or as required by law; where practicable, we will give you notice first. Termination does not entitle you to a refund except as stated in the Refund Policy.</p>
+        <SectionHeading>10. Governing Law</SectionHeading>
+        <p className="mb-4">These Terms are governed by the laws of [GOVERNING LAW JURISDICTION], without regard to conflict-of-law rules. Disputes arising under these Terms will be resolved in [VENUE / ARBITRATION CLAUSE -- TO BE SET BY COUNSEL].</p>
+        <SectionHeading>11. Changes to These Terms</SectionHeading>
+        <p className="mb-3">We may update these Terms from time to time. If we make a material change, we will provide notice before it takes effect (for example, an in-app notice or an email to the address on your account). Continued use of the Platform after a change takes effect constitutes acceptance of the updated Terms.</p>
+        <SectionHeading>12. Contact</SectionHeading>
+        <p className="mb-3">Questions about these Terms can be sent to [LEGAL/SUPPORT CONTACT EMAIL].</p>
       </>
     ),
   }),
@@ -278,12 +331,27 @@ const DOCUMENTS = Object.freeze([
     title: "Privacy Policy",
     body: (
       <>
+        <p className="mb-4 text-content-secondary">Last updated: [DATE]. This Privacy Policy describes how [COMPANY LEGAL NAME] ("we", "us") collects, uses, and protects information when you use VyomQuant.</p>
         <SectionHeading>1. Information We Collect</SectionHeading>
-        <p className="mb-3">We collect account credentials via Supabase Auth, encrypted exchange API keys, usage telemetry, and billing tokens.</p>
+        <ul className="mb-4 pl-5 text-content-secondary" style={{ listStyleType: "square" }}>
+          <li className="mb-1"><strong>Account data</strong>: your email and authentication credentials, managed via Supabase Auth.</li>
+          <li className="mb-1"><strong>Exchange API keys</strong>: if you connect an exchange account for paper or live trading, the API key and secret you provide, encrypted before storage (see Section 3).</li>
+          <li className="mb-1"><strong>Trading and strategy data</strong>: the strategies you build, their configuration and parameters, backtest and paper-trading results, and, if you enable live trading, the orders, fills, and positions that result.</li>
+          <li className="mb-1"><strong>Billing data</strong>: subscription tier, payment status, and billing tokens from our payment processors (Stripe, Razorpay) -- we do not store your full card number ourselves.</li>
+          <li className="mb-1"><strong>Usage telemetry</strong>: device/browser information, pages and features used, and error/performance diagnostics, used to operate and improve the Platform.</li>
+        </ul>
         <SectionHeading>2. How We Use Information</SectionHeading>
-        <p className="mb-3">To authenticate users, execute backtests/model training, verify webhooks, and optimize platform performance.</p>
+        <p className="mb-3">To authenticate you and operate your account; to execute the backtests, model training runs, and (where you enable it) live or paper orders you request; to verify payment-provider webhooks and apply the correct entitlement to your account; to detect and prevent fraud or abuse (including of the referral program); to provide support; and to maintain and improve the Platform's reliability and performance.</p>
         <SectionHeading>3. Data Storage & Security</SectionHeading>
-        <p className="mb-3">Authentication data is stored securely via Supabase Auth. API keys and secrets are encrypted in transit and at rest.</p>
+        <p className="mb-3">Authentication data is managed by Supabase Auth. Exchange API keys and other secrets are encrypted before being stored and are decrypted only at the point of use (submitting a request to the exchange on your behalf); they are not displayed in plaintext in the Platform's interface after initial entry. We apply access controls so that one user's trading data, strategies, and credentials are not readable by another user, including through row-level database security policies. No system is perfectly secure, and we cannot guarantee that unauthorized access, loss, or disclosure will never occur; we will notify affected users as required by applicable law if a breach materially affecting their data occurs.</p>
+        <SectionHeading>4. Third-Party Processors</SectionHeading>
+        <p className="mb-3">We share the minimum data necessary with: Supabase (authentication and database hosting), Stripe and Razorpay (payment processing), the cryptocurrency exchange(s) you connect (to submit the orders you authorize), and infrastructure/hosting providers. These processors have their own privacy practices governing the data they process on our behalf.</p>
+        <SectionHeading>5. Data Retention</SectionHeading>
+        <p className="mb-3">We retain account and trading data for as long as your account is active, and for a reasonable period afterward as needed for legal, tax, audit, or dispute-resolution purposes. You may request deletion of your account; some records (e.g., financial transaction history) may be retained longer where required by law.</p>
+        <SectionHeading>6. Your Rights</SectionHeading>
+        <p className="mb-3">Depending on your jurisdiction, you may have rights to access, correct, export, or delete your personal data, or to object to certain processing. To exercise these rights, contact us at [PRIVACY CONTACT EMAIL]. [JURISDICTION-SPECIFIC RIGHTS LANGUAGE -- E.G. GDPR/CCPA -- TO BE CONFIRMED BY COUNSEL BASED ON YOUR ACTUAL USER BASE.]</p>
+        <SectionHeading>7. Contact</SectionHeading>
+        <p className="mb-3">Questions about this Privacy Policy can be sent to [PRIVACY CONTACT EMAIL].</p>
       </>
     ),
   }),
@@ -295,11 +363,17 @@ const DOCUMENTS = Object.freeze([
         {/* The one heading that is not the brand hue. `token.status.loss.fg` → the same
             token as a class; see the header on why it is not renamed to `warning`. */}
         <SectionHeading tone="loss">⚠️ High-Risk Investment Warning</SectionHeading>
-        <p className="mb-3">Trading financial instruments involves substantial risk of loss and is not suitable for every investor.</p>
-        <SectionHeading>1. Algorithmic & Quantitative Trading Risk</SectionHeading>
-        <p className="mb-3">Automated strategies execute based on predefined rules. Bugs, logic errors, or connection drops can lead to unexpected and costly executions.</p>
-        <SectionHeading>2. Simulated / Paper Trading Limitations</SectionHeading>
-        <p className="mb-3">Paper trading uses simulated balances and idealized execution. It does not account for real-world liquidity, market impact, slippage, or latency.</p>
+        <p className="mb-3">Trading cryptocurrency and other financial instruments involves substantial risk of loss, including the risk of losing your entire deposited balance, and is not suitable for every investor. Only trade with funds you can afford to lose.</p>
+        <SectionHeading>1. Live Trading Is Real-Money Trading</SectionHeading>
+        <p className="mb-3">When you enable live trading on a strategy deployment, the Platform submits real orders to your connected exchange account using your own funds. This is a real, currently-available feature of the Platform, not a hypothetical one -- it is not the same as paper trading, and enabling it means real money is genuinely at risk from the moment a live deployment is active. You, not the Platform, decide whether and when to enable it, and you are responsible for the risk limits and exchange account you configure it against.</p>
+        <SectionHeading>2. Algorithmic & Automated Trading Risk</SectionHeading>
+        <p className="mb-3">Automated strategies execute based on predefined rules, with no human reviewing each individual order before it is sent. A bug in a strategy's own logic, a configuration mistake, a delayed or missed market-data update, an exchange outage or API change, or a dropped network connection can each cause unexpected trades, missed exits, or losses larger or different than you intended. Backtested or paper-traded performance does not guarantee live performance: live execution is subject to real slippage, latency, liquidity constraints, and exchange behavior that a simulation can only approximate.</p>
+        <SectionHeading>3. Simulated / Paper Trading Limitations</SectionHeading>
+        <p className="mb-3">Paper trading uses simulated balances and idealized execution. It does not account for real-world liquidity, market impact, slippage, partial fills, or latency the way a live order against a real exchange order book does, and a strategy's paper-trading results should not be treated as a prediction of its live results.</p>
+        <SectionHeading>4. Marketplace Strategy Risk</SectionHeading>
+        <p className="mb-3">A strategy you subscribe to from another user on the marketplace was authored by that user, not reviewed or endorsed by the Platform for soundness, safety, or profitability. Its past backtest or paper-trading record, including any shown on its listing, is historical and does not guarantee future results, in paper or live mode.</p>
+        <SectionHeading>5. Exchange & Custody Risk</SectionHeading>
+        <p className="mb-3">Your funds are held by the exchange you connect, not by the Platform. The Platform never takes custody of your assets; it submits orders on your behalf using the API key and permissions you grant it. Exchange insolvency, an exchange security incident, an exchange API outage, or an exchange-side error are risks of the exchange you chose, outside the Platform's control.</p>
       </>
     ),
   }),
@@ -309,9 +383,13 @@ const DOCUMENTS = Object.freeze([
     body: (
       <>
         <SectionHeading>1. Digital Subscription Tiers</SectionHeading>
-        <p className="mb-3">All subscription payments (Pro, Enterprise, and ML Add-ons) are digital software entitlements activated immediately. All purchases are final and non-refundable.</p>
+        <p className="mb-3">All subscription payments (Pro, Enterprise, and ML Add-ons) are digital software entitlements activated immediately upon payment. Because the entitlement is granted immediately, subscription payments are final and non-refundable except as stated below or as required by applicable law.</p>
         <SectionHeading>2. Cancellation and Renewal</SectionHeading>
-        <p className="mb-3">You may cancel your subscription at any time. Upon cancellation, you retain access until the end of your billing period.</p>
+        <p className="mb-3">You may cancel your subscription at any time from your account settings. Upon cancellation, you retain access to your paid tier until the end of the billing period you already paid for; you will not be charged again after that period ends, and we do not provide a prorated refund for the unused portion of a current billing period.</p>
+        <SectionHeading>3. Marketplace Purchases</SectionHeading>
+        <p className="mb-3">A marketplace strategy subscription follows the same immediate-activation, non-refundable rule in Section 1, except where the creator's own listing states different terms or where required by applicable law.</p>
+        <SectionHeading>4. Billing Errors</SectionHeading>
+        <p className="mb-3">If you believe you were charged in error -- for example, charged twice for the same period, or charged after a cancellation that should have taken effect -- contact [BILLING/SUPPORT CONTACT EMAIL] and we will investigate and correct a verified billing error.</p>
       </>
     ),
   }),
