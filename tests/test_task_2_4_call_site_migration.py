@@ -291,7 +291,14 @@ class TestSB01OneVerdictEverywhere:
             assert "fix_hint" in issue
 
     def test_strategy_operations_compile_uses_the_same_compiler(self, reg):
-        """`POST /strategy-operations/strategies/compile` is the fourth caller."""
+        """`POST /strategy-operations/strategies/compile` is the fourth caller.
+
+        This is a source-text delegation check only (it cannot see whether the endpoint
+        actually AGREES with the other three paths on a given graph) -- see
+        :func:`test_strategy_operations_compile_reaches_the_same_verdict_as_validate`
+        below for the real behavioural counterpart that this class's own "one verdict
+        everywhere" docstring actually requires.
+        """
         from backend_app.routers import strategy_operations as ops
 
         source = inspect.getsource(ops.compile_strategy)
@@ -301,6 +308,36 @@ class TestSB01OneVerdictEverywhere:
         assert "DAGConfig" not in _code_only(source), (
             "the compile endpoint must no longer build a legacy DAGConfig"
         )
+
+    def test_strategy_operations_compile_reaches_the_same_verdict_as_validate(
+        self, reg, client
+    ):
+        """The SB-01 property, actually driven through the fourth caller.
+
+        ``test_strategy_operations_compile_uses_the_same_compiler`` only reads the
+        handler's source; it never calls the endpoint, so it cannot tell whether
+        ``POST /api/strategies/compile`` (``strategy_operations.compile_strategy``)
+        actually reaches the same verdict as ``/api/strategies/validate`` on a graph
+        that splits valid from invalid. This drives every divergent case through the
+        real endpoint (no mocking of the handler itself) and checks the accept/reject
+        verdict agrees with ``_validate_payload`` -- the same property
+        ``test_validate_save_and_clone_agree_on_every_divergent_graph`` proves for the
+        other three callers.
+        """
+        for name, payload in divergent_cases(reg).items():
+            validate_valid, _validate_codes = _codes_from_validate(payload)
+
+            response = client.post(
+                "/api/strategies/compile",
+                json={"blueprint": payload, "version": "v1"},
+            )
+            compile_valid = response.status_code == 200
+
+            assert compile_valid == validate_valid, (
+                f"{name}: validate said valid={validate_valid} but POST "
+                f"/api/strategies/compile answered {response.status_code} -- "
+                f"{response.json() if response.status_code != 200 else 'accepted'}"
+            )
 
 
 # ---------------------------------------------------------------------------
