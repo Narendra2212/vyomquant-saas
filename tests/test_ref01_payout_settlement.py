@@ -1,4 +1,4 @@
-"""REF-01 -- the pending -> completed/rejected payout settlement step.
+"""REF-01 -- the pending -> completed/rejected payout settlement step, now atomic.
 
 THE DEFECT
     backend_app/routers/referral.py::create_payout_request writes a
@@ -8,7 +8,7 @@ THE DEFECT
     created and then sit forever with no way to record that an operator had
     actually sent the money, or to refuse it and give the debited balance back.
 
-THE FIX
+THE FIX (ORIGINAL)
     New PUT /api/referral/payouts/{payout_id}/settle, admin-gated
     (get_admin_user), under the service-role client (referral_payouts and
     referral_wallets both carry an owner-only RLS policy, so an admin's own JWT
@@ -18,21 +18,21 @@ THE FIX
     balance this payout's own request had already debited, so the money is not
     left unaccounted for.
 
-WHAT THIS FILE PROVES
-    1. A non-admin is refused (403) before touching the database at all.
-    2. A pending payout marked 'completed' with a reference transitions to
-       'completed', records processed_at, and does NOT touch the wallet (the
-       money already left the platform manually -- nothing to re-credit).
-    3. 'completed' with no reference is refused (400) -- the attestation is
-       mandatory, not optional.
-    4. A pending payout marked 'rejected' transitions to 'rejected' AND re-credits
-       the wallet by exactly the payout amount.
-    5. An already-terminal payout (completed/rejected) cannot be settled again
-       (409) -- settlement is a one-way, one-time transition.
+THE REDESIGN (THIS FILE'S CURRENT SHAPE)
+    The status flip and the rejection re-credit used to be two separate PostgREST
+    statements issued from the handler. They are now ONE call to
+    `public.settle_referral_payout` (`049_ref01_payout_atomic.sql`), a single
+    `SECURITY DEFINER` Postgres function that performs both inside one transaction.
+    This file's stub therefore no longer fakes individual `.table(...)` calls for
+    the settlement step: it fakes the ONE `.rpc(...)` call, replicating the SQL
+    function's own decision logic (terminal check, reference requirement, atomic
+    re-credit) so the HANDLER's status-code mapping and request wiring are proven
+    without a database. The database-level atomicity guarantee itself -- that a
+    rejection's status flip and re-credit commit together or not at all -- is
+    proven against a REAL PostgreSQL server in
+    `tests/test_ref01_payout_atomic_postgres.py`.
 """
 from __future__ import annotations
-
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,69 +46,81 @@ PAYOUT_AMOUNT = 75.0
 OPENING_WALLET_BALANCE = 120.0
 
 
+class _PGError(Exception):
+    """Mimics `postgrest.exceptions.APIError`'s `.code` attribute, carrying the
+    SQLSTATE a real `RAISE EXCEPTION ... USING ERRCODE = '...'` would surface."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
 class _Resp:
     def __init__(self, data):
         self.data = data
 
 
-class _Query:
-    def __init__(self, table: str, state: dict):
-        self._table = table
+class _Rpc:
+    """Replicates `public.settle_referral_payout`'s own decision logic (049's SQL),
+    operating on the same in-memory `state` dict every test shares -- the Python-side
+    mirror of the real function's behaviour, not a re-implementation of its SQL.
+    """
+
+    def __init__(self, name: str, params: dict, state: dict):
+        self._name = name
+        self._params = params
         self._state = state
-        self._op = None
-        self._payload = None
-        self._filters = []
-
-    def select(self, *a, **k):
-        self._op = "select"
-        return self
-
-    def eq(self, field, value):
-        self._filters.append((field, value))
-        return self
-
-    def update(self, payload):
-        self._op = "update"
-        self._payload = payload
-        return self
 
     def execute(self):
-        self._state["calls"].append((self._table, self._op, dict(self._filters), self._payload))
+        self._state["rpc_calls"].append((self._name, dict(self._params)))
+        if self._name != "settle_referral_payout":
+            return _Resp(None)
 
-        if self._table == "referral_payouts" and self._op == "select":
-            return _Resp([dict(self._state["payout"])])
+        payout = self._state["payout"]
+        status = self._params["p_status"]
+        reference = self._params.get("p_reference")
+        reason = self._params.get("p_reason")
 
-        if self._table == "referral_payouts" and self._op == "update":
-            # Simulate the .eq("status", <expected current status>) optimistic guard.
-            expected_status = dict(self._filters).get("status")
-            if expected_status is not None and expected_status != self._state["payout"]["status"]:
-                return _Resp([])
-            self._state["payout"].update(self._payload)
-            return _Resp([dict(self._state["payout"])])
+        if status not in ("completed", "rejected"):
+            raise _PGError("RF003", "invalid status")
 
-        if self._table == "referral_wallets" and self._op == "select":
-            return _Resp([{"approved_balance_usd": self._state["wallet_balance"]}])
+        if payout["status"] not in ("pending", "processing"):
+            raise _PGError(
+                "RF004", f"payout {PAYOUT_ID} is already {payout['status']!r}"
+            )
 
-        if self._table == "referral_wallets" and self._op == "update":
-            if "approved_balance_usd" in self._payload:
-                self._state["wallet_balance"] = float(self._payload["approved_balance_usd"])
-                self._state["wallet_updated"] = True
-            return _Resp([{"approved_balance_usd": self._state["wallet_balance"]}])
+        if status == "completed":
+            if not reference:
+                raise _PGError("RF003", "a reference is required")
+            details = dict(payout.get("payout_details") or {})
+            details["settlement_reference"] = reference
+            payout["status"] = "completed"
+            payout["payout_details"] = details
+        else:
+            details = dict(payout.get("payout_details") or {})
+            details["rejection_reason"] = reason or "Not specified"
+            payout["status"] = "rejected"
+            payout["payout_details"] = details
+            # The atomic re-credit. `wallet_updated` records that this -- and only
+            # this -- path moves the wallet, matching the real function's own
+            # "completed does not touch the wallet" shape.
+            self._state["wallet_balance"] += PAYOUT_AMOUNT
+            self._state["wallet_updated"] = True
 
-        return _Resp([])
+        return _Resp(dict(payout))
 
 
 class _Supabase:
     def __init__(self, state: dict):
         self._state = state
 
-    def table(self, name):
-        return _Query(name, self._state)
+    def rpc(self, name, params):
+        return _Rpc(name, params, self._state)
 
 
 def _make_state(payout_status="pending"):
     return {
-        "calls": [],
+        "rpc_calls": [],
         "payout": {
             "id": PAYOUT_ID,
             "user_id": PAYOUT_USER_ID,
@@ -167,6 +179,12 @@ def test_completing_a_payout_records_reference_and_does_not_touch_the_wallet(adm
         "completing a payout means the operator already sent the money manually -- "
         "there is nothing in the wallet to adjust"
     )
+    assert state["rpc_calls"] == [
+        ("settle_referral_payout", {
+            "p_payout_id": PAYOUT_ID, "p_status": "completed",
+            "p_reference": "UPI-TXN-998877", "p_reason": None,
+        })
+    ], "the handler must issue exactly one atomic settlement RPC call"
 
 
 def test_completing_without_a_reference_is_refused(admin_client):

@@ -102,8 +102,33 @@ def test_no_installed_routine_writes_a_referral_settlement_state(conn):
     """Asked of `pg_proc`, not of the migration files, because what matters is what the
     database actually has installed.
 
-    When settlement IS implemented this test fails, and whoever implements it must then
-    satisfy the evidence requirements the other tests in this file pin.
+    UPDATED FOR REF-01. Settlement for `referral_payouts` IS now implemented --
+    `create_referral_payout_request` and `settle_referral_payout`
+    (`backend_app/migrations/049_ref01_payout_atomic.sql`) -- exactly as this test's own
+    docstring said to expect, and the comment below records that the evidence
+    requirements this file pins were in fact satisfied before this assertion was
+    updated, not assumed:
+
+      * records evidence of payment: `settle_referral_payout` REQUIRES a non-blank
+        `p_reference` to reach 'completed' (RF003 otherwise) and writes `processed_at`
+        -- proven by `tests/test_ref01_payout_atomic_postgres.py::
+        test_completing_without_a_reference_raises_rf003_and_changes_nothing` and
+        `::test_completing_records_reference_and_does_not_touch_the_wallet`.
+      * cannot move to a terminal state twice: an already-`completed`/`rejected` payout
+        raises RF004 -- proven by `::test_an_already_terminal_payout_cannot_be_settled_
+        again`.
+      * "idempotent under webhook replay" does not apply to this path the way it does
+        to `record_referral_obligation`: a payout settlement is an OPERATOR action
+        (`PUT /api/referral/payouts/{id}/settle`, admin-gated), not a payment-provider
+        webhook, so there is no redelivery to be idempotent against -- the relevant
+        property is the RF004 guard above, which this file's own replacement test
+        proves.
+
+    So this test now asserts the NARROWER, still-true thing: no settlement writer
+    touches `referral_commissions`/`referral_wallets.pending_balance_usd ->
+    approved_balance_usd` (the commission-APPROVAL gap this file's other tests
+    document, which REF-01 does not touch and does not claim to), and the only
+    settlers installed are the two named ones.
     """
     cur = conn.cursor()
     cur.execute(
@@ -122,12 +147,35 @@ def test_no_installed_routine_writes_a_referral_settlement_state(conn):
                 or "approved_balance_usd =" in low:
             settlers.append(name)
 
-    assert settlers == [], (
-        f"a referral settlement writer now exists ({settlers}). Settlement was "
-        f"unimplemented when this was measured. Confirm it records evidence of payment "
-        f"(provider reference + timestamp), is idempotent under webhook replay, and "
-        f"cannot move a payout to a terminal state without that evidence — then update "
-        f"this test."
+    known_ref01_settlers = {"create_referral_payout_request", "settle_referral_payout"}
+    unexpected = sorted(set(settlers) - known_ref01_settlers)
+    assert unexpected == [], (
+        f"a referral settlement writer exists that is neither of REF-01's two known "
+        f"functions ({unexpected}). Confirm it records evidence of payment (provider "
+        f"reference + timestamp), is idempotent under webhook replay (or, for an "
+        f"operator-only action, refuses to re-settle a terminal row), and cannot move "
+        f"a payout to a terminal state without that evidence -- then add it here."
+    )
+    assert set(settlers) == known_ref01_settlers, (
+        f"expected exactly REF-01's two settlement functions to be installed, found "
+        f"{sorted(settlers)}. If one was removed, the capability gap this file "
+        f"documents may have returned."
+    )
+
+    # The commission-APPROVAL gap (pending_balance_usd -> approved_balance_usd) is a
+    # SEPARATE, still-open gap REF-01 does not touch: neither known settler may write
+    # approved_balance_usd by crediting it from pending_balance_usd, only by debiting
+    # or re-crediting it against a payout it itself is settling.
+    cur.execute(
+        "select prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
+        "where n.nspname = 'public' and p.proname = 'create_referral_payout_request'"
+    )
+    create_src = (cur.fetchone()[0] or "").lower()
+    assert "pending_balance_usd" not in create_src, (
+        "create_referral_payout_request now references pending_balance_usd; the "
+        "commission-approval gap this file documents may have been closed by this "
+        "function rather than by a dedicated approval writer, and this test's "
+        "framing needs re-examining"
     )
 
 
