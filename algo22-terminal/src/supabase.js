@@ -130,6 +130,12 @@ function createUnconfiguredClient() {
       signUp: () => ({ data: { user: null, session: null }, error: notConfiguredError() }),
       signOut: () => ({ error: null }),
       getUser: () => ({ data: { user: null }, error: notConfiguredError() }),
+      // FE-01: `App.jsx`'s `useGuardedAuthToken` (`AuthGuard`/`GuestGuard`) and
+      // `PasswordRecoveryHandler` both now await `getSession()` while a PKCE code
+      // exchange may be in flight. Resolves with no session and no error -- the
+      // unconfigured client has none to report, and a guard waiting on this must still
+      // settle rather than hang forever when Supabase is not configured at all.
+      getSession: () => ({ data: { session: null }, error: null }),
       updateUser: () => ({ data: { user: null }, error: notConfiguredError() }),
       onAuthStateChange: (callback) => ({
         data: {
@@ -162,7 +168,51 @@ try {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true
+      detectSessionInUrl: true,
+      // FE-01: the implicit-flow fix.
+      //
+      // Before this, every OAuth / magic-link / sign-up-confirmation redirect this app
+      // caused Supabase to send came back as `#access_token=<jwt>` in the URL HASH, and
+      // this library's own `detectSessionInUrl` (above) adopted whatever hash it found on
+      // ANY page load as the real, internal Supabase session -- no proof the token was
+      // ever issued to THIS browser, just that Supabase signed it for someone. That is a
+      // forgeable bearer credential sitting in a URL: an attacker who owns any valid
+      // Supabase account could craft a link to this app's own redirect target carrying
+      // THEIR token, and a victim who clicked it had their browser silently become
+      // authenticated as the attacker (login CSRF). `src/App.jsx`'s `getEffectiveToken` /
+      // `PasswordRecoveryHandler` narrowed WHERE that hash was honoured (an earlier FE-01
+      // pass), but the underlying adoption this library performs internally, before any of
+      // that app code runs, was never narrowed by that fix and remained exploitable on
+      // literally any route (see the long comment on `getEffectiveToken` in App.jsx).
+      //
+      // `flowType: 'pkce'` is the real fix. A redirect now carries `?code=<opaque>` in the
+      // QUERY STRING instead, and that code is useless on its own: exchanging it for a
+      // session (`exchangeCodeForSession`, which `detectSessionInUrl` now triggers
+      // automatically) requires a `code_verifier` this library generated and stored
+      // LOCALLY, in THIS browser, at the moment the flow was started (signInWithOAuth /
+      // signInWithOtp / signUp). An attacker's own valid `code` has no matching verifier in
+      // the victim's browser, so the exchange fails and no session is ever adopted --
+      // closing the forgery regardless of which path the link targets. As a second-order
+      // effect, this library's own URL detection now also actively REJECTS a stray
+      // `#access_token=` hash as a flow-type mismatch rather than adopting it (see
+      // `@supabase/auth-js`'s `_getSessionFromURL`), rather than silently trusting it.
+      //
+      // WHAT THIS DOES NOT COVER: the password-RECOVERY email. This app has no call site
+      // for `resetPasswordForEmail` (grep `src/` -- there isn't one), so it has never
+      // controlled, and still does not control, what generates that email or what flow
+      // type that generator uses. If it still produces an implicit-style
+      // `#access_token=...&type=recovery` link, this switch does not make that link any
+      // safer -- `PasswordRecoveryHandler`'s `type=recovery` branch in App.jsx reads that
+      // hash directly and has never gone through this library's own session validation
+      // either way. It also means this library's OWN internal session will now refuse that
+      // same implicit recovery hash (the mismatch above), which is a real behaviour change
+      // worth flagging: `supabase.auth.updateUser()` on `/reset-password` needs the
+      // library's OWN internal session, not just this app's own `sessionStorage` bookkeeping,
+      // so if the out-of-band recovery email is still implicit-shaped, completing a password
+      // reset could now fail where it previously (insecurely) succeeded. Tracked under FE-01
+      // in docs/launch_readiness/REMEDIATION_LEDGER.json as something that needs a live
+      // Supabase project -- and whoever/whatever actually generates that email -- to confirm.
+      flowType: 'pkce',
     }
   });
 } catch (error) {
