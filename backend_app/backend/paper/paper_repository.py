@@ -2615,6 +2615,242 @@ def insert_equity_snapshot(
     return _one(rows, f"{EQUITY_SNAPSHOTS_TABLE} insert")
 
 
+def _rpc_error_code(exc: BaseException) -> str:
+    """The SQLSTATE a failed ``.rpc()`` call raised, or ``""`` when none is readable.
+
+    ``paper_apply_fill_atomic`` (migration ``048_paper05_apply_fill_atomic.sql``) raises
+    ``RAISE EXCEPTION ... USING ERRCODE = 'PAxxx'``. ``postgrest.exceptions.APIError``
+    carries that SQLSTATE on its own ``.code`` attribute (PostgREST relays the Postgres
+    error code verbatim); a double that does not wrap postgrest's exception type is read
+    by falling back to ``str(exc)``, the same two-step reading :func:`_is_unique_violation`
+    already uses for the same reason.
+    """
+    code = str(getattr(exc, "code", "") or "").strip()
+    if code:
+        return code
+    text = str(exc)
+    for candidate in ("PA001", "PA002", "PA003"):
+        if candidate in text:
+            return candidate
+    return ""
+
+
+def apply_fill_atomic(
+    supabase: Any,
+    *,
+    user_id: Any,
+    account_id: Any,
+    order_id: Any,
+    session_id: Any,
+    fill_event_id: Any,
+    expected_account_version: Any,
+    expected_order_state: Any,
+    fill: Mapping[str, Any],
+    account: Mapping[str, Any],
+    balance_event: Mapping[str, Any],
+    order: Mapping[str, Any],
+    position: Mapping[str, Any],
+    equity_snapshot: Mapping[str, Any],
+    resume_fill_id: Any = None,
+    closed_leg: Optional[Mapping[str, Any]] = None,
+    trade: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """PAPER-05. The seven paper-fill writes, committed atomically in ONE ``.rpc()``
+    call to ``public.paper_apply_fill_atomic``
+    (``backend_app/migrations/048_paper05_apply_fill_atomic.sql``), replacing what used
+    to be seven separate statements through :func:`insert_fill`, :func:`bump_version`,
+    :func:`insert_balance_event`, :func:`upsert_position` (up to twice), :func:`update_order`,
+    :func:`insert_trade` and :func:`insert_equity_snapshot`.
+
+    Every guard and every arithmetic computation stays exactly where it was --
+    ``paper_simulator.apply_fill`` and ``paper_accounting`` -- and is already DONE by the
+    time this is called; this function only serialises the already-decided final values
+    into the shapes the migration's jsonb parameters expect, through the SAME
+    :func:`_numeric` / :func:`_minor_units` / :func:`_instant` / :func:`_optional_instant`
+    helpers every other write in this module already routes through, so a value travels
+    through this path exactly as exactly as it would through any of the seven calls it
+    replaces.
+
+    Args:
+        fill: ``{quantity, price, fee_minor, slippage_minor, market_event_id, filled_at}``.
+        account: ``{available_balance, locked_balance, realized_pnl, total_equity}`` --
+            the account's values AFTER this fill, as :func:`paper_accounting.apply_fill`
+            computed them.
+        balance_event: ``{available_delta, locked_delta, realized_delta, occurred_at}``.
+            The ``*_after`` columns are read back from the account row the function
+            itself updates, inside the same transaction, rather than passed in --
+            removing a chance for the ledger and the account to disagree.
+        order: ``{target_state, legacy_status, filled_quantity, avg_fill_price, fee_minor,
+            slippage_minor}``.
+        position: ``{symbol, side, size, entry_price, opened_at, current_price,
+            unrealized_pnl, price_at, closed_at}`` -- the OPEN row's values after this fill.
+        closed_leg: ``None``, or ``{side, entry_price, opened_at}`` when a reversal through
+            zero closes the prior side first (the ``current_price`` / ``price_at`` /
+            ``closed_at`` of that closed row are the fill's own price and instant, written
+            by the function itself).
+        trade: ``None``, or ``{symbol, side, quantity, entry_price, exit_price,
+            realized_pnl, fee_minor, opened_at, closed_at}`` when a position reached size
+            zero.
+        equity_snapshot: ``{series_index, total_equity, available_balance, locked_balance,
+            position_market_value, stale, taken_at}``.
+        resume_fill_id: ``None`` for a fresh fill; the existing ``paper_fills.id`` when
+            resuming a fill row that landed in a previous, now-superseded partial write
+            (pre-migration data; a fill applied entirely through this function cannot
+            reach that state itself -- see the migration file's own header).
+
+    Returns:
+        A dict with keys ``fill``, ``account``, ``balance_event``, ``position``,
+        ``closed_position``, ``order``, ``trade``, ``snapshot`` and ``resumed`` -- the rows
+        the function wrote (``None`` for ``closed_position`` / ``trade`` when neither
+        applied), in the same shape the seven calls this replaces would have returned.
+
+    Raises:
+        PaperConcurrencyConflict: ``PA001`` -- the account version or the order state the
+            caller read no longer matches; the caller's existing retry loop re-reads and
+            recomputes the whole attempt, exactly as it does for the optimistic conflicts
+            the seven separate calls used to raise.
+        PaperDuplicateFill: ``PA002`` -- a concurrent writer inserted this exact
+            ``fill_event_id`` between the caller's own duplicate guard and this call.
+        PaperPersistenceError: ``PA003`` (the account, the order, or the fill being
+            resumed does not exist for this identity) or any other failure the statement
+            did not complete for.
+    """
+    require_persistence(supabase)
+    uid = _require_text(user_id, "user_id")
+    aid = _require_text(account_id, "account_id")
+    oid = _require_text(order_id, "order_id")
+    sid = _optional_text(session_id)
+    event_id = _require_text(fill_event_id, "fill_event_id")
+    resume_id = _optional_text(resume_fill_id)
+
+    fill_payload = {
+        "quantity": _numeric(fill["quantity"], "quantity"),
+        "price": _numeric(fill["price"], "price"),
+        "fee_minor": _minor_units(fill["fee_minor"], "fee_minor"),
+        "slippage_minor": _minor_units(fill["slippage_minor"], "slippage_minor"),
+        "market_event_id": _optional_text(fill.get("market_event_id")),
+        "filled_at": _instant(fill["filled_at"], "filled_at"),
+    }
+    account_payload = {
+        "available_balance": _numeric(account["available_balance"], "available_balance"),
+        "locked_balance": _numeric(account["locked_balance"], "locked_balance"),
+        "realized_pnl": _numeric(account["realized_pnl"], "realized_pnl"),
+        "total_equity": _numeric(account["total_equity"], "total_equity"),
+    }
+    balance_event_payload = {
+        "available_delta": _numeric(balance_event["available_delta"], "available_delta"),
+        "locked_delta": _numeric(balance_event["locked_delta"], "locked_delta"),
+        "realized_delta": _numeric(balance_event["realized_delta"], "realized_delta"),
+        "occurred_at": _instant(balance_event["occurred_at"], "occurred_at"),
+    }
+    order_payload = {
+        "target_state": _require_text(order["target_state"], "target_state"),
+        "legacy_status": _require_text(order["legacy_status"], "legacy_status"),
+        "filled_quantity": _numeric(order["filled_quantity"], "filled_quantity"),
+        "avg_fill_price": _numeric(order["avg_fill_price"], "avg_fill_price"),
+        "fee_minor": _minor_units(order["fee_minor"], "fee_minor"),
+        "slippage_minor": _minor_units(order["slippage_minor"], "slippage_minor"),
+    }
+    position_payload = {
+        "symbol": _require_text(position["symbol"], "symbol"),
+        "side": _one_of(position["side"], POSITION_SIDES, "side"),
+        "size": _numeric(position["size"], "size"),
+        "entry_price": _numeric(position["entry_price"], "entry_price"),
+        "opened_at": _instant(position["opened_at"], "opened_at"),
+        "current_price": _optional_numeric(position.get("current_price"), "current_price"),
+        "unrealized_pnl": _optional_numeric(position.get("unrealized_pnl"), "unrealized_pnl"),
+        "price_at": _optional_instant(position.get("price_at"), "price_at"),
+        "closed_at": _optional_instant(position.get("closed_at"), "closed_at"),
+    }
+    closed_leg_payload: Optional[Dict[str, Any]] = None
+    if closed_leg is not None:
+        closed_leg_payload = {
+            "side": _one_of(closed_leg["side"], POSITION_SIDES, "side"),
+            "entry_price": _numeric(closed_leg["entry_price"], "entry_price"),
+            "opened_at": _instant(closed_leg["opened_at"], "opened_at"),
+        }
+    trade_payload: Optional[Dict[str, Any]] = None
+    if trade is not None:
+        trade_payload = {
+            "symbol": _require_text(trade["symbol"], "symbol"),
+            "side": _require_text(trade["side"], "side"),
+            "quantity": _numeric(trade["quantity"], "quantity"),
+            "entry_price": _numeric(trade["entry_price"], "entry_price"),
+            "exit_price": _numeric(trade["exit_price"], "exit_price"),
+            "realized_pnl": _numeric(trade["realized_pnl"], "realized_pnl"),
+            "fee_minor": _minor_units(trade["fee_minor"], "fee_minor"),
+            "opened_at": _instant(trade["opened_at"], "opened_at"),
+            "closed_at": _instant(trade["closed_at"], "closed_at"),
+        }
+    equity_payload = {
+        "series_index": _exact_int(equity_snapshot.get("series_index", 0), "series_index"),
+        "total_equity": _numeric(equity_snapshot["total_equity"], "total_equity"),
+        "available_balance": _numeric(
+            equity_snapshot["available_balance"], "available_balance"
+        ),
+        "locked_balance": _numeric(equity_snapshot["locked_balance"], "locked_balance"),
+        "position_market_value": _numeric(
+            equity_snapshot["position_market_value"], "position_market_value"
+        ),
+        "stale": bool(equity_snapshot.get("stale", False)),
+        "taken_at": _instant(equity_snapshot["taken_at"], "taken_at"),
+    }
+
+    _measured_from = time.perf_counter()
+    try:
+        response = supabase.rpc("paper_apply_fill_atomic", {
+            "p_user_id": uid,
+            "p_account_id": aid,
+            "p_order_id": oid,
+            "p_session_id": sid,
+            "p_fill_event_id": event_id,
+            "p_expected_account_version": _exact_int(
+                expected_account_version, "expected_account_version"
+            ),
+            "p_expected_order_state": _require_text(
+                expected_order_state, "expected_order_state"
+            ),
+            "p_resume_fill_id": resume_id,
+            "p_fill": fill_payload,
+            "p_account": account_payload,
+            "p_balance_event": balance_event_payload,
+            "p_order": order_payload,
+            "p_position": position_payload,
+            "p_closed_leg": closed_leg_payload,
+            "p_trade": trade_payload,
+            "p_equity_snapshot": equity_payload,
+        }).execute()
+    except Exception as exc:  # noqa: BLE001 - classified below, never swallowed blindly
+        _record_statement("paper_apply_fill_atomic", _measured_from, failed=True)
+        code = _rpc_error_code(exc)
+        if code == "PA001":
+            raise PaperConcurrencyConflict(
+                f"the paper account or order changed under the caller while applying "
+                f"fill {event_id!r} on order {oid!r}; nothing was written ({exc})",
+                table=ACCOUNTS_TABLE,
+                row_id=aid,
+            ) from exc
+        if code == "PA002":
+            raise PaperDuplicateFill(oid, event_id) from exc
+        if is_missing_paper_table_error(exc):
+            remember_persistence_absent()
+            warn_persistence_absent(str(exc))
+            raise paper_persistence_unavailable(PAPER_TRADING_MIGRATION_FILE) from exc
+        raise PaperPersistenceError(
+            f"paper_apply_fill_atomic for order {oid!r} event {event_id!r} did not "
+            f"complete: {exc}"
+        ) from exc
+
+    _record_statement("paper_apply_fill_atomic", _measured_from)
+    data = getattr(response, "data", None)
+    if not isinstance(data, Mapping):
+        raise PaperPersistenceError(
+            f"paper_apply_fill_atomic for order {oid!r} event {event_id!r} completed "
+            f"but returned no usable result"
+        )
+    return dict(data)
+
+
 def insert_metrics(
     supabase: Any,
     *,

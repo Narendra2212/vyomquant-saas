@@ -1266,11 +1266,23 @@ def _assert_the_409_applied_nothing(
             f"P-23: a market intent starves in ``apply_fill``, got operation "
             f"{error.details.get('operation')!r}. Case: {case!r}"
         )
-        assert len(unsettled) == 1, (
-            f"P-23: a market intent starved in ``apply_fill`` leaves exactly ONE unsettled fill "
-            f"row - the idempotency anchor a retry resumes from, written before the money and "
-            f"never twice however many attempts conflicted - but {len(unsettled)} were found. That "
-            f"is the 'applied twice' failure Requirement 16.10 forbids. Case: {case!r}"
+        # PAPER-05 (048_paper05_apply_fill_atomic.sql): the seven writes `apply_fill` used
+        # to issue separately are now one atomic Postgres function call that locks and
+        # version-checks the account (and the order) BEFORE issuing any of them -- so a
+        # version conflict is detected, and the whole call rolls back, before the fill
+        # insert is ever reached. A market intent whose every attempt starves on that
+        # conflict therefore leaves ZERO fill rows now, not one: there is no longer a
+        # "written but unsettled" fill for a fresh, fully-exhausted attempt to produce.
+        # (The idempotency-anchor resume this count used to pin is still exactly right
+        # for a fill row that already exists from BEFORE this migration, or reaches that
+        # state some other way -- see
+        # tests/test_paper_order_lifecycle_writes.py::
+        # test_a_resumed_fill_from_before_the_atomic_redesign_completes_once, which seeds
+        # that state directly and proves the resume path still finishes it.)
+        assert len(unsettled) == 0, (
+            f"P-23: a market intent starved in ``apply_fill`` after this call's own account-"
+            f"version check must leave NO fill row at all -- the whole atomic call rolled "
+            f"back -- but {len(unsettled)} were found. Case: {case!r}"
         )
 
 
