@@ -26,19 +26,22 @@ from __future__ import annotations
 
 from typing import List
 
-import pytest
-
-from backend_app.backend.marketplace import settlement_service as ss
 from backend_app.backend.marketplace.settlement_service import (
     SETTLEMENT_REFERENCE_UNIQUE_CONSTRAINT,
     SettlementOutcome,
-    SettlementPersistFailed,
 )
 from backend_app.backend.marketplace.subscription_period import period_for_activation
 from tests.test_settlement_service import (
     AMOUNT_1999,
     CONFIRMED_AT,
+    LISTING_ID,
+    OWNER_ID,
+    OWNER_SHARE_1999,
+    PLATFORM_FEE_1999,
+    PROVIDER,
+    PURCHASER_ID,
     REFERENCE,
+    SUBSCRIPTION_ID,
     FakeSupabase,
     RecordingAuditLogger,
     RecordingGrant,
@@ -49,28 +52,62 @@ from tests.test_settlement_service import (
 )
 
 
+def _legacy_settlement_row(
+    *, settlement_id: str, is_reversal: bool = False, settled_at=CONFIRMED_AT
+) -> dict:
+    """A ``marketplace_settlements`` row shaped exactly as ``_settlement_payload`` would
+    build it, for seeding ``FakeSupabase(settlements=[...])`` directly -- i.e. AS IF it
+    had been written by a process that predates MKT-03's atomic
+    ``record_and_transition_settlement`` (050_mkt03_settlement_atomic_transition.sql),
+    or by any other path this migration cannot reach. A FRESH ``settle()`` call can no
+    longer produce "ledger row exists, transition does not" on its own: the insert and
+    the transition are now one transaction, so a test proving the DUPLICATE_RESUMED
+    fallback still repairs this state has to construct it directly, exactly as
+    ``test_an_already_active_redelivery_is_not_auto_extended`` already does for its own
+    (different) pre-existing-ledger-row scenario.
+    """
+    return {
+        "id": settlement_id,
+        "subscription_id": SUBSCRIPTION_ID,
+        "listing_id": LISTING_ID,
+        "owner_id": OWNER_ID,
+        "purchaser_id": PURCHASER_ID,
+        "amount_minor": AMOUNT_1999,
+        "owner_share_minor": OWNER_SHARE_1999,
+        "platform_fee_minor": PLATFORM_FEE_1999,
+        "currency": "USD",
+        "provider": PROVIDER,
+        "provider_reference": REFERENCE,
+        "is_reversal": is_reversal,
+        "reverses_reference": REFERENCE if is_reversal else None,
+        "settled_at": settled_at.isoformat(),
+    }
+
+
 def test_a_redelivery_after_the_transition_never_landed_completes_it(
     audit: RecordingAuditLogger, no_sleep: List[int]
 ) -> None:
-    """The exact MKT-03 scenario: ledger row written, transition never applied, then redelivered.
+    """THE MKT-03 SCENARIO, AS IT CAN STILL ARISE: a ledger row exists with no matching
+    transition, and a redelivery must complete it rather than reporting a bare duplicate.
 
-    The first call writes the Settlement_Record and then exhausts its entire retry budget on the
-    transition UPDATE, so it raises ``SettlementPersistFailed`` with the subscription still
-    ``pending``. A second, independent call for the same reference - modelling a webhook
-    redelivery with no memory of the first attempt - must complete the transition and the
-    entitlement rather than reporting ``DUPLICATE_IGNORED``.
+    UPDATED FOR THE ATOMIC REDESIGN (050_mkt03_settlement_atomic_transition.sql). A
+    FRESH ``settle()`` call can no longer PRODUCE this state itself any more: the
+    ledger insert and the transition UPDATE are now one ``record_and_transition_
+    settlement`` call, so either both land or neither does (proven directly by
+    ``tests/test_settlement_service.py::
+    test_a_ledger_insert_that_never_completes_leaves_the_ledger_unchanged`` and its
+    sibling for the UPDATE sub-step). So this test now seeds the stuck state exactly as
+    it would exist on a database carrying a row from BEFORE this fix shipped -- the
+    scenario the fallback exists for -- rather than trying to make a fresh atomic call
+    produce it, which it structurally cannot.
     """
     client = FakeSupabase(
         subscriptions=[_subscription_row(status="pending")],
-        # Fails exactly the first call's whole attempt budget, then succeeds for the second call.
-        fail_times={("update", ss.SUBSCRIPTION_TABLE): ss.MAX_SETTLEMENT_ATTEMPTS},
+        settlements=[_legacy_settlement_row(settlement_id="settlement-legacy-1")],
     )
     grant = RecordingGrant()
 
-    with pytest.raises(SettlementPersistFailed):
-        _settle(client, grant=grant)
-
-    assert len(client.settlements) == 1, "the first call's ledger row must still be written"
+    assert len(client.settlements) == 1, "the pre-existing ledger row must be seeded"
     assert client.subscription()["status"] == "pending", (
         "the transition must not have landed -- that is the premise of this test"
     )
@@ -186,7 +223,13 @@ def test_an_already_active_redelivery_is_not_auto_extended(
 def test_a_reversal_redelivery_after_the_refund_never_landed_completes_it(
     audit: RecordingAuditLogger, no_sleep: List[int]
 ) -> None:
-    """The reversal mirror of the core case: the refund row lands, the status move does not."""
+    """The reversal mirror of the core case: the refund row exists, the status move does not.
+
+    Seeded directly, for the same reason the payment case above now is: a fresh
+    ``settle(is_reversal=True)`` call cannot itself produce "refund row recorded,
+    subscription still active" any more -- the atomic function makes that one
+    transaction.
+    """
     client = FakeSupabase(
         subscriptions=[
             _subscription_row(
@@ -195,11 +238,10 @@ def test_a_reversal_redelivery_after_the_refund_never_landed_completes_it(
                 period_expiry=CONFIRMED_AT.isoformat(),
             )
         ],
-        fail_times={("update", ss.SUBSCRIPTION_TABLE): ss.MAX_SETTLEMENT_ATTEMPTS},
+        settlements=[
+            _legacy_settlement_row(settlement_id="settlement-legacy-refund-1", is_reversal=True)
+        ],
     )
-
-    with pytest.raises(SettlementPersistFailed):
-        _settle(client, is_reversal=True)
 
     assert client.subscription()["status"] == "active", (
         "the refund transition must not have landed -- that is the premise of this test"
