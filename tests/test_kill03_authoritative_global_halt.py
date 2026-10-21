@@ -759,6 +759,33 @@ def test_a_status_surface_exists_for_verifying_the_halt():
     )
 
 
+@pytest.mark.asyncio
+async def test_the_status_surface_actually_distinguishes_no_holds_from_unreadable(
+    switch, backend
+):
+    """Behavioural backstop for the source-text check above.
+
+    That check only proves the *router* forwards a field named ``holds_readable`` --
+    it cannot tell a real `holds_readable: False` on backend failure from a hardcoded
+    `True` that happened to appear in the same file. `get_status()` is what the endpoint
+    calls and returns verbatim, so pinning it here closes the gap without needing an
+    HTTP-level harness for this thin pass-through handler.
+    """
+    backend.sets[switch.HOLDS_KEY] = {"auto:exchange_unhealthy"}
+    readable_status = await switch.get_status()
+    assert readable_status["holds"] == ["auto:exchange_unhealthy"]
+    assert readable_status["holds_readable"] is True
+
+    backend.fail = True
+    unreadable_status = await switch.get_status()
+    assert unreadable_status["holds"] == []
+    assert unreadable_status["holds_readable"] is False, (
+        "get_status() must report that the hold set could not be read, not silently "
+        "render an empty list -- an operator cannot tell 'no holds' from 'I do not know' "
+        "otherwise, which is exactly what KILL-01 conflated"
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  4. KILL-02: RESET AUTHORIZATION
 # ══════════════════════════════════════════════════════════════════════════
