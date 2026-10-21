@@ -279,20 +279,65 @@ function isDemonstrablyExpiredJwt(token) {
   }
 }
 
-// FE-01: the paths a legitimate Supabase OAuth/magic-link redirect can actually land on.
+// FE-01: the paths a legitimate Supabase auth redirect can actually land on.
 // `getAuthRedirectUrl` (config.js) hands Supabase this exact path for every OTP/sign-up/
-// resend/OAuth call site, so a hash carrying `access_token=` has no legitimate reason to
-// appear anywhere else. `/signin`/`/signup`/`/` are included because `PasswordRecoveryHandler`
-// below redirects a hash landing on any of those three toward the dashboard itself.
-const _AUTH_HASH_LANDING_PATHS = [AUTH_REDIRECT_PATH, "/signin", "/signup", "/"];
+// resend/OAuth call site, so neither a PKCE `?code=` nor a legacy `#access_token=` has any
+// legitimate reason to arrive anywhere else. `/signin`/`/signup`/`/` stay in the allowlist
+// because `PasswordRecoveryHandler` below forwards a `code` landing on any of those three
+// toward the dashboard too, once it resolves (the same thing it used to do for a stray
+// implicit hash).
+const _AUTH_REDIRECT_LANDING_PATHS = [AUTH_REDIRECT_PATH, "/signin", "/signup", "/"];
 
-// Exported for tests/unit/authHashLandingPath.test.jsx (FE-01) -- not used by any other
-// module.
-export function _isLegitimateAuthHashLandingPath(pathname) {
-  return _AUTH_HASH_LANDING_PATHS.includes(pathname);
+// Exported for tests (FE-01) -- not used by any other module. Renamed from
+// `_isLegitimateAuthHashLandingPath`: it now gates a query-string `code=`, not a hash.
+export function _isLegitimateAuthRedirectLandingPath(pathname) {
+  return _AUTH_REDIRECT_LANDING_PATHS.includes(pathname);
 }
 
-// Synchronously extracts auth token from sessionStorage or URL hash
+// FE-01: true when the current URL looks like an in-flight PKCE callback this browser
+// might be mid-exchange for -- a `code` query parameter, landing on one of the paths
+// Supabase is actually ever told to redirect to. `exchangeCodeForSession` (triggered
+// automatically by `detectSessionInUrl` in src/supabase.js) is a network round-trip, so
+// `sessionStorage` has not been populated yet on the very first render of a route that
+// just arrived this way. `AuthGuard`/`GuestGuard` use this to show a brief loading state
+// and wait for that exchange to settle instead of bouncing the arriving user to `/signin`
+// (or rendering the sign-in form over them) before Supabase has even answered.
+export function hasPendingAuthCodeExchange() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.location.search === "string" &&
+    /(?:^|[?&])code=/.test(window.location.search) &&
+    _isLegitimateAuthRedirectLandingPath(window.location.pathname)
+  );
+}
+
+// Synchronously extracts auth token from sessionStorage.
+//
+// FE-01 history: this used to ALSO read `window.location.hash` for `access_token=` -- at
+// first unconditionally on every guarded route, then (a first FE-01 pass, commit 83c8a8c)
+// only on an allowlisted path -- and adopt whatever it found as the session if the token
+// was not demonstrably expired. Both were defects, and the second only narrowed where the
+// defect was reachable through THIS function specifically: a non-expired token in a hash
+// proves only that Supabase signed it for SOMEONE, not that it was issued to this browser,
+// and `@supabase/supabase-js`'s OWN `detectSessionInUrl` was separately adopting the exact
+// same hash on ANY route the moment the page loaded -- before any React code ran at all --
+// and bridging it into this app's session via the `onAuthStateChange` listener in
+// `PasswordRecoveryHandler` below. That SDK-level path was never narrowed by the first
+// FE-01 pass, and it is the one a login-CSRF link actually used.
+//
+// The real fix is `flowType: 'pkce'` in src/supabase.js. A legitimate OAuth / magic-link /
+// sign-up redirect now lands as `?code=...`, never `#access_token=...`, and supabase-js
+// exchanges that code for a session only if THIS browser also holds the matching
+// `code_verifier` it generated when the flow was started -- an attacker's own valid `code`
+// has no such verifier here, so the exchange fails and nothing is adopted. supabase-js now
+// also actively REJECTS a stray `#access_token=` hash once `flowType: 'pkce'` is
+// configured (a flow-type mismatch), rather than adopting it the way it used to. So this
+// function has nothing left to safely read out of a hash: a real redirect never produces
+// one for these flows any more, and one that still arrives is either the attack this
+// finding is about or a stale pre-PKCE email link -- and the SDK itself now refuses both.
+// A resolved PKCE exchange reaches `sessionStorage` via the same `onAuthStateChange`
+// bridge; see `hasPendingAuthCodeExchange` and `useGuardedAuthToken` above/below for how
+// the guards wait for that bridge instead of reading a hash by hand.
 export function getEffectiveToken() {
   let token = sessionStorage.getItem("token");
   // An expired token is not a session. Both guards read this one function, so discarding it
@@ -303,46 +348,76 @@ export function getEffectiveToken() {
     sessionStorage.removeItem("token");
     token = null;
   }
-  // FE-01: this used to run on EVERY guarded route, with no check that this was actually
-  // the OAuth/magic-link redirect landing. An attacker-crafted link to any page at all --
-  // `/app/strategies/xyz#access_token=<a token the attacker owns>` -- made the victim's
-  // browser adopt the ATTACKER's session: a login CSRF, not merely an open redirect. A
-  // non-expired token proves nothing about WHO it was issued to; it only proves Supabase
-  // signed it for someone. Restricting this to the one path Supabase is actually told to
-  // redirect to closes the "any page" breadth of the attack. It does not make the implicit
-  // flow itself CSRF-proof -- only PKCE (a `code` exchanged against a locally-held
-  // verifier) does that, and switching `flowType` is a live-Supabase-project change this
-  // sandboxed session has no way to test end-to-end; tracked as the remaining gap under
-  // FE-01, not attempted here.
-  if (
-    !token &&
-    typeof window !== "undefined" &&
-    window.location.hash &&
-    _isLegitimateAuthHashLandingPath(window.location.pathname)
-  ) {
-    const hash = window.location.hash;
-    if (hash.includes("access_token=")) {
-      const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
-      const hashToken = params.get("access_token");
-      if (hashToken && !isDemonstrablyExpiredJwt(hashToken)) {
-        sessionStorage.setItem("token", hashToken);
-        token = hashToken;
-      }
-    }
-  }
   return token;
 }
 
-// AUTH GUARDS
-function AuthGuard() {
-  const token = getEffectiveToken();
-  if (!token) return <Navigate to="/signin" replace />;
+/**
+ * FE-01: the one place `AuthGuard` and `GuestGuard` both decide "is there a session",
+ * now that the answer can require waiting on an in-flight PKCE code exchange rather than
+ * being available synchronously the way a hash-borne implicit token was.
+ *
+ * Returns `{ pending: true, token: null }` while supabase-js's own init/exchange promise
+ * is still outstanding for a `code` on an allowlisted landing path (see
+ * `hasPendingAuthCodeExchange`), and `{ pending: false, token }` once that has settled --
+ * or immediately, with no render delay, when there was never anything to wait for (the
+ * overwhelmingly common case: a normal in-app navigation with an already-established
+ * `sessionStorage` token or none at all).
+ */
+function useGuardedAuthToken() {
+  const [state, setState] = useState(() => {
+    const token = getEffectiveToken();
+    if (token) return { pending: false, token };
+    return hasPendingAuthCodeExchange()
+      ? { pending: true, token: null }
+      : { pending: false, token: null };
+  });
+
+  useEffect(() => {
+    if (!state.pending) return;
+    let cancelled = false;
+    // `getSession()` awaits supabase-js's own `initializePromise`, which is the SAME
+    // promise running the automatic `exchangeCodeForSession` this is waiting on -- so this
+    // resolves only once the SDK has either adopted a genuine code (verifier matched) or
+    // given up (no match / error), never before. Its own result is not read directly:
+    // the `onAuthStateChange` listener in `PasswordRecoveryHandler` is what writes
+    // `sessionStorage`, exactly as it does for every other sign-in path, so re-reading
+    // `getEffectiveToken()` here is what stays in sync with that single source of truth
+    // rather than trusting this call's session shape a second way.
+    supabase.auth.getSession().finally(() => {
+      if (!cancelled) setState({ pending: false, token: getEffectiveToken() });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.pending]);
+
+  return state;
+}
+
+// The brief "waiting on the PKCE exchange" screen. Styled like `AdminGuard`'s own loading
+// branch below, so the two momentary auth-wait screens this app can show do not diverge.
+function AuthExchangePendingScreen() {
+  return (
+    <div style={{ background: token.surface.canvas, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <span className="font-mono" style={{ color: token.content.muted, fontSize: 12 }}>Completing sign-in…</span>
+    </div>
+  );
+}
+
+// AUTH GUARDS. Exported (alongside `AuthExchangePendingScreen`) for
+// tests/unit/authPkceRedirect.test.jsx (FE-01) -- not used by any other module.
+export function AuthGuard() {
+  const { pending, token: effectiveToken } = useGuardedAuthToken();
+  if (pending) return <AuthExchangePendingScreen />;
+  if (!effectiveToken) return <Navigate to="/signin" replace />;
   return <Outlet />;
 }
 
-function GuestGuard() {
-  const token = getEffectiveToken();
-  if (token) return <Navigate to="/app/dashboard" replace />;
+export function GuestGuard() {
+  const { pending, token: effectiveToken } = useGuardedAuthToken();
+  if (pending) return <AuthExchangePendingScreen />;
+  if (effectiveToken) return <Navigate to="/app/dashboard" replace />;
   return <Outlet />;
 }
 
@@ -393,42 +468,65 @@ function AdminGuard() {
   return <Outlet />;
 }
 
-// Intercepts Supabase OAuth and password-recovery hashes on mount
+// Intercepts Supabase password-recovery hashes and in-flight PKCE code callbacks on mount
 function PasswordRecoveryHandler() {
   const navigate = useNavigate();
   useEffect(() => {
     const hash = window.location.hash;
-    if (hash) {
-      if (hash.includes("type=recovery")) {
-        // NOT path-scoped like the branch below: nothing in src/ calls
-        // `resetPasswordForEmail` with an explicit `redirectTo`, so this app does not
-        // control -- and cannot assert -- which path a legitimate recovery email actually
-        // lands on. Still rejects a demonstrably expired token; the login-CSRF exposure
-        // this branch shares with the one below is recorded as a known, unresolved FE-01
-        // residual rather than narrowed on a guess.
-        const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
-        const token = params.get("access_token");
-        if (token && !isDemonstrablyExpiredJwt(token)) {
-          sessionStorage.setItem("token", token);
-          window.history.replaceState(null, "", window.location.pathname);
-          navigate("/reset-password", { replace: true });
-        }
-      } else if (hash.includes("access_token=") && _isLegitimateAuthHashLandingPath(window.location.pathname)) {
-        // FE-01: this used to store ANY hash's access_token on ANY path unconditionally --
-        // the login-CSRF this finding is about. Gated on the same landing-path allowlist
-        // `getEffectiveToken` above uses, for the same reason: Supabase is only ever told
-        // to redirect here (`getAuthRedirectUrl`/`AUTH_REDIRECT_PATH`), so a hash arriving
-        // anywhere else has no legitimate source.
-        const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
-        const token = params.get("access_token");
-        if (token && !isDemonstrablyExpiredJwt(token)) {
-          sessionStorage.setItem("token", token);
-          window.history.replaceState(null, "", window.location.pathname);
-          if (window.location.pathname === "/signin" || window.location.pathname === "/signup" || window.location.pathname === "/") {
-            navigate("/app/dashboard", { replace: true });
-          }
-        }
+    if (hash && hash.includes("type=recovery")) {
+      // NOT path-scoped, and NOT routed through supabase-js's own PKCE exchange: nothing
+      // in src/ calls `resetPasswordForEmail` with an explicit `redirectTo`, so this app
+      // does not control -- and cannot assert -- which path a legitimate recovery email
+      // actually lands on, or what flow type generated it. Still rejects a demonstrably
+      // expired token; the login-CSRF exposure this branch carries is recorded as a known,
+      // UNCHANGED FE-01 residual (see docs/launch_readiness/REMEDIATION_LEDGER.json),
+      // not narrowed on a guess and not touched by the `flowType: 'pkce'` switch below --
+      // switching this app's own client's flow type cannot make a link some OTHER,
+      // uncontrolled sender generates any safer. One real behaviour change IS worth
+      // flagging here even though this branch itself is unchanged: with `flowType: 'pkce'`
+      // now configured (src/supabase.js), supabase-js's OWN internal session detection
+      // will REJECT this same implicit-shaped hash as a flow-type mismatch rather than
+      // quietly adopting it into its real internal session the way it used to -- so if the
+      // out-of-band recovery email is still implicit-shaped, the `updateUser` auth call
+      // on `/reset-password` (which needs THAT internal session, not just the
+      // `sessionStorage` bookkeeping this branch does by hand) could now fail where it
+      // previously, insecurely, succeeded. Needs a live project to confirm either way.
+      const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
+      const token = params.get("access_token");
+      if (token && !isDemonstrablyExpiredJwt(token)) {
+        sessionStorage.setItem("token", token);
+        window.history.replaceState(null, "", window.location.pathname);
+        navigate("/reset-password", { replace: true });
       }
+    }
+    // The former `else if (hash.includes("access_token=") ...)` branch -- the non-recovery
+    // implicit-flow adoption an earlier FE-01 pass narrowed to an allowlisted path -- is
+    // DELETED here, not narrowed further. Under `flowType: 'pkce'` (src/supabase.js) a
+    // legitimate OAuth / magic-link / sign-up redirect never produces that shape again,
+    // and supabase-js's own `_initialize()` now actively REJECTS a `#access_token=` hash
+    // as a flow-type mismatch rather than adopting it -- so there is nothing left here to
+    // safely read out of a hash for that case, and hand-rolling a second, duplicate
+    // acceptance of it would just reopen what this fix exists to close. A legitimate
+    // redirect now lands as `?code=...`, which supabase-js's own `detectSessionInUrl`
+    // exchanges automatically against the locally-held verifier (see `getEffectiveToken`
+    // and `useGuardedAuthToken` above) -- deliberately not re-implemented here by hand.
+
+    // FE-01: forward a resolving PKCE sign-in that landed on `/`, `/signin` or `/signup`
+    // on to the dashboard -- the same three non-dashboard paths the deleted implicit-flow
+    // branch above used to forward from. `AuthGuard`/`GuestGuard` already handle
+    // `AUTH_REDIRECT_PATH` itself (it needs no further hop), so this only ever fires for
+    // the other three. The exchange itself is already running (supabase-js kicked it off
+    // when this module was first imported); this just waits for it and acts once it
+    // settles, rather than re-triggering a second one.
+    if (
+      hasPendingAuthCodeExchange() &&
+      window.location.pathname !== AUTH_REDIRECT_PATH
+    ) {
+      supabase.auth.getSession().then(({ data }) => {
+        if (data?.session?.access_token) {
+          navigate(AUTH_REDIRECT_PATH, { replace: true });
+        }
+      });
     }
 
     // Subscribe to onAuthStateChange for live session events

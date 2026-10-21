@@ -1501,13 +1501,28 @@ def test_apply_fill_gives_up_after_three_attempts_with_a_409() -> None:
     assert supabase.equity_snapshots == []
 
 
-def test_a_conflicting_retry_resumes_the_fill_row_rather_than_writing_a_second_one() -> None:
-    """The one recovery this transport's write ordering admits.
+def test_a_conflicting_retry_writes_nothing_at_all_not_even_the_fill_row() -> None:
+    """PAPER-05: a version conflict now leaves NOTHING written, the fill row included.
 
-    The fill row is the idempotency anchor and is written before the money moves, so a retry after
-    a conflict on the account UPDATE finds it, recognises that no ledger row carries it, and
-    resumes instead of inserting a second fill or skipping the movement. Three conflicting attempts
-    therefore leave **one** fill row, not three.
+    UPDATED FOR THE ATOMIC REDESIGN
+    (``backend_app/migrations/048_paper05_apply_fill_atomic.sql``). Before it, the fill
+    row was written FIRST, unconditionally, as its own separate statement, and only
+    the SECOND statement (the account UPDATE) was guarded by the version -- so a
+    conflict there left the fill row standing, written but with no ledger entry
+    carrying it, and a RETRY recognised and resumed from exactly that.
+
+    ``paper_apply_fill_atomic`` locks and version-checks the account (and the order)
+    BEFORE issuing ANY of the seven writes, inside the one transaction that is now all
+    of them -- so a stale version is detected before the fill insert is ever reached,
+    and the whole call rolls back to nothing. Three conflicting attempts therefore
+    leave ZERO fill rows, not one: there is no longer a "written but unsettled" fill
+    for a FRESH attempt to produce.
+
+    The resume mechanism this test used to exercise is not gone -- it is still exactly
+    right for data that predates this migration, or that reaches that state some other
+    way. See ``test_a_resumed_fill_from_before_the_atomic_redesign_completes_once``
+    just below, which seeds that state directly and proves the SAME Python-side
+    ``resumed_fill`` detection in ``apply_fill`` still finishes it correctly.
     """
     supabase, session, account_id = _seed()
     order = _accepted_market_order(supabase, account_id, quantity="1")
@@ -1528,7 +1543,65 @@ def test_a_conflicting_retry_resumes_the_fill_row_rather_than_writing_a_second_o
             )
         )
 
-    assert len(supabase.fills) == 1
+    assert supabase.fills == [], (
+        "a version conflict detected before any write must leave the fill row "
+        "unwritten too -- that is the whole point of making the seven writes atomic"
+    )
+    assert supabase.balance_events == []
+    assert supabase.positions == []
+
+
+def test_a_resumed_fill_from_before_the_atomic_redesign_completes_once() -> None:
+    """The residual case the resume mechanism in ``apply_fill`` still exists for.
+
+    A fill row that landed with no settling balance event -- exactly the shape a
+    process using the OLD, pre-``048`` seven-separate-statement write path could leave
+    behind if it died between writing the fill and moving the money -- is seeded
+    directly here, standing in for data that predates the atomic redesign. Guard 2 in
+    ``apply_fill`` must still recognise it as unsettled and resume through
+    ``resume_fill_id`` rather than inserting a second fill row or reporting a
+    duplicate, finishing the movement exactly once.
+    """
+    supabase, session, account_id = _seed()
+    order = _accepted_market_order(supabase, account_id, quantity="1")
+
+    orphaned = supabase._defaults(repo.FILLS_TABLE, {
+        "order_id": order["id"],
+        "session_id": SESSION,
+        "user_id": USER,
+        "fill_event_id": "fill-1",
+        "quantity": "1",
+        "price": "1000",
+        "fee_minor": 0,
+        "slippage_minor": 0,
+        "market_event_id": None,
+        "filled_at": NOW.isoformat(),
+    })
+    supabase.fills.append(orphaned)
+    assert supabase.balance_events == [], "the premise: the fill landed, the ledger did not"
+
+    outcome = _run_coroutine(
+        sim.apply_fill(
+            supabase,
+            session,
+            order,
+            config=_config(fee_rate=Decimal("0"), slippage_rate=Decimal("0")),
+            quantity="1",
+            price="1000",
+            fill_event_id="fill-1",
+            filled_at=NOW,
+            sleep=_Sleeps(),
+        )
+    )
+
+    assert outcome.outcome == sim.FILL_APPLIED
+    assert len(supabase.fills) == 1, "the resume must not insert a second fill row"
+    assert supabase.fills[0]["id"] == orphaned["id"]
+    assert len(supabase.balance_events) == 1, "the resume must finish the movement"
+    assert supabase.balance_events[0]["fill_id"] == orphaned["id"]
+    assert len(supabase.positions) == 1
+    stored_order = next(r for r in supabase.orders if r["id"] == order["id"])
+    assert stored_order["order_state"] == PaperOrderState.FILLED.value
 
 
 def test_submit_intents_lock_gives_up_with_the_phase_and_the_partial_write_named() -> None:

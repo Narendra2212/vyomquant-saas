@@ -225,6 +225,33 @@ class _Resp:
         self.data = data
 
 
+class FakeConcurrencyConflict(Exception):
+    """What a real ``RAISE EXCEPTION ... USING ERRCODE = 'MK001'`` surfaces through
+    ``postgrest.exceptions.APIError``: a ``.code`` attribute carrying the SQLSTATE,
+    which ``settlement_service._rpc_error_code`` reads to classify it.
+    """
+
+    def __init__(self, subscription_id: str) -> None:
+        self.code = "MK001"
+        super().__init__(
+            f"subscription {subscription_id} status changed under the caller"
+        )
+
+
+class _RpcCall:
+    """One ``.rpc(name, params)`` call. Terminates in ``execute()``, mirroring the
+    ``_Query`` chain's own single-method termination.
+    """
+
+    def __init__(self, name: str, params: Dict[str, Any], client: "FakeSupabase") -> None:
+        self.name = name
+        self.params = params
+        self.client = client
+
+    def execute(self) -> _Resp:
+        return self.client._execute_rpc(self.name, self.params)
+
+
 class _Query:
     """A recording query builder mimicking the supabase-py fluent chain."""
 
@@ -288,10 +315,154 @@ class FakeSupabase:
         #: ``(op, table)`` in execution order, plus ``("audit", <action name>)`` entries.
         self.ops: List[Tuple[str, str]] = []
         self.statements: List[_Query] = []
+        #: Test-only seam for MKT-03's "a concurrent writer moves the row" scenario.
+        #: Called from inside ``.rpc("record_and_transition_settlement", ...)`` right
+        #: after the ledger-insert sub-step lands (whether this call inserted it or
+        #: found it already there) and BEFORE the subscription UPDATE sub-step runs --
+        #: the one place a genuinely concurrent transaction's COMMIT could still be
+        #: observed by this call's own next statement under Postgres's normal
+        #: read-committed isolation, even though both sub-steps now live inside one
+        #: function. A test sets this to mutate ``self.subscriptions`` directly; left
+        #: alone, it is a no-op.
+        self.between_ledger_and_transition = lambda: None
 
     # ---- the supabase-py surface this module uses ------------------------
     def table(self, name: str) -> _Query:
         return _Query(name, self)
+
+    def rpc(self, name: str, params: Dict[str, Any]) -> "_RpcCall":
+        """MKT-03. ``settlement_service`` now issues ONE ``.rpc("record_and_transition_
+        settlement", ...)`` call for what used to be the separate
+        ``.table(SETTLEMENT_TABLE).insert(...)`` and ``.table(SUBSCRIPTION_TABLE).update(...)``
+        + ``.table(TRANSITION_TABLE).insert(...)`` statements.
+
+        This double simulates the REAL function's atomicity: every write below is staged
+        in a local variable and committed to ``self.settlements`` / ``self.subscriptions``
+        / ``self.transitions`` only at the very end, after every sub-step has been checked
+        against ``fail_times`` / ``raise_on`` / ``error_on`` -- so a scripted failure at
+        ANY sub-step (still keyed by the SAME ``(op, table)`` pairs every existing test
+        already uses) leaves NOTHING committed from this call, exactly as one Postgres
+        transaction would. ``self.ops`` and ``self.statements`` still record each logical
+        sub-step (plus one ``("rpc", name)`` entry for the call itself), so the existing
+        ordering assertions (`statements_on`, `client.ops`) keep reading the same shape
+        they always have.
+        """
+        return _RpcCall(name, params, self)
+
+    def _fault(
+        self,
+        key: Tuple[str, str],
+        *,
+        filters: Optional[List[Tuple[str, Any]]] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """The SAME fault-injection checks ``_execute`` makes, for one sub-step of an
+        ``.rpc()`` call -- ATTEMPTED (and recorded in ``self.ops`` / ``self.statements``,
+        exactly as ``_execute`` itself records an attempt before checking whether it
+        succeeds) regardless of the outcome, so attempt-counting assertions written
+        against the old multi-statement shape keep reading the same numbers. Raises on a
+        scripted failure (``fail_times`` / ``raise_on`` / ``error_on`` all raise here --
+        there is no intermediate response envelope inside one RPC call for ``error_on``
+        to attach to, so it is treated identically to ``raise_on``); returns normally,
+        having recorded the attempt, otherwise.
+        """
+        stmt = _Query(key[1], self)
+        stmt.op = key[0]
+        stmt.payload = dict(payload or {})
+        stmt.filters = list(filters or [])
+        self.statements.append(stmt)
+        self.ops.append(key)
+
+        remaining = self.fail_times.get(key, 0)
+        if remaining:
+            self.fail_times[key] = remaining - 1
+            raise RuntimeError(f"{key[0]} on {key[1]} did not complete")
+        if key in self.raise_on or key in self.error_on:
+            raise RuntimeError(f"{key[0]} on {key[1]} did not complete")
+
+    def _execute_rpc(self, name: str, params: Dict[str, Any]) -> _Resp:
+        if name != "record_and_transition_settlement":
+            raise RuntimeError(f"FakeSupabase.rpc: unexpected function {name!r}")
+
+        self.ops.append(("rpc", name))
+
+        pair = (params["p_provider_reference"], bool(params["p_is_reversal"]))
+        existing = None
+        for row in self.settlements:
+            if (row.get("provider_reference"), bool(row.get("is_reversal"))) == pair:
+                existing = row
+                break
+
+        inserted = False
+        if existing is None:
+            settlement_row = dict(params["p_settlement"])
+            settlement_row["subscription_id"] = params["p_subscription_id"]
+            settlement_row["provider_reference"] = params["p_provider_reference"]
+            settlement_row["is_reversal"] = params["p_is_reversal"]
+            self._fault(("insert", ss.SETTLEMENT_TABLE), payload=settlement_row)
+            inserted = True
+        else:
+            if not params["p_proceed_if_duplicate"]:
+                return _Resp(
+                    {"settlement": dict(existing), "inserted": False, "transitioned": False}
+                )
+            settlement_row = existing
+
+        self.between_ledger_and_transition()
+
+        transition = params.get("p_transition")
+        if transition is None:
+            if inserted:
+                self.settlements.append(settlement_row)
+            return _Resp(
+                {"settlement": dict(settlement_row), "inserted": inserted, "transitioned": False}
+            )
+
+        sub = None
+        for row in self.subscriptions:
+            if str(row.get("id")) == str(params["p_subscription_id"]):
+                sub = row
+                break
+        if sub is None or sub.get("status") != params["p_expected_from_status"]:
+            raise FakeConcurrencyConflict(params["p_subscription_id"])
+
+        update_payload = {
+            "status": transition["status"],
+            "period_start": transition.get("period_start"),
+            "period_expiry": transition.get("period_expiry"),
+            "cancelled_at": transition.get("cancelled_at"),
+        }
+        self._fault(
+            ("update", ss.SUBSCRIPTION_TABLE),
+            filters=[("id", params["p_subscription_id"]), ("status", params["p_expected_from_status"])],
+            payload=update_payload,
+        )
+
+        history_row = dict(params.get("p_history") or {})
+        history_row["subscription_id"] = params["p_subscription_id"]
+        self._fault(("insert", ss.TRANSITION_TABLE), payload=history_row)
+
+        # Every sub-step above passed its fault check: commit every staged write now,
+        # together, exactly as one Postgres transaction would.
+        if inserted:
+            self.settlements.append(settlement_row)
+        sub.update(update_payload)
+        # `trg_lib_subs_period_mirror` (009) mirrors period_start/period_expiry onto
+        # started_at/expires_at whenever the former are not NULL -- the real function
+        # relies on that trigger rather than setting the mirrors itself; this double
+        # reproduces the trigger's own effect for the same reason.
+        if update_payload["period_start"] is not None:
+            sub["started_at"] = update_payload["period_start"]
+        if update_payload["period_expiry"] is not None:
+            sub["expires_at"] = update_payload["period_expiry"]
+        self.transitions.append(history_row)
+
+        return _Resp({
+            "settlement": dict(settlement_row),
+            "subscription": dict(sub),
+            "inserted": inserted,
+            "transitioned": True,
+        })
 
     # ---- recording ------------------------------------------------------
     def note_audit(self, action_name: str) -> None:
@@ -952,33 +1123,28 @@ def test_every_transition_update_carries_the_status_it_read_as_an_optimistic_gua
 def test_a_concurrent_writer_that_moves_the_row_is_reported_not_treated_as_success(
     audit: RecordingAuditLogger, no_sleep: List[int]
 ) -> None:
-    """A lost ``FOR UPDATE`` race becomes ``PERSIST_FAILED``, never a second extension.
+    """A lost optimistic-guard race becomes ``PERSIST_FAILED``, never a second extension.
 
-    The Subscription is moved out from under the settlement between the read and the UPDATE, so
-    the guarded UPDATE matches zero rows. That must not be read as "already done": it is reported,
-    retried, and finally surfaced - the alternative is granting an entitlement for a period this
-    call never wrote.
+    MKT-03: the ledger insert and the transition UPDATE are now one atomic call
+    (``record_and_transition_settlement``), so this is no longer a race between two
+    SEPARATE statements -- it is the race the atomic function's OWN two sub-steps can
+    still lose under Postgres's normal read-committed isolation: a genuinely concurrent
+    transaction can still COMMIT between this function's ledger insert and its own
+    subscription UPDATE, and that UPDATE's ``WHERE status = <the status read>`` guard
+    (``.eq("status", from_status)`` in the real function) is what turns that into a
+    reported failure rather than a second extension -- exactly as it did before this
+    file's atomic redesign. ``FakeSupabase.between_ledger_and_transition`` is the seam
+    that lets this test put the race exactly there, inside the one call.
     """
     client = FakeSupabase(subscriptions=[_subscription_row(status="pending")])
     grant = RecordingGrant()
 
-    original_execute = client._execute
-    moved: List[bool] = []
+    def _move_the_row() -> None:
+        # Another writer wins the race after the ledger row lands, but before this
+        # call's own subscription UPDATE runs.
+        client.subscription()["status"] = "cancelled"
 
-    def _execute(query: _Query) -> Any:
-        if (
-            query.op == "insert"
-            and query.table_name == ss.SETTLEMENT_TABLE
-            and not moved
-        ):
-            moved.append(True)
-            response = original_execute(query)
-            # Another writer wins the race after the ledger row lands.
-            client.subscription()["status"] = "cancelled"
-            return response
-        return original_execute(query)
-
-    client._execute = _execute  # type: ignore[assignment]
+    client.between_ledger_and_transition = _move_the_row
 
     with pytest.raises(SettlementPersistFailed):
         _settle(client, grant=grant)

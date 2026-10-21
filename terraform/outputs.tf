@@ -9,8 +9,8 @@ output "ecs_cluster_name" {
 }
 
 output "redis_endpoint" {
-  description = "Endpoint of the ElastiCache Redis cluster"
-  value       = aws_elasticache_replication_group.redis.primary_endpoint_address
+  description = "Endpoint of the real production ElastiCache replication group (vyomquant-redis-production-cmd), looked up read-only -- see terraform/redis.tf. Primary address only; the live app also uses a reader endpoint (REDIS_REPLICA_URL) this output does not expose."
+  value       = data.aws_elasticache_replication_group.redis.primary_endpoint_address
 }
 
 output "cloudfront_distribution_id" {

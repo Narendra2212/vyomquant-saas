@@ -164,6 +164,29 @@ class _Resp:
         self.data = data
 
 
+class _FakePaperRpcError(Exception):
+    """What a real ``RAISE EXCEPTION ... USING ERRCODE = 'PAxxx'`` surfaces through
+    ``postgrest.exceptions.APIError``'s ``.code`` attribute, which
+    ``paper_repository._rpc_error_code`` reads to classify it.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
+class _RpcCall:
+    """One ``.rpc(name, params)`` call. Terminates in ``execute()``."""
+
+    def __init__(self, name: str, params: Dict[str, Any], client: "FakeSupabase") -> None:
+        self.name = name
+        self.params = params
+        self.client = client
+
+    def execute(self) -> Any:
+        return self.client._execute_rpc(self.name, self.params)
+
+
 class _Query:
     """A recording query builder mimicking the supabase-py fluent chain."""
 
@@ -364,6 +387,296 @@ class FakeSupabase:
     # -- the supabase-py surface the module uses ---------------------------
     def table(self, name: str) -> _Query:
         return _Query(name, self)
+
+    def rpc(self, name: str, params: Dict[str, Any]) -> "_RpcCall":
+        """PAPER-05: ``paper_simulator.apply_fill`` now issues ONE ``.rpc("paper_apply_
+        fill_atomic", ...)`` call for what used to be seven separate statements
+        (:func:`paper_repository.insert_fill`, :func:`bump_version`,
+        :func:`insert_balance_event`, :func:`upsert_position` up to twice,
+        :func:`update_order`, :func:`insert_trade`, :func:`insert_equity_snapshot`).
+
+        This double simulates the REAL function's atomicity: every sub-step is checked
+        (against the SAME unique indexes :meth:`_enforce_unique` already models, and
+        against the SAME ``raise_on`` / ``error_on`` / ``missing_tables`` fault
+        injection every other statement uses) and staged before anything is committed
+        to ``self.accounts`` / ``self.orders`` / ``self.fills`` / etc. A failure at ANY
+        sub-step leaves every one of them exactly as it was before this call, matching
+        one Postgres transaction. Every sub-step still appends to ``self.ops`` /
+        ``self.statements`` so the existing ``statements_on`` / ``ops`` assertions read
+        the same shape they always have.
+        """
+        return _RpcCall(name, params, self)
+
+    def _fault(
+        self,
+        key: Tuple[str, str],
+        *,
+        filters: Optional[List[Tuple[str, str, Any]]] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """The SAME fault checks ``_execute`` makes, for one staged sub-step of an
+        ``.rpc()`` call. A ``_Query`` stand-in carrying ``filters`` / ``payload`` is
+        recorded in ``self.statements`` (and ``self.ops``) regardless of outcome -- an
+        attempt is an attempt, matching ``_execute``'s own ordering, and this is what
+        lets ``statements_on`` / ``filter_value`` assertions written against the old
+        per-statement shape keep reading the same thing. Raises on a scripted failure,
+        returns normally otherwise.
+        """
+        stub = _Query(key[1], self)
+        stub.op = key[0]
+        stub.payload = dict(payload) if payload is not None else None
+        stub.filters = list(filters or [])
+        self.statements.append(stub)
+        self.ops.append(key)
+        if self.missing_tables and key[1].startswith("paper_"):
+            raise FakeMissingTable(key[1])
+        if key in self.raise_on:
+            raise RuntimeError(f"{key[0]} on {key[1]} did not complete")
+        if key in self.error_on:
+            raise RuntimeError(f"boom on {key[1]}")
+
+    def _execute_rpc(self, name: str, params: Dict[str, Any]) -> _Resp:
+        if name != "paper_apply_fill_atomic":
+            raise AssertionError(f"unexpected rpc: {name!r}")
+
+        account = next(
+            (
+                r for r in self.accounts
+                if str(r.get("id")) == str(params["p_account_id"])
+                and str(r.get("user_id")) == str(params["p_user_id"])
+            ),
+            None,
+        )
+        if account is None:
+            raise _FakePaperRpcError(
+                "PA003", f"no paper account {params['p_account_id']}"
+            )
+        if str(account.get("version")) != str(params["p_expected_account_version"]):
+            raise _FakePaperRpcError(
+                "PA001", f"account {account['id']} version changed under the caller"
+            )
+
+        order = next(
+            (
+                r for r in self.orders
+                if str(r.get("id")) == str(params["p_order_id"])
+                and str(r.get("user_id")) == str(params["p_user_id"])
+            ),
+            None,
+        )
+        if order is None:
+            raise _FakePaperRpcError("PA003", f"no paper order {params['p_order_id']}")
+        if str(order.get("order_state")) != str(params["p_expected_order_state"]):
+            raise _FakePaperRpcError(
+                "PA001", f"order {order['id']} state changed under the caller"
+            )
+
+        # ── write 1: the fill row, insert-or-resume ──
+        resume_id = params.get("p_resume_fill_id")
+        if resume_id is not None:
+            fill_row = next((r for r in self.fills if str(r.get("id")) == str(resume_id)), None)
+            if fill_row is None:
+                raise _FakePaperRpcError("PA003", f"resume fill {resume_id} not found")
+        else:
+            fill_payload = dict(params["p_fill"])
+            fill_payload.update({
+                "order_id": params["p_order_id"],
+                "session_id": params["p_session_id"],
+                "user_id": params["p_user_id"],
+                "fill_event_id": params["p_fill_event_id"],
+            })
+            self._fault(("insert", repo.FILLS_TABLE), payload=fill_payload)
+            candidate = self._defaults(repo.FILLS_TABLE, fill_payload)
+            try:
+                self._enforce_unique(repo.FILLS_TABLE, candidate)
+            except FakeUniqueViolation as exc:
+                raise _FakePaperRpcError(
+                    "PA002", f"fill_event_id {params['p_fill_event_id']!r} already recorded"
+                ) from exc
+            fill_row = candidate
+
+        # ── write 2: the money ──
+        account_after = dict(account)
+        account_after.update({
+            "available_balance": params["p_account"]["available_balance"],
+            "locked_balance": params["p_account"]["locked_balance"],
+            "realized_pnl": params["p_account"]["realized_pnl"],
+            "total_equity": params["p_account"]["total_equity"],
+            "last_price_at": params["p_fill"]["filled_at"],
+            "stale": False,
+            "version": int(account["version"]) + 1,
+        })
+        self._fault(
+            ("update", repo.ACCOUNTS_TABLE),
+            filters=[
+                ("eq", "id", params["p_account_id"]), ("eq", "user_id", params["p_user_id"]),
+                ("eq", "version", params["p_expected_account_version"]),
+            ],
+            payload=account_after,
+        )
+
+        # ── write 3: the ledger row ──
+        balance_event_payload = {
+            "session_id": params["p_session_id"],
+            "account_id": params["p_account_id"],
+            "user_id": params["p_user_id"],
+            "cause": "FILL",
+            "available_delta": params["p_balance_event"]["available_delta"],
+            "locked_delta": params["p_balance_event"]["locked_delta"],
+            "realized_delta": params["p_balance_event"]["realized_delta"],
+            "available_after": account_after["available_balance"],
+            "locked_after": account_after["locked_balance"],
+            "realized_after": account_after["realized_pnl"],
+            "fill_id": fill_row["id"],
+            "occurred_at": params["p_balance_event"]["occurred_at"],
+        }
+        self._fault(("insert", repo.BALANCE_EVENTS_TABLE), payload=balance_event_payload)
+        balance_event_row = self._defaults(repo.BALANCE_EVENTS_TABLE, balance_event_payload)
+
+        # ── write 4: the position(s) ──
+        closed_row = None
+        closed_leg = params.get("p_closed_leg")
+        if closed_leg is not None:
+            closed_leg_payload = {
+                "session_id": params["p_session_id"],
+                "account_id": params["p_account_id"],
+                "user_id": params["p_user_id"],
+                "symbol": params["p_position"]["symbol"],
+                "side": closed_leg["side"],
+                "size": "0",
+                "entry_price": closed_leg["entry_price"],
+                "opened_at": closed_leg["opened_at"],
+                "current_price": params["p_fill"]["price"],
+                "unrealized_pnl": "0",
+                "price_at": params["p_fill"]["filled_at"],
+                "closed_at": params["p_fill"]["filled_at"],
+            }
+            self._fault(("insert", repo.POSITIONS_TABLE), payload=closed_leg_payload)
+            closed_row = self._defaults(repo.POSITIONS_TABLE, closed_leg_payload)
+
+        open_position = next(
+            (
+                r for r in self.positions
+                if str(r.get("account_id")) == str(params["p_account_id"])
+                and str(r.get("user_id")) == str(params["p_user_id"])
+                and r.get("symbol") == params["p_position"]["symbol"]
+                and r.get("closed_at") is None
+            ),
+            None,
+        )
+        position_fields = {
+            "side": params["p_position"]["side"],
+            "size": params["p_position"]["size"],
+            "entry_price": params["p_position"]["entry_price"],
+            "current_price": params["p_position"]["current_price"],
+            "unrealized_pnl": params["p_position"]["unrealized_pnl"],
+            "price_at": params["p_position"]["price_at"],
+            "closed_at": params["p_position"]["closed_at"],
+        }
+        if open_position is not None:
+            position_row = dict(open_position)
+            position_row.update(position_fields)
+            position_row["version"] = int(open_position.get("version", 1)) + 1
+            self._fault(
+                ("update", repo.POSITIONS_TABLE),
+                filters=[
+                    ("eq", "id", open_position["id"]), ("eq", "user_id", params["p_user_id"]),
+                    ("eq", "version", open_position.get("version", 1)),
+                ],
+                payload=position_fields,
+            )
+        else:
+            position_payload = {
+                "session_id": params["p_session_id"],
+                "account_id": params["p_account_id"],
+                "user_id": params["p_user_id"],
+                "symbol": params["p_position"]["symbol"],
+                "opened_at": params["p_position"]["opened_at"],
+                **position_fields,
+            }
+            self._fault(("insert", repo.POSITIONS_TABLE), payload=position_payload)
+            position_row = self._defaults(repo.POSITIONS_TABLE, position_payload)
+
+        # ── write 5: the order ──
+        order_update_payload = {
+            "order_state": params["p_order"]["target_state"],
+            "legacy_status": params["p_order"]["legacy_status"],
+            "filled_quantity": params["p_order"]["filled_quantity"],
+            "avg_fill_price": params["p_order"]["avg_fill_price"],
+            "fee_minor": params["p_order"]["fee_minor"],
+            "slippage_minor": params["p_order"]["slippage_minor"],
+        }
+        order_after = dict(order)
+        order_after.update(order_update_payload)
+        self._fault(
+            ("update", repo.ORDERS_TABLE),
+            filters=[
+                ("eq", "id", params["p_order_id"]), ("eq", "user_id", params["p_user_id"]),
+                ("eq", "order_state", params["p_expected_order_state"]),
+            ],
+            payload=order_update_payload,
+        )
+
+        # ── write 6: the closed round-trip ──
+        trade_row = None
+        trade = params.get("p_trade")
+        if trade is not None:
+            trade_payload = {
+                "session_id": params["p_session_id"],
+                "account_id": params["p_account_id"],
+                "user_id": params["p_user_id"],
+                **trade,
+            }
+            self._fault(("insert", repo.TRADES_TABLE), payload=trade_payload)
+            trade_row = self._defaults(repo.TRADES_TABLE, trade_payload)
+
+        # ── write 7: the equity point ──
+        equity_payload = {
+            "session_id": params["p_session_id"],
+            "user_id": params["p_user_id"],
+            "series_index": params["p_equity_snapshot"].get("series_index", 0),
+            "total_equity": params["p_equity_snapshot"]["total_equity"],
+            "available_balance": params["p_equity_snapshot"]["available_balance"],
+            "locked_balance": params["p_equity_snapshot"]["locked_balance"],
+            "position_market_value": params["p_equity_snapshot"]["position_market_value"],
+            "stale": params["p_equity_snapshot"].get("stale", False),
+            "cause": "FILL",
+            "taken_at": params["p_equity_snapshot"]["taken_at"],
+        }
+        self._fault(("insert", repo.EQUITY_SNAPSHOTS_TABLE), payload=equity_payload)
+        snapshot_row = self._defaults(repo.EQUITY_SNAPSHOTS_TABLE, equity_payload)
+
+        # Every sub-step above passed its fault check: commit every staged write now,
+        # together, exactly as one Postgres transaction would.
+        if resume_id is None:
+            self.fills.append(fill_row)
+        account.clear()
+        account.update(account_after)
+        self.balance_events.append(balance_event_row)
+        if closed_row is not None:
+            self.positions.append(closed_row)
+        if open_position is not None:
+            open_position.clear()
+            open_position.update(position_row)
+        else:
+            self.positions.append(position_row)
+        order.clear()
+        order.update(order_after)
+        if trade_row is not None:
+            self.trades.append(trade_row)
+        self.equity_snapshots.append(snapshot_row)
+
+        return _Resp({
+            "fill": copy.deepcopy(fill_row),
+            "account": copy.deepcopy(account_after),
+            "balance_event": copy.deepcopy(balance_event_row),
+            "position": copy.deepcopy(position_row),
+            "closed_position": copy.deepcopy(closed_row) if closed_row else None,
+            "order": copy.deepcopy(order_after),
+            "trade": copy.deepcopy(trade_row) if trade_row else None,
+            "snapshot": copy.deepcopy(snapshot_row),
+            "resumed": resume_id is not None,
+        })
 
     # -- execution ---------------------------------------------------------
     def _execute(self, q: _Query) -> Any:

@@ -333,15 +333,32 @@ describe('3. the redirect target exists in the router', () => {
     expect(APP_JSX).toContain(`path="${AUTH_REDIRECT_PATH}"`);
   });
 
-  it('is reachable on arrival, because the guard reads the token out of the hash', () => {
+  it('is reachable on arrival, now via the PKCE code exchange rather than a hash read (FE-01)', () => {
     // Source-level, and said plainly: this asserts the mechanism is present in `App.jsx`,
-    // not that a browser performed it. `/app/dashboard` sits behind `AuthGuard`, so a user
-    // arriving with `#access_token=…` and nothing in `sessionStorage` would be bounced to
-    // `/signin` unless the guard reads the hash SYNCHRONOUSLY during render —
-    // `getEffectiveToken()` is what does that, and `AuthGuard` is what calls it.
+    // not that a browser performed it. `/app/dashboard` sits behind `AuthGuard`.
+    //
+    // This used to assert `AuthGuard` read `#access_token=` out of the hash SYNCHRONOUSLY
+    // during render via `getEffectiveToken()` -- that was the FE-01 login-CSRF defect
+    // itself (any signed token in the hash was adopted as the session) and has been
+    // deleted, not merely narrowed; see docs/launch_readiness/REMEDIATION_LEDGER.json, id
+    // "FE-01". A legitimate redirect now carries `?code=...` (`flowType: 'pkce'` in
+    // src/supabase.js), exchanged asynchronously against a locally-held verifier, so
+    // `AuthGuard` must instead be able to WAIT for that exchange rather than read it
+    // synchronously -- `hasPendingAuthCodeExchange()` is what recognises the wait is
+    // needed, and `useGuardedAuthToken()` (used by `AuthGuard`) is what performs it.
     expect(APP_JSX).toMatch(/function getEffectiveToken\(\)/);
-    expect(APP_JSX).toMatch(/hash\.includes\("access_token="\)/);
-    expect(APP_JSX).toMatch(/function AuthGuard\(\)\s*\{\s*const token = getEffectiveToken\(\)/);
+    // The deleted branch is referenced in a comment (explaining why it is gone), so this
+    // checks the FUNCTION BODY specifically rather than the whole file: `getEffectiveToken`
+    // itself must contain no `hash` read at all any more.
+    const effectiveTokenBody = APP_JSX.slice(
+      APP_JSX.indexOf('export function getEffectiveToken()'),
+      APP_JSX.indexOf('function useGuardedAuthToken()'),
+    );
+    expect(effectiveTokenBody).not.toMatch(/window\.location\.hash/);
+    expect(effectiveTokenBody).not.toMatch(/access_token=/);
+    expect(APP_JSX).toMatch(/function hasPendingAuthCodeExchange\(\)/);
+    expect(APP_JSX).toMatch(/function useGuardedAuthToken\(\)/);
+    expect(APP_JSX).toMatch(/export function AuthGuard\(\)\s*\{\s*const \{ pending, token: effectiveToken \} = useGuardedAuthToken\(\)/);
   });
 
   it('has its hash handler mounted above the routes, so it runs on this path too', () => {

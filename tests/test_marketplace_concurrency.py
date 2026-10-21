@@ -752,6 +752,28 @@ class _MoneyPathResp:
         self.error = None
 
 
+class _MoneyPathConcurrencyConflict(Exception):
+    """What a real ``RAISE EXCEPTION ... USING ERRCODE = 'MK001'`` surfaces through
+    ``postgrest.exceptions.APIError``'s ``.code`` attribute.
+    """
+
+    def __init__(self, subscription_id: str) -> None:
+        self.code = "MK001"
+        super().__init__(f"subscription {subscription_id} status changed under the caller")
+
+
+class _MoneyPathRpcCall:
+    """One ``.rpc(name, params)`` call. Terminates in ``execute()``."""
+
+    def __init__(self, name: str, params: Dict[str, Any], client: "_MoneyPathSupabase") -> None:
+        self.name = name
+        self.params = params
+        self.client = client
+
+    def execute(self) -> _MoneyPathResp:
+        return self.client._execute_rpc(self.name, self.params)
+
+
 class _MoneyPathQuery:
     """A supabase-py-shaped, recording query builder.
 
@@ -825,6 +847,117 @@ class _MoneyPathSupabase:
 
     def table(self, name: str) -> _MoneyPathQuery:
         return _MoneyPathQuery(name, self)
+
+    def rpc(self, name: str, params: Dict[str, Any]) -> "_MoneyPathRpcCall":
+        """MKT-03: ``settlement_service`` issues one
+        ``.rpc("record_and_transition_settlement", ...)`` call for what used to be a
+        separate ``marketplace_settlements`` INSERT and ``library_subscriptions``
+        UPDATE + ``library_subscription_transitions`` INSERT. This double commits all
+        three to ``self.tables`` only once every sub-step has been checked -- no
+        partial state from one call can ever be observed, matching the real atomic
+        function.
+        """
+        return _MoneyPathRpcCall(name, params, self)
+
+    def _execute_rpc(self, name: str, params: Dict[str, Any]) -> _MoneyPathResp:
+        if name != "record_and_transition_settlement":
+            raise RuntimeError(f"_MoneyPathSupabase.rpc: unexpected function {name!r}")
+        self.ops.append(("rpc", name))
+
+        settlements = self.tables.setdefault("marketplace_settlements", [])
+        pair = (params["p_provider_reference"], bool(params["p_is_reversal"]))
+        existing = None
+        for row in settlements:
+            if (row.get("provider_reference"), bool(row.get("is_reversal"))) == pair:
+                existing = row
+                break
+
+        inserted = False
+        if existing is None:
+            settlement_row = dict(params["p_settlement"])
+            settlement_row["subscription_id"] = params["p_subscription_id"]
+            settlement_row["provider_reference"] = params["p_provider_reference"]
+            settlement_row["is_reversal"] = params["p_is_reversal"]
+            settlement_row.setdefault(
+                "id", f"generated-marketplace_settlements-{len(settlements) + 1}"
+            )
+            inserted = True
+        else:
+            if not params["p_proceed_if_duplicate"]:
+                return _MoneyPathResp(
+                    {"settlement": dict(existing), "inserted": False, "transitioned": False}
+                )
+            settlement_row = existing
+
+        transition = params.get("p_transition")
+        if transition is None:
+            if inserted:
+                self._commit_rpc_settlement_insert(settlement_row)
+            return _MoneyPathResp(
+                {"settlement": dict(settlement_row), "inserted": inserted, "transitioned": False}
+            )
+
+        subscriptions = self.tables.setdefault("library_subscriptions", [])
+        sub = None
+        for row in subscriptions:
+            if str(row.get("id")) == str(params["p_subscription_id"]):
+                sub = row
+                break
+        if sub is None or sub.get("status") != params["p_expected_from_status"]:
+            raise _MoneyPathConcurrencyConflict(params["p_subscription_id"])
+
+        update_payload = {
+            "status": transition["status"],
+            "period_start": transition.get("period_start"),
+            "period_expiry": transition.get("period_expiry"),
+            "cancelled_at": transition.get("cancelled_at"),
+        }
+        history_row = dict(params.get("p_history") or {})
+        history_row["subscription_id"] = params["p_subscription_id"]
+        history_row.setdefault(
+            "id",
+            f"generated-library_subscription_transitions-"
+            f"{len(self.tables.setdefault('library_subscription_transitions', [])) + 1}",
+        )
+
+        # Every sub-step above was checked; commit every staged write now, together.
+        if inserted:
+            self._commit_rpc_settlement_insert(settlement_row)
+        sub.update(update_payload)
+        if update_payload["period_start"] is not None:
+            sub["started_at"] = update_payload["period_start"]
+        if update_payload["period_expiry"] is not None:
+            sub["expires_at"] = update_payload["period_expiry"]
+        update_stmt = _MoneyPathQuery("library_subscriptions", self)
+        update_stmt.op = "update"
+        update_stmt.payload = dict(update_payload)
+        update_stmt.filters = [
+            ("id", params["p_subscription_id"]), ("status", params["p_expected_from_status"])
+        ]
+        self.statements.append(update_stmt)
+        self.ops.append(("update", "library_subscriptions"))
+
+        self.tables["library_subscription_transitions"].append(history_row)
+        insert_stmt = _MoneyPathQuery("library_subscription_transitions", self)
+        insert_stmt.op = "insert"
+        insert_stmt.payload = dict(history_row)
+        self.statements.append(insert_stmt)
+        self.ops.append(("insert", "library_subscription_transitions"))
+
+        return _MoneyPathResp({
+            "settlement": dict(settlement_row),
+            "subscription": dict(sub),
+            "inserted": inserted,
+            "transitioned": True,
+        })
+
+    def _commit_rpc_settlement_insert(self, settlement_row: Dict[str, Any]) -> None:
+        self.tables.setdefault("marketplace_settlements", []).append(settlement_row)
+        stmt = _MoneyPathQuery("marketplace_settlements", self)
+        stmt.op = "insert"
+        stmt.payload = dict(settlement_row)
+        self.statements.append(stmt)
+        self.ops.append(("insert", "marketplace_settlements"))
 
     def note_provider_call(self, provider: str) -> None:
         self.ops.append(("provider", provider))

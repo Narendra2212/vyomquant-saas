@@ -1,37 +1,42 @@
 """The referrer's balance must not be debited without a payout record to show for it.
 
-PHASE 10 / WORKSTREAM D / observation 2, the part the column-name fix does not reach.
+PHASE 10 / WORKSTREAM D / observation 2 -- SUPERSEDED BY REF-01's ATOMIC REDESIGN.
 
-THE DEFECT
-----------
-``backend_app/routers/referral.py::create_payout_request`` performs, in order:
+WHAT THIS FILE USED TO TEST
+----------------------------
+Before ``049_ref01_payout_atomic.sql``, ``create_payout_request`` issued the wallet
+debit and the ``referral_payouts`` INSERT as two separate PostgREST statements, with a
+best-effort compensating re-credit reachable only through
+``if not payout_resp.data or len(payout_resp.data) == 0``. An insert that *raised*
+(rather than returning empty) skipped that branch entirely, jumped to the handler's
+``except Exception``, and left the wallet debited with no payout row and no
+compensation. This file drove that exact gap with a stub whose insert raises.
 
-  1. debit  ``referral_wallets.approved_balance_usd``  (a CAS update guarded by ``.gte()``)
-  2. insert ``referral_payouts``
-  3. if the insert RETURNED NO ROWS, re-credit the wallet and answer 500
+WHY IT NO LONGER TESTS THAT GAP
+--------------------------------
+The handler no longer performs a separate debit-then-insert at all: both are now ONE
+call to ``public.create_referral_payout_request``
+(``backend_app/migrations/049_ref01_payout_atomic.sql``), a single
+``SECURITY DEFINER`` Postgres function that debits the wallet and inserts the payout
+row inside one transaction. If the insert fails for any reason, the debit the SAME
+function body already issued rolls back with it -- there is no window in which the
+money is out of the wallet and nowhere else, so there is nothing left for a
+compensating re-credit to compensate, and ``routers/referral.py`` no longer has one.
 
-Step 3 is the compensating action for step 1, and it is reachable **only** through
-``if not payout_resp.data or len(payout_resp.data) == 0``. An insert that *raises* never
-produces a ``payout_resp`` at all: control jumps straight to the handler's
-``except Exception`` clause, which logs and answers 500 **without re-crediting**.
+The real atomicity guarantee is now a database property, exercised against a REAL
+PostgreSQL server in ``tests/test_ref01_payout_atomic_postgres.py`` (which drives the
+RPC directly and asserts, over an independent connection, that a rejected call leaves
+both tables completely untouched). A stub that fakes individual ``.table(...)`` calls
+cannot exercise "two statements in one transaction" at all, because there is only one
+statement now: a single ``.rpc(...)`` call.
 
-So any raising failure of the payout insert -- a PostgREST error, an RLS denial, a CHECK or
-FK violation, a timeout, a 5xx from Supabase -- leaves the customer's approved balance
-reduced with **no payout row of any kind**. The money is simply gone from the balance, and
-nothing reconciles it: there is no referral audit table and no settlement job.
-
-This is independent of the ``payout_method``/``payment_method`` column fix. That fix removed
-the *then-certain* cause of the raising insert; it did not make the debit recoverable when
-the insert fails for any of the other reasons above.
-
-WHAT THESE TESTS DO
--------------------
-Drive the real handler through the real app with the dependencies overridden, and a stub
-Supabase client whose ``referral_payouts`` insert raises. No database, no network, no
-payment initiated, no money moved.
-
-``test_a_returned_empty_insert_is_compensated`` is the NEGATIVE CONTROL: it exercises the
-path that already works, so a failure of the test below cannot be blamed on the harness.
+WHAT THIS FILE TESTS INSTEAD
+------------------------------
+That the HANDLER calls the RPC (not the old two-step table sequence) and, when that
+RPC call raises for any reason, answers an error status and claims no payout id --
+never reporting success for money that was never moved. This is the handler-level half
+of the guarantee; the database-level half (the transaction itself) is
+``test_ref01_payout_atomic_postgres.py``'s job.
 """
 
 from __future__ import annotations
@@ -45,30 +50,55 @@ from backend_app.core.dependencies import get_current_user, get_request_supabase
 from backend_app.main import app
 
 USER_ID = "11111111-1111-4111-8111-111111111111"
-OPENING_BALANCE = 500.0
 PAYOUT_AMOUNT = 50.0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  A Supabase stub that records what it was asked to write
-# ─────────────────────────────────────────────────────────────────────────────
 class _Resp:
     def __init__(self, data):
         self.data = data
 
 
+class _Rpc:
+    """One ``.rpc(name, params)`` call. Terminates in ``execute()``."""
+
+    def __init__(self, name: str, params: dict, log: dict):
+        self._name = name
+        self._params = params
+        self._log = log
+
+    def execute(self):
+        self._log["rpc_calls"].append((self._name, dict(self._params)))
+        mode = self._log["mode"]
+        if self._name == "create_referral_payout_request":
+            if mode == "raise":
+                # What a failed RPC call actually surfaces: the client raises. The
+                # SQLSTATE here is deliberately NOT one of RF001-RF004, so the handler
+                # falls to its generic 500 branch -- the real-database tests already
+                # cover each specific RFxxx classification.
+                raise RuntimeError(
+                    "APIError: {'code': '53300', 'message': 'too many connections'}"
+                )
+            if mode == "empty":
+                return _Resp(None)
+            return _Resp({
+                "id": "payout-1",
+                "status": "pending",
+                "amount_usd": PAYOUT_AMOUNT,
+                "payout_method": self._params.get("p_payout_method"),
+            })
+        return _Resp(None)
+
+
 class _Query:
-    """One fluent chain. Terminates in ``execute()``."""
+    """A ``.table(...)`` chain. Nothing in the redesigned handler reaches this for a
+    payout request any more; present only so an unrelated call does not crash the stub.
+    """
 
     def __init__(self, table: str, log: dict):
         self._table = table
         self._log = log
-        self._op = None
-        self._payload = None
 
-    # Every builder step is a no-op that keeps the chain going.
     def select(self, *a, **k):
-        self._op = "select"
         return self
 
     def eq(self, *a, **k):
@@ -87,47 +117,13 @@ class _Query:
         return self
 
     def update(self, payload):
-        self._op = "update"
-        self._payload = payload
         return self
 
     def insert(self, payload):
-        self._op = "insert"
-        self._payload = payload
         return self
 
     def execute(self):
-        self._log["calls"].append((self._table, self._op, self._payload))
-
-        if self._table == "referral_wallets" and self._op == "select":
-            return _Resp([{
-                "user_id": USER_ID,
-                "pending_balance_usd": 0,
-                "approved_balance_usd": self._log["balance"],
-                "paid_balance_usd": 0,
-                "lifetime_earnings_usd": OPENING_BALANCE,
-            }])
-
-        if self._table == "referral_wallets" and self._op == "update":
-            # The real CAS update returns the affected row. Record the new balance so the
-            # test can see both the debit and any compensating re-credit.
-            if "approved_balance_usd" in self._payload:
-                self._log["balance"] = float(self._payload["approved_balance_usd"])
-                self._log["balance_writes"].append(self._log["balance"])
-            return _Resp([{"user_id": USER_ID,
-                           "approved_balance_usd": self._log["balance"]}])
-
-        if self._table == "referral_payouts" and self._op == "insert":
-            mode = self._log["payout_insert"]
-            if mode == "raise":
-                # What PostgREST actually does on a rejected write: the client raises.
-                raise RuntimeError(
-                    "APIError: {'code': 'PGRST301', 'message': 'insert rejected'}"
-                )
-            if mode == "empty":
-                return _Resp([])
-            return _Resp([{"id": "payout-1"}])
-
+        self._log["table_calls"].append(self._table)
         return _Resp([])
 
 
@@ -138,23 +134,15 @@ class _Supabase:
     def table(self, name):
         return _Query(name, self._log)
 
+    def rpc(self, name, params):
+        return _Rpc(name, params, self._log)
+
 
 @pytest.fixture
 def harness(monkeypatch):
     """Overrides the app's auth + db dependencies and neutralises the Redis lock."""
-    log = {
-        "calls": [],
-        "balance": OPENING_BALANCE,
-        "balance_writes": [],
-        "payout_insert": "ok",
-    }
+    log = {"rpc_calls": [], "table_calls": [], "mode": "ok"}
 
-    # The handler takes a 30s Redis lock. A real connection attempt would make this
-    # test slow and non-hermetic regardless of outcome, so the manager is replaced
-    # outright with a fake whose `set()` always succeeds (REF-01: a lock-acquisition
-    # ERROR now fails CLOSED, not open -- this fake never errors, so that path is not
-    # what this file is testing; see tests/test_ref01_payout_lock_fails_closed.py and
-    # referral.py's own comment at the lock site for that regression's own coverage).
     import backend_app.core.cache as cache_mod
 
     fake_redis = MagicMock()
@@ -180,7 +168,7 @@ def harness(monkeypatch):
 
 
 def _request_payout(log, mode):
-    log["payout_insert"] = mode
+    log["mode"] = mode
     client = TestClient(app, raise_server_exceptions=False)
     return client.post(
         "/api/referral/payouts",
@@ -192,71 +180,50 @@ def _request_payout(log, mode):
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Control 1 — the happy path debits exactly once
-# ─────────────────────────────────────────────────────────────────────────────
-def test_a_successful_payout_debits_the_balance_once(harness):
+def test_a_successful_payout_calls_the_atomic_rpc_exactly_once(harness):
+    """The handler issues ONE rpc call -- not a debit statement plus an insert
+    statement -- for the happy path."""
     log = harness
     resp = _request_payout(log, "ok")
 
     assert resp.status_code == 200, resp.text
-    assert log["balance"] == pytest.approx(OPENING_BALANCE - PAYOUT_AMOUNT), (
-        "a successful payout did not debit the approved balance exactly once"
+    assert log["rpc_calls"] == [
+        ("create_referral_payout_request", {
+            "p_user_id": USER_ID,
+            "p_amount_usd": PAYOUT_AMOUNT,
+            "p_payout_method": "bank_transfer",
+            "p_payout_details": {"account": "xxxx"},
+        })
+    ], "the handler no longer issues the two-statement debit-then-insert sequence"
+    assert resp.json()["payout_id"] == "payout-1"
+
+
+def test_an_rpc_call_that_raises_claims_no_success_and_touches_no_table(harness):
+    """THE PROPERTY THAT REPLACES THE OLD COMPENSATION TEST.
+
+    When the atomic RPC raises, the handler answers an error and never falls back to
+    the old table-level statements -- there is no partial state for it to compensate,
+    because the (now single) statement never committed in the first place.
+    """
+    log = harness
+    resp = _request_payout(log, "raise")
+
+    assert resp.status_code >= 400, resp.text
+    body = resp.json()
+    assert body.get("status") != "success"
+    assert "payout_id" not in body
+    assert log["table_calls"] == [], (
+        "the handler fell back to a direct .table(...) write after the RPC failed; "
+        "the redesign's whole point is that there is nothing left to compensate, so "
+        "there should be no such fallback"
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Control 2 — the path the handler ALREADY compensates
-# ─────────────────────────────────────────────────────────────────────────────
-def test_an_insert_that_returns_no_rows_is_compensated(harness):
-    """NEGATIVE CONTROL for the test below.
-
-    The handler's existing rollback covers this case, so it must pass. If it fails, the
-    harness is wrong and the verdict of the next test means nothing.
-    """
+def test_an_rpc_call_that_returns_no_row_is_also_reported_as_a_failure(harness):
     log = harness
     resp = _request_payout(log, "empty")
 
-    assert resp.status_code == 500
-    assert log["balance"] == pytest.approx(OPENING_BALANCE), (
-        "the handler's own rollback path did not restore the balance; the harness is "
-        "not driving the handler correctly"
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  THE DEFECT
-# ─────────────────────────────────────────────────────────────────────────────
-def test_an_insert_that_raises_is_also_compensated(harness):
-    """THE ONE THAT MATTERS. A raising insert must not keep the debit.
-
-    Only the failure MODE differs from the control above: same amount, same balance, same
-    handler. If this fails while the control passes, the compensating re-credit is guarded
-    by ``if not payout_resp.data`` and does not cover an exception.
-    """
-    log = harness
-    resp = _request_payout(log, "raise")
-
-    assert resp.status_code == 500, resp.text
-
-    assert log["balance"] == pytest.approx(OPENING_BALANCE), (
-        f"THE REFERRER'S MONEY IS GONE. approved_balance_usd went "
-        f"{OPENING_BALANCE} -> {log['balance']} and NO referral_payouts row was created "
-        f"(the insert raised). Balance writes seen: {log['balance_writes']}. The "
-        f"compensating re-credit at routers/referral.py is reachable only via "
-        f"`if not payout_resp.data`, so an insert that RAISES skips it and falls to "
-        f"`except Exception`, which only logs."
-    )
-
-
-def test_no_payout_row_is_claimed_when_the_insert_failed(harness):
-    """The response must not report success for a payout that was never recorded."""
-    log = harness
-    resp = _request_payout(log, "raise")
-
-    assert resp.status_code >= 400, (
-        "the handler reported success for a payout whose insert raised"
-    )
+    assert resp.status_code >= 400, resp.text
     body = resp.json()
     assert body.get("status") != "success"
     assert "payout_id" not in body

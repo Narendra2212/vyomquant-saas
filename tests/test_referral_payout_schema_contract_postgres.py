@@ -134,20 +134,31 @@ def test_a_payout_defaults_to_pending_and_usd(conn, referrer):
 
 
 def test_the_router_insert_uses_the_authoritative_column_names():
-    """Source-level guard: the handler writes payout_method/payout_details, not payment_*.
+    """Source-level guard: no code path writes payment_* into referral_payouts.
 
-    Reads create_payout_request's own source so a future edit that reintroduces the wrong
-    column key is caught without a database.
+    REF-01 (redesign): `create_payout_request` no longer issues `.table(
+    "referral_payouts").insert(...)` directly -- the debit and the insert are now one
+    call to `public.create_referral_payout_request`
+    (`backend_app/migrations/049_ref01_payout_atomic.sql`), so there is no Python-level
+    dict literal naming the column at all any more. This test now checks BOTH halves of
+    that redesign so the original regression (writing `payment_method`/`payment_details`
+    into a table that has no such columns) stays caught on either side of the RPC
+    boundary:
+
+      1. No `.table(...).insert(...)` in this module ever names `payment_method` or
+         `payment_details` (the original defect's exact shape, still refused even
+         though the normal path no longer uses `.insert` for this table at all).
+      2. The INSTALLED `create_referral_payout_request` function -- read from
+         `pg_proc`, not from the migration file, so this is "what the database
+         actually has" and not "what a `.sql` file once said" -- inserts into
+         `referral_payouts` naming `payout_method`, the live table's real column.
     """
     from backend_app.routers import referral as referral_router
 
     src = inspect.getsource(referral_router)
     tree = ast.parse(src)
 
-    # Find every dict literal that is the argument to a `.insert(...)` whose receiver chain
-    # mentions referral_payouts in the same statement's source segment.
     offenders = []
-    good = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
@@ -155,8 +166,6 @@ def test_the_router_insert_uses_the_authoritative_column_names():
             continue
         seg = ast.get_source_segment(src, node) or ""
         if "referral_payouts" not in seg:
-            # The .insert is on a chain whose table isn't visible in this call's segment;
-            # check the enclosing statement instead by widening to the whole call text.
             continue
         for arg in node.args:
             if isinstance(arg, ast.Dict):
@@ -166,18 +175,34 @@ def test_the_router_insert_uses_the_authoritative_column_names():
                 }
                 if "payment_method" in keys or "payment_details" in keys:
                     offenders.append(sorted(keys))
-                if "payout_method" in keys:
-                    good.append(sorted(keys))
 
     assert not offenders, (
-        f"create_payout_request still inserts the wrong column name(s) into "
-        f"referral_payouts: {offenders}. The provisioned column is payout_method/"
-        f"payout_details."
+        f"a referral_payouts insert still names the wrong column(s): {offenders}. "
+        f"The provisioned column is payout_method/payout_details."
     )
-    assert good, (
-        "no referral_payouts insert naming payout_method was found; the fix may have been "
-        "removed or the detection widened incorrectly"
-    )
+
+    conn = psycopg2.connect(TEST_DATABASE_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "select pg_get_functiondef(p.oid) from pg_proc p "
+            "join pg_namespace n on n.oid = p.pronamespace "
+            "where n.nspname = 'public' and p.proname = 'create_referral_payout_request'"
+        )
+        row = cur.fetchone()
+        assert row is not None, "create_referral_payout_request is not installed"
+        body = row[0].lower()
+        assert "payout_method" in body, (
+            "the installed create_referral_payout_request does not reference "
+            "payout_method -- the fix may have regressed to the non-existent "
+            "payment_method spelling"
+        )
+        assert "payment_method" not in body and "payment_details" not in body, (
+            "the installed create_referral_payout_request references the "
+            "non-existent payment_method/payment_details spelling"
+        )
+    finally:
+        conn.close()
 
 
 def test_the_read_path_maps_payout_method_to_the_api_field():
