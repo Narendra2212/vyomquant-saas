@@ -19,10 +19,15 @@
  *
  * So the three handlers below — `saveRiskConfig`, `handleToggleSwitch`,
  * `handleStrategyAllocationChange` — are carried across UNCHANGED, debounce timings
- * included, and `handleToggleSwitch` keeps computing the payload inside the `setKillSwitches`
- * updater. That last one is an antipattern and it is deliberately not "fixed" here: the fix
- * changes when the write happens relative to the state change, which is a behavioural change
- * to a kill switch inside a commit whose subject is typography and colour.
+ * included.
+ *
+ * FE-09 UPDATE: `handleToggleSwitch` no longer computes the payload inside the
+ * `setKillSwitches` updater. This comment used to record that shape as "an antipattern
+ * ... deliberately not fixed here", which was the right call for a commit about
+ * typography and colour. It has since been MEASURED to issue two `PUT /api/risk/settings`
+ * requests per toggle under `<React.StrictMode>` (which main.jsx uses, and which
+ * double-invokes updaters on purpose to surface exactly this). See the handler's own
+ * comment for why the duplicate was not harmless and why the request body is unchanged.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * STEP 1 — ONE `loading`/`error` PAIR OUT, THREE PANEL STATES IN (Requirement 4.1)
@@ -538,14 +543,48 @@ export default function RiskSettings() {
     }, 800);
   };
 
+  /**
+   * FE-09. One toggle, one `PUT /api/risk/settings`.
+   *
+   * This used to compute the payload and call `saveRiskConfig` INSIDE the
+   * `setKillSwitches` updater. A React state updater must be pure, and `src/main.jsx`
+   * wraps the app in `<React.StrictMode>`, which DELIBERATELY invokes updaters twice to
+   * surface exactly that impurity -- so every kill-switch toggle issued TWO writes to the
+   * risk-settings endpoint. React also reserves the right to re-invoke an updater when
+   * rebasing an update during concurrent rendering, so a production build is not safe
+   * from it either, just less reliably unsafe.
+   *
+   * The duplicate was not harmless. The second PUT races the first's response handler,
+   * which writes `res.data`'s limits back into the form via setMaxLoss/setMaxPos/
+   * setLeverage -- so two in-flight writes can land out of order and leave the form, and
+   * the server, holding something other than the user's last action. On a kill switch.
+   *
+   * The payload is now computed from the current committed state OUTSIDE the updater and
+   * the state is set to that same value, so there is no updater function left to be
+   * double-invoked. The BODY is unchanged by construction: it is still the same single
+   * toggle applied to the same `killSwitches`, which is what task 7.1's strongest
+   * assertion (keyboard body deep-equals pointer body) pins.
+   *
+   * The previous file-header comment called this an antipattern and deliberately left it
+   * alone, correctly, because that commit's subject was typography and colour and the fix
+   * changes when the write happens relative to the state change. This commit's subject IS
+   * that change, with the double write measured rather than assumed.
+   *
+   * Known, unchanged limitation: two toggles dispatched inside one React batch would both
+   * derive from the same committed `killSwitches`, so the second would not see the first.
+   * That was equally true before (the updater's own `prev` was re-read, but the write it
+   * issued was already in flight), it is not reachable from a discrete pointer or key
+   * press, and making it safe needs a queue rather than a different updater shape.
+   */
   const handleToggleSwitch = (switchKey) => {
-    setKillSwitches((prev) => {
-      const next = prev.map((ks) => (ks.key === switchKey ? { ...ks, active: !ks.active } : ks));
-      const switchPayload = next.reduce((acc, ks) => ({ ...acc, [ks.key]: ks.active }), {});
-      setHasUnsavedChanges(true);
-      saveRiskConfig({ kill_switches: switchPayload });
-      return next;
-    });
+    const next = killSwitches.map(
+      (ks) => (ks.key === switchKey ? { ...ks, active: !ks.active } : ks),
+    );
+    const switchPayload = next.reduce((acc, ks) => ({ ...acc, [ks.key]: ks.active }), {});
+
+    setKillSwitches(next);
+    setHasUnsavedChanges(true);
+    saveRiskConfig({ kill_switches: switchPayload });
   };
 
   const handleStrategyAllocationChange = (id, value) => {
