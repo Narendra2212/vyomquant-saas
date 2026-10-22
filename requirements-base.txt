@@ -165,16 +165,40 @@ prometheus-client==0.20.0
 sentry-sdk[fastapi]==2.11.0
 slowapi==0.1.9
 psutil==6.0.0
-opentelemetry-api==1.25.0
-opentelemetry-sdk==1.25.0
-opentelemetry-instrumentation==0.46b0
-opentelemetry-semantic-conventions==0.46b0
-opentelemetry-util-http==0.46b0
-opentelemetry-instrumentation-asgi==0.46b0
-opentelemetry-instrumentation-fastapi==0.46b0
-opentelemetry-instrumentation-aiohttp-client==0.46b0
-opentelemetry-instrumentation-redis==0.46b0
-opentelemetry-instrumentation-sqlalchemy==0.46b0
+# ─────────────────────────────────────────────────────────────────────────────────
+# DEP-04. The eleven opentelemetry packages that were pinned here (and
+# opentelemetry-exporter-otlp-proto-grpc, further down) are REMOVED, not upgraded.
+#
+# WHY REMOVED. CVE-2026-114603 / GHSA-xcq7-p3pf-p88h -- unbounded `tracestate` parsing
+# in opentelemetry-api, all versions below 1.45.1 -- failed the blocking pip-audit gate.
+# Upgrading is not possible here: opentelemetry-proto 1.45.1 requires protobuf>=5.0,<8.0,
+# and tensorflow==2.16.1 (line 150) requires protobuf<5.0.0dev,>=3.20.3. That is a direct
+# conflict, and upgrading tensorflow to escape it was already attempted and reverted
+# earlier in this remediation (see DEP-02 in the ledger). The old pin had the mirror-image
+# problem: opentelemetry-proto 1.25.0's `protobuf<5.0` ceiling is the recorded blocker for
+# the protobuf/tensorflow work, so removing it clears that constraint instead of
+# entrenching it.
+#
+# WHY THAT IS SAFE. Nothing in this application uses them. Only two files in backend_app
+# import opentelemetry at all -- backend/observability/opentelemetry_tracing.py and
+# backend/observability/optimized_tracing.py -- and an AST walk of every .py under
+# backend_app found ZERO unguarded imports: both sit inside `try/except ImportError` that
+# sets OPENTELEMETRY_AVAILABLE = False and falls back to NoOpTracer. Neither module's
+# TracingManager is ever constructed: a grep for TracingManager / initialize_tracing /
+# optimized_tracing / get_tracing_manager across main.py, core/, routers/ and api_ws/
+# returns nothing, so FastAPIInstrumentor().instrument() is never called and no global
+# text-map propagator is installed. That is also why the CVE was not reachable: with no
+# instrumentation and no propagator, nothing parses an inbound `tracestate` header.
+# Verified by execution, not just by reading: a meta-path finder was used to make every
+# `opentelemetry*` import raise ModuleNotFoundError, then both modules were imported
+# (OPENTELEMETRY_AVAILABLE=False), TracingManager was constructed, and get_tracer()
+# returned a NoOpTracer whose start_as_current_span context manager works.
+#
+# TO RE-ENABLE TRACING. Add back opentelemetry-api/sdk at >=1.45.1 and the instrumentation
+# packages at >=0.66b1 (they version in lockstep), and bump tensorflow to a release whose
+# protobuf floor is >=5.0 in the same change -- the two cannot move independently. Then
+# actually wire TracingManager into main.py's lifespan, which has never been done.
+# ─────────────────────────────────────────────────────────────────────────────────
 wrapt==1.16.0
 elasticsearch==8.14.0
 aiosmtplib==5.1.2
@@ -182,4 +206,6 @@ asgi-correlation-id==4.3.1
 requests==2.33.0
 sse-starlette==2.1.3
 tiktoken==0.7.0
-opentelemetry-exporter-otlp-proto-grpc==1.25.0
+# opentelemetry-exporter-otlp-proto-grpc removed with the rest of the opentelemetry
+# packages -- see the DEP-04 note above. This was the one that pulled in
+# opentelemetry-proto==1.25.0 and with it the `protobuf<5.0` ceiling.
