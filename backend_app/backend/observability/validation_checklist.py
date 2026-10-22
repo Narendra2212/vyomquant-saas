@@ -362,20 +362,45 @@ class ObservabilityValidationChecklist:
         }
     
     async def _check_dependencies_installed(self) -> Dict[str, Any]:
-        """Check if all required dependencies are installed."""
-        dependencies = ['prometheus-client', 'opentelemetry-api', 'opentelemetry-exporter-otlp-proto-grpc', 'psutil']
+        """Check if all required dependencies are installed.
+
+        OBS-01. This check could never pass. It resolved each name with
+        ``__import__(dep)``, but ``dep`` held PyPI DISTRIBUTION names, and a hyphen is not
+        legal in a Python module name -- ``__import__('prometheus-client')`` raises
+        ``ModuleNotFoundError: No module named 'prometheus-client'`` on an installation
+        where prometheus_client is present and working. So three of its four entries were
+        reported missing on every run regardless of the environment, and the one that
+        appeared to work (``psutil``) only did so because its distribution name and module
+        name happen to be identical.
+
+        Fixed by asking the package metadata, which is keyed by distribution name, instead
+        of the import system, which is keyed by module name.
+
+        The two opentelemetry entries are also gone from the list: DEP-04 removed those
+        packages deliberately (unused, and carrying CVE-2026-114603 with no upgrade path
+        that does not collide with tensorflow's protobuf ceiling), so requiring them here
+        would assert the opposite of the manifest.
+        """
+        from importlib.metadata import PackageNotFoundError, version
+
+        dependencies = ['prometheus-client', 'psutil']
         missing_deps = []
-        
+        installed = {}
+
         for dep in dependencies:
             try:
-                __import__(dep)
-            except ImportError:
+                installed[dep] = version(dep)
+            except PackageNotFoundError:
                 missing_deps.append(dep)
-        
+
         return {
             'success': len(missing_deps) == 0,
             'message': 'All dependencies installed' if len(missing_deps) == 0 else f'Missing dependencies: {missing_deps}',
-            'details': {'missing_deps': missing_deps, 'required_deps': dependencies}
+            'details': {
+                'missing_deps': missing_deps,
+                'required_deps': dependencies,
+                'installed_versions': installed,
+            }
         }
     
     async def _check_staging_rollback(self) -> Dict[str, Any]:
