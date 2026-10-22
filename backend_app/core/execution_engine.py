@@ -1157,6 +1157,63 @@ class ExecutionEngine:
                     #
                     # Measured in
                     # staging/probe_phase9_order_id_fk_blocks_completion.py.
+                    #
+                    # RT-16: "ACCEPTED BY THE VENUE" IS NOT "COMPLETED"
+                    # -------------------------------------------------
+                    # `trade_result['fully_filled']` is the ONLY field
+                    # `_execute_trade_internal`'s live branch sets from positive evidence
+                    # of an actual fill (see its own comment at the `place_order` call) --
+                    # never from `trade_result['status']`, which `place_order` hardcodes
+                    # to `"pending"` by design regardless of order type. A market order
+                    # that genuinely filled immediately at the venue still reaches this
+                    # branch and is still recorded COMPLETED, unchanged from before. A
+                    # limit order that was merely accepted -- or any order for which the
+                    # venue response left the fill state ambiguous -- is NOT, because
+                    # writing COMPLETED here made it permanently invisible to
+                    # `OrderWatchdog._find_open_orders`, which only looks at `PENDING`/
+                    # `EXECUTING` rows: the order would never be reconciled again even once
+                    # it genuinely filled or was cancelled at the venue.
+                    #
+                    # The paper ledger and in-process paper paths never set this key
+                    # (`.get(..., True)` below), because both of those ARE the fill --
+                    # there is no venue to wait on, so their existing COMPLETED behaviour
+                    # is preserved exactly.
+                    #
+                    # Left EXECUTING (not re-claimed, not reset to PENDING) rather than
+                    # invented as a third state: `claim_execution_within_capacity` already
+                    # transitioned this row PENDING -> EXECUTING before the venue call, so
+                    # EXECUTING is already this row's truthful state the moment
+                    # `place_order` returns "accepted, not yet filled" -- the watchdog's
+                    # open-order scan (`PENDING`, `EXECUTING`) picks it up on its next poll
+                    # and is the one that writes COMPLETED, once it observes a real fill.
+                    # Regression: tests/test_rt16_fill_confirmation.py
+                    _fully_filled = (
+                        trade_result.get('fully_filled', True)
+                        if isinstance(trade_result, dict) else True
+                    )
+
+                    if not _fully_filled:
+                        repo.update_status(
+                            execution_id=execution_id,
+                            tenant_id=tenant_id,
+                            status=ExecutionStatus.EXECUTING,
+                            venue_order_id=trade_result.get('order_id'),
+                            result=final_result,
+                        )
+
+                        execution_metrics.record_success(tenant_id=str(tenant_id))
+
+                        return {
+                            'status': 'accepted_pending_fill',
+                            'execution_id': execution_id,
+                            'result': final_result,
+                            'message': (
+                                'Order accepted by the venue but not yet confirmed '
+                                'filled; left EXECUTING for OrderWatchdog reconciliation '
+                                'to confirm the fill and mark it completed.'
+                            ),
+                        }
+
                     repo.update_status(
                         execution_id=execution_id,
                         tenant_id=tenant_id,
@@ -1164,10 +1221,10 @@ class ExecutionEngine:
                         venue_order_id=trade_result.get('order_id'),
                         result=final_result
                     )
-                    
+
                     # Record success metric
                     execution_metrics.record_success(tenant_id=str(tenant_id))
-                    
+
                     # ONLY return AFTER successful DB commit
                     return {
                         'status': 'completed',
@@ -1695,6 +1752,54 @@ class ExecutionEngine:
                     }
 
                 if result.success:
+                    # ═══════════════════════════════════════════════════════
+                    # RT-16: "ACCEPTED BY THE VENUE" IS NOT "FILLED"
+                    # ═══════════════════════════════════════════════════════
+                    # `place_order`'s own docstring says it hardcodes `status="pending"`
+                    # by design ("STEP 6.4: Returns 'pending' - wait for event system for
+                    # FILLED") -- so `result.status` can never be read as evidence of a
+                    # fill, for a market order or a limit order alike. The only honest
+                    # signal `place_order` actually returns is the venue's own
+                    # `filled`/`remaining` amounts, passed straight through from the CCXT
+                    # response as `result.filled_size` / `result.remaining_size`.
+                    #
+                    # A fill is "confirmed" here only when there is POSITIVE evidence of
+                    # it: some amount filled, AND nothing left resting. That is true for a
+                    # market order that actually executed immediately at the venue (CCXT
+                    # ordinarily reports the full amount filled, `remaining == 0`, for a
+                    # market order's create_order response), and false for a limit order
+                    # that was merely accepted (CCXT reports `filled == 0`,
+                    # `remaining == <the whole size>`). A response that leaves this
+                    # ambiguous -- no `remaining` at all -- is treated as NOT confirmed,
+                    # per the conservative default this finding calls for: lacking
+                    # positive evidence of a fill, assume it is still resting and let
+                    # `OrderWatchdog`'s reconciliation loop (which polls the venue for the
+                    # real, current state) resolve it.
+                    #
+                    # `execute_with_idempotency` is the caller that turns this into a
+                    # database status, via `fully_filled`. It must not write COMPLETED on
+                    # mere acceptance.
+                    # Regression: tests/test_rt16_fill_confirmation.py
+                    try:
+                        _filled_amt = (
+                            Decimal(str(result.filled_size))
+                            if result.filled_size is not None else Decimal("0")
+                        )
+                    except (InvalidOperation, TypeError, ValueError):
+                        _filled_amt = Decimal("0")
+                    try:
+                        _remaining_amt = (
+                            Decimal(str(result.remaining_size))
+                            if result.remaining_size is not None else None
+                        )
+                    except (InvalidOperation, TypeError, ValueError):
+                        _remaining_amt = None
+                    _fully_filled = (
+                        _filled_amt > 0
+                        and _remaining_amt is not None
+                        and _remaining_amt <= 0
+                    )
+
                     return True, {
                         'order_id': result.exchange_order_id,
                         'executed_price': float(result.avg_price or price),
@@ -1709,6 +1814,14 @@ class ExecutionEngine:
                             else (result.raw_response.get("status")
                                   if isinstance(result.raw_response, dict)
                                   else result.status)
+                        ),
+                        # RT-16: the ONLY field `execute_with_idempotency` may treat as
+                        # evidence of an actual fill on this path. Deliberately explicit
+                        # (not inferred from 'status', which is always 'pending' here).
+                        'fully_filled': _fully_filled,
+                        'filled_size': str(_filled_amt),
+                        'remaining_size': (
+                            str(_remaining_amt) if _remaining_amt is not None else None
                         ),
                     }
                 else:

@@ -1271,7 +1271,50 @@ class OrderWatchdog:
                 
         except Exception as e:
             logger.error(f"Failed to update position from watchdog: {e}")
-    
+            # ═══════════════════════════════════════════════════════════════
+            # RT-16: A SWALLOWED EXCEPTION HERE WAS INVISIBLE TO ANY HUMAN
+            # ═══════════════════════════════════════════════════════════════
+            # This is the ONLY caller of `PositionEngine.update_position_from_fill` on
+            # the watchdog's reconciliation path. Before this block, a failure here was
+            # caught, logged at `error` (not even `critical`), and nothing else -- so a
+            # confirmed fill could be recorded on the order while the position it
+            # represents silently never updated, with no alert, no metric, and no way
+            # for an operator to learn about it short of reading logs after the fact.
+            #
+            # Reuses the SAME alert mechanism and severity convention this class
+            # already uses for a stuck order (`_trigger_alert` -> `AlertSystem.
+            # send_critical_alert`), rather than inventing a second one. Best-effort and
+            # never allowed to raise: an alerting failure must not turn into a second,
+            # worse failure that breaks reconciliation for every OTHER order in this
+            # poll. The loop (`_reconcile_open_orders` / `_check_stale_orders`) continues
+            # exactly as before either way -- this only adds visibility.
+            # Regression: tests/test_rt16_fill_confirmation.py
+            try:
+                from backend_app.backend.alert_system import get_alert_system
+                alert_system = get_alert_system()
+                await alert_system.send_critical_alert(
+                    title="Position Update From Fill Failed",
+                    message=(
+                        f"OrderWatchdog observed a fill for order "
+                        f"{getattr(order, 'execution_id', 'unknown')} "
+                        f"({getattr(order, 'symbol', 'unknown')}) but "
+                        f"PositionEngine.update_position_from_fill raised ({e}). The "
+                        f"order's status may now disagree with the account's recorded "
+                        f"position."
+                    ),
+                    metadata={
+                        "execution_id": getattr(order, "execution_id", None),
+                        "tenant_id": str(getattr(order, "tenant_id", None)),
+                        "symbol": getattr(order, "symbol", None),
+                        "error": str(e),
+                    },
+                )
+            except Exception as alert_exc:  # noqa: BLE001 - never let alerting break reconciliation
+                logger.error(
+                    "RT-16: failed to raise alert for position-update failure on %s: %s",
+                    getattr(order, "execution_id", "unknown"), alert_exc,
+                )
+
     async def _trigger_alert(self, order: ExecutionRecordModel, reason: str):
         """Trigger alert for stuck order."""
         self.alerts_triggered += 1
