@@ -746,6 +746,7 @@ jobs:
                  tests/test_bug057_listing_moderation_authz_postgres.py \
                  tests/test_d5_watchdog_adjudication_repair.py \
                  tests/test_db03_privilege_hardening_detects_untracked_tables_postgres.py \
+                 tests/test_dup01_confirmation_lost_postgres.py \
                  tests/test_fee01_tenant_is_validated_not_sentinel_postgres.py \
                  tests/test_fee_third_asset_pct_is_nullable_postgres.py \
                  tests/test_json_extract_dialect_portability.py \
