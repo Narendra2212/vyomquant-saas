@@ -194,19 +194,34 @@ PATH_A_ALLOWLIST: dict[str, dict] = {
     },
     "waitlist": {
         "authenticated": {"UPDATE", "DELETE"},
-        "why": "The ONLY table the browser writes directly with the anon key: "
+        "why": "The only table the browser writes directly with the anon key: "
                "src/lib/waitlistApi.js:109 update, :124 delete (admin UI, RLS-gated on "
-               "auth.jwt() app_metadata role). Its INSERT path is broken in production -- "
-               "anon has no grant at all and no INSERT policy exists. See DEPLOY-05.",
+               "auth.jwt() app_metadata role). INSERT is deliberately absent for both "
+               "browser roles -- see the note on ANON_WRITE_ALLOWLIST. Not drift.",
     },
 }
 
-#: Tables where `anon` legitimately writes. `download_analytics` INSERT happens on the
-#: public download page before sign-in (src/lib/downloadAnalyticsApi.js:11). The table does
-#: not exist in production yet (DEPLOY-05); when it is created it needs anon INSERT only.
-ANON_WRITE_ALLOWLIST: dict[str, set[str]] = {
-    "download_analytics": {"INSERT"},
-}
+#: Tables where `anon` legitimately writes. EMPTY, and that is the correct state.
+#:
+#: CORRECTION (same session that wrote this file). This previously pre-authorised
+#: `download_analytics: {INSERT}` on the stated grounds that "the public download page
+#: inserts pre-auth". That justification was wrong, and I had taken it from DEPLOY-05's
+#: own description without checking it. `downloadAnalyticsApi.track()` -- the only INSERT
+#: -- is called from NOWHERE. `components/download/DownloadPage.jsx` carries an explicit
+#: comment that it deliberately does not import the module at all ("an artifact nobody can
+#: fetch has no download to count"), and the sole importer, `AdminDashboard.jsx`, calls
+#: only `getStats()`, which is a SELECT. So there is no anonymous write to authorise, and
+#: an entry here would have pre-approved a grant nothing needs -- which is how a hole gets
+#: opened by a checklist rather than by a decision.
+#:
+#: Note on `waitlist` for the same reason: its missing anon INSERT policy is DELIBERATE,
+#: not drift. `backend_app/migrations/018_copilot_and_waitlist_tables.sql` omits it under a
+#: header titled "WHY THERE IS NO PUBLIC INSERT POLICY -- read this before adding one",
+#: because the signup form is unmounted (`WaitlistForm.jsx` is imported by nothing outside
+#: tests) and an open insert path with no form behind it is spam surface with no consumer.
+#: `tests/test_schema_table_reference_drift.py` fails the moment the form is re-mounted
+#: without the policy, so the two cannot drift apart. Do not add it here.
+ANON_WRITE_ALLOWLIST: dict[str, set[str]] = {}
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # WHY INVARIANT 3 IS ADVISORY AND NOT BLOCKING.
