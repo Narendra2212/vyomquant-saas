@@ -1,3 +1,12 @@
 -r requirements-base.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.3.1+cpu
+# DEP-01: 2.3.1 carried 23 advisories per PyPI's own release data, including
+# GHSA-53q9-r3pm-6pq6 / CVE-2025-32434 (CRITICAL, remote code execution via torch.load,
+# fixed in 2.6.0). The blocking pip-audit gate never saw any of them: the `+cpu` local
+# version cannot be resolved against PyPI, so pip-audit SKIPPED this pin and still
+# reported "No known vulnerabilities found". 2.10.0 is the cut point that clears every
+# CRITICAL, HIGH and MODERATE advisory; the two LOW residuals are audited and accepted by
+# name in scripts/audit_local_version_pins.py, which exists because of this blind spot.
+# Keep this version identical to requirements.txt, backend_app/requirements.txt and the
+# Dockerfile's own pre-install layer -- test_dep01_torch_pin_is_consistent.py pins that.
+torch==2.10.0+cpu

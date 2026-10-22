@@ -20,7 +20,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Install heavy PyTorch CPU package in isolated cached layer
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir --prefer-binary torch==2.3.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+    pip install --no-cache-dir --prefer-binary torch==2.10.0+cpu --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Install all backend requirements from requirements-cpu.txt (includes requirements-base.txt)
 COPY requirements-base.txt requirements-cpu.txt ./
