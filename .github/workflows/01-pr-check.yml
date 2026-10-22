@@ -698,6 +698,84 @@ jobs:
                  tests/test_production_security_probe_rolls_back_postgres.py \
                  -v --tb=short
 
+      # WHY THIS STEP EXISTS.
+      #
+      # Both PostgreSQL jobs in this workflow name their files EXPLICITLY -- neither runs
+      # `pytest tests/`. So a test file that gates itself on AERORA_TEST_DATABASE_URL and
+      # is not named in one of those lists runs against a real server NOWHERE, and nothing
+      # reports it:
+      #
+      #   * the `unit-tests` lane deliberately has no DATABASE_URL (see its own comment),
+      #     so each such test SKIPS there -- and a skip is not a failure, so it is invisible
+      #     in a green run; and
+      #   * neither PostgreSQL lane lists the file, so the gate never opens.
+      #
+      # Measured against the real CI log for run 39695784610 (HEAD dfd9ca24, all 8 jobs
+      # green): 49 test files gate on that variable, the two lanes above between them ran
+      # 11 of them, and the remaining 35 contributed 432 SKIPPED results to that run's
+      # "790 skipped" and not one assertion against PostgreSQL.
+      #
+      # Those 35 files are not peripheral. They include the regression test for SEC-07
+      # (a P0: any signed-in user could grant themselves a paid plan and raise their own
+      # limits), the cross-tenant isolation matrix, fee_records RLS, the paper-trading
+      # ledger and fill-atomicity suites, concurrent-exposure and stale-execution recovery,
+      # referral-commission idempotence and single-currency enforcement, and WORK-03's
+      # cross-process single-owner bot lock. Every one of those is an RLS, privilege,
+      # trigger, constraint or transaction-isolation guarantee that SQLite cannot express,
+      # which is exactly why each file gates itself instead of asserting something weaker.
+      #
+      # This step runs them here, in the job that has already provisioned the full schema
+      # from repository source (twice, for idempotency) and therefore has the anon /
+      # authenticated / service_role substrate they need, rather than in the lighter
+      # `database-tests` job which only alembic-upgrades to a pinned revision.
+      #
+      # It is deliberately a SEPARATE step from the lane above so that a failure here is
+      # attributable on sight, and deliberately has no `continue-on-error`: these
+      # assertions have never run against a real server, so whatever they find is new
+      # information and must be allowed to red the pipeline rather than be absorbed.
+      #
+      # tests/test_every_postgres_gated_file_runs_in_a_postgres_lane.py parses this file
+      # and fails if a newly added PostgreSQL-gated test file is missing from these lists,
+      # so this gap cannot silently reopen.
+      - name: Run every remaining PostgreSQL-gated test file
+        run: |
+          pytest tests/test_aud01_signal_audit_log.py \
+                 tests/test_aud02_order_audit_trail_is_durable.py \
+                 tests/test_bill01_razorpay_plans_expire.py \
+                 tests/test_bug056_library_subscriptions_updated_at_postgres.py \
+                 tests/test_bug057_listing_moderation_authz_postgres.py \
+                 tests/test_d5_watchdog_adjudication_repair.py \
+                 tests/test_db03_privilege_hardening_detects_untracked_tables_postgres.py \
+                 tests/test_fee01_tenant_is_validated_not_sentinel_postgres.py \
+                 tests/test_fee_third_asset_pct_is_nullable_postgres.py \
+                 tests/test_json_extract_dialect_portability.py \
+                 tests/test_kill03_authoritative_global_halt.py \
+                 tests/test_lib01_clone_strategy_postgres.py \
+                 tests/test_mkt01_entitlement_tables_postgres.py \
+                 tests/test_money01_referral_commission_idempotence_postgres.py \
+                 tests/test_money04_referral_ledger_is_single_currency_postgres.py \
+                 tests/test_money06_referral_obligations_postgres.py \
+                 tests/test_p10d_fee_summary_does_not_mix_denominations_postgres.py \
+                 tests/test_p10d_referral_settlement_lifecycle_postgres.py \
+                 tests/test_p10j_probe_pg_ready_uses_shared_classification.py \
+                 tests/test_paper01_botrunner_fills_reach_the_ledger_postgres.py \
+                 tests/test_paper02_unfunded_order_state_postgres.py \
+                 tests/test_paper03_write_service_role_only_postgres.py \
+                 tests/test_paper05_apply_fill_atomic_postgres.py \
+                 tests/test_ref01_payout_atomic_postgres.py \
+                 tests/test_referral_payout_schema_contract_postgres.py \
+                 tests/test_sec07_profiles_platform_columns_postgres.py \
+                 tests/test_sec09_marketplace_evidence_service_role_only_postgres.py \
+                 tests/test_sec16_strategy_deployments_guard_postgres.py \
+                 tests/test_tenant01_cross_tenant_matrix_postgres.py \
+                 tests/test_tenant01_restricted_payment_methods_role_postgres.py \
+                 tests/test_tenant02_fee_records_rls_postgres.py \
+                 tests/test_tenant_db_context_postgres.py \
+                 tests/test_trade01_concurrent_exposure_postgres.py \
+                 tests/test_trade07_stale_execution_recovery_postgres.py \
+                 tests/test_work03_bot_ownership_claims_postgres.py \
+                 -v --tb=short
+
       # The two gates that must pass before either production verifier is pointed at a
       # live database. They need no server of their own -- they parse the scripts -- so
       # they run here as well as in the lane above, where a missing PostgreSQL would
