@@ -56,7 +56,19 @@ const { risk, wsSubscribe } = vi.hoisted(() => ({
   wsSubscribe: vi.fn(),
 }));
 
-vi.mock('../../../src/api', () => ({ api: { risk }, default: { risk } }));
+/*
+ * `isAuthenticated` is required, not optional. A `vi.mock` factory replaces the WHOLE
+ * module, and `src/hooks/useEntitlements.js` does
+ * `import { api, isAuthenticated } from '../api'` -- so omitting it throws
+ * `[vitest] No "isAuthenticated" export is defined on the "../../../src/api" mock` and
+ * fails the RUN rather than a test. tests/test_api_mock_factories_declare_isauthenticated.py
+ * enforces this for every file not in its grandfathered list, and it caught this file.
+ */
+vi.mock('../../../src/api', () => ({
+  api: { risk },
+  default: { risk },
+  isAuthenticated: () => true,
+}));
 vi.mock('../../../src/websocketClient', () => ({
   default: { subscribe: wsSubscribe },
 }));
