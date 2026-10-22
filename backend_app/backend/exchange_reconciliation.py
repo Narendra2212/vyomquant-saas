@@ -29,6 +29,7 @@ Reconciliation Loop:
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -47,6 +48,22 @@ from backend_app.core.order_state_machine import (OrderStateMachine,
                                                   transition_to_partial_fill)
 
 logger = logging.getLogger(__name__)
+
+#: RECON-01. The Redis key naming this subsystem's leader lease.
+#:
+#: DISTINCT from ``core.reconciliation_scheduler.LEADER_LOCK_KEY`` on purpose. These are
+#: two different subsystems doing different work (this one talks to the venue; that one
+#: escalates rows already recorded as mismatched), and sharing one key would make
+#: whichever process won suppress the OTHER loop entirely -- which presents as "the loop
+#: is running" while half the work silently never happens.
+RECONCILIATION_LEADER_LOCK_KEY = "vyomquant:leader:exchange_reconciliation"
+
+#: Lease duration. MUST exceed ``start_reconciliation_loop``'s own ``interval_seconds``
+#: (default 5), or the holder would keep losing a lease it is still actively using and
+#: leadership would churn every cycle. 60s gives the default interval twelve cycles of
+#: headroom while still bounding how long a crashed leader's hold blocks a successor --
+#: the lease expires on its own, so a dead worker cannot deadlock the subsystem.
+RECONCILIATION_LEADER_LOCK_TTL_SECONDS = 60
 
 
 class ReconciliationAction(Enum):
@@ -125,7 +142,43 @@ class ExchangeReconciliationService:
         self._running = False
         self._reconciliation_task: Optional[asyncio.Task] = None
 
+        #: RECON-01. One id per instance, stable for its whole lifetime and distinct from
+        #: every other worker process's -- exactly the identity a renewable lease needs to
+        #: tell "still me, renew" apart from "someone else, back off".
+        self._instance_id = str(uuid.uuid4())
+
         logger.info("ExchangeReconciliationService initialized")
+
+    # ── Leader election (RECON-01) ──────────────────────────────────────────────
+
+    async def _try_become_leader(self) -> bool:
+        """``True`` iff THIS process may run a reconciliation cycle right now.
+
+        RECON-01's first named blocker: ``gunicorn`` runs ``--workers ${WORKERS:-2}`` and
+        nothing stopped N worker processes from each running
+        ``start_reconciliation_loop`` against the SAME rows and the same venue
+        concurrently -- every one of them cancelling, re-querying and transitioning
+        orders the others were already working on.
+
+        Delegates to the shared primitive in ``core.leader_lease``, which is the same
+        renewable-lease implementation INF-04 proved for ``ReconciliationScheduler``;
+        this finding's own ledger entry named that one as "the template to reuse, not yet
+        applied here". It is reused rather than copied, so the two cannot drift.
+
+        Its own key, deliberately: sharing one lock with ``ReconciliationScheduler``
+        would make each subsystem's leader silently suppress the other entirely, which
+        looks exactly like "the loop is running" while half the work never happens.
+
+        Fails CLOSED -- no reachable Redis means no leadership and no cycle.
+        """
+        from backend_app.core.leader_lease import try_acquire_or_renew
+
+        return await try_acquire_or_renew(
+            lock_key=RECONCILIATION_LEADER_LOCK_KEY,
+            instance_id=self._instance_id,
+            ttl_seconds=RECONCILIATION_LEADER_LOCK_TTL_SECONDS,
+            subsystem="ExchangeReconciliationService",
+        )
     
     async def reconcile_open_orders(
         self,
@@ -642,7 +695,22 @@ class ExchangeReconciliationService:
         while self._running:
             try:
                 start_time = datetime.utcnow()
-                
+
+                # RECON-01. Exactly one process per deployment may reconcile. Without
+                # this, every gunicorn worker ran this loop against the same rows and the
+                # same venue account concurrently -- each cancelling, re-querying and
+                # transitioning orders the others were already working on. Checked EVERY
+                # cycle, not once at startup: the lease is renewable and a leader that
+                # dies must be able to lose it, which only works if non-leaders keep
+                # asking.
+                if not await self._try_become_leader():
+                    logger.debug(
+                        "Not the reconciliation leader this cycle - skipping (tenant=%s)",
+                        tenant_id,
+                    )
+                    await asyncio.sleep(interval_seconds)
+                    continue
+
                 # Run reconciliation
                 results = await self.reconcile_open_orders(tenant_id, exchange_id)
                 

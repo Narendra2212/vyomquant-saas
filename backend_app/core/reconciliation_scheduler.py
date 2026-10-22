@@ -175,29 +175,22 @@ class ReconciliationScheduler:
         the exact silent per-process fan-out this method exists to prevent. See
         ``redis_manager.get_client``'s own docstring for why a DEV_MODE-only mock must
         never stand in for Redis outside a development deployment.
-        """
-        from backend_app.core.cache.redis_manager import redis_manager
 
-        try:
-            client = await redis_manager.get_client()
-            if client is None:
-                return False
-            current_holder = await client.get(self._leader_lock_key)
-            if current_holder == self._instance_id:
-                await client.set(
-                    self._leader_lock_key, self._instance_id, ex=self._leader_lock_ttl
-                )
-                return True
-            acquired = await client.set(
-                self._leader_lock_key,
-                self._instance_id,
-                nx=True,
-                ex=self._leader_lock_ttl,
-            )
-            return bool(acquired)
-        except Exception as e:
-            logger.warning(f"[ReconciliationScheduler] Leadership check failed: {e}")
-            return False
+        RECON-01 moved the mechanics into ``core.leader_lease.try_acquire_or_renew`` so
+        ``ExchangeReconciliationService`` -- which needs the identical guarantee, and whose
+        ledger entry names this method as "the template to reuse, not yet applied here" --
+        shares ONE implementation of the rule rather than carrying a second copy that
+        could drift. Behaviour here is unchanged: this method still owns this subsystem's
+        key, TTL and instance id, and still answers the same question for the same caller.
+        """
+        from backend_app.core.leader_lease import try_acquire_or_renew
+
+        return await try_acquire_or_renew(
+            lock_key=self._leader_lock_key,
+            instance_id=self._instance_id,
+            ttl_seconds=self._leader_lock_ttl,
+            subsystem="ReconciliationScheduler",
+        )
 
     # ── Poll & Escalate ───────────────────────────────────────────────────────
 
