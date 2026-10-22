@@ -181,6 +181,28 @@ def _insert(
     return execution_id
 
 
+def _insert_order(session, tenant_id: str) -> str:
+    """A real ``orders`` row, because ``execution_records.order_id`` is a FOREIGN KEY.
+
+    ``fk_execution_records_order_id`` references ``orders.id``, so a platform order id
+    cannot be an arbitrary string -- the first run of this file against a real server
+    failed with ForeignKeyViolation ("Key (order_id)=(platform-order-1) is not present in
+    table orders") on exactly that. Worth recording rather than quietly fixing: it is a
+    schema fact no SQLite run could have surfaced, and it is the constraint that makes
+    ``order_id IS NOT NULL`` genuine evidence of a platform-side order rather than a
+    free-text note. Same insert shape as
+    test_trade07_stale_execution_recovery_postgres.py's, so the two cannot disagree.
+    """
+    order_id = f"ord_dup01_{uuid.uuid4().hex[:10]}"
+    session.execute(
+        text("INSERT INTO public.orders (id, tenant_id, created_at, updated_at) "
+             "VALUES (:o, CAST(:t AS uuid), now(), now())"),
+        {"o": order_id, "t": tenant_id},
+    )
+    session.commit()
+    return order_id
+
+
 def _row(session, execution_id: str) -> dict:
     r = session.execute(
         text(
@@ -250,7 +272,7 @@ def test_a_row_holding_a_venue_order_id_is_never_classified_however_old(tenant, 
     repo = ExecutionRecordRepository(db)
     eid = _insert(
         db, tenant, f"dup01-hasid-{uuid.uuid4().hex[:8]}",
-        age_seconds=OLD * 10, order_id="platform-order-1",
+        age_seconds=OLD * 10, order_id=_insert_order(db, tenant),
     )
 
     assert eid not in _ids(repo.classify_unresolved_submissions(uuid.UUID(tenant))), (
@@ -401,7 +423,7 @@ def test_a_row_that_acquired_a_venue_order_id_is_refused_not_downgraded(tenant, 
     repo = ExecutionRecordRepository(db)
     eid = _insert(
         db, tenant, f"dup01-raced-{uuid.uuid4().hex[:8]}",
-        age_seconds=OLD, order_id="arrived-while-we-looked",
+        age_seconds=OLD, order_id=_insert_order(db, tenant),
     )
 
     assert repo.give_up_on_unresolved_submission(
