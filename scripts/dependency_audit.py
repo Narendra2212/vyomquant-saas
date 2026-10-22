@@ -182,9 +182,31 @@ LOCAL_BACKEND_MODULES = {
     'websocket_auth',
 }
 
-# Optional dependencies that may be in separate requirements files
+# Imports that are genuinely optional, so "imported but not declared" is the intended
+# state rather than a manifest gap.
 OPTIONAL_DEPENDENCIES = {
     'torch',  # In requirements-cpu.txt with extra index URL
+
+    # DEP-04. `opentelemetry` is imported by exactly two files --
+    # backend_app/backend/observability/opentelemetry_tracing.py and optimized_tracing.py
+    # -- and both imports sit inside `try/except ImportError` that sets
+    # OPENTELEMETRY_AVAILABLE = False and falls back to NoOpTracer. An AST walk of every
+    # .py under backend_app confirms there are ZERO unguarded opentelemetry imports, and
+    # the degraded path is exercised directly in CI-independent verification: with the
+    # package blocked at import, both modules load, TracingManager constructs, and
+    # get_tracer() returns a working NoOpTracer.
+    #
+    # The eleven opentelemetry packages were REMOVED from requirements-base.txt because
+    # opentelemetry-api 1.25.0 carries CVE-2026-114603 and the fixed release (1.45.1)
+    # requires protobuf>=5.0, which tensorflow==2.16.1 forbids (protobuf<5.0.0dev). They
+    # were also entirely unused: neither TracingManager is ever constructed anywhere in
+    # main.py, core/, routers/ or api_ws/, so no instrumentation and no propagator is ever
+    # installed.
+    #
+    # Listing it here is therefore accurate, not a suppression: the import is optional by
+    # construction. If tracing is ever wired up for real, remove this entry at the same
+    # time as re-adding the pins, so the audit goes back to requiring them.
+    'opentelemetry',
 }
 
 
