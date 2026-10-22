@@ -37,6 +37,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend_app.backend.event_listener import EventType, ExchangeEvent
@@ -130,9 +131,29 @@ class OrderEventHandler(EventHandler):
         order_id: str,
         tenant_id: str
     ) -> Optional[ExecutionRecordModel]:
-        """Find execution record by exchange order ID."""
+        """Find execution record by EXCHANGE order ID.
+
+        RT-16 / TRADE-12. ``order_id`` here is the venue's identifier, taken from the
+        exchange's own WebSocket event. This matched it against
+        ``ExecutionRecordModel.order_id`` -- which, since TRADE-12, is THIS platform's
+        order id (it carries ``FOREIGN KEY (order_id) REFERENCES orders(id)``). The
+        exchange's id lives in ``venue_order_id``.
+
+        So a venue id was being compared against a column that never holds one, and the
+        live execution engine leaves ``order_id`` NULL: **no fill event arriving over the
+        WebSocket could ever match an execution the engine created.** The fastest and most
+        authoritative fill-confirmation path in the system resolved to ``None`` every time
+        and the event was dropped as an unknown order.
+
+        Both columns are matched now. ``venue_order_id`` is the correct one; ``order_id``
+        is retained because the older recovery paths still populate it and their rows must
+        keep resolving.
+        """
         return self.db.query(ExecutionRecordModel).filter(
-            ExecutionRecordModel.order_id == order_id,
+            or_(
+                ExecutionRecordModel.venue_order_id == order_id,
+                ExecutionRecordModel.order_id == order_id,
+            ),
             ExecutionRecordModel.tenant_id == tenant_id
         ).first()
     

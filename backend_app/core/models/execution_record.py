@@ -9,7 +9,7 @@ Tracks individual strategy executions (orders/trades).
 import hashlib
 import logging
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple, List
 from uuid import UUID
@@ -210,6 +210,141 @@ class ExecutionStatus(str, Enum):
     FAILED = "failed"
     UNKNOWN = "unknown"
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RT-16: WAS THIS ORDER ACTUALLY FILLED, OR MERELY ACCEPTED?
+# ═══════════════════════════════════════════════════════════════════════════════
+# `execute_with_idempotency` wrote ``COMPLETED`` whenever ``place_order`` came back
+# successful. "Successful" at a venue means ACCEPTED, not FILLED. A resting limit order,
+# or a market order the venue queued, took the same branch as a genuine fill -- so the
+# platform reported fills that had not happened, and three things followed from it:
+#
+#   1. ``COMPLETED`` is operationally terminal. Every reconciliation population --
+#      `OrderWatchdog._find_open_orders`, `_find_stale_orders`,
+#      `ExchangeReconciliation._get_active_orders` -- selects only PENDING/EXECUTING. So
+#      the order left the watchdog's sight at the exact moment it most needed watching.
+#   2. `master_executor.settle_exposure` credits the bot's only record of what it holds
+#      from the engine's result, so a phantom fill became phantom exposure.
+#   3. The fee row (`master_executor`'s `update_order`) was written against that same
+#      phantom quantity.
+#
+# The evidence needed to tell the two apart was already in the response and simply never
+# read: the venue's own status string plus its filled quantity.
+#
+# WHY THERE IS NO NEW ENUM MEMBER. ``ExecutionStatus`` is a PostgreSQL enum type
+# (`alembic/versions/d97ffff9c3bb_execution_schema_rebuild.py`), so adding SUBMITTED would
+# need an ``ALTER TYPE``. It is not needed: ``EXECUTING`` already carries exactly this
+# meaning everywhere else in the codebase -- `OrderWatchdog._update_order_from_status`
+# maps a venue partial fill onto it, `resolve_stale_execution` defaults its
+# compare-and-swap to ``from_status=EXECUTING``, and ``submitted_at`` (committed in its
+# own transaction before `create_order`, TRADE-07) already distinguishes "sent to the
+# venue" from "not yet sent". ``EXECUTING AND submitted_at IS NOT NULL`` IS "live at the
+# venue, outcome not yet known".
+
+#: Venue status strings that positively assert the order is done and fully filled.
+#: CCXT's unified vocabulary uses ``closed``; raw venue ``info.status`` uses ``FILLED``.
+VENUE_STATUS_FILLED = frozenset({"filled", "closed", "completed", "done", "fill"})
+
+#: Venue status strings that positively assert a partial fill.
+VENUE_STATUS_PARTIAL = frozenset({
+    "partially_filled", "partiallyfilled", "partial", "partial_fill", "partialfill",
+})
+
+#: Venue status strings that assert the order is live but not yet filled.
+VENUE_STATUS_RESTING = frozenset({
+    "open", "new", "accepted", "pending", "pending_new", "pendingnew",
+    "working", "untriggered", "submitted", "active", "queued",
+})
+
+#: The order is fully filled; the venue said so.
+FILL_STATE_FILLED = "filled"
+#: Some quantity filled, more outstanding.
+FILL_STATE_PARTIAL = "partially_filled"
+#: The venue holds the order and nothing has filled.
+FILL_STATE_ACCEPTED = "accepted"
+
+
+def classify_venue_fill(
+    *,
+    venue_status: Any,
+    filled_size: Any,
+    requested_size: Any,
+) -> Tuple[str, Decimal, bool]:
+    """How much of this order did the venue actually fill?
+
+    Returns ``(fill_state, filled_quantity, quantity_was_inferred)``:
+
+    * ``fill_state`` -- one of :data:`FILL_STATE_FILLED`, :data:`FILL_STATE_PARTIAL`,
+      :data:`FILL_STATE_ACCEPTED`. Only the first may be persisted as ``COMPLETED``.
+    * ``filled_quantity`` -- what to credit as exposure and charge fees on. ``0`` for an
+      accepted-but-unfilled order.
+    * ``quantity_was_inferred`` -- True when the venue confirmed completion but gave no
+      filled quantity, so the requested size was used. Surfaced rather than hidden,
+      because it is the one case where the number is not the venue's own.
+
+    SAFETY DIRECTION. Every ambiguous case resolves to :data:`FILL_STATE_ACCEPTED`, never
+    to ``FILLED``. Under-reporting a fill is self-correcting -- the order stays in the
+    watchdog's population and the next poll reconciles it against the venue. Over-reporting
+    one is not: it credits exposure that does not exist, bills a fee for a trade that never
+    happened, and removes the row from every population that could have noticed.
+
+    ``filled_size=0`` is NOT treated as "unknown". That distinction is the whole defect:
+    the previous code read ``float(result.filled_size or size)``, and because ``0`` is
+    falsy in Python it substituted THE FULL REQUESTED SIZE whenever the venue reported
+    nothing filled. ``None`` means the venue did not say; ``0`` means the venue said none.
+    """
+    def _dec(value: Any) -> Optional[Decimal]:
+        if value is None:
+            return None
+        try:
+            if isinstance(value, bool):  # bool is an int subclass; never a quantity
+                return None
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+
+    filled = _dec(filled_size)
+    requested = _dec(requested_size) or Decimal("0")
+
+    status_text = ""
+    if venue_status is not None:
+        status_text = str(getattr(venue_status, "value", venue_status)).strip().lower()
+
+    venue_says_filled = status_text in VENUE_STATUS_FILLED
+    venue_says_partial = status_text in VENUE_STATUS_PARTIAL
+
+    # The venue reported a quantity. That is the authoritative number.
+    if filled is not None:
+        if filled <= 0:
+            # Nothing filled. True even when the status word is "closed" -- a closed
+            # order with nothing filled was cancelled or expired, not executed.
+            return FILL_STATE_ACCEPTED, Decimal("0"), False
+        if venue_says_partial:
+            return FILL_STATE_PARTIAL, filled, False
+        if venue_says_filled or (requested > 0 and filled >= requested):
+            return FILL_STATE_FILLED, filled, False
+        # A quantity filled, no completion claim, and less than requested.
+        return FILL_STATE_PARTIAL, filled, False
+
+    # No quantity from the venue. Only a positive completion claim justifies treating the
+    # requested size as filled; this is the path a venue that returns `status: "closed"`
+    # with no `filled` field takes, and it preserves the pre-RT-16 reading for exactly
+    # that case and no other.
+    if venue_says_filled and requested > 0:
+        return FILL_STATE_FILLED, requested, True
+    return FILL_STATE_ACCEPTED, Decimal("0"), False
+
+
+def execution_status_for_fill_state(fill_state: str) -> ExecutionStatus:
+    """The row status a ``fill_state`` justifies.
+
+    ``COMPLETED`` only for a confirmed full fill. A partial fill and a bare acceptance are
+    both ``EXECUTING``, which keeps the row in every reconciliation population so the
+    watchdog finishes the job the venue has not.
+    """
+    if fill_state == FILL_STATE_FILLED:
+        return ExecutionStatus.COMPLETED
+    return ExecutionStatus.EXECUTING
 
 
 class ExecutionSide(str, Enum):
@@ -1822,6 +1957,11 @@ class ExecutionRecordRepository:
         order_id: Optional[str] = None,
         result: Optional[Dict[str, Any]] = None,
         venue_order_id: Optional[str] = None,
+        filled_size: Optional[str] = None,
+        avg_price: Optional[str] = None,
+        remaining_size: Optional[str] = None,
+        filled_at: Optional[datetime] = None,
+        exchange_status: Optional[str] = None,
     ) -> Optional[ExecutionRecordModel]:
         """Update execution status (common operation).
 
@@ -1833,6 +1973,16 @@ class ExecutionRecordRepository:
         the exception escaped `execute_with_idempotency`, leaving the row EXECUTING with
         `order_id IS NULL` after a real fill. See the column comment on
         `ExecutionRecordModel.order_id`.
+
+        RT-16. The fill columns are writable here now. They were not, so the live path
+        could only ever set ``status`` -- every row it marked ``COMPLETED`` was left with
+        ``filled_size IS NULL``, ``avg_price IS NULL`` and ``filled_at IS NULL``. That
+        mattered beyond tidiness: `OrderWatchdog._update_order_from_status` computes
+        ``fill_delta = new_filled - Decimal(order.filled_size or "0")`` to decide how much
+        of a fill is new, so a NULL baseline on a row that HAD filled made the next poll
+        re-credit the entire quantity as if it had just happened. Every parameter is
+        optional and ``None`` leaves the column untouched, so existing callers are
+        unaffected.
         """
         record = self.get_by_id(execution_id, tenant_id)
         if not record:
@@ -1848,6 +1998,21 @@ class ExecutionRecordRepository:
         
         if result is not None:
             record.result = result
+
+        if filled_size is not None:
+            record.filled_size = filled_size
+
+        if avg_price is not None:
+            record.avg_price = avg_price
+
+        if remaining_size is not None:
+            record.remaining_size = remaining_size
+
+        if filled_at is not None:
+            record.filled_at = filled_at
+
+        if exchange_status is not None:
+            record.exchange_status = exchange_status
         
         self.db.commit()
         self.db.refresh(record)
