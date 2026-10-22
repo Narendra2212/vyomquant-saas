@@ -209,19 +209,37 @@ class TestAuditFailureNeverBreaksTheRealWrite:
 # Real PostgreSQL: the migration's own append-only/grant guarantees.
 # ─────────────────────────────────────────────────────────────────────────────
 
-psycopg2 = pytest.importorskip("psycopg2")
-
 DSN = (
     os.environ.get("AERORA_TEST_DATABASE_URL")
     or os.environ.get("DATABASE_URL")
 )
 
-if not DSN or not DSN.startswith("postgres"):
-    pytest.skip("AUD-01 migration checks require PostgreSQL", allow_module_level=True)
+#: Gates ONLY the real-PostgreSQL class below, per-test.
+#:
+#: This was a module-level ``pytest.skip(..., allow_module_level=True)`` preceded by a
+#: module-level ``pytest.importorskip("psycopg2")``. Both abort collection of the WHOLE
+#: file, which also discarded the six fake-PostgREST unit tests ABOVE them -- the ones
+#: this module's own docstring describes as proving "every writer calls it correctly and
+#: that a failure to record the audit row never breaks the write it is recording". Those
+#: six need no database at all, yet they ran in NO lane: the two PostgreSQL lanes in
+#: 01-pr-check.yml do not list this file, and the SQLite lane skipped the module before
+#: collecting them, so the skip was never visible as a gap.
+#:
+#: Same per-test convention as
+#: tests/test_production_security_probe_rolls_back_postgres.py's own ``_needs_pg``,
+#: which is why that file's six source-inspection tests do run in the SQLite lane.
+_needs_pg = pytest.mark.skipif(
+    not (DSN or "").startswith("postgres"),
+    reason="AUD-01 migration checks require PostgreSQL",
+)
 
 
 @pytest.fixture(scope="module")
 def db():
+    # Imported here, not at module scope, for the same reason the gate above is a
+    # marker and not a module-level skip: a missing psycopg2 must not delete this
+    # file's database-independent tests.
+    psycopg2 = pytest.importorskip("psycopg2")
     try:
         conn = psycopg2.connect(DSN)
     except Exception as exc:  # noqa: BLE001
@@ -231,6 +249,7 @@ def db():
     conn.close()
 
 
+@_needs_pg
 class TestSignalAuditLogMigration:
     def test_a_row_can_be_inserted_but_never_updated_or_deleted(self, db):
         cur = db.cursor()

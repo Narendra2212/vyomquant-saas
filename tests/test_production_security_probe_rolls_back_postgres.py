@@ -259,10 +259,14 @@ _needs_pg = pytest.mark.skipif(
     ),
 )
 
-psycopg2 = pytest.importorskip("psycopg2")
-
-
 def _connect():
+    # Imported here rather than at module scope. A module-level
+    # ``pytest.importorskip`` aborts collection of the WHOLE file, which would also
+    # discard the six source-inspection tests above -- they read this repo's own
+    # script text and need neither psycopg2 nor a database. The ``_needs_pg`` marker
+    # already gates everything that does. (AUD-01's own test file had the same shape
+    # with a module-level skip and lost six tests to it in every lane.)
+    psycopg2 = pytest.importorskip("psycopg2")
     conn = psycopg2.connect(TEST_DATABASE_URL)
     conn.autocommit = True
     return conn
