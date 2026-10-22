@@ -36,6 +36,15 @@ primitives rather than new destructive SQL:
      account can no longer authenticate anywhere in the product once this lands, with no
      new column and no migration.
 
+Step 4 runs with a SERVICE-ROLE client while steps 1-3 run with the caller's own
+JWT-scoped one. That split is required, not stylistic. ``is_frozen`` and ``email`` are
+platform-controlled columns, and the column-guard trigger migration 033 installs on
+``public.profiles`` refuses writes to them from the ``anon``/``authenticated`` roles. It
+has to: a role that can SET ``is_frozen`` can also CLEAR it, which would let any suspended
+user unfreeze themselves (SEC-07). So an account cannot be frozen using the credentials of
+the account being frozen. Steps 1-3 keep the user-scoped client because row-level security
+is what limits them to this user's own deployments, sessions and keys.
+
 Step 4 is the one step that must land for this to count as "deleted" at all; its own
 exception is allowed to propagate so the caller (the route) can report deletion as failed
 rather than claiming success over a profile that was never anonymised. Steps 1-3 are
@@ -45,6 +54,7 @@ not prevent the account from being locked and the profile from being scrubbed.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -130,10 +140,30 @@ async def export_account_data(supabase: Any, *, user_id: str) -> Dict[str, Any]:
 
 
 async def delete_account(
-    supabase: Any, *, user_id: str, user: Mapping[str, Any]
+    supabase: Any,
+    *,
+    user_id: str,
+    user: Mapping[str, Any],
+    service_supabase: Any = None,
 ) -> Dict[str, Any]:
     """Stop runtimes, revoke exchange keys, anonymise PII, lock the account. See module docstring
-    for exactly what this does and does not do, and why."""
+    for exactly what this does and does not do, and why.
+
+    ``supabase`` is the caller's own JWT-scoped client (PostgreSQL role ``authenticated``).
+    Steps 1-3 use it deliberately: row-level security is what confines them to this user's
+    deployments, sessions and keys, so running them with a privileged client would discard
+    the isolation rather than add anything.
+
+    ``service_supabase`` is used for step 4 only, and only because step 4 writes
+    ``is_frozen`` and ``email``. Those are platform-controlled columns: the column-guard
+    trigger on ``public.profiles`` (migration 033) rejects any write to them from the
+    ``anon``/``authenticated`` roles, which is the entire point of SEC-07 -- a user who can
+    set ``is_frozen`` can also CLEAR it and unfreeze their own suspended account. So
+    freezing an account cannot be done with the account holder's own credentials. Passing
+    ``None`` falls back to ``supabase``, which keeps the existing tests and DEV_MODE (where
+    no service-role key is configured) working unchanged; in a deployed environment
+    ``SUPABASE_SERVICE_ROLE_KEY`` is a required credential, so the route always supplies it.
+    """
     summary: Dict[str, Any] = {"user_id": user_id}
 
     try:
@@ -211,8 +241,12 @@ async def delete_account(
     # (tests/test_schema_table_reference_drift.py) can resolve this literal dict against
     # `profiles`' declared columns statically, the same way every other UPDATE in this
     # codebase is checked.
+    # `email` and `is_frozen` are platform-controlled, so this UPDATE must NOT run as the
+    # account holder -- see this function's docstring. Falls back to the caller's client
+    # when no service-role client was supplied (tests, DEV_MODE).
+    privileged = service_supabase if service_supabase is not None else supabase
     response = (
-        supabase.table("profiles")
+        privileged.table("profiles")
         .update(
             {
                 "username": None,
@@ -228,6 +262,8 @@ async def delete_account(
         .eq("id", user_id)
         .execute()
     )
+    if inspect.isawaitable(response):
+        response = await response
     updated_rows = getattr(response, "data", None) or []
     if not updated_rows:
         raise RuntimeError(

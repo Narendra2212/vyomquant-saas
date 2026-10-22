@@ -260,8 +260,29 @@ async def delete_account_endpoint(
         )
     from backend_app.backend.account_lifecycle import delete_account
 
+    # Step 4 of delete_account freezes the account and anonymises its email. Both are
+    # platform-controlled columns that the guard trigger on `public.profiles` refuses to
+    # let the `authenticated` role write -- it has to, because a role that can SET
+    # is_frozen can also CLEAR it (SEC-07). So the one privileged step gets a service-role
+    # client; steps 1-3 keep `supabase` because RLS is what scopes them to this user.
+    # Resolved here rather than inside delete_account so tests keep injecting one double.
+    service_supabase = None
     try:
-        return await delete_account(supabase, user_id=user["id"], user=user)
+        from backend_app.core.dependencies import get_service_supabase_async
+
+        service_supabase = await get_service_supabase_async()
+    except Exception as e:  # noqa: BLE001 - absence is handled by the fallback below
+        logger.warning(
+            f"Service-role client unavailable for account deletion of {user['id']}: {e}"
+        )
+
+    try:
+        return await delete_account(
+            supabase,
+            user_id=user["id"],
+            user=user,
+            service_supabase=service_supabase,
+        )
     except Exception as e:
         logger.error(f"Failed to delete account for user {user['id']}: {e}")
         raise HTTPException(

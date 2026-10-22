@@ -257,6 +257,81 @@ def test_delete_account_tolerates_one_failing_exchange_revocation(monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# 2b. WHICH CLIENT writes the profile (SEC-07)
+#
+# The anonymisation UPDATE sets `is_frozen` and `email`. Both are platform-controlled, and
+# the column-guard trigger on public.profiles rejects writes to them from the `anon` and
+# `authenticated` roles -- it must, because a role that can SET is_frozen can also CLEAR
+# it, which would let a suspended user unfreeze their own account. So an account cannot be
+# frozen with the credentials of the account being frozen, and this step needs the
+# service-role client while steps 1-3 keep the user-scoped one (RLS is what confines those
+# to the caller's own rows).
+#
+# Measured against production on 2026-10-22: with the guard trigger installed and
+# table-wide UPDATE revoked, this UPDATE run as `authenticated` fails with
+# "platform-controlled columns cannot be modified by role authenticated". These two tests
+# pin the routing so that does not silently come back.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def test_the_profile_anonymisation_uses_the_service_client_not_the_users(monkeypatch):
+    user_sb = _FakeSupabase(tables={"profiles": [{"id": USER_ID, "is_frozen": False}]})
+    service_sb = _FakeSupabase(tables={"profiles": [{"id": USER_ID, "is_frozen": False}]})
+    monkeypatch.setattr(al, "stop_deployments_for_reason", AsyncMock(return_value={}))
+    monkeypatch.setattr(al.paper_repo, "list_sessions", lambda sb, uid: [])
+
+    class _Vault:
+        def list_connected_exchanges(self, uid):
+            return []
+
+        def delete_exchange_keys(self, uid, exchange_id):  # pragma: no cover
+            return True
+
+    monkeypatch.setattr(al, "APIKeyVault", lambda: _Vault())
+
+    summary = run(
+        al.delete_account(
+            user_sb, user_id=USER_ID, user=USER, service_supabase=service_sb
+        )
+    )
+
+    assert summary["profile"]["ok"] is True
+    assert [t for t, _ in service_sb.updates] == ["profiles"], (
+        "the anonymisation UPDATE must go through the service-role client"
+    )
+    assert user_sb.updates == [], (
+        "the user's own JWT-scoped client must not be used to write is_frozen/email -- "
+        "the column guard on public.profiles rejects it, and granting it would reopen "
+        "SEC-07 (a user who can freeze can also unfreeze)"
+    )
+    assert service_sb.tables["profiles"][0]["is_frozen"] is True
+    assert user_sb.tables["profiles"][0]["is_frozen"] is False
+
+
+def test_delete_account_still_works_when_no_service_client_is_supplied(monkeypatch):
+    """DEV_MODE and the existing tests pass no service client. The fallback keeps those
+    working; it is not the deployed path, because SUPABASE_SERVICE_ROLE_KEY is a required
+    credential in any deployed environment."""
+    sb = _FakeSupabase(tables={"profiles": [{"id": USER_ID, "is_frozen": False}]})
+    monkeypatch.setattr(al, "stop_deployments_for_reason", AsyncMock(return_value={}))
+    monkeypatch.setattr(al.paper_repo, "list_sessions", lambda sb, uid: [])
+
+    class _Vault:
+        def list_connected_exchanges(self, uid):
+            return []
+
+        def delete_exchange_keys(self, uid, exchange_id):  # pragma: no cover
+            return True
+
+    monkeypatch.setattr(al, "APIKeyVault", lambda: _Vault())
+
+    summary = run(al.delete_account(sb, user_id=USER_ID, user=USER))
+
+    assert summary["profile"]["ok"] is True
+    assert sb.tables["profiles"][0]["is_frozen"] is True
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # 3. The routes
 # ══════════════════════════════════════════════════════════════════════════
 
