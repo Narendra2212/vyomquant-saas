@@ -20,8 +20,9 @@ _ENVIRONMENT_UNSTATED = object()
 from backend_app.core.database import SessionLocal
 from backend_app.core.metrics import execution_metrics
 from backend_app.core.models.execution_record import (
-    AMBIGUOUS_SUBMISSION_ACTION, ExecutionRecordRepository, ExecutionSide,
-    ExecutionStatus)
+    AMBIGUOUS_SUBMISSION_ACTION, FILL_STATE_ACCEPTED, FILL_STATE_FILLED,
+    FILL_STATE_PARTIAL, ExecutionRecordRepository, ExecutionSide,
+    ExecutionStatus, classify_venue_fill, execution_status_for_fill_state)
 from backend_app.core.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -1157,23 +1158,110 @@ class ExecutionEngine:
                     #
                     # Measured in
                     # staging/probe_phase9_order_id_fk_blocks_completion.py.
+                    # ═══════════════════════════════════════════════════════════
+                    # RT-16: COMPLETED REQUIRES A CONFIRMED FILL, NOT AN ACCEPT.
+                    # ═══════════════════════════════════════════════════════════
+                    # This wrote COMPLETED unconditionally. `_execute_trade_internal`
+                    # returning success means the VENUE ACCEPTED the order; a resting
+                    # limit order and a genuine fill took the same branch. COMPLETED is
+                    # operationally terminal -- `OrderWatchdog._find_open_orders`,
+                    # `_find_stale_orders` and `ExchangeReconciliation._get_active_orders`
+                    # all select only PENDING/EXECUTING -- so the row left every
+                    # reconciliation population at the moment it most needed watching,
+                    # and nothing would ever discover whether it filled.
+                    #
+                    # `fill_state` is absent on the paper/ledger branches of
+                    # `_execute_trade_internal`, which return a recorded fill by
+                    # construction; those default to FILLED and are unchanged.
+                    fill_state = (
+                        trade_result.get('fill_state', FILL_STATE_FILLED)
+                        if isinstance(trade_result, dict)
+                        else FILL_STATE_FILLED
+                    )
+                    recorded_status = execution_status_for_fill_state(fill_state)
+                    filled_qty = (
+                        trade_result.get('size')
+                        if isinstance(trade_result, dict) else None
+                    )
+                    requested_qty = (
+                        trade_result.get('requested_size')
+                        if isinstance(trade_result, dict) else None
+                    )
+                    remaining_qty = None
+                    if filled_qty is not None and requested_qty is not None:
+                        try:
+                            remaining_qty = str(
+                                max(
+                                    Decimal("0"),
+                                    Decimal(str(requested_qty)) - Decimal(str(filled_qty)),
+                                )
+                            )
+                        except (InvalidOperation, ValueError, TypeError):
+                            remaining_qty = None
+
                     repo.update_status(
                         execution_id=execution_id,
                         tenant_id=tenant_id,
-                        status=ExecutionStatus.COMPLETED,
-                        venue_order_id=trade_result.get('order_id'),
-                        result=final_result
+                        status=recorded_status,
+                        venue_order_id=trade_result.get('order_id') if isinstance(trade_result, dict) else None,
+                        result=final_result,
+                        # RT-16: write the fill columns the watchdog's `fill_delta`
+                        # arithmetic reads. They were never written here, so a row marked
+                        # COMPLETED carried `filled_size IS NULL` and the next poll
+                        # re-credited the whole quantity as newly filled.
+                        filled_size=str(filled_qty) if filled_qty is not None else None,
+                        avg_price=(
+                            str(trade_result.get('executed_price'))
+                            if isinstance(trade_result, dict)
+                            and trade_result.get('executed_price') is not None
+                            and fill_state != FILL_STATE_ACCEPTED
+                            else None
+                        ),
+                        remaining_size=remaining_qty,
+                        filled_at=(
+                            datetime.utcnow()
+                            if recorded_status == ExecutionStatus.COMPLETED
+                            else None
+                        ),
+                        exchange_status=(
+                            str(trade_result.get('status'))
+                            if isinstance(trade_result, dict)
+                            and trade_result.get('status') is not None
+                            else None
+                        ),
                     )
-                    
-                    # Record success metric
+
+                    # Record success metric. A venue acceptance IS a successful
+                    # submission -- this counts submissions, not fills.
                     execution_metrics.record_success(tenant_id=str(tenant_id))
-                    
-                    # ONLY return AFTER successful DB commit
+
+                    # ONLY return AFTER successful DB commit.
+                    #
+                    # RT-16: the returned string is load-bearing beyond this function.
+                    # `master_executor.settle_exposure` credits exposure only for
+                    # "completed", and the fee row keys off the same value, so returning
+                    # "completed" for an accepted-but-unfilled order is what produced
+                    # phantom exposure and a phantom fee. The two non-filled states get
+                    # their own strings instead of being folded into either "completed"
+                    # or a failure -- the order is live at the venue, and calling it
+                    # failed would be as wrong as calling it filled.
+                    if fill_state == FILL_STATE_FILLED:
+                        return {
+                            'status': 'completed',
+                            'execution_id': execution_id,
+                            'result': final_result,
+                            'message': 'Trade executed successfully'
+                        }
                     return {
-                        'status': 'completed',
+                        'status': fill_state,
                         'execution_id': execution_id,
                         'result': final_result,
-                        'message': 'Trade executed successfully'
+                        'message': (
+                            'The venue accepted the order and has filled '
+                            f'{filled_qty} of {requested_qty}. It is recorded as '
+                            'EXECUTING and is being reconciled against the venue; it '
+                            'has NOT been treated as a completed trade.'
+                        ),
                     }
                 elif isinstance(trade_result, dict) and trade_result.get('submission_unknown'):
                     # ═══════════════════════════════════════════════════════════
@@ -1695,21 +1783,75 @@ class ExecutionEngine:
                     }
 
                 if result.success:
+                    venue_status = (
+                        result.raw_response.get("info", {}).get("status")
+                        if isinstance(result.raw_response, dict) and isinstance(result.raw_response.get("info"), dict)
+                        else (result.raw_response.get("status")
+                              if isinstance(result.raw_response, dict)
+                              else result.status)
+                    )
+                    # ═══════════════════════════════════════════════════════════
+                    # RT-16: `result.success` MEANS ACCEPTED, NOT FILLED.
+                    # ═══════════════════════════════════════════════════════════
+                    # `size` used to be `float(result.filled_size or size)`. `0` is falsy
+                    # in Python, so a venue that accepted a resting limit order and
+                    # reported `filled=0` made this claim THE FULL REQUESTED SIZE as
+                    # filled -- and `master_executor.settle_exposure` reads exactly this
+                    # field to credit the bot's only record of what it holds, while the
+                    # fee row is computed from the same number. One falsy-zero turned an
+                    # unfilled order into phantom exposure and a phantom fee.
+                    # `executed_price` had the identical bug via `result.avg_price or
+                    # price`, reporting the price we ASKED for as a price we GOT.
+                    #
+                    # `classify_venue_fill` reads the venue's own status word and its own
+                    # filled quantity, and resolves every ambiguous case to `accepted`
+                    # rather than `filled`. Under-reporting is self-correcting: the row
+                    # stays EXECUTING, so it stays in the watchdog's population and the
+                    # next poll reconciles it. Over-reporting is not.
+                    fill_state, filled_qty, qty_inferred = classify_venue_fill(
+                        venue_status=venue_status,
+                        filled_size=result.filled_size,
+                        requested_size=size,
+                    )
+                    if qty_inferred:
+                        logger.warning(
+                            "RT-16: venue confirmed completion for execution %s (%s %s) "
+                            "but reported no filled quantity; crediting the requested "
+                            "size %s. venue_status=%r",
+                            execution_id, side, symbol, size, venue_status,
+                        )
+                    if fill_state != FILL_STATE_FILLED:
+                        logger.info(
+                            "RT-16: venue ACCEPTED execution %s (%s %s) without a full "
+                            "fill -- fill_state=%s filled=%s of %s venue_status=%r. "
+                            "Recorded EXECUTING, not COMPLETED; the watchdog owns it "
+                            "from here.",
+                            execution_id, side, symbol, fill_state, filled_qty, size,
+                            venue_status,
+                        )
                     return True, {
                         'order_id': result.exchange_order_id,
-                        'executed_price': float(result.avg_price or price),
-                        'size': float(result.filled_size or size),
+                        # Kept non-None deliberately: `distributed_execution/
+                        # execution_worker.py` treats a None `executed_price` as a failed
+                        # job, and an accepted order is LIVE, not failed. When nothing
+                        # filled there is no execution price, so the requested price
+                        # stands in -- `fill_state` is what says whether it means
+                        # anything.
+                        'executed_price': float(
+                            result.avg_price
+                            if result.avg_price is not None
+                            else price
+                        ),
+                        # The venue's own number. 0.0 when it filled nothing.
+                        'size': float(filled_qty),
+                        # RT-16: so a consumer can tell intent from outcome.
+                        'requested_size': float(size),
+                        'fill_state': fill_state,
                         'fee': str(actual_fee),
                         'fee_currency': actual_fee_currency,  # MC-08: denomination preserved
                         'total_cost': 0.0,
                         'slippage_applied': False,
-                        'status': (
-                            result.raw_response.get("info", {}).get("status")
-                            if isinstance(result.raw_response, dict) and isinstance(result.raw_response.get("info"), dict)
-                            else (result.raw_response.get("status")
-                                  if isinstance(result.raw_response, dict)
-                                  else result.status)
-                        ),
+                        'status': venue_status,
                     }
                 else:
                     return False, f"Exchange execution failed: {result.error_message}"

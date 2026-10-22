@@ -53,6 +53,35 @@ _UNPERSISTED_SUFFIX = (
 )
 
 
+def venue_identifier(order: Any) -> Optional[str]:
+    """The id the EXCHANGE knows this order by, from whichever column carries it.
+
+    RT-16 / TRADE-12. Every venue call in this file passed ``order.order_id``, and every
+    population query required ``order_id IS NOT NULL``. But TRADE-12 split the two
+    identifiers apart precisely because they are not the same thing:
+    ``execution_records.order_id`` carries ``FOREIGN KEY (order_id) REFERENCES orders(id)``
+    and holds THIS platform's order, while ``venue_order_id`` holds the exchange's and has
+    no foreign key. The live engine therefore writes the venue id to ``venue_order_id`` and
+    leaves ``order_id`` NULL.
+
+    The consequence was that **every row the live execution engine created was invisible to
+    this watchdog**, on both counts: the filter excluded it for a NULL ``order_id``, and
+    had it got through, the venue would have been asked about ``None``. That did not show
+    up while the engine marked everything ``COMPLETED`` on accept, because a completed row
+    is not in the population anyway. The moment accepted orders correctly stay
+    ``EXECUTING``, this is what decides whether they are ever reconciled or simply sit
+    there forever -- so it is part of the same fix, not a follow-up.
+
+    Prefers ``venue_order_id``; falls back to ``order_id`` for rows written by the older
+    recovery paths that still populate it.
+    """
+    for attr in ("venue_order_id", "order_id"):
+        value = getattr(order, attr, None)
+        if value:
+            return str(value)
+    return None
+
+
 @dataclass
 class WatchdogConfig:
     """Configuration for order watchdog."""
@@ -302,9 +331,13 @@ class OrderWatchdog:
                         )
                         continue
                     
-                    # Fetch latest status from exchange
+                    # Fetch latest status from exchange.
+                    # RT-16 / TRADE-12: ask about the id the VENUE assigned, which the
+                    # live engine stores in `venue_order_id`. This passed
+                    # `order.order_id` -- this platform's own id, NULL on every row the
+                    # engine created. See `venue_identifier`.
                     result = await executor.get_order_status(
-                        exchange_order_id=order.order_id,
+                        exchange_order_id=venue_identifier(order),
                         symbol=order.symbol
                     )
                     
@@ -402,7 +435,10 @@ class OrderWatchdog:
             repo.record_mismatch(ReconciliationMismatchCreate(
                 tenant_id=order.tenant_id,
                 execution_id=order.execution_id,
-                order_id=order.order_id,
+                # RT-16: the venue's id is the useful one on a mismatch record -- it is
+                # what an operator needs to look the order up at the exchange, and it is
+                # the only one present on rows the live engine created.
+                order_id=venue_identifier(order),
                 symbol=order.symbol,
                 side=getattr(order, "side", None) or "unknown",
                 field=field,
@@ -436,7 +472,15 @@ class OrderWatchdog:
         orders = self.db.query(ExecutionRecordModel).filter(
             and_(
                 ExecutionRecordModel.status.in_(open_statuses),
-                ExecutionRecordModel.order_id.isnot(None)  # Must have exchange order ID
+                # RT-16 / TRADE-12: either identifier qualifies. This required
+                # `order_id IS NOT NULL`, and the live engine writes the venue's id to
+                # `venue_order_id` while leaving `order_id` NULL -- so every row the
+                # engine created was excluded from this population. See
+                # `venue_identifier`.
+                or_(
+                    ExecutionRecordModel.venue_order_id.isnot(None),
+                    ExecutionRecordModel.order_id.isnot(None),
+                )
             )
         ).all()
         
@@ -967,7 +1011,12 @@ class OrderWatchdog:
                     ExecutionRecordModel.last_exchange_sync < threshold,
                     ExecutionRecordModel.last_exchange_sync.is_(None)
                 ),
-                ExecutionRecordModel.order_id.isnot(None)  # Must have exchange order ID
+                # RT-16 / TRADE-12: either identifier qualifies -- see `venue_identifier`
+                # and the matching comment in `_find_open_orders`.
+                or_(
+                    ExecutionRecordModel.venue_order_id.isnot(None),
+                    ExecutionRecordModel.order_id.isnot(None),
+                )
             )
         ).all()
         
@@ -977,7 +1026,7 @@ class OrderWatchdog:
         """Fetch and update order status from exchange."""
         logger.info(
             f"Refreshing order: {order.execution_id} | "
-            f"exchange_order={order.order_id} | "
+            f"exchange_order={venue_identifier(order)} | "
             f"last_sync={order.last_exchange_sync}"
         )
         
@@ -1027,8 +1076,9 @@ class OrderWatchdog:
         # Fetch status from exchange
         for attempt in range(self.config.max_retries):
             try:
+                # RT-16 / TRADE-12: the venue's own id -- see `venue_identifier`.
                 result: OrderStatusResult = await executor.get_order_status(
-                    exchange_order_id=order.order_id,
+                    exchange_order_id=venue_identifier(order),
                     symbol=order.symbol
                 )
                 

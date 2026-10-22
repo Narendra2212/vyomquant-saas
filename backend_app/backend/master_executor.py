@@ -46,6 +46,12 @@ from backend_app.backend.deployment_runtime import (ClosedBar,
                                                     is_graph_blueprint)
 from backend_app.backend.execution_environment import ExecutionEnvironment
 from backend_app.backend.ml_models import create_ml_block
+# RT-16. Module scope rather than the function-local import this file uses for
+# `generate_execution_id`, because `_SETTLING_STATUSES` is built at import time. Safe:
+# `core.models.execution_record` imports only `core.database` and `core.metrics`, so it
+# does not reach back into `backend/` and there is no cycle.
+from backend_app.core.models.execution_record import (FILL_STATE_ACCEPTED,
+                                                      FILL_STATE_PARTIAL)
 from backend_app.core.risk_manager import RiskVerdict, TradeRequest
 from backend_app.backend.strategy_builder import StrategyEngine
 
@@ -75,21 +81,71 @@ ML_INFERENCE_TIMEOUT = float(os.getenv("ML_INFERENCE_TIMEOUT", 2.0))
 MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", 5))
 
 
+#: RT-16. Engine result statuses that carry a real, venue-reported quantity. ``completed``
+#: is a confirmed full fill; ``partially_filled`` is a confirmed part fill and is just as
+#: real as exposure. ``accepted`` is deliberately absent -- the venue holds the order and
+#: has filled nothing, so there is nothing to credit yet.
+_SETTLING_STATUSES = frozenset({"completed", FILL_STATE_PARTIAL})
+
+
 def settle_exposure(*, side: str, qty: Decimal, previous_exposure: Decimal, result):
     """RT-06: the exposure consequence of one ``execute_with_idempotency`` result.
 
-    Returns ``(filled_qty, new_exposure)``. ONLY a ``completed`` result is a fill; blocked,
-    failed and ``skipped_*`` outcomes (a dedupe replay, a contention skip, an ambiguous
-    prior submission, a refused live order) executed nothing in this call and leave
-    exposure exactly as it was. This used to treat every status except two as a full fill
-    of ``qty`` and counted a deduplicated ``skipped_completed`` replay a second time.
+    Returns ``(filled_qty, new_exposure)``. Blocked, failed and ``skipped_*`` outcomes
+    (a dedupe replay, a contention skip, an ambiguous prior submission, a refused live
+    order) executed nothing in this call and leave exposure exactly as it was. This used
+    to treat every status except two as a full fill of ``qty`` and counted a deduplicated
+    ``skipped_completed`` replay a second time.
+
+    RT-16 added ``partially_filled``. The engine used to report any accepted order as
+    ``completed``, so a partial fill never had its own status and this function never
+    needed one; now that it does, treating it as a non-event would under-credit real
+    exposure -- the mirror of the bug being fixed, and equally wrong.
+
+    RT-16 deliberately did NOT touch the ``.get("size", qty)`` fallback, and that is worth
+    recording because it looks like part of the same defect and is not. The phantom
+    exposure came from the STATUS: an accepted-but-unfilled order was reported as
+    ``completed``, so it reached this branch at all. With the status corrected, an
+    accepted order never gets here, and the fallback's remaining job is to handle a
+    genuine ``completed`` result whose quantity is missing.
+    For that case the requested quantity is the SAFE answer, not a guess to be refused.
+    ``previous_exposure`` is the bot's only record of what it holds and it gates position
+    limits: over-stating it makes the bot trade LESS than it could, while under-stating it
+    makes the bot believe it has room it does not have and buy again. Refusing to credit a
+    confirmed fill is the dangerous direction. Pinned by
+    tests/test_rt06_exposure_follows_completed_fills_only.py::
+    test_completed_without_a_reported_size_uses_the_requested_quantity.
+    The fallback is NOT extended to ``partially_filled``: crediting a full requested
+    quantity for a result that says only part of it filled would be self-contradictory,
+    and the engine always reports a quantity on that path.
     """
     status = result.get("status") if result else None
-    if status != "completed":
+    if status not in _SETTLING_STATUSES:
         return Decimal("0"), previous_exposure
 
     trade_result = result.get("result", {}) or {}
-    filled_qty = Decimal(str((trade_result.get("trade_result") or {}).get("size", qty)))
+    inner = (trade_result.get("trade_result") or {})
+    if status == FILL_STATE_PARTIAL:
+        raw_size = inner.get("size")
+        if raw_size is None:
+            logger.error(
+                "RT-16: a %r result carried no filled quantity, so there is nothing "
+                "trustworthy to credit -- a partial fill of an unstated amount cannot be "
+                "assumed to be the whole order. Exposure left unchanged at %s.",
+                status, previous_exposure,
+            )
+            return Decimal("0"), previous_exposure
+    else:
+        raw_size = inner.get("size", qty)
+    try:
+        filled_qty = Decimal(str(raw_size))
+    except (InvalidOperation, ValueError, TypeError):
+        logger.error(
+            "RT-16: settle_exposure could not read %r as a filled quantity for a %r "
+            "result. Exposure left unchanged at %s.",
+            raw_size, status, previous_exposure,
+        )
+        return Decimal("0"), previous_exposure
     if filled_qty <= 0:
         return Decimal("0"), previous_exposure
 
@@ -773,17 +829,56 @@ class BotRunner:
                             return
 
                         # Order & Execution update
-                        order_st = "FILLED" if v_status in ["completed", "skipped_completed"] else "FAILED"
+                        #
+                        # RT-16. This was binary: FILLED for "completed"/"skipped_completed",
+                        # FAILED for everything else. Now that the engine distinguishes a
+                        # venue acceptance from a fill, that mapping would record a LIVE
+                        # resting order as FAILED -- as wrong as the phantom fill it
+                        # replaces, and in the more alarming direction for anyone reading
+                        # the signal trail. A third state is needed because a third thing
+                        # genuinely happens.
+                        #
+                        # "SUBMITTED" is understood downstream: `SignalService.update_order`
+                        # only maps FILLED/PARTIALLY_FILLED -> EXECUTED, CANCELLED and
+                        # FAILED, leaving the signal's own status untouched for anything
+                        # else -- which is right for an order that has neither executed nor
+                        # failed -- and `map_order_state` covers SUBMITTED in the OrderState
+                        # vocabulary that Requirement 16.2's reconciliation reads.
+                        if v_status in ("completed", "skipped_completed"):
+                            order_st = "FILLED"
+                        elif v_status == FILL_STATE_PARTIAL:
+                            order_st = "PARTIALLY_FILLED"
+                        elif v_status == FILL_STATE_ACCEPTED:
+                            order_st = "SUBMITTED"
+                        else:
+                            order_st = "FAILED"
+
+                        requested_qty = float(order_payload["qty"])
+                        filled_qty_f = float(v_fill)
+                        # Remaining follows the fill, not the label. Previously any
+                        # non-FILLED outcome reported the whole quantity outstanding,
+                        # which is wrong for a partial fill.
+                        if order_st == "FILLED":
+                            remaining_qty = 0.0
+                        elif order_st in ("PARTIALLY_FILLED", "SUBMITTED"):
+                            remaining_qty = max(0.0, requested_qty - filled_qty_f)
+                        else:
+                            remaining_qty = requested_qty
+
                         await sig_svc.update_order(
                             user={"id": self.user_id},
                             signal_id=sig_id,
                             order_id=v_exec_id,
                             exchange_order_id=None,
                             order_status=order_st,
-                            quantity=float(order_payload["qty"]),
-                            filled=float(v_fill),
-                            remaining=0.0 if order_st == "FILLED" else float(order_payload["qty"]),
+                            quantity=requested_qty,
+                            filled=filled_qty_f,
+                            remaining=remaining_qty,
                             average_price=float(price),
+                            # Charged on what actually filled. `v_fill` comes from
+                            # `settle_exposure`, which now returns the venue's own
+                            # quantity -- 0 for an accepted-but-unfilled order, so this
+                            # is 0 rather than a fee for a trade that never happened.
                             fees=float(Decimal(str(v_fill)) * Decimal(str(price)) * Decimal("0.001")),
                             slippage=0.0005,
                             latency_ms=10.0
