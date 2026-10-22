@@ -399,7 +399,16 @@ describe('RiskSettings: the controls around the switches survive', () => {
 
     // The strategy the limits read returned, by its own name. A page that dropped the read
     // would render an empty allocations region and look fine.
-    expect(screen.getByText('Aurora Momentum')).toBeTruthy();
+    //
+    // `findByText`, not `getByText`: this name arrives with the STRATEGY LIMITS read, and
+    // `mountLoaded` only gates on the CONFIG read's effects (the switch states and the
+    // unenforced-guard label). The three reads -- getConfig, getStrategyLimits,
+    // getMarginHealth -- settle independently, so demanding this name be present at the
+    // instant mountLoaded returns is a race the page can legitimately lose. It did, on
+    // CI, on main: "Unable to find an element with the text: Aurora Momentum" at this
+    // line, while all 19 tests in this file pass locally. Awaiting it asserts exactly the
+    // same thing -- the name appears, so the read was not dropped -- without pinning WHEN.
+    expect(await screen.findByText('Aurora Momentum', {}, { timeout: 5000 })).toBeTruthy();
   });
 });
 
