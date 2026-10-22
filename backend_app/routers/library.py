@@ -44,7 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, validator
 from backend_app.backend.ml_node_types import detect_ml_nodes
 from backend_app.core.auth_middleware import decode_token_local
 from backend_app.core.dependencies import (bearer_scheme, get_admin_user,
-                                           get_current_user)
+                                           get_current_user, get_service_supabase)
 from backend_app.core.subscription_dependencies import (
     check_feature_optional,
     check_marketplace_publish_quota,
@@ -4300,6 +4300,217 @@ async def creator_analytics(request: Request, user: dict = Depends(get_current_u
         response["rating_count"] = rating_count_total
 
     return response
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MKT-06 — creator payouts: weekly, platform-initiated, admin-settled
+#
+# `creator_analytics` above has always been read-only: it reports what a creator
+# has EARNED, never what has been PAID. The payout rows this section reads and
+# settles are created automatically, on a weekly cadence, by
+# `backend_app.core.creator_payout_scheduler` calling
+# `public.create_creator_payout` (`051_mkt06_creator_payout_atomic.sql`) -- never
+# by a creator-initiated request, unlike `POST /referral/payouts`. There is no
+# `POST` here for that reason: a creator cannot request a payout, only see the
+# ones the platform has already created and been told to settle.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _mkt06_rpc_error_code(exc: Exception) -> str:
+    """The SQLSTATE a failed ``settle_creator_payout`` call raised, or ``""``.
+
+    Same two-step reading ``referral.py::_rpc_error_code`` and
+    ``settlement_service._rpc_error_code`` already use for the identical reason:
+    ``postgrest.exceptions.APIError`` carries the SQLSTATE on its own ``.code``
+    attribute, but a double built for a test may not.
+    """
+    code = str(getattr(exc, "code", "") or "").strip()
+    if code:
+        return code
+    text = str(exc)
+    for candidate in ("PY001", "PY002", "PY003", "PY004"):
+        if candidate in text:
+            return candidate
+    return ""
+
+
+class CreatorPayoutRecord(BaseModel):
+    """One row of a creator's own payout history, as `GET /creator/payouts` returns it.
+
+    ``amount_minor`` is the exact integer Minor_Units `create_creator_payout`
+    claimed for this currency -- no major-unit conversion here, for the same
+    reason `_earnings_entry` above converts nothing: that would route the figure
+    through binary floating point (Requirement 10.3).
+    """
+
+    id: str
+    amount_minor: int
+    currency: str
+    status: str
+    period_start: str
+    period_end: str
+    created_at: str
+    settled_at: Optional[str] = None
+    reference: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@literal_router.get("/creator/payouts")
+@limiter.limit("60/60second", key_func=caller_or_address)
+async def creator_payout_history(request: Request, user: dict = Depends(get_current_user)):
+    """The caller's OWN `marketplace_creator_payouts` rows, most recent first.
+
+    OWNER-SCOPED, BY PREDICATE, SAME AS `creator_analytics` (Requirements 21.4, 22.1)
+    ---------------------------------------------------------------------------------
+    The identity is the authenticated server-side session, never a path or query
+    parameter, and travels as ``.eq("owner_id", user_id)`` on the read. The RLS
+    policy on ``marketplace_creator_payouts`` (``051``'s own
+    ``creator_payouts_owner_read``) enforces the identical restriction at the
+    database, so this predicate is a belt, not the only strap -- consistent with
+    ``get_payout_history`` in ``routers/referral.py``, which this endpoint mirrors.
+    """
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+
+    if not svc:
+        logger.error("creator payout history: no service client available for %s", user_id)
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    try:
+        resp = (
+            svc.table("marketplace_creator_payouts")
+            .select("id,amount_minor,currency,status,period_start,period_end,"
+                    "created_at,settled_at,reference,reason")
+            .eq("owner_id", user_id)
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("creator payout history read failed for %s: %s", user_id, exc)
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    rows = resp.data if resp is not None else None
+    if rows is None:
+        logger.error("creator payout history read unreadable for %s", user_id)
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    payouts = [
+        CreatorPayoutRecord(
+            id=str(row["id"]),
+            amount_minor=int(row["amount_minor"]),
+            currency=row["currency"],
+            status=row["status"],
+            period_start=row["period_start"],
+            period_end=row["period_end"],
+            created_at=row["created_at"],
+            settled_at=row.get("settled_at"),
+            reference=row.get("reference"),
+            reason=row.get("reason"),
+        )
+        for row in rows
+    ]
+
+    return {"payouts": payouts, "count": len(payouts)}
+
+
+class SettleCreatorPayoutRequest(BaseModel):
+    """MKT-06: the pending -> completed/rejected settlement step, mirroring REF-01's
+    ``SettlePayoutRequest`` exactly."""
+
+    status: str = Field(..., pattern="^(completed|rejected)$")
+    reference: Optional[str] = Field(
+        None, max_length=200,
+        description="For 'completed': the external transfer reference (bank/UPI/PayPal "
+                    "transaction id) proving the operator actually sent the money."
+    )
+    reason: Optional[str] = Field(
+        None, max_length=500,
+        description="For 'rejected': why (e.g. invalid payout details, failed KYC)."
+    )
+
+
+@router.put("/creator-payouts/{payout_id}/settle")
+@limiter.limit("30/minute")
+async def settle_creator_payout_endpoint(
+    request: Request,
+    payout_id: str,
+    body: SettleCreatorPayoutRequest,
+    admin: dict = Depends(get_admin_user),
+    sb=Depends(get_service_supabase),
+):
+    """Operator-only: settle a pending creator payout as completed or rejected.
+
+    MKT-06: this is the admin-attested half of the weekly creator payout
+    mechanism, mirroring ``routers/referral.py::settle_payout`` precisely, for the
+    identical reason -- the finding this closes is the SAME "no payout mechanism
+    exists in this system" gap REF-01 already closed for referrals, applied here
+    to marketplace creator earnings.
+
+    WHAT THIS DOES NOT DO. There is no outbound payment-rail integration anywhere
+    in this codebase for creator payouts, any more than for referral payouts --
+    Stripe/Razorpay are wired for INCOMING subscription payments only. 'completed'
+    therefore records that a human operator performed the transfer manually (bank
+    transfer, UPI, PayPal) and is attesting to it with `reference`; this endpoint
+    NEVER itself moves money. 'rejected' releases this payout's claim on the
+    settlements it covered (``marketplace_creator_payout_claims``, deleted inside
+    the same atomic call), so they are summed again -- and a fresh payout created
+    for them -- the next time the weekly scheduler runs for this creator.
+
+    Runs under the service-role client (not the admin's own JWT): like
+    `referral_payouts`, `marketplace_creator_payouts` carries an owner-only RLS
+    read policy, so an admin's own token cannot see or settle a payout belonging
+    to the creator it concerns -- the same SEC-08 pattern, applied only AFTER
+    `get_admin_user`'s own check has passed.
+
+    The status flip and (for a rejection) the claim release are ONE call to
+    ``public.settle_creator_payout`` (``051_mkt06_creator_payout_atomic.sql``):
+    if the claim-release DELETE could not run, the whole function raises and the
+    status flip rolls back with it too, so the payout stays `pending` rather than
+    becoming `rejected` with its settlements permanently stuck claimed.
+    """
+    if sb is None:
+        raise HTTPException(status_code=503, detail="Database connection unavailable")
+
+    try:
+        rpc_resp = sb.rpc("settle_creator_payout", {
+            "p_payout_id": payout_id,
+            "p_status": body.status,
+            "p_reference": body.reference,
+            "p_reason": body.reason,
+        }).execute()
+    except Exception as rpc_err:  # noqa: BLE001 — classified by SQLSTATE below
+        code = _mkt06_rpc_error_code(rpc_err)
+        if code == "PY002":
+            raise HTTPException(
+                status_code=404, detail="Payout not found",
+            ) from rpc_err
+        if code == "PY003":
+            raise HTTPException(status_code=400, detail=str(rpc_err)) from rpc_err
+        if code == "PY004":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Payout {payout_id} is already settled and cannot be settled "
+                       "again.",
+            ) from rpc_err
+        logger.error("Error settling creator payout %s: %s", payout_id, rpc_err)
+        raise HTTPException(
+            status_code=500, detail="Failed to settle payout"
+        ) from rpc_err
+
+    payout = getattr(rpc_resp, "data", None)
+    if not payout:
+        raise HTTPException(status_code=500, detail="Failed to settle payout")
+
+    logger.info(
+        "Creator payout %s settled as %s by admin %s", payout_id, body.status,
+        admin.get("id"),
+    )
+    return {
+        "status": "success",
+        "payout_id": payout_id,
+        "settled_as": body.status,
+    }
 
 
 @literal_router.get("/subscriber/analytics")

@@ -1101,6 +1101,15 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         # `moderation_status` required.
         body={"moderation_status": 123},
     ),
+    # MKT-06: admin-gated (get_admin_user), same shape as referral.settle_payout
+    # above -- this sweep's ordinary non-admin caller is refused with 403 before
+    # the body is ever inspected.
+    MutatingRoute(
+        key="library.settle_creator_payout_endpoint",
+        method="PUT",
+        path=f"/api/library/creator-payouts/{_ID}/settle",
+        handler="backend_app.routers.library:settle_creator_payout_endpoint",
+    ),
     MutatingRoute(
         key="library.create_marketplace_checkout",
         method="POST",

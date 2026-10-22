@@ -97,6 +97,8 @@ from backend_app.core.position_model import PositionModel  # noqa: F401
 from backend_app.core.rate_limit import limiter
 from backend_app.core.reconciliation_scheduler import (
     start_reconciliation_scheduler, stop_reconciliation_scheduler)
+from backend_app.core.creator_payout_scheduler import (
+    start_creator_payout_scheduler, stop_creator_payout_scheduler)
 from backend_app.core.runtime_env import (deployment_environment,
                                           local_state_is_acceptable)
 #  SYSTEM FREEZE: Import safety config FIRST to block all execution
@@ -492,6 +494,19 @@ async def lifespan(app: FastAPI):
         service_status["reconciliation_scheduler"] = "INACTIVE"
         logger.warning(f" ReconciliationScheduler: INACTIVE — {e}")
 
+    # ── MKT-06: CreatorPayoutScheduler — weekly marketplace creator payouts ──
+    try:
+        await start_creator_payout_scheduler()
+        service_status["creator_payout_scheduler"] = "ACTIVE"
+        logger.info(
+            " CreatorPayoutScheduler: started (poll=1h, sweep interval=7d) — "
+            "creates payout rows only, never moves money; settlement is manual "
+            "and admin-only (PUT /api/library/creator-payouts/{id}/settle)"
+        )
+    except Exception as e:
+        service_status["creator_payout_scheduler"] = "INACTIVE"
+        logger.warning(f" CreatorPayoutScheduler: INACTIVE — {e}")
+
     # ── BILL-01: expire lapsed one-time (Razorpay) plan purchases ───────────
     global _plan_expiry_task
     try:
@@ -619,6 +634,13 @@ async def lifespan(app: FastAPI):
         logger.info(" ReconciliationScheduler: stopped")
     except Exception as e:
         logger.warning(f" ReconciliationScheduler shutdown error: {e}")
+
+    # MKT-06: CreatorPayoutScheduler — stop background sweep loop
+    try:
+        await stop_creator_payout_scheduler()
+        logger.info(" CreatorPayoutScheduler: stopped")
+    except Exception as e:
+        logger.warning(f" CreatorPayoutScheduler shutdown error: {e}")
 
     # BILL-01: stop the plan-expiry sweep
     try:
