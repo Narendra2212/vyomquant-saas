@@ -1,2 +1,4 @@
 -r ../requirements-base.txt
-torch==2.3.1
+# DEP-01: kept identical to requirements.txt / requirements-cpu.txt / the Dockerfile.
+# See requirements-cpu.txt for why 2.3.1 was replaced.
+torch==2.10.0
