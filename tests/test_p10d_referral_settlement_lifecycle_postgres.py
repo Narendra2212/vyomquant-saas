@@ -315,26 +315,40 @@ def test_an_obligation_cannot_be_settled_without_a_settled_at(conn):
     assert (status, has_ts) == ("settled", True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN GAP. backend_app/migrations/032_referral_payouts_terminal_evidence.sql adds "
-        "chk_referral_payouts_terminal_evidence but is PREPARED, NOT APPLIED: it alters a "
-        "shared table and needs the migration owner's approval under the Phase 10 "
-        "workstream rules. Until it is applied, referral_payouts.status can be set to "
-        "'completed' with processed_at NULL — a payout recorded as paid with no record of "
-        "when, no actor and no provider reference, on a table with no audit trail. Not "
-        "currently reachable from application code (nothing writes any status but "
-        "'pending'), so this is a latent exposure for a future settlement job or an "
-        "operator UPDATE. When 032 is applied this test XPASSes and strict mode fails the "
-        "suite until this marker is removed."
-    ),
-)
 def test_a_payout_cannot_be_completed_without_a_processed_at(payout):
-    """The one unsafe transition the database still permits.
+    """A payout may not reach 'completed' without a record of when it was paid.
 
     Deliberately asserts the SAFE invariant rather than recording the unsafe behaviour, so
     the suite carries the requirement and not the defect.
+
+    THIS CARRIED A ``strict=True`` XFAIL UNTIL THIS COMMIT, on the premise that
+    032_referral_payouts_terminal_evidence.sql was "PREPARED, NOT APPLIED". That premise
+    is false for every database provisioned from repository source, which is what CI
+    tests: ``scripts/provision_database.py`` applies the whole
+    ``backend_app/migrations/`` directory, 032 included. The provisioning job's own log
+    for this change says so in as many words --
+    ``migrations/032_referral_payouts_terminal_evidence.sql: applied`` -- and then
+    ``skipped (already applied)`` on the idempotency re-run.
+
+    So the constraint IS present, this test passes, and the marker's own closing sentence
+    ("when 032 is applied this test XPASSes and strict mode fails the suite until this
+    marker is removed") is the instruction being followed here. That XPASS is precisely
+    what failed when this file was first wired into a PostgreSQL lane; it had never run
+    against a real server before, so nothing had ever evaluated the premise.
+
+    NO XFAIL/SKIP REPLACES IT, deliberately. The assertion is a money-integrity
+    invariant: a database that lets a payout be marked paid with no timestamp, no actor
+    and no provider reference -- on a table with no audit trail -- SHOULD red this suite
+    rather than quietly record the defect as expected.
+
+    Note the migration file still declares itself NOT APPLIED in its own header. That
+    declaration concerns the shared-table approval process for the PRODUCTION database,
+    which this test cannot observe and does not assert anything about; it is tracked
+    separately in the remediation ledger. Correcting that header is not done here because
+    editing the file changes its checksum, which
+    staging/provisioning_snapshot.json records and scripts/verify_schema_drift.py
+    enforces -- and that baseline can only be regenerated against a real PostgreSQL
+    server.
     """
     cur = payout["cur"]
     with pytest.raises(psycopg2.errors.CheckViolation):
