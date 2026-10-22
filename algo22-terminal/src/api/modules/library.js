@@ -476,18 +476,39 @@ export const libraryApi = {
    * `POST /api/library/{library_id}/deploy` (`deploy_marketplace_strategy`, rate-limited
    * 10/60s). The subscriber-safe path: the server binds a new `strategy_deployments` row to
    * the OWNER's current version and never copies `buy_logic`/`sell_logic`/`risk`/
-   * `indicators` into a row the caller owns. Runs as a PAPER deployment — there is no live
-   * path for a marketplace Listing today.
+   * `indicators` into a row the caller owns.
    *
-   * `body` accepts only `symbol`, `timeframe`, `capital` and `session_options`; any other key
-   * is a 422 that names the field but never echoes the value. All four are optional.
+   * `mode` unset or `'paper'` runs exactly the PAPER path this always has. `mode: 'live'`
+   * (MKT-05) runs the SAME `deployment_binding.evaluate_binding` gate a first-party live
+   * deploy runs through, keyed to the SUBSCRIBER's own `exchange_account_id` and
+   * `risk_config_id` — never the owner's. The owner's model artifact (if the listing has one)
+   * is what the gate verifies against; it is never copied to the subscriber.
+   *
+   * `body` accepts only `symbol`, `timeframe`, `capital`, `session_options`, `mode`,
+   * `exchange_account_id`, `risk_config_id`, `execution_config` and `gap_strategy`; any other
+   * key is a 422 that names the field but never echoes the value.
    *
    * @param {string} listingId
-   * @param {{symbol?: string, timeframe?: string, capital?: number, session_options?: Object}} [body]
-   * @returns {Promise<Object>} `{deployment_id, library_id, granted_via, message}`.
+   * @param {{symbol?: string, timeframe?: string, capital?: number, session_options?: Object,
+   *   mode?: string, exchange_account_id?: string, risk_config_id?: string,
+   *   execution_config?: Object, gap_strategy?: string}} [body]
+   * @returns {Promise<Object>} `{deployment_id, library_id, granted_via, message}`, plus
+   *   `mode`/`exchange_account_id`/`risk_config_id` when the binding resolved one.
    */
   deploy: (listingId, body = {}) =>
     post(`/api/library/${encodeURIComponent(listingId)}/deploy`, body),
+
+  /**
+   * Whether this deployment the platform can currently run LIVE at all (MKT-05).
+   *
+   * `GET /api/system/trading-capabilities`, unauthenticated. The SAME check
+   * `pages/Strategies.jsx`'s first-party deploy modal already gates its own live/paper
+   * toggle on — reused here rather than re-decided, so the marketplace and first-party
+   * surfaces cannot disagree about whether Live is offered.
+   *
+   * @returns {Promise<{live_trading_available?: boolean}>}
+   */
+  tradingCapabilities: () => publicGet('/api/system/trading-capabilities'),
 
   /**
    * Submit or update the caller's rating for a Listing.

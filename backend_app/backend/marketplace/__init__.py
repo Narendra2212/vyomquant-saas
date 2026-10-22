@@ -610,19 +610,32 @@ _CHECKOUT_HANDLER = {
 #                                 ``updated_at`` are base columns (001 section 2 / 003 section 3).
 #                                 ``marketplace_listing_id`` is task 17.3's own additive column,
 #                                 created by ``011_marketplace_deployment_source.sql``.
-#   * ``strategy_versions``     - the one further read this path makes: the owner's version LABEL
-#                                 (``version``, e.g. "v1.2") for the ``NOT NULL VARCHAR(20)``
-#                                 ``strategy_deployments.version`` column. The Entitlement_Resolver
-#                                 returns the version *id*; the human-readable label is not an
-#                                 identifier and is deliberately not on :class:`Entitlement`, so
-#                                 it is read here. The projection names ``id`` and ``version``
-#                                 only - no ``blueprint`` and no ``execution_graph``, the two
-#                                 columns on that table that carry Protected_Logic.
+#                                 MKT-05 additionally writes, on a LIVE marketplace deploy only:
+#                                 ``exchange_id`` (001/003, already written by a first-party
+#                                 deploy) and the ``004e_deployment_bindings.sql`` columns
+#                                 ``exchange_account_id``, ``risk_config_id``,
+#                                 ``execution_config``, ``mode`` and ``dag_hash`` -
+#                                 ``deployment_binding.binding_row_columns`` is the SAME
+#                                 projection ``strategy_operations.deploy_version`` writes a
+#                                 first-party deployment with.
+#   * ``strategy_versions``     - the owner's version LABEL (``version``, e.g. "v1.2") for the
+#                                 ``NOT NULL VARCHAR(20)`` ``strategy_deployments.version``
+#                                 column. The Entitlement_Resolver returns the version *id*; the
+#                                 human-readable label is not an identifier and is deliberately
+#                                 not on :class:`Entitlement`, so it is read here. The paper-path
+#                                 projection names ``id`` and ``version`` only - no ``blueprint``
+#                                 and no ``execution_graph``, the two columns on that table that
+#                                 carry Protected_Logic. MKT-05's live path additionally reads
+#                                 ``lifecycle_state``, ``compiled_plan`` and ``dag_hash`` off the
+#                                 SAME row (``_owner_version_row_for_binding``) - the version's
+#                                 own gate inputs ``evaluate_binding`` needs, read server-side to
+#                                 RUN the version, never returned to the subscriber in any
+#                                 response this handler sends.
 #
 # ``strategy_deployments`` is NOT marked ``preexisting``, unlike ``strategy_versions``. The table
 # pre-dates this work, but ``marketplace_listing_id`` does not: marking the table pre-existing
 # would exempt the one column at risk from assertion 1 and leave the PGRST204 this manifest
-# exists to catch uncaught. Every other column listed for it is created by 001/003, so the
+# exists to catch uncaught. Every other column listed for it is created by 001/003/004e, so the
 # stricter setting costs nothing and buys the assertion that matters.
 _DEPLOYMENT_HANDLER = {
     "module": "backend_app.routers.library",
@@ -642,6 +655,13 @@ _DEPLOYMENT_HANDLER = {
                 "initial_capital",
                 "created_at",
                 "updated_at",
+                "exchange_id",
+                # MKT-05's live path only (004e_deployment_bindings.sql).
+                "exchange_account_id",
+                "risk_config_id",
+                "execution_config",
+                "mode",
+                "dag_hash",
             }
         ),
         "strategy_versions": frozenset({"id", "version"}),

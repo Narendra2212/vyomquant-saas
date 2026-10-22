@@ -461,6 +461,11 @@ describe('StrategyMarketplace transport (Requirements 20.2, 20.10)', () => {
       .filter((s) => s.startsWith('.'));
     expect(specifiers).toEqual([
       '../api',
+      // MKT-05: the live-deploy "no exchange accounts connected" refusal reuses the SAME
+      // `Alert` component `pages/Strategies.jsx`'s first-party deploy modal already renders
+      // its own account-refusal with — rendering, not transport; the one client behind the
+      // account read it gates is still `api.exchange.list()` through `../api`.
+      '../components/ds/Alert',
       '../components/ds/CommandButton',
       '../components/ds/Metric',
       '../components/ds/PageHeader',

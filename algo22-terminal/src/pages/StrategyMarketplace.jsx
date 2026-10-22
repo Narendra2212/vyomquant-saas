@@ -208,6 +208,7 @@ import {
   Search, Users, ArrowRight, Cpu, ArrowLeft, Flame, Trophy, Info, Clock,
 } from 'lucide-react';
 import api from '../api';
+import { Alert } from '../components/ds/Alert';
 import { CommandButton } from '../components/ds/CommandButton';
 import { Metric, formatFigure } from '../components/ds/Metric';
 import { PageHeader } from '../components/ds/PageHeader';
@@ -529,6 +530,65 @@ const StrategyMarketplace = () => {
   const [deployTimeframe, setDeployTimeframe] = useState('');
   const [deployCapital, setDeployCapital] = useState('');
   const [deployLoading, setDeployLoading] = useState(false);
+
+  // MKT-05: the live/paper mode toggle. Defaults to 'paper' -- the ONLY value that keeps
+  // `handleDeploy`'s request body byte-for-byte what it was before this toggle existed, so
+  // the paper-only flow this page shipped with stays unchanged for every trader who never
+  // touches the toggle. `liveAvailable` mirrors `pages/Strategies.jsx`'s own gate exactly:
+  // the SAME `/api/system/trading-capabilities` read, defaulting closed on any failure, so
+  // the two surfaces cannot disagree about whether Live is offered.
+  const [deployMode, setDeployMode] = useState('paper');
+  const [liveAvailable, setLiveAvailable] = useState(false);
+  // The subscriber's OWN connected exchange accounts -- read lazily, the first time Live is
+  // selected, via the SAME `api.exchange.list()` call `pages/Strategies.jsx`'s first-party
+  // deploy modal already uses for its own account picker. Never the owner's accounts: the
+  // backend resolves the owner's model artifact server-side and never asks this page for it.
+  const [connectedExchanges, setConnectedExchanges] = useState([]);
+  const [exchangesLoading, setExchangesLoading] = useState(false);
+  const [exchangesLoaded, setExchangesLoaded] = useState(false);
+  const [selectedAccount, setSelectedAccount] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const caps = await api.library.tradingCapabilities();
+        if (!cancelled) setLiveAvailable(caps?.live_trading_available === true);
+      } catch {
+        if (!cancelled) setLiveAvailable(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Fail closed exactly as `pages/Strategies.jsx` does: if Live stops being available (or
+  // was never confirmed), the toggle itself is forced back to paper so the request this page
+  // builds can never disagree with what the server just said is offered.
+  useEffect(() => {
+    if (!liveAvailable && deployMode !== 'paper') setDeployMode('paper');
+  }, [liveAvailable, deployMode]);
+
+  const loadConnectedExchangesOnce = useCallback(async () => {
+    if (exchangesLoaded || exchangesLoading) return;
+    setExchangesLoading(true);
+    try {
+      const accounts = await api.exchange.list();
+      const list = Array.isArray(accounts) ? accounts : accounts?.data || accounts?.exchanges || [];
+      setConnectedExchanges(list);
+      const firstConnected = list.find((a) => a.status === 'connected' || a.status === 'active');
+      if (firstConnected) setSelectedAccount(firstConnected);
+    } catch (err) {
+      console.error('Failed to load exchange accounts:', err);
+    } finally {
+      setExchangesLoaded(true);
+      setExchangesLoading(false);
+    }
+  }, [exchangesLoaded, exchangesLoading]);
+
+  const handleDeployModeChange = (mode) => {
+    setDeployMode(mode);
+    if (mode === 'live') loadConnectedExchangesOnce();
+  };
 
   /*
     ── THE ENTITLEMENT GATES ────────────────────────────────────────────────────────────────
@@ -927,9 +987,14 @@ const StrategyMarketplace = () => {
   // Deploy Flow (MKT-05)
   //
   // The subscriber-safe path: `api.library.deploy` binds a new `strategy_deployments` row to
-  // the OWNER's current version without copying its logic. It always runs as PAPER today —
-  // there is no live-trading path for a marketplace Listing in this backend yet, so this
-  // button never risks real capital regardless of what the trader enters below.
+  // the OWNER's current version without copying its logic.
+  //
+  // `deployMode === 'paper'` (the toggle's default, and the only value it can hold while
+  // `liveAvailable` is false) sends EXACTLY the body this handler always sent -- no `mode`
+  // key at all -- so the paper-only flow this page shipped with is byte-for-byte unchanged.
+  // `deployMode === 'live'` additionally sends `mode: 'live'` and the SUBSCRIBER's own
+  // `exchange_account_id`, gated through the same `deployment_binding.evaluate_binding` a
+  // first-party live deploy runs through server-side.
   const handleDeploy = async (strat) => {
     const listingId = strat?.listing_id;
     if (!listingId) return;
@@ -942,13 +1007,19 @@ const StrategyMarketplace = () => {
         const capital = Number(deployCapital);
         if (Number.isFinite(capital) && capital >= 0) body.capital = capital;
       }
+      if (deployMode === 'live') {
+        body.mode = 'live';
+        if (selectedAccount?.id) body.exchange_account_id = selectedAccount.id;
+      }
 
       const result = await api.library.deploy(listingId, body);
       const message = typeof result?.message === 'string' && result.message
         ? result.message
-        : 'Deployment created. It runs as a paper session.';
+        : deployMode === 'live'
+          ? 'Live deployment created against the owner\'s version.'
+          : 'Deployment created. It runs as a paper session.';
       notify('success', message);
-      navigate('/app/paper-trading');
+      navigate(deployMode === 'live' ? '/app/strategies' : '/app/paper-trading');
     } catch (err) {
       console.error(err);
       notify('error', errorMessage(err, 'Failed to deploy this strategy.'));
@@ -1464,8 +1535,74 @@ const StrategyMarketplace = () => {
                 <SectionHeader
                   level={3}
                   title="Deploy this strategy"
-                  subtitle="Runs as a paper session against the owner's current version. Every field below is optional."
+                  subtitle={
+                    deployMode === 'live'
+                      ? "Runs LIVE, against your own exchange account and the owner's current version."
+                      : "Runs as a paper session against the owner's current version. Every field below is optional."
+                  }
                 />
+                {/* MKT-05: the live/paper toggle, gated behind the SAME
+                    `/api/system/trading-capabilities` check `pages/Strategies.jsx`'s
+                    first-party deploy modal uses. Only two options ever render: Live is
+                    simply absent from the DOM while the server has not confirmed it, the
+                    same fail-closed shape that page's `PAPER_ONLY_MODE_OPTIONS` gives. */}
+                <div className="flex flex-wrap gap-3" data-testid="deploy-mode-toggle">
+                  <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                    Mode
+                    <select
+                      value={deployMode}
+                      onChange={(e) => handleDeployModeChange(e.target.value)}
+                      disabled={deployLoading}
+                      data-testid="deploy-mode-select"
+                      className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                    >
+                      <option value="paper">Paper (virtual execution)</option>
+                      {liveAvailable ? <option value="live">Live (real orders)</option> : null}
+                    </select>
+                  </label>
+
+                  {deployMode === 'live' ? (
+                    exchangesLoading ? (
+                      <p role="status" className="m-0 self-center font-mono text-micro text-content-secondary">
+                        Reading your connected exchange accounts…
+                      </p>
+                    ) : connectedExchanges.length === 0 ? (
+                      <Alert
+                        severity="error"
+                        title="No exchange accounts connected"
+                        data-testid="deploy-no-accounts"
+                        action={{
+                          label: 'Add an exchange account',
+                          onClick: () => navigate('/app/exchange'),
+                        }}
+                      >
+                        A live deployment binds one of YOUR connected exchange accounts, and
+                        this session has none.
+                      </Alert>
+                    ) : (
+                      <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                        Your exchange account
+                        <select
+                          value={selectedAccount?.id || ''}
+                          onChange={(e) => {
+                            const acct = connectedExchanges.find((a) => a.id === e.target.value);
+                            setSelectedAccount(acct || null);
+                          }}
+                          disabled={deployLoading}
+                          data-testid="deploy-exchange-account"
+                          className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                        >
+                          <option value="" disabled>Select an account</option>
+                          {connectedExchanges.map((acct) => (
+                            <option key={acct.id} value={acct.id}>
+                              {`${acct.exchange_id?.toUpperCase() || 'exchange'} — ${acct.name || acct.masked_key || acct.id.slice(0, 8)} [${acct.status}]`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )
+                  ) : null}
+                </div>
                 <div className="flex flex-wrap gap-3">
                   <label className="flex flex-col gap-1 text-micro text-content-secondary">
                     Symbol

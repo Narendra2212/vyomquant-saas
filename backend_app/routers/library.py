@@ -3261,21 +3261,34 @@ async def check_deployment_permission_endpoint(
 
 
 class DeployMarketplaceStrategyRequest(BaseModel):
-    """The subscriber-supplied body for ``POST /api/library/{id}/deploy`` (task 17.3).
+    """The subscriber-supplied body for ``POST /api/library/{id}/deploy`` (task 17.3, MKT-05).
 
     The subscriber controls only the *runtime* of the deployment — the symbol, the timeframe,
-    the capital committed and the session options. It never supplies, and can never smuggle in,
-    any part of the owner's Protected_Logic: there is no ``strategy_definition``, ``graph``,
-    ``compiled_plan``, ``buy_logic``, ``sell_logic``, ``risk``, ``indicators``, ``ml_model_path``,
-    ``version_id``, ``owner_id``, ``tenant_id`` or ``subscription_id`` field here (Requirements
-    7.1, 7.6, 7.8). ``model_config = extra="forbid"`` makes any such field a 422 — see
+    the capital committed, the session options, and (MKT-05) the deployment binding itself: its
+    mode, the subscriber's OWN exchange account and risk configuration, its execution limits and
+    its gap policy. It never supplies, and can never smuggle in, any part of the owner's
+    Protected_Logic: there is no ``strategy_definition``, ``graph``, ``compiled_plan``,
+    ``buy_logic``, ``sell_logic``, ``risk``, ``indicators``, ``ml_model_path``, ``version_id``,
+    ``owner_id``, ``tenant_id`` or ``subscription_id`` field here (Requirements 7.1, 7.6, 7.8).
+    ``model_config = extra="forbid"`` makes any such field a 422 — see
     :func:`_parse_deploy_request`, which produces the 422 by hand so it names the offending
     field(s) but **echoes no supplied value** (Requirement 7.6; a value echoed back into an
     error body is exactly the leakage this design forbids).
 
-    Only ``symbol`` and ``timeframe`` may cross the boundary; ``capital`` and ``session_options``
-    are accepted but not the concern of this task's persistence — the owner's version already
-    carries the executable artifact, and the deployment row binds to it rather than copying it.
+    ``symbol`` and ``timeframe`` may cross the boundary; ``capital`` and ``session_options`` are
+    accepted but not the concern of this task's persistence — the owner's version already carries
+    the executable artifact, and the deployment row binds to it rather than copying it.
+
+    MKT-05's five additions — ``mode``, ``exchange_account_id``, ``risk_config_id``,
+    ``execution_config`` and ``gap_strategy`` — are exactly the fields
+    ``strategy_operations.DeploymentBindingRequest`` already accepts for a first-party deploy,
+    carried over here unchanged so the two surfaces cannot disagree about the binding vocabulary.
+    They are forwarded, verbatim, into a
+    :class:`~backend_app.backend.deployment_binding.BindingRequest` and gated by
+    :func:`~backend_app.backend.deployment_binding.evaluate_binding` — the SAME gate a
+    first-party live deploy runs through. No field here can carry an exchange key, secret or
+    passphrase: ``exchange_account_id`` is a reference the subscriber's OWN vault entry is
+    resolved from, never a credential (Requirements 13.9, 21.7).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -3292,16 +3305,55 @@ class DeployMarketplaceStrategyRequest(BaseModel):
     session_options: Optional[dict] = Field(
         None, description="Opaque per-session runtime options."
     )
+    mode: Optional[str] = Field(
+        None, description="Deployment binding mode: 'paper' (default) or 'live' (chk_sd_mode)."
+    )
+    exchange_account_id: Optional[str] = Field(
+        None,
+        description=(
+            "The SUBSCRIBER's own connected exchange account id. A reference, never a "
+            "credential. Required when mode is 'live'."
+        ),
+    )
+    risk_config_id: Optional[str] = Field(
+        None, description="The SUBSCRIBER's own risk configuration id."
+    )
+    execution_config: Optional[dict] = Field(
+        None,
+        description=(
+            "max_order_notional, max_open_positions, slippage_tolerance_bps, "
+            "order_timeout_seconds, retry_policy"
+        ),
+    )
+    gap_strategy: Optional[str] = Field(
+        None,
+        description=(
+            "Requested market-data gap handling. Synthetic and interpolating fills are "
+            "refused; a live binding may not fill gaps at all (Requirement 13.7)."
+        ),
+    )
 
 
 #: The set of fields a subscriber may send to the deploy endpoint. Any other key is a 422 that
-#: names the key(s) but never their value (Requirement 7.6). It is exactly Requirement 7.5's
-#: list of execution parameters — symbol, timeframe, capital, session options — and nothing else:
-#: not a strategy definition, graph or compiled plan, and not a version, owner, tenant or
-#: subscription identifier, because every one of those is resolved server-side from the
-#: authenticated session and the Listing (Requirement 7.7).
+#: names the key(s) but never their value (Requirement 7.6). It is Requirement 7.5's list of
+#: execution parameters — symbol, timeframe, capital, session options — plus (MKT-05) the five
+#: binding fields a first-party live deploy already accepts (``mode``, ``exchange_account_id``,
+#: ``risk_config_id``, ``execution_config``, ``gap_strategy``). Nothing else: not a strategy
+#: definition, graph or compiled plan, and not a version, owner, tenant or subscription
+#: identifier, because every one of those is resolved server-side from the authenticated session
+#: and the Listing (Requirement 7.7).
 _DEPLOY_ALLOWED_FIELDS = frozenset(
-    {"symbol", "timeframe", "capital", "session_options"}
+    {
+        "symbol",
+        "timeframe",
+        "capital",
+        "session_options",
+        "mode",
+        "exchange_account_id",
+        "risk_config_id",
+        "execution_config",
+        "gap_strategy",
+    }
 )
 
 #: The stable code the deploy endpoint answers an unaccepted or malformed field with. Not a
@@ -3496,6 +3548,84 @@ def _owner_version_label(svc, version_id: str) -> Optional[str]:
     return str(label) if label is not None else None
 
 
+def _owner_version_row_for_binding(
+    svc, *, version_id: str, strategy_id: str
+) -> Optional[dict]:
+    """MKT-05. The OWNER's full ``strategy_versions`` row, for
+    :func:`~backend_app.backend.deployment_binding.evaluate_binding`.
+
+    ``evaluate_binding``'s gates (``assert_version_ready``, ``load_binding_plan``,
+    ``resolve_binding_market``) need ``lifecycle_state``, ``compiled_plan`` and ``dag_hash`` —
+    exactly the row ``strategy_operations.deploy_version`` loads for a first-party deploy via
+    ``StrategyService._load_deployable_version``. That helper also asserts the CALLER owns the
+    ``strategies`` row, which is wrong here: the subscriber does not and must not own the OWNER's
+    strategy — ownership of the Listing's version was already established by
+    ``entitlement_resolver.resolve`` (the single admission decision this handler already made).
+    So this is the same read, scoped to the OWNER's own ``strategy_id``/``version_id`` instead,
+    with no ownership assertion of its own to make.
+
+    Returns ``None`` when the row has vanished between admission and here (the caller answers
+    the same ``MARKETPLACE_STRATEGY_UNAVAILABLE`` 409 ``_owner_version_label`` uses for the
+    identical race).
+
+    Raises:
+        MarketplaceError: ``MARKETPLACE_READ_FAILED`` (503) when the read did not complete.
+    """
+    try:
+        resp = (
+            svc.table("strategy_versions")
+            .select("*")
+            .eq("id", version_id)
+            .eq("strategy_id", strategy_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(
+            f"deploy_strategy owner version-row read failed for {version_id}: {exc}"
+        )
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    rows = getattr(resp, "data", None) or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    return dict(rows[0]) if rows else None
+
+
+def _listing_owner_id(svc, lib_id: str) -> Optional[str]:
+    """MKT-05. The Listing's ``author_id`` — the MODEL_OWNER identity for ``evaluate_binding``.
+
+    A plan's model node(s) were trained by, and are verified against, the strategy's AUTHOR —
+    never the subscriber. This is the one additional read that supplies that identity;
+    ``entitlement_resolver.Entitlement`` deliberately does not carry it (it carries only the
+    identifiers a caller needs to execute the version, and the author's own id is not one of
+    them for the entitlement decision itself).
+
+    Returns ``None`` when the Listing has vanished between admission and here (the caller
+    answers the same 409 the resolver gives for an unresolvable Listing).
+
+    Raises:
+        MarketplaceError: ``MARKETPLACE_READ_FAILED`` (503) when the read did not complete.
+    """
+    try:
+        resp = (
+            svc.table("library_strategies")
+            .select("author_id")
+            .eq("id", lib_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"deploy_strategy listing owner read failed for {lib_id}: {exc}")
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    rows = getattr(resp, "data", None) or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not rows:
+        return None
+    owner_id = rows[0].get("author_id")
+    return str(owner_id) if owner_id else None
+
+
 @router.post("/{library_id}/deploy")
 @limiter.limit("10/60second", key_func=caller_or_address)
 async def deploy_marketplace_strategy(
@@ -3609,6 +3739,83 @@ async def deploy_marketplace_strategy(
             _entitlement_resolver.EntitlementReason.LISTING_UNAVAILABLE
         ])
 
+    # ── MKT-05: the live marketplace-deploy path. ──────────────────────────────────────────
+    #
+    #    `mode` unset or 'paper' falls through to EXACTLY today's behaviour below — the
+    #    `live_binding` stays `None` and nothing in this block runs. Anything else (in
+    #    particular 'live') goes through `deployment_binding.evaluate_binding` — the SAME gate
+    #    `strategy_operations.deploy_version` runs a first-party live deploy through — before
+    #    any deployment row is written.
+    #
+    #    THE ONE SUBTLETY: `model_owner_user_id`. The deploying identity `evaluate_binding` is
+    #    given is the SUBSCRIBER (`user_id`) for every gate — the exchange account, the risk
+    #    config, 13.6, the market/timeframe checks — exactly as a first-party deploy. The ONE
+    #    exception is the model-ownership check inside `assert_models_verified`: the plan's
+    #    model node(s), if any, were trained by and are verified against the LISTING OWNER
+    #    (`owner_user_id`), never the subscriber, because the owner's artifact is what the
+    #    subscriber is being allowed to run against their own account — server-side, never
+    #    copied to them (the same non-copying guarantee the paper path above already gives for
+    #    the owner's strategy logic). Passing `user_id` there instead would refuse every
+    #    marketplace listing with an ML node, for every subscriber, forever
+    #    (MODEL_NODE_NOT_BOUND) — see `deployment_binding._active_model_rows`'s own docstring.
+    raw_mode = str(deploy_request.mode or "paper").strip().lower()
+    live_binding = None
+    if raw_mode != "paper":
+        from backend_app.backend import deployment_binding as db_binding
+
+        owner_user_id = _listing_owner_id(svc, lib_id)
+        if not owner_user_id:
+            raise MarketplaceError(_entitlement_resolver.WIRE_CODE_FOR_REASON[
+                _entitlement_resolver.EntitlementReason.LISTING_UNAVAILABLE
+            ])
+
+        owner_version_row = _owner_version_row_for_binding(
+            svc, version_id=owner_version_id, strategy_id=owner_strategy_id
+        )
+        if owner_version_row is None:
+            raise MarketplaceError(_entitlement_resolver.WIRE_CODE_FOR_REASON[
+                _entitlement_resolver.EntitlementReason.LISTING_UNAVAILABLE
+            ])
+
+        binding_request = db_binding.BindingRequest(
+            mode=deploy_request.mode,
+            exchange_account_id=deploy_request.exchange_account_id,
+            risk_config_id=deploy_request.risk_config_id,
+            execution_config=deploy_request.execution_config,
+            gap_strategy=deploy_request.gap_strategy,
+        )
+
+        try:
+            live_binding = await db_binding.evaluate_binding(
+                svc,
+                {"id": user_id},
+                owner_version_row,
+                owner_strategy_id,
+                owner_version_label,
+                binding_request,
+                model_owner_user_id=owner_user_id,
+            )
+            binding_columns_available = await db_binding.binding_columns_supported(svc)
+            db_binding.assert_binding_storable(
+                live_binding, columns_available=binding_columns_available
+            )
+        except db_binding.DeployRejected as exc:
+            # Requirement 7.12's own standing rule, applied to this new refusal family too:
+            # one MARKETPLACE_ACCESS_REFUSED Audit_Log entry, carrying the gate's stable code
+            # and no Protected_Logic — `exc.details` never carries a graph, node, indicator,
+            # threshold or model path (see `deployment_binding`'s own module docstring).
+            await _audit_marketplace_refusal(
+                actor_id=user_id,
+                listing_id=lib_id,
+                operation="deploy",
+                reason=exc.code,
+                extra={"http_status": exc.http_status},
+            )
+            # Same shape `strategy_operations._deploy_rejected_http` uses: the status lives on
+            # the exception, decided once in `deployment_binding`, so the two live-deploy
+            # surfaces (first-party and marketplace) cannot disagree about it.
+            raise HTTPException(status_code=exc.http_status, detail=exc.to_detail())
+
     now_ts = datetime.now(timezone.utc).isoformat()
 
     # ── The subscriber-safe deployment row (Requirements 7.1, 7.5).
@@ -3656,6 +3863,25 @@ async def deploy_marketplace_strategy(
     if deploy_request.capital is not None:
         deployment_payload["initial_capital"] = deploy_request.capital
 
+    # ── MKT-05: the resolved, GATED binding overrides the paper defaults above. ─────────────
+    #
+    #    `environment` is set to 'live' only from `live_binding.mode` — the value
+    #    `evaluate_binding` itself resolved and validated (`chk_sd_mode`'s vocabulary) — never
+    #    from the raw, unvalidated `deploy_request.mode` the subscriber sent. `binding_row_
+    #    columns` is the SAME projection `strategy_operations.deploy_version` writes with for a
+    #    first-party deploy: `exchange_account_id`, `risk_config_id`, `execution_config`,
+    #    `mode`, `dag_hash` — all five are 004e's columns, already confirmed storable above.
+    #    `exchange_symbol` is overwritten with the binding's own `symbol` (from the owner's
+    #    compiled plan via the market gate), which is authoritative over whatever the
+    #    subscriber additionally sent — the same "resolved from the version, never a default or
+    #    a request value" rule `strategy_service.deploy_version` applies to `exchange_symbol`.
+    if live_binding is not None:
+        deployment_payload.update(db_binding.binding_row_columns(live_binding))
+        deployment_payload["environment"] = live_binding.mode
+        deployment_payload["exchange_id"] = live_binding.exchange_id
+        if live_binding.symbol:
+            deployment_payload["exchange_symbol"] = live_binding.symbol
+
     try:
         deploy_resp = (
             svc.table("strategy_deployments").insert(deployment_payload).execute()
@@ -3687,12 +3913,19 @@ async def deploy_marketplace_strategy(
     # granted. It carries no `strategy_id`, no `version_id` and no part of the owner's
     # definition: those are server-side identifiers for an artifact the subscriber executes and
     # may not read (Requirement 7.1).
-    return {
+    response = {
         "deployment_id": deployment_id,
         "library_id": lib_id,
         "granted_via": entitlement.reason.value,
         "message": "Marketplace deployment created against the owner's version.",
     }
+    if live_binding is not None:
+        # The subscriber's OWN binding fields, echoed back exactly as a first-party deploy's
+        # `public_binding` discloses them — never a credential, never the owner's identity.
+        response["mode"] = live_binding.mode
+        response["exchange_account_id"] = live_binding.exchange_account_id
+        response["risk_config_id"] = live_binding.risk_config_id
+    return response
 
 @router.post("/subscriptions/{sub_id}/cancel")
 @limiter.limit("10/60second", key_func=caller_or_address)

@@ -1351,7 +1351,7 @@ def assert_account_required_for_live(mode: str, exchange_account_id: Optional[st
 
 
 async def _active_model_rows(
-    sb: Any, user_id: str, version_id: str
+    sb: Any, user_id: str, version_id: str, *, model_owner_user_id: Optional[str] = None
 ) -> Dict[str, Dict[str, Any]]:
     """``{node_id: row}`` for this version's active model versions, ownership re-checked.
 
@@ -1362,6 +1362,18 @@ async def _active_model_rows(
     :func:`load_owned_exchange_account` uses. A row belonging to another tenant is
     dropped rather than reported, which lands on ``MODEL_NODE_NOT_BOUND`` for that node
     rather than confirming that someone else's model version exists.
+
+    ``model_owner_user_id`` is the identity the model row must belong to, and defaults to
+    ``user_id`` (the deploying user) when not given - which is exactly the first-party
+    call shape and leaves it unchanged. MKT-05 passes the MARKETPLACE LISTING OWNER's id
+    here while every other ownership check in :func:`evaluate_binding` (the exchange
+    account, the risk config) stays keyed to the deploying SUBSCRIBER: the model artifact
+    was trained by, and is verified against, the strategy's author, never the subscriber -
+    the subscriber supplies real exchange credentials and a real risk profile to run the
+    owner's already-verified model against, server-side, and the model is never copied to
+    them. Without this split, every marketplace listing with an ML node would be refused
+    with ``MODEL_NODE_NOT_BOUND`` for every subscriber, forever, because the row the owner
+    trained would be filtered out as "not owned by the deploying user".
 
     Raises
         :class:`DeployRejected` ``MODEL_VERSIONS_UNAVAILABLE`` (503) when 004d is
@@ -1374,6 +1386,8 @@ async def _active_model_rows(
         MODEL_MIGRATION,
         active_model_versions,
     )
+
+    owner_id = str(model_owner_user_id) if model_owner_user_id is not None else str(user_id)
 
     try:
         rows = await active_model_versions(sb, str(version_id))
@@ -1394,13 +1408,14 @@ async def _active_model_rows(
 
     owned: Dict[str, Dict[str, Any]] = {}
     for node_id, row in (rows or {}).items():
-        if str((row or {}).get("user_id") or "") != str(user_id):
+        if str((row or {}).get("user_id") or "") != owner_id:
             logger.error(
                 "[DeploymentBinding] model version %s for node %s of version %s is not "
-                "owned by the deploying user; it is not consulted.",
+                "owned by %s; it is not consulted.",
                 (row or {}).get("id"),
                 node_id,
                 version_id,
+                owner_id,
             )
             continue
         owned[str(node_id)] = dict(row)
@@ -1415,8 +1430,13 @@ async def assert_models_verified(
     *,
     registry: Any = None,
     store: Any = None,
+    model_owner_user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Requirements 17.6 and 17.7, at deploy time. Returns any non-blocking warnings.
+
+    ``model_owner_user_id`` defaults to ``user["id"]`` (unchanged first-party behaviour)
+    and is forwarded verbatim to :func:`_active_model_rows` - see that function's
+    docstring for MKT-05's reason this parameter exists at all.
 
     17.6's second enforcer, verbatim: "THE Deployment_Service SHALL hold the deployment
     out of the running state". A deployment refused here never reaches ``DEPLOYING``, so
@@ -1441,7 +1461,9 @@ async def assert_models_verified(
         return []
 
     version_id = str(version_row.get("id") or "")
-    model_rows = await _active_model_rows(sb, str(user["id"]), version_id)
+    model_rows = await _active_model_rows(
+        sb, str(user["id"]), version_id, model_owner_user_id=model_owner_user_id
+    )
     report = mr.evaluate_model_gates(
         version_id, plan, model_rows, registry=registry, store=store
     )
@@ -1501,6 +1523,8 @@ async def evaluate_binding(
     strategy_id: str,
     version: Any,
     request: BindingRequest,
+    *,
+    model_owner_user_id: Optional[str] = None,
 ) -> DeploymentBinding:
     """Every gate, in order, producing the binding that is about to be written.
 
@@ -1519,6 +1543,15 @@ async def evaluate_binding(
     does not match its recorded checksum cannot run on **any** account, so resolving one
     would be work done to answer a question already settled - and it would put an account
     id in a log line for a deploy that was never going to happen.
+
+    ``model_owner_user_id`` (MKT-05): the identity the plan's model node(s) must be owned
+    by, forwarded verbatim to :func:`assert_models_verified`. Defaults to ``user["id"]``,
+    which is the unchanged first-party call shape (``strategy_operations.deploy_version``
+    passes nothing here and gets exactly today's behaviour). The marketplace live-deploy
+    path passes the LISTING OWNER's id so the deploying SUBSCRIBER can run the owner's
+    already-verified model, while every OTHER gate in this function - the exchange account,
+    the risk config, 13.6, the market/timeframe checks - stays keyed to ``user["id"]`` (the
+    subscriber), exactly as for a first-party deploy.
     """
     assert_version_ready(version_row, strategy_id, version)
 
@@ -1530,7 +1563,9 @@ async def evaluate_binding(
     execution_config = normalise_execution_config(request.execution_config)
     gap_policy = resolve_binding_gap_policy(mode, request.gap_strategy)
 
-    model_warnings = await assert_models_verified(sb, user, version_row, plan)
+    model_warnings = await assert_models_verified(
+        sb, user, version_row, plan, model_owner_user_id=model_owner_user_id
+    )
 
     exchange_id: Optional[str] = None
     if request.exchange_account_id:
