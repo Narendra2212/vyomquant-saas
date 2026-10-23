@@ -37,6 +37,7 @@ export { supportApi } from './modules/support';
 export { paperApi } from './modules/paper';
 export { libraryApi } from './modules/library';
 export { notificationsApi } from './modules/notifications';
+export { legalApi } from './modules/legal';
 
 // Import all modules for consolidated export
 import { assetsApi } from './modules/assets';
@@ -57,6 +58,7 @@ import { supportApi } from './modules/support';
 import { paperApi } from './modules/paper';
 import { libraryApi } from './modules/library';
 import { notificationsApi } from './modules/notifications';
+import { legalApi } from './modules/legal';
 
 /**
  * Consolidated API object - single entry point for all API calls
@@ -81,6 +83,10 @@ export const api = {
   health: healthApi,
   support: supportApi,
   notifications: notificationsApi,
+  // LEGAL-01: records which version of the Terms/Privacy/Risk/Refund documents
+  // a user accepted. The signup checkbox used to be React state that was never
+  // sent anywhere, so the platform could not answer that for any account.
+  legal: legalApi,
 };
 
 /**

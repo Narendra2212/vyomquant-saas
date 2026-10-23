@@ -338,6 +338,11 @@ import { supabase } from "../supabase";
 // ERR_CONNECTION_REFUSED with a perfectly valid token in the hash. See `config.js`.
 import { getAuthRedirectUrl } from "../config";
 
+// LEGAL-01: the signup consent checkbox below used to be React state that gated
+// this form and was then discarded. These two make it a persisted record.
+import { api } from "../api";
+import { LEGAL_VERSION, SIGNUP_REQUIRED_DOCUMENTS } from "../legal/documents";
+
 const RESEND_COOLDOWN_SECONDS = 60;
 
 export const AUTH_STATES = {
@@ -754,6 +759,38 @@ export default function AuthPage({ mode = "signin" }) {
       if (data?.session?.access_token) {
         setAuthState(AUTH_STATES.AUTHENTICATED);
         sessionStorage.setItem("token", data.session.access_token);
+
+        // LEGAL-01: PERSIST THE ACCEPTANCE. This is the only point in the signup
+        // flow where a session exists — the password step deliberately calls
+        // signOut() so nothing live exists before OTP succeeds — and the
+        // endpoint requires authentication, so it cannot be called earlier.
+        //
+        // Until now `agreedToPolicies` gated this form and was then discarded,
+        // so no record of any user's acceptance existed anywhere.
+        //
+        // DELIBERATELY NOT AWAITED AS A BLOCKER, AND DELIBERATELY NOT SILENT.
+        // The user has authenticated; refusing them the dashboard because an
+        // audit write failed would be the wrong trade. But a failure that
+        // vanished would recreate the original defect, so it is logged and the
+        // app re-prompts on next load (getMyAcceptance reports
+        // needs_acceptance: true while no row exists).
+        if (isUp) {
+          api.legal
+            .accept({
+              version: LEGAL_VERSION,
+              documents: SIGNUP_REQUIRED_DOCUMENTS,
+              context: "signup",
+            })
+            .catch((acceptErr) => {
+               
+              console.error(
+                "[LEGAL-01] acceptance was NOT recorded for this signup; the "
+                  + "user will be re-prompted on next load.",
+                acceptErr,
+              );
+            });
+        }
+
         setSuccess("Authentication successful. Redirecting to dashboard...");
         navigate("/app/dashboard");
       } else {

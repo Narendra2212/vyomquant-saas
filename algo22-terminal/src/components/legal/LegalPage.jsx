@@ -1,124 +1,33 @@
-import React from 'react'
+/**
+ * src/components/legal/LegalPage.jsx — LEGAL-01
+ *
+ * Renders a legal document. THE TEXT IS NOT HERE.
+ *
+ * It lives in `src/legal/documents.js`, which is the single source of truth, and
+ * this file is presentation only. Before this change the prose was a
+ * `legalContent` object literal in this file AND a second, different `DOCUMENTS`
+ * object in `src/pages/LegalPage.jsx`, both routed and both served. They
+ * contradicted each other on refunds: one promised pro-rated service credits,
+ * the other said all purchases were final. Which page a customer happened to
+ * open decided whether they were owed money.
+ *
+ * `src/pages/LegalPage.jsx` has been deleted and `/legal` now redirects to
+ * `/legal/terms`, so there is one body of text reachable by one set of routes.
+ */
+
 import { Link } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 
-const legalContent = {
-  privacy: {
-    title: 'Privacy Policy',
-    updated: '2026-06-01',
-    sections: [
-      {
-        heading: '1. Information We Collect',
-        body: `We collect information you provide directly to us: name, email address, trading experience level, and expected volume when you join our waitlist or create an account. We also collect usage data automatically including IP address, browser type, pages visited, and platform interactions.`,
-      },
-      {
-        heading: '2. How We Use Your Information',
-        body: `We use collected information to provide, maintain, and improve the VyomQuant platform; send you waitlist notifications and product updates; monitor for fraudulent activity; and comply with legal obligations. We do not sell your personal data to third parties.`,
-      },
-      {
-        heading: '3. Exchange API Credentials',
-        body: `Exchange API keys you provide are encrypted at rest. We never store your API secret in plaintext. Read-only API permissions are enforced by default. You may delete your API keys at any time from the platform settings.`,
-      },
-      {
-        heading: '4. Data Retention',
-        body: `We retain your account data for the duration of your account. Waitlist data is retained for 24 months. You may request deletion of your data by contacting us at privacy@vyomquant.com.`,
-      },
-      {
-        heading: '5. Cookies',
-        body: `We use strictly necessary cookies for authentication session management. We do not use third-party tracking or advertising cookies.`,
-      },
-      {
-        heading: '6. Contact',
-        body: `For privacy inquiries, contact: privacy@vyomquant.com.`,
-      },
-    ],
-  },
-  terms: {
-    title: 'Terms of Service',
-    updated: '2026-06-01',
-    sections: [
-      {
-        heading: '1. Acceptance',
-        body: `By accessing or using VyomQuant, you agree to be bound by these Terms of Service and all applicable laws. If you do not agree, do not use the platform.`,
-      },
-      {
-        heading: '2. Platform Use',
-        body: `VyomQuant provides systematic trading infrastructure software. You are solely responsible for all trading decisions, strategy configurations, and orders placed through the platform. Paper trading mode is enabled by default; live trading requires explicit activation per strategy.`,
-      },
-      {
-        heading: '3. Account Responsibility',
-        body: `You are responsible for maintaining the confidentiality of your account credentials. You must not share accounts or allow unauthorized access. Notify us immediately of any unauthorized use.`,
-      },
-      {
-        heading: '4. Prohibited Uses',
-        body: `You may not use VyomQuant for market manipulation, wash trading, front-running, or any activity that violates applicable securities laws or exchange terms of service. Violation results in immediate account termination.`,
-      },
-      {
-        heading: '5. Intellectual Property',
-        body: `VyomQuant software, design, and content is owned by VyomQuant. Community strategies published on the marketplace remain the intellectual property of their creators.`,
-      },
-      {
-        heading: '6. Limitation of Liability',
-        body: `VyomQuant shall not be liable for any trading losses, missed opportunities, or financial damage arising from use of the platform. Software is provided "as is" without warranty of any kind.`,
-      },
-    ],
-  },
-  risk: {
-    title: 'Risk Disclosure',
-    updated: '2026-06-01',
-    sections: [
-      {
-        heading: 'Important Risk Warning',
-        body: `Algorithmic trading and cryptocurrency trading involve substantial risk of loss. You could lose some or all of your invested capital. You should not trade with money you cannot afford to lose.`,
-      },
-      {
-        heading: 'No Financial Advice',
-        body: `VyomQuant is not a registered investment adviser. Nothing on this platform constitutes financial advice, investment advice, or a recommendation to buy or sell any asset. All content is for educational and infrastructure purposes only.`,
-      },
-      {
-        heading: 'Backtest Limitations',
-        body: `Historical backtesting results do not guarantee future performance. Backtests are subject to survivorship bias, look-ahead bias, and market impact that is not modeled. Live results may differ materially from backtest results.`,
-      },
-      {
-        heading: 'Paper Trading',
-        body: `Paper trading simulates orders but does not account for slippage, partial fills, exchange downtime, or liquidity constraints. Paper trading performance may differ from live trading performance.`,
-      },
-      {
-        heading: 'Exchange Risk',
-        body: `Cryptocurrency exchanges may freeze funds, halt withdrawals, or close without notice. VyomQuant has no control over connected exchanges and is not responsible for exchange failures.`,
-      },
-      {
-        heading: 'Technology Risk',
-        body: `Software bugs, network failures, API outages, or latency spikes may cause unintended orders or missed executions. Always monitor your running strategies.`,
-      },
-    ],
-  },
-  refund: {
-    title: 'Refund Policy',
-    updated: '2026-06-01',
-    sections: [
-      {
-        heading: '1. Subscription Fees',
-        body: `Paid subscription fees are non-refundable except where required by applicable law. If you cancel your subscription, you retain access to paid features until the end of your current billing period.`,
-      },
-      {
-        heading: '2. Free Beta Period',
-        body: `During the closed beta period, VyomQuant is provided at no charge. No refunds are applicable to beta access.`,
-      },
-      {
-        heading: '3. Exceptional Circumstances',
-        body: `In cases of platform unavailability exceeding 72 continuous hours, we may, at our discretion, issue pro-rated service credits. Service credits are not redeemable for cash.`,
-      },
-      {
-        heading: '4. Contact for Billing Issues',
-        body: `For billing inquiries or refund requests under applicable law, contact: billing@vyomquant.com within 14 days of the charge.`,
-      },
-    ],
-  },
-}
+import {
+  DOCUMENTS,
+  DOCUMENT_ORDER,
+  LEGAL_EFFECTIVE_DATE,
+  LEGAL_VERSION,
+  REVIEW_NOTES,
+} from '../../legal/documents'
 
-export default function LegalPage({ type = 'privacy' }) {
-  const content = legalContent[type] || legalContent.privacy
+export default function LegalPage({ type = 'terms' }) {
+  const content = DOCUMENTS[type] || DOCUMENTS.terms
 
   return (
     <div className="relative min-h-screen bg-surface-canvas">
@@ -145,29 +54,83 @@ export default function LegalPage({ type = 'privacy' }) {
             </div>
             <span className="text-sm font-mono text-content-secondary">VyomQuant Legal</span>
           </div>
-          <h1 className="text-3xl sm:text-4xl font-black text-content-primary mt-4 mb-2">{content.title}</h1>
-          <p className="text-xs font-mono text-content-secondary">Last updated: {content.updated}</p>
+          <h1 className="text-3xl sm:text-4xl font-black text-content-primary mt-4 mb-2">
+            {content.title}
+          </h1>
+          <p className="text-xs font-mono text-content-secondary">
+            Version {LEGAL_VERSION} &middot; effective {LEGAL_EFFECTIVE_DATE}
+          </p>
         </div>
 
-        {/* Legal content */}
+        {/* Document navigation, so a reader can move between all four rather
+            than returning to the footer. */}
+        <nav className="mb-10 flex flex-wrap gap-2" aria-label="Legal documents">
+          {DOCUMENT_ORDER.map((id) => (
+            <Link
+              key={id}
+              to={`/legal/${id}`}
+              aria-current={id === content.id ? 'page' : undefined}
+              className={
+                id === content.id
+                  ? 'rounded-lg border border-brand/40 bg-brand/10 px-3 py-1.5 text-xs font-mono text-content-primary'
+                  : 'rounded-lg border border-line-default px-3 py-1.5 text-xs font-mono text-content-secondary hover:text-content-primary transition-colors'
+              }
+            >
+              {DOCUMENTS[id].title}
+            </Link>
+          ))}
+        </nav>
+
+        {/* Legal content. `white-space: pre-line` so the paragraph breaks and
+            bullet lists authored in documents.js survive rendering — the text is
+            written for a human to read, not reflowed into one block. */}
         <div className="space-y-8">
           {content.sections.map((section, i) => (
-            <div key={i} className="card-surface p-6">
-              <h2 className="text-base font-bold text-content-primary mb-3">{section.heading}</h2>
-              <p className="text-sm text-content-secondary leading-relaxed">{section.body}</p>
+            <div key={section.heading || i} className="card-surface p-6">
+              <h2 className="text-base font-bold text-content-primary mb-3">
+                {section.heading}
+              </h2>
+              <p className="whitespace-pre-line text-sm text-content-secondary leading-relaxed">
+                {section.body}
+              </p>
             </div>
           ))}
         </div>
 
+        {/* REVIEW NOTES, NON-PRODUCTION ONLY.
+            These documents are accurate and complete but NOT counsel-reviewed.
+            Showing the outstanding clauses in dev and preview builds keeps that
+            visible to whoever is working on the product, without putting an
+            internal to-do list in front of a customer. */}
+        {import.meta.env.MODE !== 'production' && REVIEW_NOTES.length > 0 && (
+          <div className="mt-12 rounded-lg border border-amber-500/40 bg-amber-500/5 p-6">
+            <h2 className="mb-3 text-sm font-bold text-amber-400">
+              Pending legal review ({REVIEW_NOTES.length}) &mdash; not shown in production
+            </h2>
+            <ul className="list-disc space-y-2 pl-5 text-xs text-content-secondary">
+              {REVIEW_NOTES.map((note, i) => (
+                <li key={i}>{note}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Footer nav */}
         <div className="mt-12 pt-8 border-t border-line-default">
           <div className="flex flex-wrap gap-4 text-xs font-mono text-content-secondary">
-            <Link to="/legal/privacy" className="hover:text-content-primary transition-colors">Privacy Policy</Link>
-            <Link to="/legal/terms" className="hover:text-content-primary transition-colors">Terms of Service</Link>
-            <Link to="/legal/risk" className="hover:text-content-primary transition-colors">Risk Disclosure</Link>
-            <Link to="/legal/refund" className="hover:text-content-primary transition-colors">Refund Policy</Link>
+            {DOCUMENT_ORDER.map((id) => (
+              <Link
+                key={id}
+                to={`/legal/${id}`}
+                className="hover:text-content-primary transition-colors"
+              >
+                {DOCUMENTS[id].title}
+              </Link>
+            ))}
           </div>
-          <p className="text-xs text-content-secondary mt-4">© {new Date().getFullYear()} VyomQuant. Not financial advice.</p>
+          <p className="text-xs text-content-secondary mt-4">
+            © {new Date().getFullYear()} VyomQuant. Not financial advice.
+          </p>
         </div>
       </div>
     </div>
