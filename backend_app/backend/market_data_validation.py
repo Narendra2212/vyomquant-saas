@@ -606,9 +606,19 @@ class GapHandler:
         df: pd.DataFrame,
         timeframe: str,
         strategy: GapHandlingStrategy,
-        max_gap_minutes: float
+        max_gap_minutes: float,
+        symbol: str = "UNKNOWN",
     ) -> Tuple[pd.DataFrame, List[ValidationIssue]]:
-        """Detect and handle gaps in data."""
+        """Detect and handle gaps in data.
+
+        DATA-03: ``symbol`` is threaded through for the same reason it was threaded into
+        :class:`OutlierDetector` -- so a refusal says WHICH instrument was refused. This
+        message interpolated the literal ``'UNKNOWN'``, and unlike the outlier path it was
+        not even a parameter with a fallback: it was a hardcoded string, so a gap refusal
+        could never name the feed no matter what the caller knew. ``MarketDataValidator.
+        validate`` has the symbol and already passes it to the three validators either
+        side of this one.
+        """
         issues = []
         
         if len(df) < 2:
@@ -624,21 +634,30 @@ class GapHandler:
         gap_count = gaps.sum()
         
         if gap_count > 0:
-            max_gap = time_diffs[gaps].max()
-            max_gap_minutes = max_gap.total_seconds() / 60
+            # DATA-03: the observed width is a DIFFERENT quantity from the configured
+            # threshold and no longer overwrites it. This local was previously also named
+            # `max_gap_minutes`, shadowing the parameter of that name before it was ever
+            # read -- which made the severity test below `x < x`, constantly False, so the
+            # issue was classified "error" regardless of the configured tolerance and the
+            # caller's `max_gap_minutes` setting had no effect on this path at all.
+            observed_gap_minutes = time_diffs[gaps].max().total_seconds() / 60
             
             issues.append(ValidationIssue(
                 issue_type="data_gaps",
-                severity="warning" if max_gap_minutes < max_gap_minutes else "error",
+                severity="warning" if observed_gap_minutes < max_gap_minutes else "error",
                 timestamp=None,
-                message=f"Found {gap_count} gaps, max: {max_gap_minutes:.1f} minutes",
-                details={"count": int(gap_count), "max_gap_minutes": max_gap_minutes}
+                message=f"Found {gap_count} gaps, max: {observed_gap_minutes:.1f} minutes",
+                details={
+                    "count": int(gap_count),
+                    "max_gap_minutes": observed_gap_minutes,
+                    "configured_max_gap_minutes": max_gap_minutes,
+                }
             ))
             
             # STEP 1: HARD FAIL - No gap filling
             raise DataValidationError(
-                f"Found {gap_count} data gaps (max: {max_gap_minutes:.1f} min) "
-                f"for {'UNKNOWN'}. Dataset rejected - no synthetic data allowed."
+                f"Found {gap_count} data gaps (max: {observed_gap_minutes:.1f} min) "
+                f"for {symbol}. Dataset rejected - no synthetic data allowed."
             )
         
         return df, issues
@@ -830,8 +849,10 @@ class MarketDataValidator:
         issues.extend(outlier_issues)
         
         # Step 4: Gap handling
+        # DATA-03: `symbol` passed for the same reason as Step 3 above -- a gap refusal
+        # read "for UNKNOWN" from a hardcoded literal, so it could never name the feed.
         df, gap_issues = GapHandler.handle(
-            df, timeframe, self.config.gap_strategy, self.config.max_gap_minutes
+            df, timeframe, self.config.gap_strategy, self.config.max_gap_minutes, symbol
         )
         issues.extend(gap_issues)
         
