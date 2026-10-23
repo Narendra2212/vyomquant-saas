@@ -65,21 +65,33 @@ REQUIREMENT_FILES: Tuple[str, ...] = (
 #: Same ratchet-from-a-known-baseline convention as 05-security.yml's own
 #: ``--ignore-vuln`` list: an advisory outside this map fails the job, and an entry is
 #: removed in the same commit that bumps the pin which fixes it.
-IGNORED: Dict[str, str] = {
-    # torch, LOW. No fixed version exists in ANY torch release as of this commit --
-    # PyPI reports fixed_in as empty. Nothing to upgrade to; recorded rather than hidden.
-    "PYSEC-2026-139": (
-        "torch CVE-2026-4538, LOW, no fixed version published in any release yet"
-    ),
-    # torch, LOW. Fixed in 2.13.0. Deliberately not taken in the same commit as the
-    # 2.3.1 -> 2.10.0 bump: 2.10.0 is the cut point that clears every CRITICAL, HIGH and
-    # MODERATE advisory, and stretching to 2.13.0 for one LOW widens the blast radius of
-    # a dependency this app only uses for optional seeding and GPU detection.
-    "GHSA-rrmf-rvhw-rf47": (
-        "torch CVE-2025-3000, LOW, needs 2.13.0; tracked in DEP-01 for a later pass"
-    ),
-    "PYSEC-2025-194": "alias of GHSA-rrmf-rvhw-rf47 (torch CVE-2025-3000, LOW)",
-}
+#:
+#: THIS MAP IS NOW EMPTY, and DEP-01 is suppression-free across BOTH dependency gates --
+#: this one and 05-security.yml's pip-audit step, which no longer passes --ignore-vuln
+#: either.
+#:
+#: The three entries removed were all torch, all LOW, and both of their stated reasons
+#: had expired:
+#:
+#:   GHSA-rrmf-rvhw-rf47 / CVE-2025-3000 (memory corruption via torch.jit)
+#:   PYSEC-2025-194 (its alias)
+#:       Accepted as "needs 2.13.0; tracked in DEP-01 for a later pass", on the
+#:       reasoning that stretching from 2.10.0 to 2.13.0 for one LOW would widen the
+#:       blast radius of a dependency used only for optional seeding and GPU detection.
+#:       That reasoning was sound at the time. It is now cheap to take: 2.13.0+ exists,
+#:       `torch==2.14.1+cpu` is on download.pytorch.org for cp311, and the API surface
+#:       actually used is seven symbols in one module, all stable since torch 1.x.
+#:
+#:   PYSEC-2026-139 / CVE-2026-4538
+#:       Accepted as "no fixed version published in any release yet", which was true
+#:       when written. OSV now reports torch 2.13.0, 2.14.0 and 2.14.1 as UNAFFECTED.
+#:       An accepted advisory whose justification has silently expired is the failure
+#:       mode this whole convention exists to prevent, and it happened here.
+#:
+#: BEFORE ADDING AN ENTRY BACK: re-query OSV for the pin rather than trusting a previous
+#: pass's note. Both entries above, and the razorpay premise that kept setuptools pinned
+#: in requirements-base.txt, were inherited conclusions that had stopped being true.
+IGNORED: Dict[str, str] = {}
 
 LOCAL_PIN_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*(?P<version>[^\s;#]+)"

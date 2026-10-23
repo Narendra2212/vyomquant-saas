@@ -4,9 +4,34 @@
 # GHSA-53q9-r3pm-6pq6 / CVE-2025-32434 (CRITICAL, remote code execution via torch.load,
 # fixed in 2.6.0). The blocking pip-audit gate never saw any of them: the `+cpu` local
 # version cannot be resolved against PyPI, so pip-audit SKIPPED this pin and still
-# reported "No known vulnerabilities found". 2.10.0 is the cut point that clears every
-# CRITICAL, HIGH and MODERATE advisory; the two LOW residuals are audited and accepted by
-# name in scripts/audit_local_version_pins.py, which exists because of this blind spot.
+# reported "No known vulnerabilities found". That blind spot is why
+# scripts/audit_local_version_pins.py exists.
+#
+# 2.10.0 -> 2.14.1, WHICH EMPTIES THAT SCRIPT'S IGNORE MAP COMPLETELY.
+#
+# 2.10.0 was chosen as "the cut point that clears every CRITICAL, HIGH and MODERATE
+# advisory", leaving two LOW residuals accepted by name. Both are now gone, and one of
+# them for a reason the accepting comment did not anticipate:
+#
+#   GHSA-rrmf-rvhw-rf47 / CVE-2025-3000 (LOW, memory corruption via torch.jit) --
+#       recorded as "needs 2.13.0; tracked in DEP-01 for a later pass". This is that
+#       pass. OSV reports fixed in 2.13.0.
+#   PYSEC-2026-139 / CVE-2026-4538 (LOW) -- recorded as "no fixed version published in
+#       any release yet". That is NO LONGER TRUE: OSV reports 2.13.0, 2.14.0 and 2.14.1
+#       as unaffected. The entry was accurate when written and stale by the time it was
+#       read, the same way the razorpay premise in requirements-base.txt was.
+#
+# OSV reports torch 2.13.0, 2.14.0 and 2.14.1 as carrying ZERO advisories, and the bump
+# introduces none. 2.14.1 is taken as the current release; `torch==2.14.1+cpu` is
+# confirmed present on download.pytorch.org for cp311.
+#
+# API RISK IS NIL, CHECKED RATHER THAN ASSUMED. torch is imported in exactly one module
+# (backend_app/core/ml_safety.py, three times, each inside a `try:`) and uses seven
+# symbols: manual_seed, cuda.manual_seed_all, cuda.is_available, cuda.device_count,
+# device, backends.cudnn.benchmark and backends.cudnn.deterministic. All have been stable
+# since torch 1.x. The dependency is used for deterministic seeding and GPU detection,
+# nothing else -- there is no model loading, no jit, no serialization on this path.
+#
 # Keep this version identical to requirements.txt, backend_app/requirements.txt and the
 # Dockerfile's own pre-install layer -- test_dep01_torch_pin_is_consistent.py pins that.
-torch==2.10.0+cpu
+torch==2.14.1+cpu

@@ -1,4 +1,5 @@
 -r requirements-base.txt
 # DEP-01: kept identical to requirements-cpu.txt / backend_app/requirements.txt / the
-# Dockerfile. See requirements-cpu.txt for why 2.3.1 was replaced.
-torch==2.10.0
+# Dockerfile. See requirements-cpu.txt for why 2.3.1 was replaced, and why 2.10.0 moved
+# to 2.14.1 -- the latter empties scripts/audit_local_version_pins.py's ignore map.
+torch==2.14.1
