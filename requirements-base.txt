@@ -147,7 +147,42 @@ scikit-learn==1.5.1
 joblib==1.4.2
 
 # --- Deep Learning -------------------------------------------------------
-tensorflow==2.16.1
+# DEP-01. 2.16.1 -> 2.20.0 to clear PYSEC-2026-1805 in protobuf.
+#
+# tensorflow is the ONLY pinned puller of protobuf in this manifest -- re-verified against
+# PyPI metadata for every pin across all three requirements files. 2.16.1 required
+# `protobuf!=4.21.0-4.21.5,<5.0.0dev,>=3.20.3`, and every protobuf below 5.x carries
+# PYSEC-2026-1805, so the advisory could not be cleared while that ceiling stood. It was a
+# genuine standoff until recently: opentelemetry-proto==1.25.0 imposed the same
+# `protobuf<5.0` ceiling from the other side, and the FIXED opentelemetry release requires
+# `protobuf>=5.0` -- so neither could move without the other. DEP-04 removed the
+# opentelemetry packages outright (unused, and carrying their own CVE with no upgrade path),
+# which left tensorflow as the only remaining constraint.
+#
+# 2.20.0 declares `protobuf>=5.28.0` with NO upper bound. Its other floors are already
+# satisfied, so this is not a cascade: `numpy>=1.26.0` (pinned 1.26.4 above),
+# `keras>=3.10.0` (not pinned here; already ahead of what 2.16.1 bundled), `h5py>=3.11.0`,
+# `grpcio<2.0,>=1.24.3`. pandas/scipy/scikit-learn are untouched. Only two files import
+# tensorflow directly: backend_app/backend/ml_models.py and backend_app/core/ml_safety.py.
+# Wheel confirmed present for CI's platform:
+# tensorflow-2.20.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.
+# Both 2.16.1 and 2.20.0 are themselves clean in OSV; the advisory was always protobuf's.
+tensorflow==2.20.0
+
+# DEP-01. PINNED EXPLICITLY, and the exact version matters.
+#
+# protobuf was previously unpinned, resolved transitively through tensorflow. Leaving it
+# unpinned is unsafe in a way it was not before: tensorflow 2.20.0's `protobuf>=5.28.0` has
+# no ceiling, so a fresh resolve could pick up 6.x -- and 6.33.1 carries PYSEC-2026-1805
+# AGAIN. Checked against OSV today, 5.29.6 is the only candidate that comes back clean:
+#     4.25.3  GHSA-7gcm-g887-7qv7, GHSA-8qvm-5x2c-j2w7, PYSEC-2026-1805, PYSEC-2026-1806
+#     5.28.0  GHSA-7gcm-g887-7qv7, GHSA-8qvm-5x2c-j2w7, PYSEC-2026-1805, PYSEC-2026-1806
+#     5.29.6  clean
+#     6.33.1  GHSA-7gcm-g887-7qv7, PYSEC-2026-1805
+# So the floor tensorflow declares is NOT by itself sufficient to clear the advisory, which
+# is the whole reason this pin exists rather than being left to the resolver.
+# Wheel present for CI's platform: protobuf-5.29.6-cp38-abi3-manylinux2014_x86_64.whl.
+protobuf==5.29.6
 
 # --- Utilities & Observability --------------------------------------------
 # CI-04/DEP-01: PYSEC-2026-2270 is fixed in 1.2.2. Confirmed no version-sensitive usage --

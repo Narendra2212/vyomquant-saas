@@ -298,11 +298,25 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
 
+      # DEP-01: PYSEC-2026-1805 (protobuf) REMOVED from this list, because the pin it was
+      # written for has moved. tensorflow 2.16.1's `protobuf<5.0.0dev` ceiling was the
+      # reason the advisory could not be cleared; tensorflow is now 2.20.0
+      # (`protobuf>=5.28.0`, no ceiling) with protobuf explicitly pinned to 5.29.6, which
+      # OSV reports clean. Leaving the ignore in place would be a standing instruction to
+      # say nothing about an advisory id that no longer applies -- and would hide a
+      # regression if protobuf ever resolved to 6.x, which carries PYSEC-2026-1805 again.
+      # Same cleanup the starlette ignores above got, for the same reason.
+      #
+      # PYSEC-2026-3447 (setuptools) STAYS, and is genuinely stuck rather than unexamined:
+      # the fix is setuptools 83.0.0, which REMOVES pkg_resources, and razorpay 1.4.1
+      # imports pkg_resources at razorpay/client.py:4. PyPI has no razorpay release after
+      # 1.4.1 (1.4.2/1.5.0/1.5.1/1.5.2 all 404), so there is no upstream fix to adopt, and
+      # source-patching a payment SDK used for real billing is a materially different risk
+      # from a version bump.
       - name: Run pip-audit (blocking)
         run: |
           pip-audit \
-            --ignore-vuln PYSEC-2026-3447 \
-            --ignore-vuln PYSEC-2026-1805
+            --ignore-vuln PYSEC-2026-3447
 
       # Closes the silent-skip blind spot documented above. Audits the base version of
       # every local-version pin (which the step above can only skip), and fails on any
