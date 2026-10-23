@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -36,9 +37,18 @@ BATCHES = 12           # ~12,000 bars, past the 10,000-bar floor RT-04 needs
 THRESHOLDS = [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0]
 WINDOWS = [200, 500, 900, 2000, 10000]
 
+# ── DATA-03 (A+C) calibration mode: `--robust` ──────────────────────────────────
+#: The instruments the shipped constants were fitted across. One instrument would fit the
+#: threshold to one asset's volatility; three of materially different character (a major, a
+#: large alt, a high-beta meme) is what makes the chosen pair defensible as a default.
+ROBUST_SYMBOLS = ["BTCUSDT", "ETHUSDT", "DOGEUSDT"]
+ROBUST_THRESHOLDS = [5.0, 8.0, 10.0, 12.0, 15.0, 20.0]
+MAD_TO_SIGMA = 1.4826
+FLOOR_WINDOW = 10_000
 
-def fetch_klines(end_time_ms: int | None = None) -> list:
-    url = (f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}"
+
+def fetch_klines(end_time_ms: int | None = None, symbol: str = SYMBOL) -> list:
+    url = (f"https://api.binance.com/api/v3/klines?symbol={symbol}"
            f"&interval={INTERVAL}&limit={BATCH}")
     if end_time_ms is not None:
         url += f"&endTime={end_time_ms}"
@@ -54,7 +64,143 @@ def fetch_klines(end_time_ms: int | None = None) -> list:
     return []
 
 
+def _closes_for(symbol: str) -> list[float]:
+    """Oldest-first closes, paginated backwards from now, de-duplicated by open time."""
+    closes: list[float] = []
+    end = None
+    seen: set[int] = set()
+    for _ in range(BATCHES):
+        rows = fetch_klines(end, symbol=symbol)
+        if not rows:
+            break
+        fresh = [r for r in rows if int(r[0]) not in seen]
+        for r in fresh:
+            seen.add(int(r[0]))
+        closes = [float(r[4]) for r in fresh] + closes
+        end = int(rows[0][0]) - 1
+        time.sleep(0.25)
+    return closes
+
+
+def _log_returns(closes: list[float]) -> list[float]:
+    return [math.log(closes[i] / closes[i - 1])
+            for i in range(1, len(closes))
+            if closes[i - 1] > 0 and closes[i] > 0]
+
+
+def _robust_scores(rets: list[float]) -> list[float]:
+    """``|x - median| / (1.4826 * MAD)`` -- what OutlierDetector._robust_z_scores computes."""
+    ordered = sorted(rets)
+    mid = len(ordered) // 2
+    median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+    devs = sorted(abs(r - median) for r in rets)
+    dmid = len(devs) // 2
+    mad = devs[dmid] if len(devs) % 2 else (devs[dmid - 1] + devs[dmid]) / 2
+    if mad <= 0:
+        return [0.0] * len(rets)
+    return [abs(r - median) / (MAD_TO_SIGMA * mad) for r in rets]
+
+
+def _worst_window_fraction(flags: list[bool], w: int) -> float:
+    """Max contamination share over any length-w window -- what a budget must cover."""
+    if len(flags) < w:
+        return float("nan")
+    running = sum(flags[:w])
+    worst = running
+    for i in range(w, len(flags)):
+        running += flags[i] - flags[i - w]
+        worst = max(worst, running)
+    return worst / w
+
+
+def measure_robust() -> int:
+    """DATA-03 (A+C): reproduce the calibration behind the shipped constants.
+
+    Prints the two tables the defaults were read off:
+    ``ROBUST_Z_SCORE_THRESHOLD_DEFAULT`` (per-point rate, so "outlier" means something real)
+    and ``MAX_OUTLIER_FRACTION_DEFAULT`` (worst-case contamination of a floor-sized window,
+    so the budget has headroom over measured reality). Also prints the estimator comparison
+    that justifies using median/MAD at all, and the largest real single-bar move, which is
+    what ``MAX_BAR_LOG_MOVE_DEFAULT`` has to sit well above.
+    """
+    series: dict[str, list[float]] = {}
+    for sym in ROBUST_SYMBOLS:
+        closes = _closes_for(sym)
+        if len(closes) < FLOOR_WINDOW:
+            print(f"{sym}: only {len(closes)} bars, need >={FLOOR_WINDOW}; skipping")
+            continue
+        series[sym] = _log_returns(closes)
+        print(f"{sym}: {len(closes)} bars, {len(series[sym])} log-returns")
+
+    if not series:
+        print("no instrument returned enough bars")
+        return 2
+
+    print("\n" + "=" * 78)
+    print("(C) ESTIMATOR: the classic scale is inflated by the points it judges")
+    print("=" * 78)
+    print(f"{'symbol':<10}{'std':>12}{'1.4826*MAD':>14}{'ratio':>8}"
+          f"{'max|z|':>9}{'max|rz|':>10}")
+    for sym, rets in series.items():
+        n = len(rets)
+        mean = sum(rets) / n
+        sd = math.sqrt(sum((r - mean) ** 2 for r in rets) / n)
+        rz = _robust_scores(rets)
+        scale = max(abs(r - mean) / sd for r in rets)
+        ordered = sorted(rets)
+        mid = len(ordered) // 2
+        median = ordered[mid] if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+        devs = sorted(abs(r - median) for r in rets)
+        dmid = len(devs) // 2
+        mad = devs[dmid] if n % 2 else (devs[dmid - 1] + devs[dmid]) / 2
+        robust_scale = MAD_TO_SIGMA * mad
+        print(f"{sym:<10}{sd:>12.3e}{robust_scale:>14.3e}"
+              f"{sd / robust_scale:>8.2f}{scale:>9.2f}{max(rz):>10.2f}")
+    print("\nA ratio > 1 means a few extreme returns inflate std and therefore DEFLATE every")
+    print("ordinary point's classic z-score -- the masking effect. max|rz| exceeding max|z|")
+    print("is the same fact seen from the other side: the classic rule hid its own extremes.")
+
+    print("\n" + "=" * 78)
+    print(f"(A)+(C) ADMISSIBILITY over {FLOOR_WINDOW}-bar windows")
+    print("=" * 78)
+    print(f"{'robust-z':>9}", end="")
+    for sym in series:
+        print(f"{sym[:4] + ' rate':>14}{sym[:4] + ' worst%':>14}", end="")
+    print(f"{'worst of all':>14}")
+    for t in ROBUST_THRESHOLDS:
+        print(f"{t:>9.1f}", end="")
+        worst_all = 0.0
+        for rets in series.values():
+            flags = [s > t for s in _robust_scores(rets)]
+            rate = sum(flags) / len(flags)
+            worst = _worst_window_fraction(flags, FLOOR_WINDOW)
+            worst_all = max(worst_all, worst)
+            print(f"{rate:>14.3e}{worst:>14.4%}", end="")
+        print(f"{worst_all:>14.4%}")
+
+    print("\n" + "=" * 78)
+    print("MAGNITUDE CEILING: the largest move real data actually produces")
+    print("=" * 78)
+    for sym, rets in series.items():
+        biggest = max(abs(r) for r in rets)
+        print(f"{sym:<10} max |log-return| = {biggest:.5f}  "
+              f"({math.exp(biggest):.4f}x in one bar)")
+    print(f"\nMAX_BAR_LOG_MOVE_DEFAULT is log(2) = {math.log(2):.4f} (2.00x), which must sit")
+    print("far ABOVE every figure here -- a real flash crash must still pass -- and far")
+    print("BELOW a fabricated spike (DATA-02's fixtures are 3.91 and 7.05).")
+
+    print("\nREADING THIS")
+    print("   Pick the first threshold whose 'worst of all' column fits comfortably inside")
+    print("   MAX_OUTLIER_FRACTION_DEFAULT while its per-point rate is still non-zero. A")
+    print("   threshold with a zero rate detects nothing and is not a safety control --")
+    print("   which was the classic rule's own failure mode at 12.0.")
+    return 0
+
+
 def main() -> int:
+    if "--robust" in sys.argv:
+        return measure_robust()
+
     print(f"fetching ~{BATCH * BATCHES} real {SYMBOL} {INTERVAL} bars from Binance...")
     closes: list[float] = []
     end = None

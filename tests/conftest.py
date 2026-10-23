@@ -564,6 +564,33 @@ def live_platform_enabled(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_on_demand_venue_quotes(monkeypatch):
+    """PAPER-02: the on-demand venue quote must never fire from the unit suite.
+
+    ``paper_trading_service.resolve_market_price`` falls back to
+    :func:`~backend_app.backend.paper_trading_service.fetch_venue_quote`, a real bounded
+    REST read, when nothing has cached a price. ``tests/conftest.py`` sets
+    ``DEFAULT_EXCHANGE=binance`` for the whole suite (see the top of this file), so without
+    this guard every market-order test that does not supply a quote would reach out to the
+    live venue -- making unit tests network-dependent, slow, and dependent on a real price.
+
+    Autouse and default-off, so the production behaviour is opt-IN for a test rather than
+    opt-out: a test that wants the on-demand path asserts against a fake venue (see
+    tests/test_paper02_on_demand_quote.py), and the one test that exercises it against the
+    real venue is marked and skipped unless explicitly enabled.
+
+    This is the same reason ``fresh_paper_quote`` exists for the cache half: the production
+    default is to have no quote, and a test that needs one must say so.
+    """
+    from backend_app.backend import paper_trading_service as pts
+
+    async def _refuse(symbol, exchange_id=None, *, timeout=None):
+        return None
+
+    monkeypatch.setattr(pts, "fetch_venue_quote", _refuse)
+
+
 @pytest.fixture
 def fresh_paper_quote(monkeypatch):
     """PAPER-02: market orders fill only at a measured quote. Tests that exercise the
