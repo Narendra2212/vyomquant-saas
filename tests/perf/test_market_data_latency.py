@@ -103,6 +103,7 @@ import pytest
 from backend_app.backend.feed_state import expected_interval_seconds
 from backend_app.backend.market_data_latency import (
     DECISION_REPORT_PATH,
+    DEFAULT_FLOOR,
     P99_MARGIN_MS,
     SOURCE_A,
     SOURCE_B,
@@ -941,6 +942,10 @@ def _measure_candidate_b(
     timeframe = timeframes[0]
     interval_seconds = expected_interval_seconds(timeframe)
     resources = ResourceSampler()
+    #: RT-04. Read from the floor rather than restated, for the same reason
+    #: ``test_paper_market_feed_selection.py`` reads it instead of writing 10,000: the two
+    #: numbers must not be able to drift apart. See the comment at the fetch below.
+    floor_sample_bars = int(DEFAULT_FLOOR.min_completeness_sample_bars)
 
     pipeline_ms: List[float] = []
     delivered: set = set()
@@ -971,7 +976,36 @@ def _measure_candidate_b(
             while time.perf_counter() < deadline:
                 polls += 1
                 try:
-                    rows = await data.fetch_historical_ohlcv(symbols[0], timeframe, limit=1000)
+                    # RT-04: the depth is DERIVED FROM THE FLOOR, not hardcoded.
+                    #
+                    # This asked for 1,000 bars while the floor it is measured against
+                    # requires >= DEFAULT_FLOOR.min_completeness_sample_bars (10,000, itself
+                    # derived from 1/(1-0.9999)). Completeness here is computed from the BAR
+                    # TIMESTAMPS -- "a closed 1m bar is due every 60 s between the oldest and
+                    # the newest bar delivered" -- so with a 1,000-bar request the delivered
+                    # grid saturated at ~999 and `completeness_sample` could NEVER pass,
+                    # whatever threshold or window length was used. Only new bars closing
+                    # during the run could widen it, which is where the recorded "roughly
+                    # seven days of continuous measurement" came from: ~9,000 more minutes of
+                    # wall clock to reach a grid the venue will serve in one paginated read.
+                    #
+                    # That wall-clock cost was therefore an artefact of the request depth,
+                    # not a property of the requirement. `fetch_historical_ohlcv`'s default
+                    # mode pages BACKWARD since DATA-01 ("it now pages backward: after the
+                    # latest page, each request starts one page-width before the oldest bar
+                    # held"), so a deeper limit is honoured rather than silently truncated at
+                    # one page -- which is exactly the defect DATA-01 fixed.
+                    #
+                    # What this does NOT claim is unchanged and still recorded above: the
+                    # live ARRIVAL half of Candidate B needs Redis, and end-to-end/ingest
+                    # latency stay None because a historical bar's age is not its delivery
+                    # time. This measures the correctness properties the floor actually
+                    # checks -- completeness over the grid, ordering, duplicates, invalid
+                    # OHLC, synthetic candles -- plus the pipeline latency an executor waits
+                    # for, over a sample large enough for 99.99% to be resolvable.
+                    rows = await data.fetch_historical_ohlcv(
+                        symbols[0], timeframe, limit=floor_sample_bars
+                    )
                 except Exception:
                     errors += 1
                     await asyncio.sleep(poll_seconds)
