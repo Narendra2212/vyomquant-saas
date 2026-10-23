@@ -21,14 +21,22 @@ because it looks like protection.
 
 WHAT THIS FILE DELIBERATELY DOES *NOT* DO
 -----------------------------------------
-It does not start the service. RECON-01's second blocker is still open -- nothing
-enumerates tenants, so nothing calls ``reconcile_open_orders`` for anyone -- and
+It does not start the service, and
 ``tests/test_p10d_exchange_reconciliation_fails_safely.py::
 test_the_service_is_not_registered_in_the_application_lifespan`` PINS the service as
 absent from the FastAPI lifespan on purpose. That test passing is part of this change's
-own acceptance: closing blocker 1 must not quietly start a loop whose remaining blocker
-makes it unsafe. ``test_the_service_is_still_not_started_anywhere`` below asserts the
+own acceptance. ``test_the_service_is_still_not_started_anywhere`` below asserts the
 same thing from this file, so the two findings cannot be confused for one another.
+
+This paragraph used to justify that by saying "RECON-01's second blocker is still open --
+nothing enumerates tenants, so nothing calls ``reconcile_open_orders`` for anyone". That
+is no longer true: ``enumerate_reconcilable_pairs`` closed it
+(tests/test_recon01_tenant_enumeration.py). Both of RECON-01's originally named blockers
+are now closed, so the reason the service stays unstarted has been restated from current
+measurement at ``test_the_service_is_still_not_started_anywhere`` below -- in short, that
+``OrderWatchdog`` already reconciles these same rows in production and owns adjudication,
+and that ``_handle_ghost_order`` would fabricate ``execution_records`` rows for
+unattributable venue orders.
 
 THE FAKE REDIS IS SHARED ON PURPOSE
 -----------------------------------
@@ -364,11 +372,33 @@ def test_the_shared_primitive_fails_closed_by_construction():
 def test_the_service_is_still_not_started_anywhere():
     """Closing blocker 1 must NOT quietly start the loop.
 
-    RECON-01's blocker 2 -- no tenant enumeration -- is still open, so starting this
-    service would run a loop that reconciles nobody while holding a lease. This mirrors
-    test_p10d_exchange_reconciliation_fails_safely.py's own lifespan assertion, stated
-    here too so a future change to THIS file's subject cannot silently also start the
-    service.
+    THE ORIGINAL REASON HERE IS NOW OUT OF DATE, AND THE CONCLUSION IS UNCHANGED.
+    This docstring used to say "blocker 2 -- no tenant enumeration -- is still open, so
+    starting this service would run a loop that reconciles nobody". Enumeration IS now
+    closed (``enumerate_reconcilable_pairs``, tests/test_recon01_tenant_enumeration.py)
+    and so is leader election (this file's subject). Both of RECON-01's originally named
+    blockers are therefore gone, and if this test still gave that as its justification the
+    next reader would check, find the justification false, and reasonably delete the test.
+
+    THE REASON IT STILL HOLDS, which is a different one:
+
+    1. ``_handle_ghost_order`` does not report, it WRITES. A venue order the reconciler
+       cannot attribute to a DB row is inserted and committed as a new
+       ``execution_records`` row with ``strategy_id="reconciled"``, ``price=None`` and
+       status EXECUTING -- an execution no strategy owns, created on a live-money path with
+       no risk check. Whether the platform should manufacture position state for orders it
+       cannot explain is an owner's policy decision, not a wiring detail.
+    2. ``backend_app/core/models/execution_record.py`` records the invariant directly:
+       "`OrderWatchdog` is the only owner of adjudication, and introducing a second one
+       would be worse than the defect." OrderWatchdog is started in the lifespan and its
+       ``_reconciliation_loop`` already polls the same PENDING/EXECUTING rows against the
+       venue every 5-10s with a per-tenant executor. Starting this service adds that second
+       owner.
+
+    See tests/test_recon01_venue_identity_matching.py for the defect found while
+    establishing the above -- the reconciler matched the two sides of the comparison by
+    different identifiers, so it declared the tenant's own open orders to be ghosts and
+    committed duplicate rows for them. That is fixed; it is not a reason to start the loop.
     """
     import pathlib
 

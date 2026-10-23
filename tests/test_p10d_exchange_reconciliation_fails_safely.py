@@ -63,12 +63,34 @@ WS_LISTENER_SRC = (
 def test_the_service_is_not_registered_in_the_application_lifespan():
     """Records the measured fact, and makes wiring it up a deliberate act.
 
-    If someone later registers this service, this test fails and they must read the
-    reasoning in this file's docstring first -- specifically that `OrderWatchdog` already
-    runs a reconciliation loop over the same `execution_records` rows, that this service
-    is per-tenant with nothing enumerating tenants, and that gunicorn runs
+    THREE REASONS WERE GIVEN HERE. TWO HAVE SINCE BEEN CLOSED; ONE DECIDES IT.
+
+    Closed: "this service is per-tenant with nothing enumerating tenants" --
+    ``enumerate_reconcilable_pairs`` now derives the pairs from open orders
+    (tests/test_recon01_tenant_enumeration.py). Closed: "gunicorn runs
     `--workers ${WORKERS:-2}` with no leader election, so N processes would reconcile the
-    same rows concurrently.
+    same rows concurrently" -- ``_try_become_leader`` now delegates to
+    ``core.leader_lease``, which fails closed
+    (tests/test_recon01_exchange_reconciliation_leader_election.py).
+
+    Still decisive, and verified against current source rather than inherited: the first
+    reason, that **`OrderWatchdog` already runs a reconciliation loop over the same
+    `execution_records` rows**. It is constructed and started in the lifespan, its
+    ``_reconciliation_loop`` polls the same PENDING/EXECUTING population every 5-10s, and
+    RT-16 gave it a real per-tenant executor via ``_get_executor_for_order``. So the
+    capability this entry exists to guarantee is already live, by another route, while
+    ``execution_record.py`` records that OrderWatchdog is "the only owner of adjudication,
+    and introducing a second one would be worse than the defect".
+
+    Note the asymmetry that remains OrderWatchdog's own, not this service's: the watchdog
+    has NO leader election, so both gunicorn workers do run its loop concurrently today.
+    That is a live condition recorded against OrderWatchdog, and it is an argument for
+    fixing the started service rather than for starting a second one.
+
+    The remaining gap this service alone would close is ghost-order detection -- venue
+    orders with no DB row. ``_handle_ghost_order`` currently answers that by INSERTing a
+    row with ``strategy_id="reconciled"`` and ``price=None``, which is a policy decision
+    about fabricating position state on a live-money path, not a wiring fix.
     """
     main_src = MAIN_SRC.read_text(encoding="utf-8")
     # Strip comments before checking: RT-11's own removal of distributed_execution.router
