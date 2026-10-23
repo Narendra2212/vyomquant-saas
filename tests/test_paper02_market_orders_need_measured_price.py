@@ -19,7 +19,28 @@ def test_default_provider_has_no_quote():
 def test_place_order_source_ignores_client_price_for_market():
     src = inspect.getsource(pts.PaperTradingService.place_order)
     assert 'clean_type == "market"' in src
-    assert "get_fresh_market_price" in src
+    # PAPER-02: the measured-price seam is now `resolve_market_price`, which tries the
+    # `mds:last_price` cache (`get_fresh_market_price`) first and then a bounded on-demand
+    # venue quote. This assertion named the cache function directly; it names the seam the
+    # order path actually calls, so it keeps testing "the price comes from a measurement"
+    # rather than pinning which measurement.
+    assert "resolve_market_price" in src
+    assert "price=price" not in src.split('clean_type == "market"')[1].split("else")[0], (
+        "the client's price must not reach the market branch"
+    )
+
+
+def test_the_measured_price_seam_still_consults_the_cache_first():
+    """`resolve_market_price` must prefer the free, already-streamed price.
+
+    Pinned because the ordering is what keeps the on-demand venue read rare, and because
+    `tests/conftest.py`'s `fresh_paper_quote` fixture patches `get_fresh_market_price` and
+    relies on that call short-circuiting the venue path for ~13 other suites.
+    """
+    src = inspect.getsource(pts.resolve_market_price)
+    assert src.index("get_fresh_market_price") < src.index("fetch_venue_quote"), (
+        "the cache must be consulted before the venue"
+    )
 
 
 def _service_with_account(monkeypatch):

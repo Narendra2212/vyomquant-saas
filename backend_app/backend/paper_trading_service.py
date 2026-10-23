@@ -116,6 +116,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_EVEN, Decimal
 from enum import Enum
@@ -182,6 +183,69 @@ ACCOUNT_STATUS = "active"
 PAPER_PRICE_SOURCE_EXCHANGE = "binance"
 
 
+def _paper_price_exchange() -> str:
+    """The venue whose last-price cache this service reads.
+
+    PAPER-02 FIX. This was the module constant ``PAPER_PRICE_SOURCE_EXCHANGE`` used
+    directly, hardcoded to ``"binance"``. A Paper_Session runs on ``DEFAULT_EXCHANGE``
+    (``routers/paper_trading.py::_paper_venue``), and ``mds/main.py`` keys its cache on
+    whatever exchange the subscribe command named -- so on any deployment whose
+    ``DEFAULT_EXCHANGE`` is not binance, the sessions wrote keys this reader never looked
+    at, and every manual market order refused no matter what was streaming.
+
+    ``DEFAULT_EXCHANGE`` first, then the same ``"binance"`` fallback
+    ``mds/main.py::handle_commands`` itself uses for a subscribe command that names no
+    exchange (``data.get("exchange", "binance")``) -- so a bare symbol still reads the
+    identical venue MDS falls back to, which is what the constant was for.
+    """
+    return (os.environ.get("DEFAULT_EXCHANGE") or PAPER_PRICE_SOURCE_EXCHANGE).strip().lower()
+
+
+def _venue_symbol(symbol: str) -> str:
+    """``BTC-USDT`` -> ``BTC/USDT``: the form the VENUE and MDS key on.
+
+    PAPER-02 FIX, AND THE REASON THE PREVIOUS FIX WAS INERT
+    -------------------------------------------------------
+    ``place_order`` normalises its argument with :meth:`PaperTradingService._clean_symbol`,
+    which is ``upper().replace("/", "-")`` -- the platform's own canonical internal form,
+    used by every ``paper_orders`` and ``paper_positions`` row. It then looked the price
+    cache up under THAT form. But ``mds/main.py`` keys the cache on the symbol exactly as
+    the subscribe command named it, and for a Paper_Session that is the ccxt market symbol
+    ``BTC/USDT`` (``PaperFeedConfig.symbol``, from ``resolve_market_metadata``).
+
+    So the writer wrote ``mds:last_price:binance:BTC/USDT`` and the reader read
+    ``mds:last_price:binance:BTC-USDT``. The keys could never match, which means a manual
+    market order could never fill EVEN FOR A SYMBOL AN ACTIVE PAPER_SESSION WAS STREAMING
+    -- the case PAPER-02's previous fix was recorded as having closed. Every manual market
+    order refused with ``NO_FRESH_PRICE``.
+
+    The existing tests did not catch it because they call ``get_fresh_market_price``
+    directly with an already-slashed ``"BTC/USDT"``, bypassing ``_clean_symbol`` -- so they
+    exercised the key format (which was always consistent between writer and reader) and
+    never the symbol form that reaches it from a real order.
+    """
+    return str(symbol).strip().upper().replace("-", "/")
+
+
+#: PAPER-02. How long a manual order may wait for an on-demand venue quote before refusing.
+#:
+#: MEASURED against the live venue (kiro-session-artifacts/measure_ticker_latency.py),
+#: ccxt binance ``fetch_ticker``, 36 warm calls across BTC/ETH/DOGE, zero failures:
+#:
+#:     median 201 ms | p95 ~516 ms | p99 516 ms | max 516 ms
+#:     cold first call, including TLS and market loading: 6,105 ms
+#:
+#: 3 s is ~5.8x the measured warm p99, so an ordinary resolve has ample headroom, while the
+#: 6.1 s cold-start case deliberately does NOT fit: the first order in a fresh process
+#: refuses honestly instead of holding an HTTP worker for six seconds, and the pooled client
+#: it leaves behind makes the next one warm. A refusal here is always safe -- it is the
+#: existing ``NO_FRESH_PRICE`` answer, and PAPER-02's whole point is that refusing beats
+#: inventing a price.
+ON_DEMAND_QUOTE_TIMEOUT_SECONDS = float(
+    os.environ.get("PAPER_ONDEMAND_QUOTE_TIMEOUT_SECONDS", "3.0")
+)
+
+
 def _last_price_key(exchange_id: str, symbol: str) -> str:
     """Spelled identically to ``mds/main.py::last_price_key`` - a literal, not a shared import,
     the same choice this codebase already made for ``TRANSPORT_WEBSOCKET``/``TRANSPORT_REST``
@@ -220,10 +284,25 @@ async def get_fresh_market_price(symbol: str) -> Optional[Decimal]:
     """
     from backend_app.core.cache.redis_manager import redis_manager
 
+    # PAPER-02 FIX: look the symbol up in the form the WRITER keys on, and accept either
+    # spelling. `_venue_symbol` is first because that is what a Paper_Session subscribes
+    # with (and therefore what mds/main.py keys on); the caller's own spelling is tried
+    # second because `data_seeking_engine.stream_live_ohlcv` is the other subscriber and
+    # nothing normalises what it is handed. See `_venue_symbol` for why reading only the
+    # caller's form made this function unable to return a price at all.
+    exchange_id = _paper_price_exchange()
+    candidates = []
+    for form in (_venue_symbol(symbol), str(symbol).strip()):
+        key = _last_price_key(exchange_id, form)
+        if key not in candidates:
+            candidates.append(key)
+
+    raw = None
     try:
-        raw = await redis_manager.redis.get(
-            _last_price_key(PAPER_PRICE_SOURCE_EXCHANGE, symbol)
-        )
+        for key in candidates:
+            raw = await redis_manager.redis.get(key)
+            if raw is not None:
+                break
     except Exception:
         logger.warning("get_fresh_market_price: cache read failed for %s", symbol, exc_info=True)
         return None
@@ -246,6 +325,198 @@ async def get_fresh_market_price(symbol: str) -> Optional[Decimal]:
     except Exception:
         logger.warning("get_fresh_market_price: non-numeric cached price for %s: %r", symbol, price)
         return None
+
+
+async def fetch_venue_quote(
+    symbol: str,
+    exchange_id: Optional[str] = None,
+    *,
+    timeout: Optional[float] = None,
+) -> Optional[Decimal]:
+    """One bounded REST quote from the venue, or ``None``. PAPER-02's on-demand resolve.
+
+    WHY THIS IS A REST ONE-SHOT AND NOT A SUBSCRIBE-AND-WAIT
+    --------------------------------------------------------
+    PAPER-02's recorded blocker was that an on-demand subscribe could not be bounded:
+    "``watch_ohlcv`` on a 1-minute timeframe can legitimately take up to a minute to yield
+    its first candle ... not a bound a synchronous, inside-an-HTTP-request order-placement
+    call can safely wait on without real-exchange timing data".
+
+    That is true of ``watch_ohlcv``, and it is the wrong thing to wait on. A candle stream
+    withholds its first value until a bar CLOSES; a ticker read returns the venue's current
+    last price immediately. So the premise is sidestepped rather than measured around: this
+    asks for a price, not for a candle. Measured warm cost is ~200 ms median and 516 ms p99
+    (see :data:`ON_DEMAND_QUOTE_TIMEOUT_SECONDS`), which an HTTP handler can wait on.
+
+    This is NOT a second market-data path in the sense Requirement 14.2 forbids. It is the
+    same REST read ``mds/main.py::broadcast_ohlcv`` already falls back to, reached through
+    the platform's single venue-client factory (``connection_engine.get_or_create_exchange``
+    under the public, credential-less pool identity that ``routers/market.py`` already uses
+    for public market data). No new credentials, no new connection management, no socket.
+
+    THE MOCK REFUSAL IS NOT OPTIONAL HERE
+    -------------------------------------
+    ``connection_engine._apply_mock_interface``'s ``fetch_ticker`` returns a HARDCODED
+    price. Filling from it would reinstate PAPER-02's original defect by a new route, so a
+    mock-served connection returns ``None`` -- the same check ``paper_market_feed.open_feed``
+    makes for Requirement 14.8.
+
+    Returns ``None``, never raises, for every failure: unreachable venue, timeout, unknown
+    symbol, mocked interface, missing ``last``. The caller treats ``None`` as its refusal
+    signal, and refusing is always safe.
+    """
+    venue = (exchange_id or _paper_price_exchange()).strip().lower()
+    wait = ON_DEMAND_QUOTE_TIMEOUT_SECONDS if timeout is None else float(timeout)
+    market_symbol = _venue_symbol(symbol)
+
+    try:
+        from backend_app.backend.asset_universe import markets_are_mocked
+        from backend_app.backend.connection_engine import get_or_create_exchange
+
+        exchange = await asyncio.wait_for(
+            get_or_create_exchange(
+                user_id=_PUBLIC_QUOTE_POOL_IDENTITY,
+                exchange_id=venue,
+                api_key=None,
+                secret_key=None,
+            ),
+            timeout=wait,
+        )
+        if exchange is None:
+            return None
+
+        if markets_are_mocked(exchange):
+            logger.warning(
+                "fetch_venue_quote: the resolved %s connection is the DEV_MODE mock "
+                "interface, whose prices are hardcoded constants. Refusing to quote %s "
+                "from it -- paper trading never fills at an invented price.",
+                venue,
+                market_symbol,
+            )
+            return None
+
+        ticker = await asyncio.wait_for(
+            exchange.fetch_ticker(market_symbol), timeout=wait
+        )
+    except asyncio.CancelledError:
+        raise
+    except asyncio.TimeoutError:
+        logger.warning(
+            "fetch_venue_quote: %s did not answer for %s within %.1fs; refusing rather "
+            "than waiting longer inside a request",
+            venue,
+            market_symbol,
+            wait,
+        )
+        return None
+    except Exception:
+        logger.warning(
+            "fetch_venue_quote: could not read a %s quote for %s",
+            venue,
+            market_symbol,
+            exc_info=True,
+        )
+        return None
+
+    last = None
+    if isinstance(ticker, Mapping):
+        last = ticker.get("last")
+        if last is None:
+            last = ticker.get("close")
+    if last is None:
+        logger.warning(
+            "fetch_venue_quote: %s returned a ticker for %s with no last price",
+            venue,
+            market_symbol,
+        )
+        return None
+
+    try:
+        quote = Decimal(str(last))
+    except Exception:
+        logger.warning(
+            "fetch_venue_quote: non-numeric last price for %s: %r", market_symbol, last
+        )
+        return None
+
+    return quote if quote > 0 else None
+
+
+#: The pool identity a public, credential-less market-data client is cached under. The same
+#: constant `routers/market.py` uses for the same purpose: public market data needs no key,
+#: and a shared identity means one pooled client per venue rather than one per user.
+_PUBLIC_QUOTE_POOL_IDENTITY = "__public_market_data__"
+
+
+async def _warm_the_price_cache(symbol: str, exchange_id: str) -> None:
+    """Best-effort ``subscribe`` to ``mds:commands`` so the NEXT order reads the cache.
+
+    This is the "subscribe" half of the subscribe-and-wait PAPER-02 deliberately did not
+    build, with the waiting removed -- which is what makes it safe to do inside a request.
+    Nothing is awaited on the result: this order has already been priced from
+    :func:`fetch_venue_quote`, and the subscription exists so subsequent orders for the same
+    symbol are served from ``mds:last_price`` at no venue cost.
+
+    Reuses ``paper_market_feed.mds_command`` rather than spelling the wire format a third
+    time -- that builder exists precisely so there is ONE place that knows the shape of this
+    contract. Failures are logged and swallowed: a cache that did not get warmed costs the
+    next order one REST read, which is not a reason to fail an order that is already priced.
+    """
+    try:
+        from backend_app.backend.paper.paper_market_feed import (
+            MDS_ACTION_SUBSCRIBE, MDS_COMMAND_CHANNEL, mds_command)
+        from backend_app.core.cache.redis_manager import redis_manager
+
+        await redis_manager.redis.publish(
+            MDS_COMMAND_CHANNEL,
+            mds_command(MDS_ACTION_SUBSCRIBE, exchange_id, _venue_symbol(symbol)),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug(
+            "_warm_the_price_cache: could not publish a subscribe for %s; the next order "
+            "will resolve over REST again",
+            symbol,
+            exc_info=True,
+        )
+
+
+async def resolve_market_price(symbol: str) -> Optional[Decimal]:
+    """A measured price for ``symbol``, from the cache or from the venue. Or ``None``.
+
+    PAPER-02's complete answer, in the order that costs least:
+
+    1. :func:`get_fresh_market_price` -- the ``mds:last_price`` cache a Paper_Session or any
+       other MDS subscriber has already warmed. Free, and the common case.
+    2. :func:`fetch_venue_quote` -- a bounded REST one-shot for a symbol nothing is
+       streaming. This is the coverage gap PAPER-02 recorded as deliberately unbuilt.
+    3. :func:`_warm_the_price_cache` -- tell MDS to start streaming the pair, so step 1
+       answers next time. Fire-and-forget; this order is already priced.
+
+    ``get_fresh_market_price`` is called through the module global on purpose, so the
+    ``fresh_paper_quote`` fixture (``tests/conftest.py``) keeps working unchanged for the
+    ~13 suites that rely on it: patching that name still short-circuits this function at
+    step 1 and never reaches the venue.
+    """
+    cached = await get_fresh_market_price(symbol)
+    if cached is not None:
+        return cached
+
+    exchange_id = _paper_price_exchange()
+    quote = await fetch_venue_quote(symbol, exchange_id)
+    if quote is None:
+        return None
+
+    await _warm_the_price_cache(symbol, exchange_id)
+    logger.info(
+        "resolve_market_price: %s had no cached price; resolved %s from %s over REST and "
+        "asked MDS to start streaming it",
+        symbol,
+        quote,
+        exchange_id,
+    )
+    return quote
 
 
 #: Decimal places for money (USD minor units), for a price and for a quantity. The first is
@@ -1396,7 +1667,9 @@ class PaperTradingService:
             #  - market: the client's ``price`` is IGNORED; fill only at a fresh measured quote.
             #  - limit : the caller's price is the limit itself and is required.
             if clean_type == "market":
-                measured = await get_fresh_market_price(clean_sym)
+                # PAPER-02: cache first, then a bounded on-demand venue quote. See
+                # `resolve_market_price`. Still never the client's `price`.
+                measured = await resolve_market_price(clean_sym)
                 if measured is None or self._exact(measured, "price") <= Decimal("0"):
                     from backend_app.backend.paper.paper_market_feed import (
                         PaperMarketDataUnavailable,
