@@ -33,10 +33,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from backend_app.core.models.execution_record import (ExecutionRecordModel,
@@ -731,7 +731,167 @@ class ExchangeReconciliationService:
             except Exception as e:
                 logger.error(f"Reconciliation loop error: {e}", exc_info=True)
                 await asyncio.sleep(interval_seconds)  # Continue after error
-    
+
+    # ── Tenant enumeration (RECON-01) ───────────────────────────────────────────
+
+    def enumerate_reconcilable_pairs(self) -> List[Tuple[str, Optional[str]]]:
+        """Every ``(tenant_id, exchange_id)`` with an order that could be reconciled.
+
+        RECON-01's second blocker was "NO TENANT-ENUMERATION SOURCE IS WIRED. Nothing
+        calls reconcile_open_orders for any real tenant". This is that source.
+
+        IT IS DERIVED FROM THE WORK, NOT FROM A TENANT LIST, and that choice is the whole
+        design. Measured against production before deciding: ``execution_records`` holds
+        198 rows -- 108 COMPLETED, 90 FAILED, and **zero** PENDING or EXECUTING -- across
+        40 distinct tenants, against 182 profiles. So enumerating tenants and reconciling
+        each would resolve a per-tenant executor for 40+ tenants, each requiring a vault
+        decryption and a venue session, to reconcile nothing at all. Enumerating the OPEN
+        ORDERS instead returns the empty set, costs one indexed query, and scales with
+        actual open exposure rather than with signups.
+
+        The predicate is deliberately the same one ``_fetch_db_active_orders`` uses, plus
+        the requirement that a venue identifier exists: an order the venue was never told
+        about, or whose id was never recorded, cannot be asked about. ``venue_order_id``
+        is checked first and ``order_id`` second for the reason recorded in
+        ``OrderWatchdog.venue_identifier`` -- TRADE-12 moved the exchange's id into
+        ``venue_order_id`` and the live engine leaves ``order_id`` NULL, so a filter on
+        ``order_id`` alone misses every row the engine created.
+
+        Returns pairs, not tenants, because ``reconcile_open_orders`` resolves one
+        executor per ``(tenant, exchange)`` and a tenant may hold orders at more than one
+        venue. ``exchange_id`` may be ``None`` on a row that never recorded one; that pair
+        is still returned so the caller can see it rather than silently dropping an open
+        order, and ``_fetch_exchange_orders`` already refuses a ``None`` exchange with a
+        clear error when a vault is configured.
+        """
+        rows = (
+            self.db.query(
+                ExecutionRecordModel.tenant_id,
+                ExecutionRecordModel.exchange_id,
+            )
+            .filter(
+                ExecutionRecordModel.status.in_([
+                    ExecutionStatus.PENDING,
+                    ExecutionStatus.EXECUTING,
+                ]),
+                or_(
+                    ExecutionRecordModel.venue_order_id.isnot(None),
+                    ExecutionRecordModel.order_id.isnot(None),
+                ),
+            )
+            .distinct()
+            .all()
+        )
+        return [(str(tenant_id), exchange_id) for tenant_id, exchange_id in rows]
+
+    async def start_reconciliation_loop_all_tenants(
+        self,
+        interval_seconds: int = 5,
+    ):
+        """Reconcile every tenant that currently has an open order, once per cycle.
+
+        RECON-01. ``start_reconciliation_loop`` above takes a single ``tenant_id``, which
+        is why nothing could call it in production: there was no answer to "which tenant?".
+        This resolves that by asking the database each cycle.
+
+        ONE LEASE FOR THE WHOLE CYCLE, NOT ONE PER TENANT. The finding left this open as a
+        decision between "one leader reconciles every tenant in sequence (simple, but one
+        slow venue delays everyone)" and "the lease is held per tenant/exchange pair
+        (parallel, but N leases and N executors to manage)". Taken deliberately, with the
+        measurement above: N is zero today and will be small at launch, production runs a
+        SINGLE ECS service with no worker services at all (INF-03), and there is therefore
+        nothing to parallelise across. N leases for N=0 is complexity bought on
+        speculation. The head-of-line concern is real but becomes real only with several
+        tenants holding orders at a slow venue simultaneously, at which point the pair
+        shape is a contained change -- the enumeration already returns pairs.
+
+        FAILURE IS PER TENANT, NOT PER CYCLE. One tenant's venue being unreachable, or its
+        credentials being unloadable, must not stop the others being reconciled; each pair
+        is attempted independently and its failure logged. A cycle that loses every tenant
+        to the same error still sleeps and retries rather than exiting the loop.
+
+        NOT REGISTERED IN THE APPLICATION LIFESPAN, and that is not an oversight -- see
+        the module note at :func:`start_reconciliation_loop_all_tenants` callers. A 5-second
+        background loop inside the web process is precisely the defect PAPER-04 records
+        ("paper session loops run in the web process ... a worker restart/redeploy ends
+        every in-flight loop"). Hosting this in the API process would repeat that mistake
+        knowingly. It belongs in a worker service, and INF-03 records that production has
+        none: exactly one ECS service exists. The enumeration is the blocker this change
+        closes; hosting is INF-03's.
+        """
+        self._running = True
+        logger.info(
+            "Starting multi-tenant reconciliation loop (interval=%ss)", interval_seconds
+        )
+
+        while self._running:
+            try:
+                start_time = datetime.utcnow()
+
+                # Leadership first, and before the enumerating query: a non-leader should
+                # cost nothing, not one query per cycle per process.
+                if not await self._try_become_leader():
+                    logger.debug(
+                        "Not the reconciliation leader this cycle - skipping"
+                    )
+                    await asyncio.sleep(interval_seconds)
+                    continue
+
+                pairs = self.enumerate_reconcilable_pairs()
+                if not pairs:
+                    # The ordinary state while live trading is off. Debug, not info: this
+                    # fires every interval_seconds and would otherwise be the loudest line
+                    # in the log while saying nothing happened.
+                    logger.debug(
+                        "No tenant holds a reconcilable open order this cycle"
+                    )
+                else:
+                    logger.info(
+                        "Reconciling %d (tenant, exchange) pair(s)", len(pairs)
+                    )
+
+                total_discrepancies = 0
+                for tenant_id, exchange_id in pairs:
+                    try:
+                        results = await self.reconcile_open_orders(
+                            tenant_id, exchange_id
+                        )
+                    except Exception as exc:  # noqa: BLE001 - isolate one tenant's failure
+                        logger.error(
+                            "Reconciliation failed for tenant=%s exchange=%s: %s. Other "
+                            "tenants in this cycle are unaffected.",
+                            tenant_id, exchange_id, exc, exc_info=True,
+                        )
+                        continue
+
+                    discrepancies = [
+                        r for r in results
+                        if r.action != ReconciliationAction.NO_ACTION
+                    ]
+                    if discrepancies:
+                        total_discrepancies += len(discrepancies)
+                        logger.warning(
+                            "Reconciliation found %d discrepancy(ies) for tenant=%s "
+                            "exchange=%s: %s",
+                            len(discrepancies), tenant_id, exchange_id,
+                            [r.action.value for r in discrepancies],
+                        )
+
+                if total_discrepancies:
+                    logger.warning(
+                        "Cycle complete: %d discrepancy(ies) across %d pair(s)",
+                        total_discrepancies, len(pairs),
+                    )
+
+                elapsed = (datetime.utcnow() - start_time).total_seconds()
+                await asyncio.sleep(max(0, interval_seconds - elapsed))
+
+            except Exception as e:  # noqa: BLE001 - the loop must outlive a bad cycle
+                logger.error(
+                    f"Multi-tenant reconciliation loop error: {e}", exc_info=True
+                )
+                await asyncio.sleep(interval_seconds)
+
     def stop_reconciliation_loop(self):
         """Stop the reconciliation loop."""
         self._running = False
