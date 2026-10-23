@@ -28,10 +28,12 @@ WHAT THIS FILE DOES NOT CHANGE, DELIBERATELY
     process is exactly the defect PAPER-04 records, and hosting it there would repeat that
     mistake knowingly. It belongs in a worker; INF-03 records that production has none.
     ``test_the_service_is_still_not_started_anywhere`` in
-    tests/test_recon01_leader_election.py and
+    tests/test_recon01_exchange_reconciliation_leader_election.py and
     ``test_the_service_is_not_registered_in_the_application_lifespan`` in
     tests/test_p10d_exchange_reconciliation_fails_safely.py both still pin that, and are
-    deliberately left passing.
+    deliberately left passing. (That first path was cited here as
+    tests/test_recon01_leader_election.py -- a file which does not exist -- and is
+    corrected above to the real filename.)
 """
 from __future__ import annotations
 
@@ -297,11 +299,32 @@ def test_the_service_is_still_not_started_in_the_web_process():
     to resume it". Repeating it knowingly for reconciliation would be worse than leaving
     the loop unhosted, because reconciliation exists to notice lost fills and a loop that
     silently dies on deploy would be a reconciliation service that reports healthy while
-    reconciling nothing.
+    reconciling nothing. ``/health/services`` would not even show the death: it is a boot
+    snapshot written once during the lifespan and never refreshed (OBS-01), so a loop that
+    died an hour ago still reports ACTIVE.
 
     INF-03 records that production has exactly ONE ECS service and no worker services of
-    any kind, so there is nowhere correct to host this yet. This test fails the moment
-    someone wires it into the lifespan, which forces that decision to be made explicitly.
+    any kind, so there is nowhere correct to host this yet. Measured this session, the
+    worker route is additionally blocked by PERMISSIONS and not merely unbuilt: the deploy
+    identity ``user/github-actions`` is DENIED ``s3:CreateBucket``, the terraform state
+    bucket ``vyomquant-terraform-state`` returns 404, and ``events:ListRules`` is denied
+    too -- so neither a terraform-managed worker service nor an EventBridge scheduled task
+    can be created with the credentials available.
+
+    BUT HOSTING IS NO LONGER THE DECIDING REASON, and this test does not rest on it.
+    Two reasons survive regardless of where the loop would run:
+
+    1. ``_handle_ghost_order`` INSERTs and COMMITs a new ``execution_records`` row
+       (``strategy_id="reconciled"``, ``price=None``, status EXECUTING) for any venue order
+       it cannot attribute. Manufacturing position state for unexplained live orders is an
+       owner's policy call.
+    2. ``backend_app/core/models/execution_record.py`` records that "`OrderWatchdog` is the
+       only owner of adjudication, and introducing a second one would be worse than the
+       defect" -- and OrderWatchdog is already started and already reconciles these same
+       rows against the venue every 5-10s.
+
+    This test fails the moment someone wires it into the lifespan, which forces that
+    decision to be made explicitly.
     """
     import inspect
 

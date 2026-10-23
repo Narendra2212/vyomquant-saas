@@ -39,6 +39,7 @@ from uuid import UUID
 from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
+from backend_app.backend.order_watchdog import venue_identifier
 from backend_app.core.models.execution_record import (ExecutionRecordModel,
                                                       ExecutionStatus)
 from backend_app.core.order_state_machine import (OrderStateMachine,
@@ -211,9 +212,31 @@ class ExchangeReconciliationService:
             db_orders = self._fetch_db_active_orders(tenant_id, exchange_id)
             logger.debug(f"Fetched {len(db_orders)} active orders from DB")
             
-            # Build lookup maps
+            # Build lookup maps.
+            #
+            # RECON-01 / RT-16 / TRADE-12: both sides of this comparison must be keyed by
+            # the id the VENUE assigned, via `venue_identifier`. They were not. The
+            # exchange side is keyed by the venue's own id (correct, it has no other),
+            # while every DB-side lookup below used `db_order.order_id` alone -- and
+            # TRADE-12 moved the venue's id into `venue_order_id`, leaving `order_id` NULL
+            # on every row the live engine creates. `_fetch_db_active_orders` applies no
+            # identifier filter, so those rows ARE in `db_orders`.
+            #
+            # The consequence was not a missed check but a FABRICATED one, in both
+            # directions at once, for the same real order:
+            #   * CASE 1 compared the venue's id against a NULL `order_id`, found no
+            #     match, and so classified the tenant's own genuine open order as a ghost
+            #     -- `_handle_ghost_order` then INSERTs and COMMITs a second
+            #     `execution_records` row (`exec_ghost_<venue id>`, status EXECUTING,
+            #     `strategy_id="reconciled"`, `price=None`) duplicating a row that was
+            #     already there under its real execution_id;
+            #   * CASE 2 looked the same order up by NULL, missed it, and routed it to
+            #     `_handle_missing_exchange_order` as absent from the venue.
+            # Closing this entry's enumeration blocker is what ARMED that: enumeration was
+            # taught to accept `venue_order_id` rows (see `enumerate_reconcilable_pairs`)
+            # while the matching below was not, so the fix widened the population to
+            # exactly the rows that mismatch. Nothing tested the ghost path.
             exchange_orders_by_id = {o['order_id']: o for o in exchange_orders}
-            {o.execution_id: o for o in db_orders}
             
             # 3. Compare and reconcile
             
@@ -233,7 +256,7 @@ class ExchangeReconciliationService:
             
             # CASE 2 & 3: DB has order, check against exchange
             for db_order in db_orders:
-                exchange_order = exchange_orders_by_id.get(db_order.order_id)
+                exchange_order = exchange_orders_by_id.get(venue_identifier(db_order))
                 
                 if not exchange_order:
                     # Exchange doesn't have order → FILLED or CANCELLED
@@ -371,9 +394,21 @@ class ExchangeReconciliationService:
         db_orders: List[ExecutionRecordModel],
         exchange_order_id: str
     ) -> Optional[ExecutionRecordModel]:
-        """Find DB order matching exchange order_id."""
+        """Find the DB order the venue knows by ``exchange_order_id``.
+
+        Matched via ``venue_identifier`` (``venue_order_id``, then ``order_id``) rather
+        than ``order_id`` alone. This is the deciding comparison in CASE 1: a row that
+        fails to match here is declared a ghost and a duplicate ``execution_records`` row
+        is inserted for it. Keying on ``order_id`` alone therefore did not merely miss
+        engine-created rows, it manufactured a duplicate for each one -- see the reasoning
+        recorded at the lookup-map construction in ``reconcile_open_orders``.
+        """
+        if not exchange_order_id:
+            # Never match on a null id: an exchange order with no id must not be paired
+            # with whichever DB row also happens to have none.
+            return None
         for order in db_orders:
-            if order.order_id == exchange_order_id:
+            if venue_identifier(order) == exchange_order_id:
                 return order
         return None
     
@@ -445,10 +480,17 @@ class ExchangeReconciliationService:
         - CANCELLED (user or system cancelled)
         - EXPIRED/REJECTED
         """
-        # BUG-FIX ORD-03: Query authoritative order status from exchange first if supported
-        if self.exchange and hasattr(self.exchange, "fetch_order") and db_order.order_id:
+        # BUG-FIX ORD-03: Query authoritative order status from exchange first if supported.
+        # RECON-01 / RT-16 / TRADE-12: ask about the id the VENUE assigned. Gating on
+        # `db_order.order_id` skipped this authoritative check for every engine-created row
+        # (`order_id` NULL, venue id in `venue_order_id`) and so fell through to deciding
+        # the order's fate from its absence alone -- the precise situation the rest of this
+        # function refuses to act on. With the venue id resolved, the row that most needs a
+        # definitive answer is the one that now gets asked.
+        venue_id = venue_identifier(db_order)
+        if self.exchange and hasattr(self.exchange, "fetch_order") and venue_id:
             try:
-                raw_order = await self.exchange.fetch_order(db_order.order_id, db_order.symbol)
+                raw_order = await self.exchange.fetch_order(venue_id, db_order.symbol)
                 if isinstance(raw_order, dict):
                     raw_status = str(raw_order.get("status", "")).lower()
                     filled_val = float(raw_order.get("filled", 0) or 0)
@@ -459,7 +501,7 @@ class ExchangeReconciliationService:
                             execution_id=db_order.execution_id,
                             filled_size=filled_val,
                             avg_price=avg_p,
-                            exchange_order_id=db_order.order_id,
+                            exchange_order_id=venue_id,
                             reason="Reconciled via fetch_order: Order confirmed filled on exchange"
                         )
                         db_order.status = ExecutionStatus.COMPLETED
@@ -473,7 +515,7 @@ class ExchangeReconciliationService:
                             action=ReconciliationAction.MARK_FILLED,
                             old_state=db_order.status,
                             new_state="filled",
-                            exchange_order_id=db_order.order_id,
+                            exchange_order_id=venue_id,
                             filled_size=filled_val,
                             avg_price=avg_p,
                             discrepancy="Order closed on exchange (verified via fetch_order)"
@@ -492,7 +534,7 @@ class ExchangeReconciliationService:
                             action=ReconciliationAction.MARK_CANCELLED,
                             old_state=db_order.status,
                             new_state="cancelled",
-                            exchange_order_id=db_order.order_id,
+                            exchange_order_id=venue_id,
                             filled_size=filled_val,
                             avg_price=avg_p if avg_p > 0 else None,
                             discrepancy="Order cancelled on exchange (verified via fetch_order)"
@@ -505,7 +547,7 @@ class ExchangeReconciliationService:
                             action=ReconciliationAction.NO_ACTION,
                             old_state=db_order.status,
                             new_state=db_order.status,
-                            exchange_order_id=db_order.order_id,
+                            exchange_order_id=venue_id,
                             filled_size=float(db_order.filled_size or 0),
                             avg_price=float(db_order.avg_price or 0) if db_order.avg_price else None,
                             discrepancy=f"Unrecognized status '{raw_status}' from fetch_order; state preserved for retry"
@@ -518,7 +560,7 @@ class ExchangeReconciliationService:
                         action=ReconciliationAction.NO_ACTION,
                         old_state=db_order.status,
                         new_state=db_order.status,
-                        exchange_order_id=db_order.order_id,
+                        exchange_order_id=venue_id,
                         filled_size=float(db_order.filled_size or 0),
                         avg_price=float(db_order.avg_price or 0) if db_order.avg_price else None,
                         discrepancy="fetch_order returned non-dict response; state preserved for retry"
@@ -531,7 +573,7 @@ class ExchangeReconciliationService:
                     action=ReconciliationAction.NO_ACTION,
                     old_state=db_order.status,
                     new_state=db_order.status,
-                    exchange_order_id=db_order.order_id,
+                    exchange_order_id=venue_id,
                     filled_size=float(db_order.filled_size or 0),
                     avg_price=float(db_order.avg_price or 0) if db_order.avg_price else None,
                     discrepancy=f"Exchange status uncertain due to transient error ({e}); state preserved for next reconciliation cycle"
@@ -579,7 +621,7 @@ class ExchangeReconciliationService:
             action=ReconciliationAction.NO_ACTION,
             old_state=db_order.status,
             new_state=db_order.status,
-            exchange_order_id=db_order.order_id,
+            exchange_order_id=venue_id,
             filled_size=filled_size,
             avg_price=float(db_order.avg_price) if db_order.avg_price else None,
             discrepancy=(
@@ -595,7 +637,14 @@ class ExchangeReconciliationService:
     ) -> ReconciliationResult:
         """
         CASE 3: Both have order → Update fill data if mismatch.
+
+        RECON-01 / RT-16 / TRADE-12: `exchange_order_id` reports the id the VENUE
+        assigned, resolved via `venue_identifier`. It read `db_order.order_id`, which is
+        this platform's own order id (it carries the FK to `orders(id)`) and is NULL on
+        every row the live engine wrote -- so the field named for the exchange's id
+        reported either the wrong system's id or nothing at all.
         """
+        venue_id = venue_identifier(db_order)
         db_filled = float(db_order.filled_size or 0)
         exchange_filled = exchange_order['filled_size']
         
@@ -615,7 +664,7 @@ class ExchangeReconciliationService:
                     execution_id=db_order.execution_id,
                     filled_size=exchange_filled,
                     avg_price=exchange_order['avg_price'],
-                    exchange_order_id=db_order.order_id or "unknown",
+                    exchange_order_id=venue_id or "unknown",
                     reason="Reconciled: Order fully filled on exchange"
                 )
                 db_order.status = ExecutionStatus.COMPLETED
@@ -627,7 +676,7 @@ class ExchangeReconciliationService:
                     filled_size=exchange_filled,
                     remaining_size=exchange_order['remaining_size'],
                     avg_price=exchange_order['avg_price'],
-                    exchange_order_id=db_order.order_id or "unknown",
+                    exchange_order_id=venue_id or "unknown",
                     reason="Reconciled: Updated fill data from exchange"
                 )
             
@@ -638,7 +687,7 @@ class ExchangeReconciliationService:
                 action=ReconciliationAction.UPDATE_FILL_DATA,
                 old_state=f"filled={db_filled}",
                 new_state=f"filled={exchange_filled}",
-                exchange_order_id=db_order.order_id,
+                exchange_order_id=venue_id,
                 filled_size=exchange_filled,
                 avg_price=exchange_order['avg_price'],
                 discrepancy=f"Fill mismatch: DB={db_filled}, Exchange={exchange_filled}"
@@ -650,7 +699,7 @@ class ExchangeReconciliationService:
             action=ReconciliationAction.NO_ACTION,
             old_state=None,
             new_state=None,
-            exchange_order_id=db_order.order_id,
+            exchange_order_id=venue_id,
             filled_size=exchange_filled,
             avg_price=exchange_order['avg_price']
         )
@@ -949,10 +998,21 @@ _reconciliation_service: Optional[ExchangeReconciliationService] = None
 
 def get_reconciliation_service(
     db_session: Session,
-    exchange_client: Optional[Any] = None
+    exchange_client: Optional[Any] = None,
+    vault: Optional[Any] = None,
 ) -> ExchangeReconciliationService:
-    """Get or create global reconciliation service."""
+    """Get or create global reconciliation service.
+
+    RECON-01: this factory could not express the only multi-tenant-safe configuration of
+    the thing it constructs. ``__init__`` grew a ``vault`` parameter precisely so that
+    ``_fetch_exchange_orders`` resolves a per-(tenant, exchange) executor rather than
+    trusting one shared ``exchange_client``, but the factory did not forward it -- so the
+    single documented entry point could only ever build the unsafe shape, and any caller
+    wanting the safe one had to bypass it and call the constructor directly.
+    """
     global _reconciliation_service
     if _reconciliation_service is None:
-        _reconciliation_service = ExchangeReconciliationService(db_session, exchange_client)
+        _reconciliation_service = ExchangeReconciliationService(
+            db_session, exchange_client, vault=vault
+        )
     return _reconciliation_service
