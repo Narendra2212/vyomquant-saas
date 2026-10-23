@@ -92,26 +92,68 @@ redis==5.0.8
 
 # --- Payment Gateways ----------------------------------------------------
 stripe==10.8.0
-razorpay==1.4.1
-# razorpay 1.4.1 does `import pkg_resources` at razorpay/client.py:4. setuptools 81
-# deprecated pkg_resources and 83.0.0 removed it outright, so an unpinned setuptools
-# makes `import razorpay` raise ModuleNotFoundError and every checkout path answer
-# HTTPException(500, "Failed to initialize payment gateway."). Pinned below the removal
-# until razorpay ships a release that no longer imports it.
+razorpay==2.0.1
+# DEP-01, RESOLVED. This pin and the setuptools one below were deadlocked, and the
+# deadlock is gone. Recording why, because the previous comment argued at length
+# that it could not be.
+#
+# THE DEADLOCK AS IT STOOD: razorpay 1.4.1 does `import pkg_resources` at
+# razorpay/client.py:4 -- unconditionally, at module level. setuptools 81
+# deprecated pkg_resources and 83.0.0 removed it, so a setuptools new enough to
+# clear PYSEC-2026-3447 made `import razorpay` raise ModuleNotFoundError and every
+# checkout path answer HTTPException(500, "Failed to initialize payment gateway").
+# setuptools was therefore held at 78.1.1 and the advisory was suppressed with
+# --ignore-vuln.
+#
+# WHAT WAS WRONG: the finding recorded "PyPI has no razorpay release after 1.4.1 at
+# all (1.4.2, 1.5.0, 1.5.1 and 1.5.2 are all 404)" and concluded the only options
+# were to wait, replace the SDK with raw HTTP, or vendor a patched copy. PyPI lists
+# 1.4.2, 2.0.0 AND 2.0.1. Whether that was wrong when written or releases have
+# landed since does not matter; the conclusion was inherited rather than re-derived,
+# which is exactly how the protobuf half of this finding also sat as "no path
+# forward" until it was re-checked.
+#
+# WHY 2.0.1 BREAKS THE DEADLOCK: it still CONTAINS the string pkg_resources, so a
+# naive grep says nothing changed. The import MOVED. In 2.0.x it sits at
+# client.py:109 inside `_get_version()`, in the `except ImportError` arm of a try
+# that reaches for `importlib.metadata` first. importlib.metadata is stdlib from
+# Python 3.8, so on this project's 3.11 the fallback CANNOT fire and pkg_resources
+# is never imported. Module-level imports in 2.0.1 are os, json, requests, warnings,
+# random, time and types -- nothing from setuptools.
+#
+# PROVEN, NOT REASONED: built a clean venv with setuptools 84.2.1 (pkg_resources
+# genuinely absent -- `import pkg_resources` raises ModuleNotFoundError) and
+# razorpay 2.0.1. `import razorpay` succeeds, Client constructs, `_get_version()`
+# returns "2.0.1" rather than the hardcoded fallback, and it emits no warning, which
+# confirms importlib.metadata answered.
+#
+# THE MAJOR BUMP IS SAFE FOR THE CODE AS WRITTEN. 1.x -> 2.x on a payment SDK is
+# where a resource gets renamed, and a silent AttributeError here means a customer
+# is charged and gets nothing. So every call site was taken from billing.py rather
+# than guessed -- rzp.order.create, rzp.order.fetch, rzp.payment.fetch,
+# rzp.payment_link.create -- and each was checked against a real installed 2.0.1
+# with its signature compared to 1.4.1. All four exist; all four signatures are
+# IDENTICAL. The API surface diff removes nothing and adds five resources
+# (DeviceActivity, DeviceMode, Dispute, Document, retry_enabled).
+#
+# OSV: razorpay 2.0.1 has zero live advisories, so this is not trading one for
+# another.
+setuptools==84.2.1
+# DEP-01: 78.1.1 -> 84.2.1, which closes the LAST advisory this finding carried.
+#
+# 78.1.1 carries TWO ids for one issue -- PYSEC-2026-3447 and its alias
+# GHSA-h35f-9h28-mq5c (MANIFEST.in exclusion bypass when building an sdist, via a
+# Unicode NFC/NFD filename collision). Fixed in 83.0.0. OSV reports 83.0.0 and
+# 84.2.1 both clean; 84.2.1 is taken as the current release rather than the bare
+# advisory floor.
+#
+# This was only reachable once razorpay stopped importing pkg_resources at module
+# level -- see the razorpay pin above for the proof. The `--ignore-vuln
+# PYSEC-2026-3447` flag in .github/workflows/05-security.yml is REMOVED in the same
+# change, so pip-audit now runs with no suppressions at all.
 #
 # CVE-2025-47273 / GHSA-5rjg-fvgr-3xxf (HIGH, path traversal in
-# PackageIndex.download -> arbitrary file write) is vulnerable `< 78.1.1`,
-# first_patched_version 78.1.1. 78.1.1 is the advisory floor and it still ships
-# pkg_resources (importable, emits a DeprecationWarning, verified `import razorpay`
-# succeeds under it), so it clears the HIGH without reintroducing the razorpay
-# breakage described above.
-#
-# KNOWINGLY NOT TAKEN: CVE-2026-59890 / GHSA-h35f-9h28-mq5c (MEDIUM, MANIFEST.in
-# exclusion bypass in sdist via NFC/NFD collision on macOS APFS) needs 83.0.0, which is
-# the release that removes pkg_resources. Taking it breaks `import razorpay`. It is also
-# an sdist-authoring bug on macOS, and this package is build-time only in a Linux image
-# that builds no sdists. See .kiro/specs/production-launch-hardening/tasks.md task 13.24.
-setuptools==78.1.1
+# PackageIndex.download) needed >= 78.1.1 and remains cleared.
 
 # --- Exchange Connectivity -----------------------------------------------
 ccxt[async]==4.3.92

@@ -190,28 +190,117 @@ def test_the_pinned_torch_clears_the_critical_rce_advisory():
     )
 
 
-def test_every_accepted_advisory_in_the_script_carries_a_reason():
-    """An ignore without a stated reason is indistinguishable from suppression."""
+#: The id shapes the IGNORED-map parser must be able to see. Kept at module scope so the
+#: parser can be exercised against a known sample (see the drift test below) instead of
+#: depending on real entries existing -- which is what broke when the map was emptied.
+_ADVISORY_ID_RE = (
+    r'"((?:PYSEC|CVE|BIT)-\d{4}-[0-9A-Za-z-]+'
+    r"|GHSA-[0-9a-z]{4,}(?:-[0-9a-z]{4,})+)\"\s*:"
+)
+
+
+def _ignored_map_body() -> str:
+    """The source text of the IGNORED map, however it is formatted.
+
+    Handles both the populated multi-line form and the empty single-line
+    ``IGNORED: Dict[str, str] = {}``. The previous implementation split on "\\n}",
+    which finds nothing in the empty form.
+    """
     source = SCRIPT.read_text(encoding="utf-8")
     block = source.split("IGNORED: Dict[str, str] = {", 1)
     assert len(block) == 2, "could not find the IGNORED map in the audit script"
-    body = block[1].split("\n}", 1)[0]
-    # Must match BOTH id shapes. An earlier version of this test matched only
-    # PYSEC-YYYY-N, which silently skipped every GHSA- entry -- so a GHSA ignore with no
-    # reason would have passed this guard. Caught while negative-controlling the script.
-    ids = re.findall(r'"((?:PYSEC|CVE|BIT)-\d{4}-[0-9A-Za-z-]+|GHSA-[0-9a-z]{4,}(?:-[0-9a-z]{4,})+)"\s*:', body)
-    assert ids, "the IGNORED map declares no advisory ids; the parser may have drifted"
-    ghsa = [i for i in ids if i.startswith("GHSA-")]
-    pysec = [i for i in ids if i.startswith("PYSEC-")]
-    assert ghsa and pysec, (
-        "expected the IGNORED map to contain both GHSA- and PYSEC- ids (the same advisory "
-        f"is often listed under both); parsed {ids}. If the map genuinely no longer has "
-        "one of the two shapes, relax this assertion deliberately rather than leaving a "
-        "parser that cannot see it."
+    rest = block[1]
+    # Empty map: the very next character closes it.
+    if rest.lstrip().startswith("}"):
+        return ""
+    return rest.split("\n}", 1)[0]
+
+
+def test_the_ignored_map_parser_still_works():
+    """Exercise the parser against a KNOWN sample, not against real entries.
+
+    This guard used to be `assert ids` on the live map, which conflated two very
+    different things: "the parser has drifted" and "there is nothing to accept".
+    When DEP-01's last torch ignores were removed, the map became empty -- the
+    best possible state -- and that assertion failed, reporting a parser problem
+    that did not exist.
+
+    So parser health is now checked independently of the map's contents, and both
+    id shapes are covered here rather than relying on one of each happening to be
+    present. An earlier version of this test matched only PYSEC-YYYY-N and
+    silently skipped every GHSA- entry, so a GHSA ignore with no reason would have
+    passed unnoticed.
+    """
+    sample = (
+        '    "PYSEC-2026-139": ("a reason long enough to be substantive"),\n'
+        '    "GHSA-rrmf-rvhw-rf47": ("another substantive reason here"),\n'
+        '    "CVE-2025-32434": "a third substantive reason for coverage",\n'
     )
+    ids = re.findall(_ADVISORY_ID_RE, sample)
+    assert "PYSEC-2026-139" in ids, "the parser no longer sees PYSEC- ids"
+    assert "GHSA-rrmf-rvhw-rf47" in ids, "the parser no longer sees GHSA- ids"
+    assert "CVE-2025-32434" in ids, "the parser no longer sees CVE- ids"
+
+
+def test_every_accepted_advisory_in_the_script_carries_a_reason():
+    """An ignore without a stated reason is indistinguishable from suppression.
+
+    Vacuously satisfied when the map is empty, which is the state DEP-01 reached:
+    both dependency gates now run with no suppressions at all. The assertion that
+    matters is conditional -- IF something is accepted, it must say why.
+    """
+    body = _ignored_map_body()
+    ids = re.findall(_ADVISORY_ID_RE, body)
+
+    if not ids:
+        # The desired end state, asserted rather than merely tolerated so that a
+        # reader of this test knows an empty map is correct and not a parse failure.
+        assert body.strip() in ("", "}"), (
+            "the IGNORED map parsed as empty but its body is not; the parser may "
+            f"have drifted. Body was: {body[:200]!r}"
+        )
+        return
+
     for vuln_id in ids:
         # The reason is the mapped value; assert it is a non-trivial string.
         m = re.search(rf'"{re.escape(vuln_id)}"\s*:\s*\(?\s*"([^"]+)"', body)
         assert m and len(m.group(1).strip()) > 12, (
             f"{vuln_id} is accepted without a substantive reason"
         )
+
+
+def test_dep01_has_no_remaining_dependency_suppressions():
+    """DEP-01's close-out condition, as an executable assertion.
+
+    Both dependency gates must run with an empty ignore list:
+
+      * scripts/audit_local_version_pins.py -- the IGNORED map here
+      * .github/workflows/05-security.yml   -- the pip-audit step's --ignore-vuln
+
+    Every historical suppression on this finding expired without anyone noticing:
+    the starlette ignores outlived their pin by several commits, the setuptools one
+    outlived its stated premise ("PyPI has no razorpay release after 1.4.1")
+    entirely, and a torch entry claimed "no fixed version published in any release
+    yet" after 2.13.0 had shipped one. This test fails the moment a suppression
+    returns, so the next one has to be argued for rather than inherited.
+    """
+    assert not re.findall(_ADVISORY_ID_RE, _ignored_map_body()), (
+        "scripts/audit_local_version_pins.py accepts an advisory again. Add a "
+        "ledger entry for it in docs/launch_readiness/REMEDIATION_LEDGER.json and "
+        "relax this test deliberately."
+    )
+
+    workflow = (
+        SCRIPT.parent.parent / ".github" / "workflows" / "05-security.yml"
+    ).read_text(encoding="utf-8")
+    # Only count it as a suppression when it is actually passed to pip-audit, not
+    # when the string appears in the surrounding explanatory comments.
+    live = [
+        line for line in workflow.splitlines()
+        if "--ignore-vuln" in line and not line.strip().startswith("#")
+    ]
+    assert not live, (
+        f"05-security.yml passes --ignore-vuln again: {live}. pip-audit is meant to "
+        "run with no suppressions; a clean result otherwise means 'clean outside the "
+        "advisories we agreed not to look at'."
+    )

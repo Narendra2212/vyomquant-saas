@@ -224,17 +224,21 @@ jobs:
   # the gate here is "block on every advisory pip-audit finds a fix for, except this
   # explicit, reviewed ignore list" rather than a severity threshold -- the same
   # ratchet-from-a-known-baseline shape as the IaC scan above, just expressed as
-  # --ignore-vuln instead of a severity floor. Each ignored ID is DEP-01's own
-  # already-investigated, currently-irreducible residual (ledger: docs/launch_readiness/
-  # REMEDIATION_LEDGER.json), re-confirmed this session by actually running pip-audit
-  # against this session's installed venv rather than carried forward from memory:
-  #   PYSEC-2026-3447 - setuptools; the fix (83.0.0) removes pkg_resources and breaks
-  #     `import razorpay` (see requirements-base.txt's own comment on that pin).
-  #   PYSEC-2026-1805 - protobuf; pulled in transitively by tensorflow/opentelemetry-proto,
-  #     whose current pins cap it below the fixed version.
-  # A new advisory outside this list fails the job; removing an entry here (because it was
-  # actually fixed) should happen in the same commit that bumps the pin, as DEP-01's
-  # python-dotenv fix (PYSEC-2026-2270, closed) did this session.
+  # --ignore-vuln instead of a severity floor.
+  #
+  # THE IGNORE LIST IS NOW EMPTY. DEP-01's last suppression (PYSEC-2026-3447, setuptools)
+  # was removed when razorpay moved to 2.0.1 and setuptools to 84.2.1 -- see the step's
+  # own comment below for why that became possible and how it was verified. pip-audit
+  # therefore runs with no exceptions at all, which is the state this gate was always
+  # meant to reach: a new advisory fails the job outright rather than landing in a list
+  # nobody re-reads.
+  #
+  # IF AN IGNORE EVER HAS TO COME BACK: add it in the same commit as a ledger entry in
+  # docs/launch_readiness/REMEDIATION_LEDGER.json naming the advisory, the pin that
+  # blocks the fix, and what would unblock it -- and remove it in the same commit that
+  # bumps that pin. Both halves of that rule were broken historically: the starlette
+  # ignores outlived their pin by several commits, and the setuptools one outlived its
+  # stated premise ("PyPI has no razorpay release after 1.4.1") entirely.
   #
   # STALE IGNORES REMOVED (DEP-01): PYSEC-2026-161/248/249/2280/2281 (starlette) were
   # still listed here long after commit 0bdd78f bumped the pin to starlette==1.3.1, which
@@ -307,16 +311,37 @@ jobs:
       # regression if protobuf ever resolved to 6.x, which carries PYSEC-2026-1805 again.
       # Same cleanup the starlette ignores above got, for the same reason.
       #
-      # PYSEC-2026-3447 (setuptools) STAYS, and is genuinely stuck rather than unexamined:
-      # the fix is setuptools 83.0.0, which REMOVES pkg_resources, and razorpay 1.4.1
-      # imports pkg_resources at razorpay/client.py:4. PyPI has no razorpay release after
-      # 1.4.1 (1.4.2/1.5.0/1.5.1/1.5.2 all 404), so there is no upstream fix to adopt, and
-      # source-patching a payment SDK used for real billing is a materially different risk
-      # from a version bump.
-      - name: Run pip-audit (blocking)
-        run: |
-          pip-audit \
-            --ignore-vuln PYSEC-2026-3447
+      # PYSEC-2026-3447 (setuptools) REMOVED TOO. DEP-01 IS NOW SUPPRESSION-FREE: this
+      # step runs pip-audit with NO --ignore-vuln flags at all.
+      #
+      # The comment this replaces said the advisory was "genuinely stuck rather than
+      # unexamined", on the grounds that the fix (setuptools 83.0.0) removes
+      # pkg_resources, razorpay 1.4.1 imports it at client.py:4, and "PyPI has no
+      # razorpay release after 1.4.1 (1.4.2/1.5.0/1.5.1/1.5.2 all 404)".
+      #
+      # That last premise was false. PyPI lists 1.4.2, 2.0.0 and 2.0.1.
+      #
+      # razorpay 2.0.x still contains the string pkg_resources, so a grep suggests
+      # nothing changed -- but the IMPORT MOVED. It now sits inside `_get_version()`, in
+      # the `except ImportError` arm of a try that reaches for `importlib.metadata`
+      # first. importlib.metadata is stdlib from Python 3.8, so on this project's 3.11
+      # the fallback cannot fire and pkg_resources is never imported.
+      #
+      # Verified by construction rather than by argument: a clean venv with setuptools
+      # 84.2.1, where `import pkg_resources` raises ModuleNotFoundError, imports razorpay
+      # 2.0.1 successfully and resolves its real version with no fallback warning. Every
+      # call site billing.py uses (order.create, order.fetch, payment.fetch,
+      # payment_link.create) exists in 2.0.1 with an IDENTICAL signature.
+      #
+      # So the pins moved (razorpay 1.4.1 -> 2.0.1, setuptools 78.1.1 -> 84.2.1) and the
+      # suppression goes with them, in this same commit -- which is what the policy
+      # paragraph above asks for and what the stale starlette ignores failed to do.
+      #
+      # DO NOT ADD AN IGNORE BACK WITHOUT A LEDGER ENTRY. An empty ignore list is the
+      # point: a new advisory now fails this job outright instead of landing in a list
+      # that nobody re-reads.
+      - name: Run pip-audit (blocking, no suppressions)
+        run: pip-audit
 
       # Closes the silent-skip blind spot documented above. Audits the base version of
       # every local-version pin (which the step above can only skip), and fails on any
