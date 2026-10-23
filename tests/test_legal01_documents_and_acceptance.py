@@ -704,3 +704,134 @@ def test_the_migration_keeps_the_new_columns_nullable():
             "is a legal input that changes, and baking it in would make every "
             "revision a schema change"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  10. GDPR OBLIGATIONS THAT FOLLOW FROM ACCEPTING EU/UK CUSTOMERS
+#
+#  The owner's decision is to accept customers globally INCLUDING the EU and
+#  UK, which makes GDPR and UK GDPR apply in full rather than optionally.
+#  These assert the obligations that are code or documents -- and, for the one
+#  that is an appointment rather than code, that the gap stays VISIBLE.
+# ══════════════════════════════════════════════════════════════════════════
+
+ROPA = REPO / "docs" / "legal" / "RECORDS_OF_PROCESSING.md"
+
+
+def test_the_article_27_gap_is_visible_rather_than_omitted():
+    """Article 27 requires an EU representative for a non-EU controller that
+    offers services to EU data subjects OR monitors their behaviour. Both apply
+    here: global signups, plus Google Analytics and Microsoft Clarity.
+
+    It is an APPOINTMENT, not code, so it cannot be satisfied in this repository.
+    What this test protects is that the gap is stated in the document a user
+    actually reads, instead of the section being quietly left out -- an omitted
+    representative reads as "not required", which is the opposite of true.
+
+    WHEN THE REPRESENTATIVES ARE APPOINTED, this test should be inverted to
+    assert the real contact details are present and the placeholder is gone.
+    """
+    text = _documents_text()
+    assert "Article 27" in text, (
+        "the Privacy Policy must address Article 27 now that EU/UK users are in "
+        "scope"
+    )
+    assert "NOT YET APPOINTED" in text, (
+        "the Article 27 representatives are not appointed. While that is true, "
+        "the documents must SAY so rather than omitting the section."
+    )
+    # Both jurisdictions, because the UK requires its own.
+    assert "EU representative" in text
+    assert "UK representative" in text
+
+
+def test_the_privacy_policy_commits_to_the_72_hour_breach_notification():
+    """Article 33: notify the supervisory authority within 72 hours where the
+    breach is likely to risk rights and freedoms."""
+    text = _documents_text()
+    assert "72 HOURS" in text or "72 hours" in text
+    assert "supervisory authority" in text.lower()
+
+
+def test_the_privacy_policy_states_the_one_month_response_period():
+    """Article 12(3): respond without undue delay and within one month,
+    extendable by two further months for complex requests. The earlier wording
+    said '30 days', which is close but is not the regulation's period."""
+    text = _documents_text()
+    assert "WITHIN ONE MONTH" in text, (
+        "Article 12(3)'s period is one month, not 30 days"
+    )
+    assert "two further months" in text, (
+        "the extension right should be stated, since relying on it without "
+        "having disclosed it is worse than not having it"
+    )
+
+
+def test_the_privacy_policy_addresses_automated_decision_making():
+    """Article 22. The answer here is 'we do not', which is worth saying on a
+    platform where software places orders -- a reader could reasonably assume
+    otherwise."""
+    text = _documents_text()
+    assert "automated means" in text.lower()
+
+
+def test_records_of_processing_activities_exist():
+    """Article 30 requires a controller to maintain these and produce them on
+    request. This is a hard obligation the moment EU/UK users are accepted."""
+    assert ROPA.is_file(), (
+        "Article 30 requires Records of Processing Activities; "
+        f"{ROPA.relative_to(REPO)} is missing"
+    )
+    text = ROPA.read_text(encoding="utf-8", errors="replace")
+
+    # The identifiers must agree with the published documents, or the ROPA
+    # describes a different company than the Terms do.
+    assert _entity_field("legalName") in text
+    assert _entity_field("cin") in text
+    assert _entity_field("gstin") in text
+
+    # Every processor named in the Privacy Policy must appear in the ROPA.
+    for processor in (
+        "Supabase", "Amazon Web Services", "Razorpay", "Stripe",
+        "Sentry", "Google Analytics", "Microsoft Clarity",
+    ):
+        assert processor in text, f"{processor} is in the Policy but not the ROPA"
+
+    # Article 30(1) content requirements.
+    for required in ("Purpose", "Lawful basis", "Retention", "Recipients"):
+        assert required in text, f"the ROPA does not record {required.lower()}"
+
+
+def test_the_ropa_records_its_own_gaps():
+    """A ROPA that lists only what is in order is a sales document.
+
+    The unappointed representatives, the unexecuted DPAs and the unknown
+    Supabase region all have to be IN it, because a supervisory authority
+    reading it will find them anyway and the difference between disclosed and
+    discovered is the whole of good faith here.
+    """
+    text = ROPA.read_text(encoding="utf-8", errors="replace")
+    assert "Known gaps" in text or "KNOWN GAPS" in text
+    assert "not appointed" in text.lower()
+    assert "Supabase region not confirmed" in text or "region not yet confirmed" in text
+
+
+def test_the_ropa_records_what_is_not_processed():
+    """The absences are load-bearing: no custody underpins the PMLA position, and
+    no Article 9 data underpins the DPIA screening conclusion."""
+    text = ROPA.read_text(encoding="utf-8", errors="replace")
+    assert "No custody" in text
+    assert "No special-category data" in text or "no special-category" in text.lower()
+    assert "No automated decision-making" in text
+
+
+def test_the_ropa_does_not_overstate_the_copilot():
+    """Migration 018 records that every copilot write is swallowed by a
+    try/except, so assistant history is never persisted. A ROPA claiming to hold
+    conversation data that does not exist would be inaccurate in the direction
+    that looks worse for us, which is still inaccurate.
+    """
+    text = ROPA.read_text(encoding="utf-8", errors="replace")
+    assert "never persisted" in text, (
+        "the ROPA should record that copilot history is not actually stored"
+    )

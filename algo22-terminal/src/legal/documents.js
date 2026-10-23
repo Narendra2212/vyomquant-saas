@@ -118,6 +118,34 @@ export const ENTITY = {
   pinCode: '285122',
   cin: 'U26515UP2024PTC206131',
   gstin: '09ABBCA0242R1ZI',
+  // LEGAL-01: GDPR Article 27, and the equivalent UK GDPR provision.
+  //
+  // THESE ARE REQUIRED AND NOT YET APPOINTED, which is why they render as
+  // visible placeholders rather than being quietly omitted.
+  //
+  // Article 27 obliges a controller established outside the EU to designate a
+  // representative in the Union, in writing, when it offers goods or services to
+  // people in the EU OR MONITORS THEIR BEHAVIOUR. Both limbs apply here: the
+  // product owner's decision is to accept customers globally including the EU
+  // and UK, and this platform runs Google Analytics and Microsoft Clarity, which
+  // is behaviour monitoring. The Article 27(2) exemptions are narrow -- occasional
+  // processing, no large-scale special-category data, unlikely to risk rights and
+  // freedoms -- and session analytics across every visitor is not occasional.
+  //
+  // A representative is an appointment, not code: typically a service in an EU
+  // member state (and separately in the UK) that acts as the contact point for
+  // data subjects and supervisory authorities. It cannot be written here.
+  //
+  // tests/test_legal01_documents_and_acceptance.py asserts these placeholders
+  // are PRESENT while unappointed, so the gap cannot be lost, and will need
+  // updating to assert real values once they are appointed.
+  euRepresentative:
+    'EU representative: [NOT YET APPOINTED - GDPR Article 27 requires one '
+    + 'because we offer this service to people in the EU and use analytics that '
+    + 'monitor behaviour. Contact privacy@vyomquant.com in the meantime.]',
+  ukRepresentative:
+    'UK representative: [NOT YET APPOINTED - the UK GDPR requires one on the '
+    + 'same basis. Contact privacy@vyomquant.com in the meantime.]',
   grievanceEmail: 'grievance@vyomquant.com',
   privacyEmail: 'privacy@vyomquant.com',
   billingEmail: 'billing@vyomquant.com',
@@ -132,7 +160,9 @@ export const ENTITY = {
  * and mirrored in LEGAL-01's ledger entry.
  */
 export const REVIEW_NOTES = [
-  'COUNSEL — GDPR SCOPE. GDPR/UK-GDPR language is included and signups are global. If EU/UK users are genuinely in scope, counsel must settle the lawful basis, an Article 27 representative, and the transfer mechanism for the India-to-Singapore processing disclosed in Privacy section 7.',
+  'OWNER ACTION, BLOCKING FOR EU/UK — ARTICLE 27 REPRESENTATIVES ARE NOT APPOINTED. The product owner has decided to accept customers globally INCLUDING the EU and UK, so GDPR and UK GDPR apply in full. Article 27 obliges a controller established outside the Union to designate a representative in writing where it offers services to people in the EU OR monitors their behaviour; BOTH limbs apply here, since Google Analytics and Microsoft Clarity are behaviour monitoring. The Article 27(2) exemptions are narrow and session analytics across every visitor is not "occasional". A separate UK representative is required on the same basis. These render as VISIBLE PLACEHOLDERS in Privacy section 1 rather than being omitted, so they cannot ship unnoticed. This is an appointment, not code.',
+  'OWNER ACTION — PROCESSOR DPAs AND SCCs must be confirmed executed with Supabase, AWS, Google, Microsoft and Sentry. All publish them; Privacy section 7 already states we rely on them, which must be true rather than aspirational. Also: the SUPABASE REGION is not recorded anywhere in this repository (every reference is the placeholder your-project-ref.supabase.co), so docs/legal/RECORDS_OF_PROCESSING.md cannot state where the primary database physically sits -- which is exactly what a ROPA is for.',
+  'COUNSEL — DPIA SCREENING. Session replay of every consenting visitor, alongside financial-context data, is the kind of processing an authority may expect a documented screening assessment for. A full DPIA is arguably not mandatory -- there is no Article 9 special-category data and no systematic monitoring of a publicly accessible area -- but that conclusion should be recorded by someone qualified rather than assumed. Records of Processing Activities (Article 30) ARE now maintained at docs/legal/RECORDS_OF_PROCESSING.md.',
   'COUNSEL — PMLA / FIU-IND. The position that VyomQuant falls outside the virtual-digital-asset service-provider definition is stated as a FACTUAL description of what the platform does (no custody, no exchange of assets, no transfer on behalf of another; trades execute on the user\'s own exchange account under their own API keys) and NOT as a legal conclusion. Counsel should confirm against the FIU-IND AML/CFT guidelines as updated 08.01.2026.',
   'COUNSEL — LIABILITY CAP. Terms section 11 is drafted broadly, with a cap at amounts paid in the preceding twelve months or Rs 5,000. Indian consumer law limits how far liability may be excluded against a consumer; the cap and its carve-outs need review.',
   'COUNSEL — REGISTERED OBJECT. The CIN\'s industry code (26515) sits in the instruments and measuring-devices range rather than software or financial services. That is a fact about the incorporation rather than an error in these documents, but a reviewer will reasonably ask whether the registered object covers operating a trading platform.',
@@ -395,6 +425,14 @@ PAST PERFORMANCE — yours, a creator's, or a backtest's — DOES NOT INDICATE F
 
 For privacy questions or to exercise a right in section 9, contact ${ENTITY.privacyEmail}. For a formal complaint, contact our Grievance Officer at ${ENTITY.grievanceEmail}.
 
+IF YOU ARE IN THE EUROPEAN ECONOMIC AREA OR THE UNITED KINGDOM: we are established in India, not in the EEA or the UK, and we offer this service to people in both. Our representative for the purposes of Article 27 of the GDPR, and of the equivalent provision of the UK GDPR, is:
+
+${ENTITY.euRepresentative}
+
+${ENTITY.ukRepresentative}
+
+You may contact the representative instead of us on any matter relating to our processing of your personal data.
+
 This version is ${LEGAL_VERSION}, effective ${LEGAL_EFFECTIVE_DATE}.`,
       },
       {
@@ -492,19 +530,25 @@ Encrypted exchange credentials are deleted when you delete them, or with your ac
       },
       {
         heading: '9. Your rights',
-        body: `Wherever you live, you may ask us to: give you a copy of your personal data; correct it; delete it; restrict or object to a particular use; send it to you or another provider in a portable form; and withdraw a consent you gave.
+        body: `Wherever you live, you may ask us to: give you a copy of your personal data; correct it; delete it; restrict or object to a particular use; send it to you or another provider in a portable, machine-readable form; and withdraw a consent you gave.
 
-If you are in the EU or UK these are your rights under the GDPR and UK GDPR, and you may complain to your national data-protection authority. If you are in India you may exercise the equivalent rights under applicable Indian data-protection law and complain to the competent authority.
+You may also object to processing we carry out on the basis of our legitimate interests, which section 3 identifies specifically rather than in general. We do not make decisions about you by purely automated means that have a legal or similarly significant effect on you.
 
-Write to ${ENTITY.privacyEmail}. WE WILL RESPOND WITHIN 30 DAYS. We may ask you to confirm who you are first, so we do not disclose your data to someone else.
+IF YOU ARE IN THE EEA OR THE UK these are your rights under Articles 15 to 22 of the GDPR, and under the UK GDPR. You may lodge a complaint with the supervisory authority where you live or work, or where you believe the problem occurred — in the UK, the Information Commissioner's Office. You may also contact our Article 27 representative, named in section 1, instead of contacting us.
 
-Some requests have limits: we cannot delete what we are legally required to keep, and deleting your account ends your access to it.`,
+IF YOU ARE IN INDIA you may exercise the equivalent rights under applicable Indian data-protection law and complain to the competent authority.
+
+Write to ${ENTITY.privacyEmail}. WE WILL RESPOND WITHIN ONE MONTH, which we may extend by two further months for a complex request — if we do, we will tell you within the first month and explain why. We may ask you to confirm who you are first, so we do not disclose your data to someone else. We do not charge for this.
+
+Some requests have limits: we cannot delete what we are legally required to keep, chiefly billing and tax records, and deleting your account ends your access to it.`,
       },
       {
         heading: '10. Security, and its limits',
         body: `We encrypt data in transit, encrypt exchange credentials at rest, hold encryption keys in a managed secrets service, apply row-level access controls in the database, restrict administrative access, and log security-relevant events.
 
-NO SYSTEM IS PERFECTLY SECURE AND WE DO NOT CLAIM OURS IS. If a breach affects your personal data and law requires us to tell you, we will, within the time the law requires.
+NO SYSTEM IS PERFECTLY SECURE AND WE DO NOT CLAIM OURS IS.
+
+IF A BREACH HAPPENS: where it is likely to result in a risk to your rights and freedoms, we will notify the relevant supervisory authority WITHIN 72 HOURS of becoming aware of it. Where it is likely to result in a HIGH risk to you, we will tell you directly, without undue delay, and describe what happened, what data was involved, what we are doing about it and what you can do. We keep a record of every breach we become aware of, whether or not it is notifiable.
 
 Use a strong, unique password. Enable multi-factor authentication where offered.`,
       },
