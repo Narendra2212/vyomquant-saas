@@ -72,8 +72,26 @@ export const legalApi = {
    *                                     refused rather than recorded
    * @param {'signup'|'re_acceptance'} [params.context]
    */
-  accept({ version, documents, context = 'signup' }) {
-    return post('/api/legal/accept', { version, documents, context });
+  accept({
+    version,
+    documents,
+    context = 'signup',
+    ageConfirmed,
+    declaredCountry,
+  }) {
+    return post('/api/legal/accept', {
+      version,
+      documents,
+      context,
+      // LEGAL-01: the two representations Terms section 3 asks for. REQUIRED for
+      // a signup and refused server-side if absent -- `age_confirmed` must be
+      // true, and `declared_country` must be a two-letter code that is not on
+      // the restricted list. Omitted keys are sent as undefined and dropped by
+      // JSON serialisation, which is correct for a re-acceptance: that flow asks
+      // the user to accept new TEXT, not to restate where they live.
+      age_confirmed: ageConfirmed,
+      declared_country: declaredCountry,
+    });
   },
 };
 

@@ -47,6 +47,12 @@ from backend_app.core.legal_documents import (
     validate_version,
 )
 from backend_app.core.rate_limit import limiter
+from backend_app.core.restricted_jurisdictions import (
+    JurisdictionMalformed,
+    JurisdictionRefused,
+    assert_permitted,
+    restricted_list,
+)
 
 logger = logging.getLogger("LegalRouter")
 
@@ -81,6 +87,23 @@ class AcceptanceRequest(BaseModel):
                     "prompted after a version change.",
         max_length=32,
     )
+    # LEGAL-01: the two representations Terms section 3 asks for and which nothing
+    # previously captured. Optional on the MODEL so a re-acceptance by an existing
+    # user is not forced to restate them, and required for a SIGNUP below -- the
+    # distinction is enforced in the handler, where the context is known.
+    age_confirmed: Optional[bool] = Field(
+        None,
+        description="The user's assertion that they meet the age requirement in "
+                    "Terms section 3. A representation, not a verified fact: "
+                    "there is no age verification anywhere in this schema.",
+    )
+    declared_country: Optional[str] = Field(
+        None,
+        description="ISO 3166-1 alpha-2 country the user declares they are in. "
+                    "Checked against the restricted-jurisdiction list. DECLARED, "
+                    "NOT VERIFIED -- nothing corroborates it.",
+        max_length=8,
+    )
 
 
 def _client_ip(request: Request) -> Optional[str]:
@@ -113,6 +136,11 @@ async def get_current_documents() -> Dict[str, Any]:
         "version": LEGAL_VERSION,
         "effective_date": LEGAL_EFFECTIVE_DATE,
         "required_documents": sorted(REQUIRED_DOCUMENTS),
+        # LEGAL-01: published so the signup form can refuse a restricted country
+        # before submitting, rather than letting the user fill in a whole form and
+        # then rejecting it. The server still enforces it -- this is a courtesy to
+        # the UI, never the control.
+        "restricted_countries": sorted(restricted_list()),
     }
 
 
@@ -215,6 +243,60 @@ async def accept_documents(
 
     context = body.context if body.context in {"signup", "re_acceptance"} else "signup"
 
+    # LEGAL-01: enforce the two representations Terms section 3 makes.
+    #
+    # REQUIRED AT SIGNUP, OPTIONAL ON RE-ACCEPTANCE. A new account must state both;
+    # an existing user prompted by a version change is being asked to accept the
+    # new TEXT, and re-demanding a country declaration there would either block
+    # them out of their own account or collect a value the prompt did not ask for.
+    # Their original declaration, where they have one, stands on its own row.
+    age_confirmed: Optional[bool] = body.age_confirmed
+    declared_country: Optional[str] = None
+
+    if context == "signup":
+        if age_confirmed is not True:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "AGE_NOT_CONFIRMED",
+                    "message": "You must confirm you meet the minimum age in our "
+                               "Terms of Service to create an account.",
+                },
+            )
+        try:
+            declared_country = assert_permitted(body.declared_country)
+        except JurisdictionMalformed as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": exc.code, "message": str(exc)},
+            ) from exc
+        except JurisdictionRefused as exc:
+            # 403, not 400: the request is well-formed and the answer is "no".
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": exc.code,
+                    "message": str(exc),
+                    "country": exc.country_code,
+                },
+            ) from exc
+    elif body.declared_country is not None:
+        # Accept it if offered on a re-acceptance, but still refuse a restricted
+        # value rather than storing a declaration the Terms forbid.
+        try:
+            declared_country = assert_permitted(body.declared_country)
+        except JurisdictionMalformed:
+            declared_country = None
+        except JurisdictionRefused as exc:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": exc.code,
+                    "message": str(exc),
+                    "country": exc.country_code,
+                },
+            ) from exc
+
     if not supabase:
         raise HTTPException(
             status_code=503,
@@ -234,6 +316,8 @@ async def accept_documents(
         "ip_address": _client_ip(request),
         "user_agent": user_agent[:_MAX_USER_AGENT] if user_agent else None,
         "context": context,
+        "age_confirmed": age_confirmed,
+        "declared_country": declared_country,
     }
 
     try:
