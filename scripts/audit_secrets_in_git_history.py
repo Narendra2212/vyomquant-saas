@@ -30,11 +30,23 @@ import time
 from urllib.parse import urlsplit
 
 REGION = "ap-southeast-1"
+CLUSTER = "vyomquant-cluster"
+SERVICE = "vyomquant-api-service-cjema2sl"
 SALT = b"sec01-definitive-sweep-local-only"
 PLACEHOLDERS = {
     "PASSWORD", "password", "pass", "***", "REDACTED", "changeme",
     "your-password", "YOUR_PASSWORD", "xxx", "secret", "<password>",
 }
+
+#: Secrets whose whole point is to be published. Finding these in git is EXPECTED
+#: and reporting them as exposures is actively harmful: an alert that always
+#: contains a known-benign entry teaches its reader to skim past the real ones.
+#:
+#: A Supabase ANON key is shipped in the browser bundle and stored as the
+#: VITE_SUPABASE_ANON_KEY CI secret precisely so it can be. Its safety rests on
+#: row-level security, not on secrecy. Matched by suffix so both the lowercase and
+#: the legacy uppercase naming are covered.
+PUBLIC_BY_DESIGN_SUFFIXES = ("supabase_anon_key", "SUPABASE_ANON_KEY")
 
 
 def digest(v: str) -> str:
@@ -94,6 +106,41 @@ def history_text() -> str:
     return out.stdout
 
 
+def live_secret_arns() -> set[str]:
+    """ARNs the RUNNING task definition actually resolves.
+
+    Without this the sweep cannot tell a live exposure from secret sprawl. An
+    ORPHANED secret nothing reads may well contain published material, but that
+    material authenticates nothing, so the remedy is to delete the secret rather
+    than to rotate a credential that is not in use. Conflating the two sends the
+    reader to rotate something that is already harmless while the genuine finding
+    sits in the same list.
+    """
+    td = subprocess.run(
+        ["aws", "ecs", "describe-services", "--cluster", CLUSTER,
+         "--services", SERVICE, "--region", REGION,
+         "--query", "services[0].taskDefinition", "--output", "text"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if not td:
+        return set()
+    out = subprocess.run(
+        ["aws", "ecs", "describe-task-definition", "--task-definition", td,
+         "--region", REGION, "--query",
+         "taskDefinition.containerDefinitions[].secrets[].valueFrom",
+         "--output", "json"],
+        capture_output=True, text=True,
+    )
+    try:
+        return set(json.loads(out.stdout) or [])
+    except ValueError:
+        return set()
+
+
+def is_public_by_design(name: str) -> bool:
+    return any(name.endswith(s) for s in PUBLIC_BY_DESIGN_SUFFIXES)
+
+
 def main() -> int:
     print("SEC-01 DEFINITIVE SWEEP")
     print("=" * 78)
@@ -126,21 +173,42 @@ def main() -> int:
     blob = history_text()
     print(f"history: {len(blob):,} characters\n")
 
+    print("reading which secrets the running task definition resolves...")
+    live_arns = live_secret_arns()
+    print(f"referenced by the running task: {len(live_arns)}\n")
+
+    def is_live(name: str) -> bool:
+        return any(name in arn for arn in live_arns)
+
     print("=" * 78)
     print("PER-SECRET RESULT")
     print("=" * 78)
-    exposed: dict[str, list[str]] = {}
+    matched: dict[str, list[str]] = {}
     for atom, (name, kind) in atoms.items():
         if atom in blob:
-            exposed.setdefault(name, []).append(kind)
+            matched.setdefault(name, []).append(kind)
+
+    exposed: dict[str, list[str]] = {}   # live + in history + not public by design
+    sprawl: dict[str, list[str]] = {}    # in history, but nothing reads it
+    benign: list[str] = []               # public by design
 
     for n in names:
         if statuses[n] != "read":
-            print(f"  NOT CHECKED   {n}   ({statuses[n]})")
-        elif n in exposed:
-            print(f"  *** EXPOSED   {n}   ({', '.join(exposed[n])})")
+            print(f"  NOT CHECKED       {n}   ({statuses[n]})")
+            continue
+        if n not in matched:
+            print(f"  clean             {n}")
+            continue
+        kinds = matched[n]
+        if is_public_by_design(n):
+            benign.append(n)
+            print(f"  public by design  {n}   (in history, and expected to be)")
+        elif is_live(n):
+            exposed[n] = kinds
+            print(f"  *** EXPOSED       {n}   ({', '.join(kinds)})  LIVE")
         else:
-            print(f"  clean         {n}")
+            sprawl[n] = kinds
+            print(f"  ORPHANED          {n}   (in history; read by nothing)")
 
     print("\n" + "=" * 78)
     print("VERDICT")
@@ -154,12 +222,35 @@ def main() -> int:
         print("  purging without rotating leaves clones that already exist holding a")
         print("  working credential. Both are required, rotation first.")
     else:
-        print("\n  No live secret value matched anything in git history.")
+        print("\n  NO LIVE SECRET IS RECOVERABLE FROM GIT HISTORY.")
+
+    if sprawl:
+        print(f"\n  {len(sprawl)} ORPHANED secret(s) contain published material but are")
+        print("  read by NOTHING, so they authenticate nothing:\n")
+        for name in sprawl:
+            print(f"     {name}")
+        print("\n  These are NOT a live exposure and must not be confused with one.")
+        print("  The remedy is DELETE, not rotate: leaving them invites a future")
+        print("  operator to wire one up and silently deploy a published credential.")
+        print("  `aws secretsmanager delete-secret` keeps a recovery window, so this")
+        print("  is reversible for 7-30 days.")
+
+    if benign:
+        print(f"\n  {len(benign)} secret(s) are PUBLIC BY DESIGN and correctly in git:\n")
+        for name in benign:
+            print(f"     {name}")
+        print("\n  Listed for completeness, deliberately NOT counted as findings. A")
+        print("  Supabase anon key ships in the browser bundle; its safety rests on")
+        print("  row-level security, not on secrecy.")
+
     if unread:
         print(f"\n  COVERAGE CAVEAT: {len(unread)} secret(s) could not be read and are")
         print("  therefore UNKNOWN, not clean:")
         for n, s in unread.items():
             print(f"     {n}  ({s})")
+
+    # Non-zero ONLY for a live exposure. Sprawl and public-by-design entries are
+    # reported but must not fail a scheduled run, or the signal gets ignored.
     return 1 if exposed else 0
 
 

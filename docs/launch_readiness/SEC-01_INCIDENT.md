@@ -1,7 +1,53 @@
 # SEC-01 — Live production secrets published in a public repository
 
-**Status:** ACTIVE INCIDENT. Discovered 2026-10-23 while scoping SEC-01's rotation.
-**Repository visibility:** `PUBLIC` (`gh repo view` → `"visibility": "PUBLIC"`, 0 forks, 1 collaborator, 0 deploy keys).
+**Status: LIVE EXPOSURE CLOSED, 2026-10-23.** All three leaked secrets are rotated and
+independently verified. `scripts/audit_secrets_in_git_history.py` prints
+`NO LIVE SECRET IS RECOVERABLE FROM GIT HISTORY` and exits 0.
+
+**Repository visibility:** `PUBLIC` (`gh repo view` → `"visibility": "PUBLIC"`, 0 forks,
+1 collaborator, 0 deploy keys). **Still public.**
+
+## Resolution summary
+
+| Secret | Rotated | Evidence |
+|---|---|---|
+| `database_url` | yes | new `AWSCURRENT` 15:26:16+05:30, prior kept `AWSPREVIOUS`, service `232 → 234`, reports `clean` |
+| `jwt_secret` | yes | fingerprint `1ba08925c720 → 69ec7601df82`, deployment `COMPLETED`, `--verify` confirms production-grade and absent from history |
+| `master_encryption_keys` | yes | fingerprint `baff8a448794 → bade92adbfb2` by prepend → redeploy → retire → redeploy, ends at a single key, not in history |
+
+Production after three consecutive deployments: ECS task `RUNNING health=HEALTHY`,
+`running=1/1`, `rolloutState=COMPLETED` on `vyomquant-api:234`, ALB target group `healthy`,
+stored DSN connects as `postgres`. **None of the three deployments failed or rolled back.**
+
+The `jwt_secret` rotation is additionally proven by the boot itself: `main.py:320` calls
+`assert_jwt_secret_is_production_grade()` and raises on a weak value, so a task that reaches
+`RUNNING` has necessarily accepted the new secret.
+
+Two of the three rotations required **no human to handle the secret at all** — the value was
+generated in-process and never printed, prompted for, pasted, or placed on a command line.
+Only the database password needed an operator, because Supabase had to be told the same
+string.
+
+## What remains, none of it a live credential
+
+1. **Two orphaned secrets** still hold the old published values:
+   `/vyomquant/production/MASTER_ENCRYPTION_KEYS` and `/vyomquant/production/JWT_SECRET`.
+   Referenced by nothing (checked against the running task definition's 11 `valueFrom`
+   ARNs), so their contents authenticate nothing now. **Remedy is delete, not rotate.**
+   Four further unreferenced uppercase duplicates exist; three of them currently *mirror
+   live values*, which is worse than holding dead ones, because the next rotation leaves
+   them stale and a future operator may wire one up.
+2. **The git-history purge** of every old literal. Destructive, and it does not reach
+   existing clones — which is precisely why rotation was the control that mattered.
+3. `vyomquant/production/supabase_key` returns `ResourceNotFound`, so sweep coverage is
+   20/21 with one **unknown**.
+4. **The repository is still public.** Note the sweep only compares against secrets that
+   exist in Secrets Manager *today*; a credential leaked and since deleted from AWS would
+   not be detected by it at all.
+
+## Original incident record
+
+The sections below are the finding as first established, retained unchanged.
 
 ## Why this was not found earlier
 
