@@ -285,10 +285,30 @@ git-portable/
 PortableGit/
 
 # ── KUBERNETES SECRETS ───────────────────────────────────────────────────────
+# Intent: block Kubernetes Secret manifests (my-secret.yaml and friends). The
+# pattern is repo-wide, though, so it catches any file whose name merely contains
+# "secret" -- which is a trap rather than a guard for one directory in
+# particular.
 *secret*.yaml
 *secret*.yml
 !*secret*.example.yaml
 !*secret*.example.yml
+
+# GitHub Actions workflows are NEVER Kubernetes manifests, and a gitignored
+# workflow does not merely fail to be committed -- IT SILENTLY DOES NOT EXIST.
+# GitHub runs workflows from the committed tree, so an ignored one never fires
+# and nothing reports that it is missing.
+#
+# This was not hypothetical: `.github/workflows/08-secret-history-audit.yml`, the
+# scheduled job that watches for live credentials in git history, matched
+# `*secret*.yml` and was refused by `git add` with only a hint. Had that been
+# forced past with `-f` or not noticed, SEC-01's whole point -- that nothing was
+# watching -- would have been "fixed" by a file that was never in the repository.
+#
+# Narrow by design: this re-includes workflow definitions only, which must be
+# committed to function at all. It does not re-include anything elsewhere.
+!.github/workflows/*secret*.yaml
+!.github/workflows/*secret*.yml
 
 # ── NGINX SSL ────────────────────────────────────────────────────────────────
 nginx/ssl/
