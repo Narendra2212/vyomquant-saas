@@ -564,8 +564,8 @@ def live_platform_enabled(monkeypatch):
     yield
 
 
-@pytest.fixture(autouse=True)
-def _no_on_demand_venue_quotes(monkeypatch):
+@pytest.fixture(scope="session", autouse=True)
+def _no_on_demand_venue_quotes():
     """PAPER-02: the on-demand venue quote must never fire from the unit suite.
 
     ``paper_trading_service.resolve_market_price`` falls back to
@@ -582,13 +582,34 @@ def _no_on_demand_venue_quotes(monkeypatch):
 
     This is the same reason ``fresh_paper_quote`` exists for the cache half: the production
     default is to have no quote, and a test that needs one must say so.
+
+    SESSION-SCOPED, AND NOT VIA ``monkeypatch``, DELIBERATELY. The first version of this was
+    ``@pytest.fixture(autouse=True)`` taking ``monkeypatch``, which is function-scoped -- so
+    it re-patched once per test across the whole suite and, because an autouse
+    function-scoped fixture wraps every test, it also wrapped the Hypothesis ``@given``
+    tests. That reliably broke
+    ``tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic``
+    in CI (the failure surfaced as ``ValueError: 48 is not in list`` from inside
+    Hypothesis's own shrinker, ``intervalsets.index_from_char_in_shrink_order``, which
+    masked whatever it was shrinking). Patching once for the session removes the per-example
+    fixture churn entirely, and is what this guard wanted anyway: one substitution, not
+    fifteen thousand.
+
+    A test that needs the real function restores it itself with ``monkeypatch.setattr``,
+    which still wins for the duration of that test -- see
+    ``tests/test_paper02_on_demand_quote.py::_with_venue``.
     """
     from backend_app.backend import paper_trading_service as pts
 
     async def _refuse(symbol, exchange_id=None, *, timeout=None):
         return None
 
-    monkeypatch.setattr(pts, "fetch_venue_quote", _refuse)
+    original = pts.fetch_venue_quote
+    pts.fetch_venue_quote = _refuse
+    try:
+        yield
+    finally:
+        pts.fetch_venue_quote = original
 
 
 @pytest.fixture
