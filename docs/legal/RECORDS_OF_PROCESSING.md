@@ -171,7 +171,7 @@ Article 27 representatives are **not yet appointed**.
 
 | Recipient | Role | Purpose | Location |
 |---|---|---|---|
-| Supabase | Processor | Authentication, primary database | region not yet confirmed — **see §4** |
+| Supabase | Processor | Authentication, primary database | **`ap-southeast-1` (Singapore)** — established from the Supavisor pooler hostname `aws-1-ap-southeast-1.pooler.supabase.com`, which encodes the region. Co-located with our own compute |
 | Amazon Web Services | Processor | Hosting, storage, secrets, logging | **`ap-southeast-1` (Singapore)** |
 | Razorpay | Independent controller / processor | INR payments | India |
 | Stripe | Processor | Non-INR payments where used | global |
@@ -213,14 +213,15 @@ Stated because its absence is load-bearing for the risk assessment:
 
 ## 4. Known gaps — the honest part
 
-| # | Gap | Who closes it |
-|---|---|---|
-| 1 | **Article 27 representatives not appointed**, for either the EU or the UK. Required because we offer the service to people in the EU/UK *and* run behaviour-monitoring analytics. The Art 27(2) exemptions are narrow and session analytics across every visitor is not "occasional" | **Owner** — an appointment, typically a paid service per jurisdiction |
-| 2 | **DPAs / SCCs with processors not confirmed executed.** Supabase, AWS, Google, Microsoft and Sentry all publish them; they must actually be in place | **Owner** — mostly click-through or already within provider terms |
-| 3 | **Supabase region not confirmed.** Every reference in the repo is the placeholder `your-project-ref.supabase.co`, so this ROPA cannot state where the primary database physically sits — which a ROPA is supposed to say | **Owner** — read it from the Supabase dashboard; I will record it |
-| 4 | **DPIA screening not formally recorded.** Session replay of all visitors plus financial-context data is the kind of processing an authority may expect a screening assessment for, even if a full DPIA is not mandatory (no Art 9 data; not systematic monitoring of a publicly accessible area) | **Counsel** to confirm; I can draft the screening |
-| 5 | **No breach-response runbook**, although Privacy §10 now commits to 72-hour notification. A commitment without a procedure is the pattern this whole finding was about | **Me**, on request |
-| 6 | Three substantive clauses still await counsel: the PMLA/FIU-IND position, the liability cap, and whether the CIN's registered object (industry code 26515 — instruments and measuring devices) covers operating a trading platform | **Counsel** |
+| # | Gap | Who closes it | Status |
+|---|---|---|---|
+| 1 | **Article 27 representatives not appointed**, for either the EU or the UK. Required because we offer the service to people in the EU/UK *and* run behaviour-monitoring analytics. The Art 27(2) exemptions are narrow and session analytics across every visitor is not "occasional". **This also blocks the breach-notification route** — see `BREACH_RESPONSE_RUNBOOK.md` §4 | **Owner** — an appointment, typically a paid service per jurisdiction | **OPEN** |
+| 2 | **DPAs / SCCs with processors not confirmed executed.** Supabase, AWS, Google, Microsoft and Sentry all publish them; Privacy §7 states we rely on them, which must be true rather than aspirational | **Owner** — mostly click-through or already within provider terms | **OPEN** |
+| 3 | Supabase region | — | **CLOSED.** `ap-southeast-1` (Singapore), established from the Supavisor pooler hostname rather than asked for. Co-located with our own compute, so there is no additional hop between application and database |
+| 4 | DPIA screening | — | **CLOSED.** `docs/legal/DPIA_SCREENING.md`. Concludes a full DPIA is **not mandatory** — none of the three Art 35(3) triggers is met — while recommending a focused one on the session-replay processing anyway, and recording that the conclusion is borderline rather than comfortable. Counsel to confirm or overturn |
+| 5 | Breach-response runbook | — | **CLOSED.** `docs/legal/BREACH_RESPONSE_RUNBOOK.md`, with the 72-hour clock, the containment tooling that already exists, the Art 33(3)/34(2) content requirements, and its own standing gaps |
+| 6 | Three substantive clauses still await counsel: the PMLA/FIU-IND position, the liability cap, and whether the CIN's registered object (industry code 26515 — instruments and measuring devices) covers operating a trading platform | **Counsel** | **OPEN** |
+| 7 | **Clarity session-replay masking** | — | **CLOSED.** Found by writing the DPIA screening: Clarity's default masking covers form inputs but not page text, and on a trading platform the text is the sensitive part. `data-clarity-mask="true"` now applies to the single `<main>` landmark wrapping every authenticated route, so balances, positions and strategy contents do not reach a replay. Public marketing pages render outside it and stay unmasked, which is where the analytics are actually useful |
 
 ---
 
