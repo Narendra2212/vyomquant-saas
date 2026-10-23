@@ -65,6 +65,30 @@ def list_secrets() -> list[str]:
     return json.loads(out.stdout)
 
 
+def has_no_versions(secret_id: str) -> bool:
+    """True when the secret EXISTS but has never had a value stored.
+
+    A Terraform-declared secret whose value is set out of band starts life like
+    this: `describe-secret` succeeds, `list-secret-version-ids` returns an empty
+    list, and `get-secret-value` answers ResourceNotFound. Reporting that as
+    'could not be read -- UNKNOWN, not clean' is wrong and it never resolves: a
+    secret holding no value has nothing that could appear in git history, so it
+    is genuinely, permanently not a finding. Leaving it as a standing UNKNOWN
+    means the sweep can never report full coverage and the caveat gets ignored.
+    """
+    out = subprocess.run(
+        ["aws", "secretsmanager", "list-secret-version-ids", "--secret-id", secret_id,
+         "--region", REGION, "--include-deprecated"],
+        capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        return False
+    try:
+        return not json.loads(out.stdout).get("Versions")
+    except ValueError:
+        return False
+
+
 def fetch(secret_id: str, attempts: int = 5) -> tuple[str | None, str]:
     """Returns (value, status). Retries throttling with backoff."""
     last = ""
@@ -81,7 +105,8 @@ def fetch(secret_id: str, attempts: int = 5) -> tuple[str | None, str]:
             time.sleep(1.5 * (i + 1))
             continue
         if "ResourceNotFound" in last:
-            return None, "not-found"
+            # Distinguish "no such secret" from "secret exists, holds nothing".
+            return None, "empty" if has_no_versions(secret_id) else "not-found"
         if "AccessDenied" in last or "not authorized" in last:
             return None, "access-denied"
         time.sleep(0.6 * (i + 1))
@@ -96,6 +121,50 @@ def safe_password(value: str) -> str | None:
     except ValueError:
         m = re.match(r"[a-z+]+://[^:/@]+:([^@]+)@", value)
         return m.group(1) if m else None
+
+
+def assert_full_history() -> None:
+    """Refuse to run against a shallow clone.
+
+    THIS IS THE MOST IMPORTANT GUARD IN THE FILE. `actions/checkout` defaults to
+    `fetch-depth: 1`, which yields a clone with ONE commit. This sweep would then
+    scan almost nothing, match nothing, and print 'NO LIVE SECRET IS RECOVERABLE
+    FROM GIT HISTORY' with a clean exit code -- a scheduled job reporting success
+    forever while looking at nothing. That is the same class of failure as the
+    first version of this script silently skipping 7 of 11 secrets, and it is
+    worse here because it would be invisible: the output looks identical to a
+    genuine pass.
+
+    A scheduled workflow MUST use `fetch-depth: 0`.
+    """
+    shallow = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if shallow == "true":
+        print("REFUSING TO RUN: this is a SHALLOW clone.\n", file=sys.stderr)
+        print("A shallow clone contains almost no history, so this sweep would scan",
+              file=sys.stderr)
+        print("nothing, match nothing, and report a clean result that means nothing.",
+              file=sys.stderr)
+        print("\nIn GitHub Actions, set:\n", file=sys.stderr)
+        print("    - uses: actions/checkout@...\n      with:\n        fetch-depth: 0",
+              file=sys.stderr)
+        sys.exit(2)
+
+    count = subprocess.run(
+        ["git", "rev-list", "--all", "--count"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    try:
+        n = int(count)
+    except ValueError:
+        n = 0
+    if n < 2:
+        print(f"REFUSING TO RUN: only {n} commit(s) reachable. This is not a full "
+              f"history.", file=sys.stderr)
+        sys.exit(2)
+    print(f"history depth check: {n} commits reachable (not shallow)")
 
 
 def history_text() -> str:
@@ -146,6 +215,8 @@ def main() -> int:
     print("=" * 78)
     print("(read-only; no secret material in this output)\n")
 
+    assert_full_history()
+
     names = [n for n in list_secrets() if "production" in n or "staging" in n]
     print(f"secrets in scope: {len(names)}\n")
 
@@ -165,7 +236,11 @@ def main() -> int:
         print(f"  [{status:>14}] {n}  ({len(val)} chars"
               + (f", password {len(pw)} chars" if pw else "") + ")")
 
-    unread = {n: s for n, s in statuses.items() if s != "read"}
+    # An empty secret is FULLY RESOLVED, not a coverage gap: it stores no value, so
+    # no value of its can be in git history. Only a secret we genuinely could not
+    # look at counts against coverage.
+    empty = {n for n, s in statuses.items() if s == "empty"}
+    unread = {n: s for n, s in statuses.items() if s not in ("read", "empty")}
     print(f"\nreadable: {len(statuses) - len(unread)}/{len(statuses)}   "
           f"distinct atoms to match: {len(atoms)}")
 
@@ -193,6 +268,9 @@ def main() -> int:
     benign: list[str] = []               # public by design
 
     for n in names:
+        if statuses[n] == "empty":
+            print(f"  empty             {n}   (exists, stores no value)")
+            continue
         if statuses[n] != "read":
             print(f"  NOT CHECKED       {n}   ({statuses[n]})")
             continue
@@ -243,11 +321,23 @@ def main() -> int:
         print("  Supabase anon key ships in the browser bundle; its safety rests on")
         print("  row-level security, not on secrecy.")
 
+    if empty:
+        print(f"\n  {len(empty)} secret(s) EXIST but store no value, so they hold nothing")
+        print("  that could be in git history:\n")
+        for n in sorted(empty):
+            print(f"     {n}")
+        print("\n  Counted as resolved, not as a coverage gap. A Terraform-declared")
+        print("  secret whose value is set out of band looks exactly like this.")
+
     if unread:
         print(f"\n  COVERAGE CAVEAT: {len(unread)} secret(s) could not be read and are")
         print("  therefore UNKNOWN, not clean:")
         for n, s in unread.items():
             print(f"     {n}  ({s})")
+    else:
+        checked = len(statuses) - len(unread)
+        print(f"\n  COVERAGE: {checked}/{len(statuses)} - complete. Every secret was "
+              f"either\n  compared against history or confirmed to store no value.")
 
     # Non-zero ONLY for a live exposure. Sprawl and public-by-design entries are
     # reported but must not fail a scheduled run, or the signal gets ignored.
