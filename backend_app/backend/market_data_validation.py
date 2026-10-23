@@ -437,25 +437,43 @@ class OutlierDetector:
         cls,
         df: pd.DataFrame,
         method: OutlierMethod,
-        config: ValidationConfig
+        config: ValidationConfig,
+        symbol: str = "UNKNOWN",
     ) -> Tuple[pd.DataFrame, List[ValidationIssue]]:
-        """Detect and handle outliers."""
+        """Detect and handle outliers.
+
+        DATA-03. ``symbol`` is threaded through purely so a refusal says WHICH instrument
+        was refused. Every message on this path interpolated the literal string
+        ``'UNKNOWN'`` -- not a fallback that happened to trigger, but the only value it
+        could ever produce, because the symbol was never a parameter. The caller
+        (``MarketDataValidator.validate``) has had it all along and passes it to the
+        structural and candle-integrity validators already, which do report it.
+
+        The practical cost was real: a rejection reads "Found 1 outliers in close
+        log-returns using z_score for UNKNOWN", so with several symbols in flight nothing
+        in the logs says which feed was refused. This was found while tracing why RT-04's
+        Candidate B could not deliver a bar.
+
+        Defaulted rather than required, so existing callers are unaffected.
+        """
         issues = []
         df = df.copy()
         
         if method == OutlierMethod.Z_SCORE:
-            outlier_count = cls._z_score_filter(df, config.z_score_threshold)
+            outlier_count = cls._z_score_filter(df, config.z_score_threshold, symbol)
         elif method == OutlierMethod.IQR:
-            outlier_count = cls._iqr_filter(df, config.iqr_multiplier)
+            outlier_count = cls._iqr_filter(df, config.iqr_multiplier, symbol)
         elif method == OutlierMethod.PERCENT_CHANGE:
-            outlier_count = cls._percent_change_filter(df, config.percent_change_threshold)
+            outlier_count = cls._percent_change_filter(
+                df, config.percent_change_threshold, symbol
+            )
         else:
             outlier_count = 0
         
         if outlier_count > 0:
             raise DataValidationError(
                 f"Found {outlier_count} outliers in {method.value} "
-                f"for {'UNKNOWN'}. Dataset rejected - no synthetic data allowed."
+                f"for {symbol}. Dataset rejected - no synthetic data allowed."
             )
         
         return df, issues
@@ -478,9 +496,28 @@ class OutlierDetector:
         return np.log(series).diff().dropna()
 
     @classmethod
-    def _z_score_filter(cls, df: pd.DataFrame, threshold: float) -> int:
+    def _z_score_filter(
+        cls, df: pd.DataFrame, threshold: float, symbol: str = "UNKNOWN"
+    ) -> int:
         """Filter outliers using Z-score, computed over bar-to-bar log-returns (see
-        :meth:`_log_returns`), not the raw price/volume level."""
+        :meth:`_log_returns`), not the raw price/volume level.
+
+        DATA-03, MEASURED: this rejects the ENTIRE window when ANY single bar exceeds
+        ``threshold``, and that is incompatible with Requirement 19.11's >=10,000-bar
+        correctness floor at any threshold. Against 12,000 real BTC/USDT 1m bars, 100% of
+        10,000-bar windows are rejected at every threshold from 3.0 to 10.0, and 50% even at
+        12.0 -- above the largest z-score in the sample. The reason is structural rather
+        than a matter of calibration: P(reject) = 1 - (1-p)^n tends to 1 as n grows for any
+        p > 0. The real per-point exceedance rate at 5.0 was measured at 3.667e-3, against
+        the 5.733e-7 the normal model in ``Z_SCORE_THRESHOLD_DEFAULT``'s comment assumes --
+        understated 6,396x, because crypto log-returns are fat-tailed.
+
+        NOT CHANGED HERE. Whether to keep window rejection or move to per-point handling
+        governs what data the platform will trade on, so it is DATA-03's recorded design
+        decision rather than something to adjust in passing.
+        ``scripts/measure_market_data_outlier_reality.py`` reproduces the measurement
+        against the live venue.
+        """
         for col in ["close", "volume"]:
             if col not in df.columns:
                 continue
@@ -495,15 +532,21 @@ class OutlierDetector:
             if outliers.any():
                 raise DataValidationError(
                     f"Found {int(outliers.sum())} outliers in {col} log-returns using z_score "
-                    f"for UNKNOWN. Dataset rejected - no synthetic data allowed."
+                    f"for {symbol}. Dataset rejected - no synthetic data allowed."
                 )
 
         return 0
 
     @classmethod
-    def _iqr_filter(cls, df: pd.DataFrame, multiplier: float) -> int:
+    def _iqr_filter(
+        cls, df: pd.DataFrame, multiplier: float, symbol: str = "UNKNOWN"
+    ) -> int:
         """Filter outliers using the IQR method, computed over bar-to-bar log-returns (see
-        :meth:`_log_returns`), not the raw price/volume level."""
+        :meth:`_log_returns`), not the raw price/volume level.
+
+        DATA-03 applies here too: this also rejects the whole window on any single
+        exceedance, so it carries the same incompatibility with the >=10,000-bar floor.
+        """
         for col in ["close", "volume"]:
             if col not in df.columns:
                 continue
@@ -524,18 +567,22 @@ class OutlierDetector:
             if outliers.any():
                 raise DataValidationError(
                     f"Found {int(outliers.sum())} outliers in {col} log-returns using iqr "
-                    f"for UNKNOWN. Dataset rejected - no synthetic data allowed."
+                    f"for {symbol}. Dataset rejected - no synthetic data allowed."
                 )
 
         return 0
     
     @classmethod
-    def _percent_change_filter(cls, df: pd.DataFrame, threshold: float) -> int:
+    def _percent_change_filter(
+        cls, df: pd.DataFrame, threshold: float, symbol: str = "UNKNOWN"
+    ) -> int:
         """Filter outliers using percent change."""
         if "close" not in df.columns:
             return 0
-        
-        symbol = "UNKNOWN"
+
+        # DATA-03: `symbol` is a parameter now. This line used to be `symbol = "UNKNOWN"`,
+        # a local assignment that made the refusal message structurally unable to name the
+        # instrument.
         col = "close"
         i = 0
         returns = df["close"].pct_change().abs()
@@ -773,8 +820,12 @@ class MarketDataValidator:
             issues.extend(integrity_issues)
         
         # Step 3: Outlier detection
+        # DATA-03: `symbol` passed so an outlier refusal names the instrument. Every
+        # message on this path previously read "for UNKNOWN", which was the only value it
+        # could produce -- the symbol was never a parameter, though this caller has it and
+        # already hands it to the structural and candle-integrity validators above.
         df, outlier_issues = OutlierDetector.detect(
-            df, self.config.outlier_method, self.config
+            df, self.config.outlier_method, self.config, symbol
         )
         issues.extend(outlier_issues)
         
