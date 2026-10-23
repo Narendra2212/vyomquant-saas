@@ -28,6 +28,12 @@
  * without `async` run in document order, after parsing, before `DOMContentLoaded`).
  */
 
+import {
+  hasAnalyticsConsent,
+  neutraliseAnalytics,
+  onConsentChange,
+} from './legal/consent.js';
+
 function isDummyValue(value) {
   if (!value) return true;
   const lower = String(value).toLowerCase();
@@ -51,21 +57,59 @@ function initSentry(sentryDsn, isLocal) {
           tracesSampleRate: 1.0,
           profilesSampleRate: 1.0,
         });
-        // eslint-disable-next-line no-console
+         
         console.log('Telemetry: Sentry initialized in browser.');
       }
     };
     document.head.appendChild(script);
   } else if (isLocal) {
     window.onerror = function onLocalError(msg, url, lineNo, columnNo, error) {
-      // eslint-disable-next-line no-console
+       
       console.error('[DEV Telemetry] ', msg, url, lineNo, columnNo, error);
       return false;
     };
   }
 }
 
-function initAnalytics(gaId, clarityId, isLocal) {
+/** Guard so a repeated consent event cannot inject the tags twice. */
+let analyticsLoaded = false;
+
+/**
+ * Install inert stubs so callers can always call `gtag`/`clarity` safely.
+ *
+ * Every analytics call site in the app assumes these globals exist. Before
+ * consent they must exist AND DO NOTHING — not queue for later replay, which
+ * would collect behaviour from before the visitor agreed and send it the moment
+ * they did. A denied visitor's events are dropped, not deferred.
+ */
+function installAnalyticsStubs(isLocal) {
+  window.gtag = function gtagStub() {
+    if (isLocal) {
+       
+      console.log('[DEV] GA Event (not sent - no consent):', arguments);
+    }
+  };
+  window.clarity = function clarityStub() {
+    if (isLocal) {
+       
+      console.log('[DEV] Clarity Event (not sent - no consent):', arguments);
+    }
+  };
+}
+
+/**
+ * Inject Google Analytics and Microsoft Clarity.
+ *
+ * LEGAL-01: called only once consent is GRANTED. This used to run on every page
+ * load before the visitor had been asked anything, while the Privacy Policy
+ * claimed no third-party tracking was used. Both halves of that are now fixed:
+ * the Policy discloses these services, and this function does not run until
+ * `hasAnalyticsConsent()` is true.
+ */
+function loadAnalytics(gaId, clarityId) {
+  if (analyticsLoaded) return;
+  analyticsLoaded = true;
+
   if (!isDummyValue(gaId)) {
     const script = document.createElement('script');
     script.async = true;
@@ -75,14 +119,15 @@ function initAnalytics(gaId, clarityId, isLocal) {
     window.dataLayer = window.dataLayer || [];
     window.gtag = function gtag() { window.dataLayer.push(arguments); };
     window.gtag('js', new Date());
+    // GA consent mode, set explicitly rather than left to GA's defaults, so the
+    // tag itself knows analytics storage is permitted and advertising is not.
+    window.gtag('consent', 'default', {
+      analytics_storage: 'granted',
+      ad_storage: 'denied',
+      ad_user_data: 'denied',
+      ad_personalization: 'denied',
+    });
     window.gtag('config', gaId);
-  } else {
-    window.gtag = function gtagStub() {
-      if (isLocal) {
-        // eslint-disable-next-line no-console
-        console.log('[DEV] GA Event:', arguments);
-      }
-    };
   }
 
   if (!isDummyValue(clarityId)) {
@@ -94,20 +139,44 @@ function initAnalytics(gaId, clarityId, isLocal) {
       const y = l.getElementsByTagName(r)[0];
       y.parentNode.insertBefore(t, y);
     }(window, document, 'clarity', 'script', clarityId));
-  } else {
-    window.clarity = function clarityStub() {
-      if (isLocal) {
-        // eslint-disable-next-line no-console
-        console.log('[DEV] Clarity Event:', arguments);
-      }
-    };
   }
+}
+
+/**
+ * Wire analytics to the visitor's consent decision.
+ *
+ * Stubs first, unconditionally, so the globals are safe to call. Then load the
+ * real tags only if consent is already granted, and subscribe so that granting
+ * it later takes effect immediately rather than on the next page load.
+ */
+function initAnalytics(gaId, clarityId, isLocal) {
+  installAnalyticsStubs(isLocal);
+
+  if (hasAnalyticsConsent()) {
+    loadAnalytics(gaId, clarityId);
+  }
+
+  onConsentChange((state) => {
+    if (state === 'granted') {
+      loadAnalytics(gaId, clarityId);
+    } else {
+      // Withdrawal. Stubs out our call paths; a tag already executed in this
+      // page stays executed until reload, which consent.js and the Privacy
+      // Policy both state rather than implying a clean revocation.
+      neutraliseAnalytics();
+      installAnalyticsStubs(isLocal);
+    }
+  });
 }
 
 export function runBootstrap(env) {
   const vars = env || import.meta.env;
   const isLocal = detectLocal();
   window.__VQ_LOCAL__ = isLocal;
+  // Sentry is NOT consent-gated: it is error diagnostics relied on under
+  // legitimate interest, declared as such in the Privacy Policy, and configured
+  // not to capture credentials. Gating fault reporting behind a cookie banner
+  // would mean losing the crashes of exactly the visitors who never answer it.
   initSentry(vars.VITE_SENTRY_DSN, isLocal);
   initAnalytics(vars.VITE_GA_TRACKING_ID, vars.VITE_CLARITY_PROJECT_ID, isLocal);
   return isLocal;

@@ -107,9 +107,9 @@ from backend_app.core.state import app_state
 from backend_app.core.dependencies import get_admin_user
 #  Router imports 
 from backend_app.routers import (admin, analytics, auth, billing, copilot, dashboard,
-                                 exchange, health, health_websocket, library, market, metrics, notifications,
-                                 orders, paper_trading, portfolio, referral, risk, security, signal_trace,
-                                 signals, strategies, strategy_operations, support, user)
+                                 exchange, health, health_websocket, legal, library, market, metrics,
+                                 notifications, orders, paper_trading, portfolio, referral, risk, security,
+                                 signal_trace, signals, strategies, strategy_operations, support, user)
 # DAG task queue
 from backend_app.routers.dag_tasks import router as dag_tasks_router
 
@@ -956,6 +956,11 @@ app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
 app.include_router(signal_trace.router, prefix="/api/signal-trace", tags=["Signal Trace"])
 app.include_router(copilot.router, prefix="/api/v1/copilot", tags=["AI Copilot"])
 app.include_router(support.router, prefix="/api/support", tags=["Support"])
+# LEGAL-01: records which version of the Terms/Privacy/Risk/Refund documents each
+# user accepted. Before this existed the signup checkbox was client-side state
+# that was never persisted, so the platform could not answer that question for
+# any of its 182 accounts.
+app.include_router(legal.router, prefix="/api/legal", tags=["Legal"])
 app.include_router(metrics.router, tags=["Observability"])
 
 #  Mount Production Execution router 

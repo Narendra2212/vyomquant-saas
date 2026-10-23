@@ -21,6 +21,16 @@ import AccountMenu from './components/shell/AccountMenu';
 // `'navigate'` bridge's id resolution read from it, so neither can disagree with the
 // sidebar about what a route is called or where an id points.
 import { NAV_ENTRIES, routeTitle } from './components/shell/navigation';
+// LEGAL-01. Imported directly rather than lazily: it decides whether analytics
+// may load at all, and it is mounted outside any <Suspense>, so a lazy chunk
+// would render nothing on the first paint — exactly the moment the question
+// needs answering. It is a few hundred bytes.
+import CookieConsent from './components/legal/CookieConsent';
+// LEGAL-01. Signup records an acceptance, which covers new accounts and nothing
+// else: 182 accounts already exist and NONE has a record, because the old
+// checkbox was never persisted. Without this the table would be accurate about
+// new users and permanently silent about every existing one.
+import ReacceptanceGate from './components/legal/ReacceptanceGate';
 // Direct module paths, not `components/ds/index.js`: the barrel pulls the module graph
 // of every primitive, and the shell needs exactly these two (design.md §26).
 import { PageHeader } from './components/ds/PageHeader';
@@ -50,7 +60,8 @@ const LegalPageRoute = lazy(() => import('./components/legal/LegalPage'));
 const AuthPage  = lazy(() => import('./pages/AuthPage'));
 const TwoFA     = lazy(() => import('./pages/TwoFA'));
 const Wizard    = lazy(() => import('./pages/Wizard'));
-const LegalPage = lazy(() => import('./pages/LegalPage'));
+// LEGAL-01: ./pages/LegalPage was a second, divergent copy of the legal
+// documents and is deleted. `/legal` now redirects to `/legal/terms'.
 
 // Authenticated app pages (lazy - one chunk per route)
 const Dashboard           = lazy(() => import('./pages/Dashboard'));
@@ -610,6 +621,13 @@ function AppShell() {
     // shell/ResponsiveGate.jsx. Below 768px it renders its own gate screen and
     // `children` never enter the tree, so nothing below here runs at all.
     <ResponsiveGate pathname={location.pathname}>
+      {/* LEGAL-01: mounted inside the AUTHENTICATED shell, because
+          /api/legal/acceptance requires a session — calling it from the public
+          tree would 401 on every landing-page visit. Renders nothing unless the
+          signed-in user's recorded acceptance is older than the published
+          version, which is true for all 182 accounts that predate the
+          acceptance table. */}
+      <ReacceptanceGate />
       <ShellGrid toasts={toasts} removeToast={removeToast} />
     </ResponsiveGate>
   );
@@ -752,13 +770,28 @@ export default function AppWrapper() {
     <ErrorBoundary>
       <AppStateProvider>
         <PasswordRecoveryHandler />
+        {/* LEGAL-01: Google Analytics and Microsoft Clarity used to load on
+            first paint, before any interaction, while the Privacy Policy
+            claimed no third-party tracking was used. They are now gated on this
+            banner's decision (src/legal/consent.js) and the Policy discloses
+            them. Mounted outside <Routes> so the choice is offered on every
+            page, including the legal documents themselves. */}
+        <CookieConsent />
         <Routes>
           {/* Public landing. Every route from here to `/wizard` renders OUTSIDE the shell,
               so all of them take `PUBLIC_FALLBACK` — no page header, no route title. */}
           <Route path="/" element={<Suspense fallback={PUBLIC_FALLBACK}><LandingPage /></Suspense>} />
           <Route path="/download" element={<Suspense fallback={PUBLIC_FALLBACK}><DownloadPage /></Suspense>} />
-          {/* Legal */}
-          <Route path="/legal" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPage /></Suspense>} />
+          {/* Legal.
+              LEGAL-01: `/legal` used to render a SECOND, different set of legal
+              documents from src/pages/LegalPage.jsx, which contradicted the
+              canonical ones on refunds — one promised pro-rated service credits,
+              the other said all purchases were final. Which page a customer
+              happened to open decided whether they were owed money. That file is
+              deleted and this URL redirects, so there is one body of text behind
+              one set of routes. A redirect rather than a removal keeps any
+              existing link, bookmark or crawled URL working. */}
+          <Route path="/legal" element={<Navigate to="/legal/terms" replace />} />
           <Route path="/legal/privacy" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="privacy" /></Suspense>} />
           <Route path="/legal/terms" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="terms" /></Suspense>} />
           <Route path="/legal/risk" element={<Suspense fallback={PUBLIC_FALLBACK}><LegalPageRoute type="risk" /></Suspense>} />

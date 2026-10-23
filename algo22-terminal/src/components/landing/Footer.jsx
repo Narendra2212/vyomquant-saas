@@ -53,6 +53,11 @@ import React from 'react'
 import { Link } from 'react-router-dom'
 import { Globe, MonitorDown } from 'lucide-react'
 
+// LEGAL-01: the risk paragraph is single-sourced rather than literal JSX here,
+// and the cookie control makes the Privacy Policy's withdrawal promise real.
+import { SUMMARY_DISCLAIMER } from '../../legal/documents'
+import { CookieSettingsLink } from '../legal/CookieConsent'
+
 /**
  * The only social glyph this file still needs.
  *
@@ -220,17 +225,29 @@ export default function Footer() {
             </Link>
           </div>
 
-          {/* Verbatim. See the header. */}
+          {/* LEGAL-01: no longer verbatim JSX. See SUMMARY_DISCLAIMER.
+              The cookie-settings control is mounted here because the Privacy
+              Policy promises consent can be withdrawn "at any time" from "the
+              cookie settings link in the footer". A banner that only ever
+              appears once cannot deliver that, so the promise needs a permanent
+              control to be true rather than aspirational. */}
           <div className="mt-8 flex flex-col items-start justify-between gap-6 border-t border-line-subtle pt-8 md:flex-row md:items-center">
             <p className="max-w-4xl text-xs leading-relaxed text-content-secondary">
-              Algorithmic trading involves substantial risk of loss. Past performance of backtests
-              does not guarantee future results. VyomQuant provides software infrastructure only;
-              all execution decisions are made by the user. Paper trading mode is enabled by
-              default. VyomQuant is not a registered investment adviser. Not financial advice.
+              {/* LEGAL-01: single-sourced from src/legal/documents.js. This
+                  paragraph used to be literal JSX here and had drifted into two
+                  inaccuracies: "Paper trading mode is enabled by default", which
+                  implies live trading is a switch the reader can flip when it is
+                  operator-granted per account, and "all execution decisions are
+                  made by the user", which is the opposite of the main risk on an
+                  automated platform. */}
+              {SUMMARY_DISCLAIMER}
             </p>
-            <p className="whitespace-nowrap text-xs text-content-secondary">
-              © {new Date().getFullYear()} VyomQuant. All rights reserved.
-            </p>
+            <div className="flex shrink-0 items-center gap-4">
+              <CookieSettingsLink className="whitespace-nowrap text-xs text-content-secondary underline hover:text-content-primary transition-colors" />
+              <p className="whitespace-nowrap text-xs text-content-secondary">
+                © {new Date().getFullYear()} VyomQuant. All rights reserved.
+              </p>
+            </div>
           </div>
         </div>
       </div>
