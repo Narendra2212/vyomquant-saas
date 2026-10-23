@@ -342,6 +342,13 @@ import { getAuthRedirectUrl } from "../config";
 // this form and was then discarded. These two make it a persisted record.
 import { api } from "../api";
 import { LEGAL_VERSION, SIGNUP_REQUIRED_DOCUMENTS } from "../legal/documents";
+import { COUNTRIES } from "../legal/countries";
+
+// LEGAL-01: mirrored here only to refuse early in the form. The SERVER holds the
+// authoritative list (backend_app/core/restricted_jurisdictions.py) and refuses
+// regardless of what this constant says, so a stale copy here cannot admit
+// anyone it should not -- it can only fail to warn them a moment sooner.
+const RESTRICTED_COUNTRY_CODES = ["CU", "IR", "KP", "SY"];
 
 const RESEND_COOLDOWN_SECONDS = 60;
 
@@ -488,6 +495,14 @@ export default function AuthPage({ mode = "signin" }) {
 
   const [agreedToPolicies, setAgreedToPolicies] = useState(false);
 
+  // LEGAL-01: Terms section 3 makes the user represent that they meet the age
+  // requirement and are not in a restricted jurisdiction. Both were sentences in
+  // a document with no mechanism behind them. Neither is pre-filled: the country
+  // starts empty so India is not silently declared on a user's behalf, and the
+  // age box starts unticked.
+  const [confirmedAge, setConfirmedAge] = useState(false);
+  const [declaredCountry, setDeclaredCountry] = useState("");
+
   // OTP form state: 6 separate digits
   const [otpDigits, setOtpDigits] = useState(["", "", "", "", "", ""]);
   const otpInputRefs = useRef([]);
@@ -599,6 +614,27 @@ export default function AuthPage({ mode = "signin" }) {
       }
       if (!agreedToPolicies) {
         setError("You must agree to the Terms and Risk Disclosure.");
+        return;
+      }
+      // LEGAL-01. Checked here so the user is told before an account is created,
+      // rather than after -- the acceptance POST happens post-OTP, and failing
+      // there would leave an account with no recorded representations. The server
+      // enforces both regardless; this is the early, kinder refusal.
+      if (!confirmedAge) {
+        setError("You must confirm you meet the minimum age in our Terms of Service.");
+        return;
+      }
+      if (!declaredCountry) {
+        setError("Please select the country you are in.");
+        return;
+      }
+      if (RESTRICTED_COUNTRY_CODES.includes(declaredCountry)) {
+        const name =
+          COUNTRIES.find((c) => c.code === declaredCountry)?.name || declaredCountry;
+        setError(
+          `We cannot open an account for someone in ${name}. See section 3 of our `
+            + `Terms of Service.`,
+        );
         return;
       }
     }
@@ -780,6 +816,11 @@ export default function AuthPage({ mode = "signin" }) {
               version: LEGAL_VERSION,
               documents: SIGNUP_REQUIRED_DOCUMENTS,
               context: "signup",
+              // LEGAL-01: the two representations Terms section 3 makes. The
+              // server REQUIRES both for a signup -- age must be true and the
+              // country must not be restricted -- so these are not decorative.
+              ageConfirmed: confirmedAge,
+              declaredCountry: declaredCountry,
             })
             .catch((acceptErr) => {
                
@@ -1140,6 +1181,45 @@ export default function AuthPage({ mode = "signin" }) {
               <div className="mt-1 flex flex-col gap-1">
                 {/* fontSize: 11 → --text-body (sentence, and the one on this page a trader is
                     agreeing to). */}
+                {/* LEGAL-01: the country declaration that makes Terms section 3's
+                    restricted-jurisdiction clause enforceable. Starts EMPTY --
+                    defaulting to India would declare a country on the user's
+                    behalf, which is the opposite of a representation. */}
+                <label className="flex flex-col gap-1.5 text-body text-content-secondary">
+                  <span>Which country are you in?</span>
+                  <select
+                    required
+                    value={declaredCountry}
+                    onChange={(e) => setDeclaredCountry(e.target.value)}
+                    className="rounded-lg border border-line-default bg-surface-canvas px-3 py-2 text-content-primary"
+                  >
+                    <option value="" disabled>
+                      Select your country
+                    </option>
+                    {COUNTRIES.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {/* LEGAL-01: the age attestation. Not pre-ticked. */}
+                <label className="flex cursor-pointer items-start gap-2 text-body leading-relaxed text-content-secondary">
+                  <input
+                    type="checkbox"
+                    required
+                    checked={confirmedAge}
+                    onChange={(e) => setConfirmedAge(e.target.checked)}
+                    className="mt-0.5"
+                    style={{ accentColor: token.brand.base }}
+                  />
+                  <span>
+                    I am at least 18, or the age of majority where I live if that is
+                    higher, and I have legal capacity to enter this contract.
+                  </span>
+                </label>
+
                 <label className="flex cursor-pointer items-start gap-2 text-body leading-relaxed text-content-secondary">
                   <input
                     type="checkbox"

@@ -82,20 +82,42 @@ export const LEGAL_EFFECTIVE_DATE = '23 October 2026';
 /**
  * The operating entity. Published because Razorpay's merchant terms and the
  * Consumer Protection (E-Commerce) Rules 2020 both expect a contactable
- * identity and a reachable address.
+ * identity, a reachable address and, for a GST-registered seller, the GSTIN.
  *
- * PIN CODE IS MISSING. The address supplied was "Mohammdabad, Orai, Jalaun,
- * Uttar Pradesh" with no postal code. An address without one is not a
- * deliverable address, so it is marked rather than invented.
+ * ALL FOUR IDENTIFIERS WERE VALIDATED BEFORE BEING PUBLISHED, because a wrong
+ * statutory identifier in a Terms of Service is worse than a placeholder: a
+ * placeholder is obviously unfinished, and a wrong number looks finished.
+ *
+ *   CIN      21 characters, structure parsed and cross-checked: U (unlisted),
+ *            industry 26515, state UP -- which matches the registered address --
+ *            year 2024, PTC (Private Limited Company, matching `form` below),
+ *            registration 206131.
+ *   GSTIN    15 characters, and its CHECK DIGIT WAS COMPUTED INDEPENDENTLY and
+ *            agrees ('I'). State code 09 is Uttar Pradesh, matching the address,
+ *            and the PAN's 4th character is 'C' (Company), which is what a
+ *            Private Limited must be.
+ *   PIN      285122. 285001 is Orai town; 2851xx covers surrounding localities
+ *            in Jalaun district, so this is consistent with a Mohammdabad
+ *            address rather than the town centre.
+ *   NAME     Corroborated by src/utils/razorpayCheckout.js, which already
+ *            defaults the checkout merchant name to 'Aerora Dynamics'.
+ *
+ * ONE THING FOR COUNSEL, recorded rather than silently accepted: CIN industry
+ * code 26515 sits in the instruments and measuring-devices range, not software
+ * or financial services. That is a fact about the incorporation, not an error in
+ * these documents, but a reviewer will reasonably ask whether the registered
+ * object covers operating a trading platform. See REVIEW_NOTES.
  */
 export const ENTITY = {
   name: 'VyomQuant',
-  legalName: '[REGISTERED COMPANY NAME] Private Limited',
+  legalName: 'Aerora Dynamics Private Limited',
   form: 'Private Limited Company incorporated in India',
-  address: 'Mohammdabad, Orai, Jalaun, Uttar Pradesh, India',
-  pinCode: '[PIN CODE REQUIRED]',
-  cin: '[CIN REQUIRED]',
-  gstin: '[GSTIN REQUIRED]',
+  // PIN included here, in Indian postal order, so the three places that render
+  // an address do not have to concatenate it and cannot get the order wrong.
+  address: 'Mohammdabad, Orai, Jalaun, Uttar Pradesh 285122, India',
+  pinCode: '285122',
+  cin: 'U26515UP2024PTC206131',
+  gstin: '09ABBCA0242R1ZI',
   grievanceEmail: 'grievance@vyomquant.com',
   privacyEmail: 'privacy@vyomquant.com',
   billingEmail: 'billing@vyomquant.com',
@@ -110,15 +132,16 @@ export const ENTITY = {
  * and mirrored in LEGAL-01's ledger entry.
  */
 export const REVIEW_NOTES = [
-  'ENTITY.legalName, .cin, .gstin and .pinCode are placeholders. The supplied address has no PIN code, which the Consumer Protection (E-Commerce) Rules 2020 expect to be reachable.',
-  'Exclusive venue at Orai, Uttar Pradesh: under the Consumer Protection Act 2019 a consumer may file where they reside or work regardless of such a clause. It is therefore drafted as a preference and NOT as a waiver, and needs confirmation that this is intended.',
-  'Signups are open globally. A restricted-jurisdiction and sanctions clause is included because unrestricted access would admit users in sanctioned jurisdictions, but NO SCREENING CONTROL EXISTS IN CODE — the clause is a representation by the user, not an enforced control.',
-  'GDPR/UK-GDPR language is included. If EU/UK users are genuinely in scope, counsel must settle the lawful basis, an Article 27 representative, and the transfer mechanism for India-to-Singapore processing.',
-  'Prices are stated INCLUSIVE of GST because Razorpay Standard Checkout charges the exact order amount and no GST computation exists in subscription_engine.py. If GST-exclusive pricing is ever intended, the code must change BEFORE the documents can say so.',
-  'The position that VyomQuant falls outside the PMLA virtual-digital-asset service-provider definition is stated as a factual description of what the platform does (no custody, no exchange, no transfer on behalf of another), not as a legal conclusion. Counsel should confirm against the FIU-IND AML/CFT guidelines as updated 08.01.2026.',
-  'No KYC or age-verification control exists. The age and eligibility clauses are representations by the user, not verified facts.',
-  'The liability cap is drafted broadly. Indian consumer law limits how far liability may be excluded against a consumer; the cap and the carve-outs need counsel review.',
-  'Live trading is described as per-account and operator-granted. If live trading launches with different mechanics, section 4 of the Terms and the Risk Disclosure must be revisited and LEGAL_VERSION bumped.',
+  'COUNSEL — GDPR SCOPE. GDPR/UK-GDPR language is included and signups are global. If EU/UK users are genuinely in scope, counsel must settle the lawful basis, an Article 27 representative, and the transfer mechanism for the India-to-Singapore processing disclosed in Privacy section 7.',
+  'COUNSEL — PMLA / FIU-IND. The position that VyomQuant falls outside the virtual-digital-asset service-provider definition is stated as a FACTUAL description of what the platform does (no custody, no exchange of assets, no transfer on behalf of another; trades execute on the user\'s own exchange account under their own API keys) and NOT as a legal conclusion. Counsel should confirm against the FIU-IND AML/CFT guidelines as updated 08.01.2026.',
+  'COUNSEL — LIABILITY CAP. Terms section 11 is drafted broadly, with a cap at amounts paid in the preceding twelve months or Rs 5,000. Indian consumer law limits how far liability may be excluded against a consumer; the cap and its carve-outs need review.',
+  'COUNSEL — REGISTERED OBJECT. The CIN\'s industry code (26515) sits in the instruments and measuring-devices range rather than software or financial services. That is a fact about the incorporation rather than an error in these documents, but a reviewer will reasonably ask whether the registered object covers operating a trading platform.',
+  'CONTROL GAP, NARROWED NOT CLOSED — JURISDICTION. The restricted-jurisdiction clause in Terms section 3 is now ENFORCED at signup by backend_app/core/restricted_jurisdictions.py, and the declaration is recorded against the acceptance. But it is a DECLARED-COUNTRY GATE, not sanctions screening: nothing verifies the declaration, no SDN/UN/EU/UK list is consulted, and a country code cannot express region-level measures such as those applying to parts of Ukraine. Counsel must set the definitive list and decide whether a licensed screening provider is required.',
+  'CONTROL GAP, NARROWED NOT CLOSED — AGE. The 18+ requirement is now an explicit, recorded attestation at signup rather than a sentence nobody captured. It is still a REPRESENTATION: there is no age or identity verification anywhere in the schema.',
+  'RECORDED, REVISIT IF CODE CHANGES — GST. Prices are stated INCLUSIVE of GST because Razorpay Standard Checkout charges the exact server-created order amount and no GST computation exists in subscription_engine.py. If GST-exclusive pricing is ever intended, the code must change BEFORE the documents can say so; a test guards the current wording.',
+  'RECORDED, REVISIT IF CODE CHANGES — LIVE TRADING. Live trading is described as per-account and operator-granted, which is true both now (it is hard-gated off) and after it is enabled. If it launches with different mechanics, Terms section 4 and the Risk Disclosure must be revisited and LEGAL_VERSION bumped, which re-prompts every user.',
+  'SETTLED — VENUE. Exclusive venue at Orai, Uttar Pradesh, confirmed by the product owner. Drafted as a PREFERENCE and explicitly NOT as a waiver, because the Consumer Protection Act 2019 lets a consumer file where they reside or work regardless of such a clause.',
+  'SETTLED — ENTITY DETAILS. Company name, CIN, GSTIN and PIN code supplied and validated: the CIN parses to U / 26515 / UP / 2024 / PTC / 206131 with the state matching the registered address and the ownership code matching the declared company form, and the GSTIN\'s CHECK DIGIT was computed independently and agrees.',
 ];
 
 export const DOCUMENTS = {
@@ -128,7 +151,7 @@ export const DOCUMENTS = {
     sections: [
       {
         heading: '1. Who we are, and what these terms cover',
-        body: `${ENTITY.name} is operated by ${ENTITY.legalName}, a ${ENTITY.form}, registered office ${ENTITY.address} ${ENTITY.pinCode}. "We", "us" and "our" mean that company. "You" means the person using the platform.
+        body: `${ENTITY.name} is operated by ${ENTITY.legalName}, a ${ENTITY.form}, registered office ${ENTITY.address}. Our Corporate Identity Number is ${ENTITY.cin} and our GSTIN is ${ENTITY.gstin}. "We", "us" and "our" mean that company. "You" means the person using the platform.
 
 These Terms govern your use of the ${ENTITY.name} web platform, desktop application and APIs (the "Platform"). By creating an account or using the Platform you accept these Terms, the Privacy Policy, the Risk Disclosure and the Refund and Cancellation Policy. If you do not accept them, do not use the Platform.
 
@@ -262,7 +285,7 @@ IF YOU ARE A CONSUMER, nothing in this section removes your right to bring a com
       },
       {
         heading: '16. Grievance contact',
-        body: `For complaints, including about content or about how we handle your data, contact our Grievance Officer at ${ENTITY.grievanceEmail}, or write to ${ENTITY.legalName}, ${ENTITY.address} ${ENTITY.pinCode}.
+        body: `For complaints, including about content or about how we handle your data, contact our Grievance Officer at ${ENTITY.grievanceEmail}, or write to ${ENTITY.legalName}, ${ENTITY.address}.
 
 We aim to acknowledge within 48 hours and resolve within the period applicable law requires.`,
       },
@@ -368,7 +391,7 @@ PAST PERFORMANCE — yours, a creator's, or a backtest's — DOES NOT INDICATE F
     sections: [
       {
         heading: '1. Who controls your data',
-        body: `${ENTITY.legalName}, ${ENTITY.address} ${ENTITY.pinCode}, is the controller of the personal data described here.
+        body: `${ENTITY.legalName}, ${ENTITY.address}, is the controller of the personal data described here.
 
 For privacy questions or to exercise a right in section 9, contact ${ENTITY.privacyEmail}. For a formal complaint, contact our Grievance Officer at ${ENTITY.grievanceEmail}.
 

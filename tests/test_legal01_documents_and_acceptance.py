@@ -505,3 +505,202 @@ def test_the_summary_disclaimer_names_the_automation_risk():
         "the summary must convey that a started strategy places orders without "
         "asking again -- the single most important risk on this platform."
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  8. ENTITY IDENTIFIERS ARE REAL, NOT PLACEHOLDERS
+#
+#  A placeholder is obviously unfinished. A WRONG statutory identifier looks
+#  finished, which is worse -- so these assert the values are present AND
+#  structurally valid, including the GSTIN's check digit.
+# ══════════════════════════════════════════════════════════════════════════
+
+_CP = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _entity_field(name: str) -> str:
+    text = DOCUMENTS_JS.read_text(encoding="utf-8", errors="replace")
+    m = re.search(rf"^\s*{name}:\s*'([^']+)'", text, re.MULTILINE)
+    assert m, f"could not find ENTITY.{name} in documents.js"
+    return m.group(1)
+
+
+def test_no_placeholders_remain_in_the_published_documents():
+    """These render verbatim to users, so a leftover is a visible defect."""
+    text = _documents_text()
+    leftovers = re.findall(r"\[[A-Z][A-Z ]*(?:REQUIRED|NAME)\]", text)
+    assert not leftovers, f"placeholder(s) still in the documents: {set(leftovers)}"
+
+
+def test_the_legal_name_is_a_real_company_name():
+    name = _entity_field("legalName")
+    assert "[" not in name and "]" not in name
+    assert name.endswith("Private Limited"), (
+        f"ENTITY.legalName must match the declared company form; got {name!r}"
+    )
+    assert name.count("Private Limited") == 1, "the suffix is duplicated"
+
+
+def test_the_cin_is_structurally_valid_and_internally_consistent():
+    cin = _entity_field("cin")
+    m = re.fullmatch(r"([UL])(\d{5})([A-Z]{2})(\d{4})([A-Z]{3})(\d{6})", cin)
+    assert m, f"CIN does not match the 21-character structure: {cin!r}"
+    _listing, _industry, state, year, ownership, _reg = m.groups()
+    assert len(cin) == 21
+    # The state in the CIN must agree with the registered address, and the
+    # ownership code with the company form. Those are the two fields that can be
+    # cross-checked against something else in this file.
+    assert state == "UP", f"CIN state {state!r} but the address says Uttar Pradesh"
+    assert "Uttar Pradesh" in _entity_field("address")
+    assert ownership == "PTC", (
+        f"CIN ownership code {ownership!r} but ENTITY.form declares a Private "
+        f"Limited Company, which is PTC"
+    )
+    assert 1900 <= int(year) <= 2100
+
+
+def test_the_gstin_check_digit_verifies():
+    """The one identifier here that can be proven wrong by arithmetic."""
+    gstin = _entity_field("gstin")
+    assert len(gstin) == 15, f"a GSTIN is 15 characters; got {len(gstin)}"
+    m = re.fullmatch(r"(\d{2})([A-Z]{5}\d{4}[A-Z])(\d|[A-Z])(Z)([0-9A-Z])", gstin)
+    assert m, f"GSTIN does not match the expected structure: {gstin!r}"
+    state_code, pan, _entity, _z, given = m.groups()
+
+    assert state_code == "09", (
+        f"GSTIN state code {state_code!r} is not 09 (Uttar Pradesh), which the "
+        f"registered address declares"
+    )
+    # PAN's 4th character encodes holder type; 'C' is Company.
+    assert pan[3] == "C", (
+        f"PAN holder type {pan[3]!r} is not 'C' (Company), which a Private "
+        f"Limited must be"
+    )
+
+    factor, total, mod = 2, 0, 36
+    for ch in reversed(gstin[:14]):
+        addend = factor * _CP.index(ch)
+        factor = 1 if factor == 2 else 2
+        total += (addend // mod) + (addend % mod)
+    expected = _CP[(mod - (total % mod)) % mod]
+    assert given == expected, (
+        f"GSTIN check digit is wrong: computed {expected!r}, document says {given!r}"
+    )
+
+
+def test_the_address_carries_a_pin_code():
+    """An address without one is not deliverable, and the E-Commerce Rules expect
+    a reachable address."""
+    address = _entity_field("address")
+    assert re.search(r"\b\d{6}\b", address), (
+        f"the registered address has no six-digit PIN code: {address!r}"
+    )
+    assert _entity_field("pinCode") == re.search(r"\b(\d{6})\b", address).group(1), (
+        "ENTITY.pinCode disagrees with the PIN embedded in ENTITY.address"
+    )
+
+
+def test_the_cin_and_gstin_are_actually_published():
+    """Defined-but-never-rendered is how they sat before. The Consumer Protection
+    (E-Commerce) Rules expect a GST-registered seller to publish its GSTIN."""
+    text = _documents_text()
+    assert _entity_field("cin") in text, "the CIN is defined but never rendered"
+    assert _entity_field("gstin") in text, "the GSTIN is defined but never rendered"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  9. THE TWO REPRESENTATIONS ARE ENFORCED, NOT JUST WORDED
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_a_restricted_jurisdiction_is_refused():
+    from backend_app.core.restricted_jurisdictions import (JurisdictionRefused,
+                                                           assert_permitted)
+
+    for code in ("IR", "KP", "CU", "SY"):
+        with pytest.raises(JurisdictionRefused) as exc:
+            assert_permitted(code)
+        assert exc.value.code == "JURISDICTION_RESTRICTED"
+        assert exc.value.country_code == code
+
+
+def test_a_permitted_jurisdiction_is_normalised_and_allowed():
+    from backend_app.core.restricted_jurisdictions import assert_permitted
+
+    assert assert_permitted("in") == "IN"
+    assert assert_permitted(" gb ") == "GB"
+    assert assert_permitted("US") == "US"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "IND", "i", "12", "I1", None])
+def test_a_malformed_country_is_refused_as_malformed_not_as_restricted(bad):
+    """Conflating the two would report a typo as a sanctions hit."""
+    from backend_app.core.restricted_jurisdictions import (JurisdictionMalformed,
+                                                           assert_permitted,
+                                                           is_restricted)
+
+    with pytest.raises(JurisdictionMalformed):
+        assert_permitted(bad)
+    assert is_restricted(bad) is False
+
+
+def test_the_restricted_list_is_documented_as_a_declaration_not_screening():
+    """The honesty requirement. Describing a declared-country gate as sanctions
+    screening would be the same class of false statement this finding is about."""
+    source = (
+        REPO / "backend_app" / "core" / "restricted_jurisdictions.py"
+    ).read_text(encoding="utf-8")
+    assert "NOT sanctions screening" in source or "IS NOT SANCTIONS SCREENING" in source
+    assert "DELIBERATELY_NOT_BLOCKED" in source, (
+        "jurisdictions deliberately left unblocked should be recorded so the "
+        "omission reads as a decision rather than an oversight"
+    )
+
+
+def test_signup_requires_both_representations_server_side():
+    router = (REPO / "backend_app" / "routers" / "legal.py").read_text(
+        encoding="utf-8"
+    )
+    assert "AGE_NOT_CONFIRMED" in router, (
+        "a signup must be refused without the age attestation"
+    )
+    assert "assert_permitted" in router, (
+        "a signup must be refused for a restricted declared country"
+    )
+    # Required at signup, optional on re-acceptance -- re-demanding a country
+    # declaration when prompting about new TEXT would lock a user out.
+    assert 'context == "signup"' in router
+
+
+def test_the_signup_form_collects_both():
+    text = AUTH_PAGE.read_text(encoding="utf-8", errors="replace")
+    assert "confirmedAge" in text, "the signup form must collect the age attestation"
+    assert "declaredCountry" in text, "the signup form must collect the country"
+    # Neither may be pre-filled: a defaulted country declares something on the
+    # user's behalf, which is not a representation.
+    assert "useState(false)" in text
+    assert 'useState("")' in text
+
+
+def test_the_migration_keeps_the_new_columns_nullable():
+    """A NOT NULL with a backfill would manufacture a legal representation the
+    user never made, which is worse than an honest NULL."""
+    migration = (
+        REPO / "backend_app" / "migrations"
+        / "053_legal_acceptance_age_and_jurisdiction.sql"
+    )
+    assert migration.is_file()
+    sql = migration.read_text(encoding="utf-8", errors="replace")
+    assert "ADD COLUMN IF NOT EXISTS age_confirmed BOOLEAN" in sql
+    assert "ADD COLUMN IF NOT EXISTS declared_country TEXT" in sql
+    assert "NOT NULL" not in sql.split("SECTION 1")[1].split("SECTION 2")[0], (
+        "the new columns must be nullable; see the migration header"
+    )
+    # Shape only in the database; the restricted LIST lives in Python so counsel
+    # can change it without a migration invalidating historical rows.
+    assert "chk_legal_acceptances_declared_country_shape" in sql
+    for code in ("'IR'", "'KP'", "'CU'", "'SY'"):
+        assert code not in sql, (
+            "the restricted list must NOT be encoded in a CHECK constraint -- it "
+            "is a legal input that changes, and baking it in would make every "
+            "revision a schema change"
+        )
