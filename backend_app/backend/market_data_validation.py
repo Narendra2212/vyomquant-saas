@@ -111,6 +111,7 @@ Validation Pipeline:
 """
 import asyncio
 import logging
+import math
 import os
 import random
 from dataclasses import dataclass, field
@@ -184,9 +185,40 @@ class GapHandlingStrategy(Enum):
 class OutlierMethod(Enum):
     """Outlier detection methods."""
     Z_SCORE = "z_score"
+    #: DATA-03 option (C). ``(x - median) / (1.4826 * MAD)`` instead of
+    #: ``(x - mean) / std``. See :meth:`OutlierDetector._robust_z_filter` for the measured
+    #: reason this is the default: on real crypto log-returns the classic scale is inflated
+    #: ~1.4x by the very tail points being detected, which DEFLATES every ordinary point's
+    #: z-score. The classic rule is mis-ESTIMATED, not merely mis-thresholded.
+    ROBUST_Z_SCORE = "robust_z_score"
     IQR = "iqr"
     PERCENT_CHANGE = "percent_change"
     ISOLATION_FOREST = "isolation_forest"
+
+
+class OutlierPolicy(Enum):
+    """What to DO about a detected outlier. DATA-03 option (A).
+
+    Detection and response were fused: every detector raised on the first exceedance, so
+    "an outlier exists in this window" and "this window is unusable" were the same
+    statement. They are not. Measured over 12,000 real bars each of BTC/ETH/DOGE, a
+    >=10,000-bar window essentially always contains at least one extreme log-return, so
+    fusing them makes Requirement 19.11's >=10,000-bar floor unsatisfiable at every
+    threshold that detects anything at all.
+    """
+
+    #: The original behaviour: ANY exceedance rejects the WHOLE window. Retained so a
+    #: caller that genuinely wants all-or-nothing can still ask for it explicitly, and so
+    #: the change is opt-out rather than irreversible. Measured consequence at >=10,000
+    #: bars: rejects ~100% of real windows.
+    REJECT_WINDOW = "reject_window"
+
+    #: DATA-03's resolution. Flag the offending bars, REPORT how many, admit the window,
+    #: and refuse only when the flagged FRACTION exceeds
+    #: :attr:`ValidationConfig.max_outlier_fraction`. The guarantee changes from "this
+    #: window contains no outlier" -- which real data cannot honour -- to "at most X% of
+    #: these bars were extreme, and here is exactly how many", which it can.
+    FLAG_AND_ADMIT = "flag_and_admit"
 
 
 @dataclass
@@ -275,6 +307,91 @@ Z_SCORE_THRESHOLD_DEFAULT = float(os.environ.get("MARKET_DATA_Z_SCORE_THRESHOLD"
 #: not). Also env-overridable for the same future-recalibration reason as the z-score threshold.
 IQR_MULTIPLIER_DEFAULT = float(os.environ.get("MARKET_DATA_IQR_MULTIPLIER", "3.0"))
 
+#: DATA-03 (C). Scales the median absolute deviation to be a consistent estimator of sigma
+#: for normally-distributed data, so a robust z-score is on the same footing as a classic one
+#: and a threshold read across from the literature means the same thing. Exact constant:
+#: ``1 / Phi^-1(0.75)``.
+MAD_TO_SIGMA = 1.4826
+
+#: DATA-03 (C), FITTED TO REAL DATA rather than asserted from a normal model -- which is the
+#: recalibration ``Z_SCORE_THRESHOLD_DEFAULT``'s own comment conceded was still owed.
+#:
+#: MEASURED, 12,000 live 1m bars each of BTC/USDT, ETH/USDT and DOGE/USDT
+#: (kiro-session-artifacts/calibrate_robust_outliers.py; reproduced by
+#: scripts/measure_market_data_outlier_reality.py --robust):
+#:
+#:   robust-z   per-point rate        worst contamination of any 10,000-bar window
+#:     5.0      8.5e-3 .. 1.1e-2      1.07%
+#:     8.0      2.3e-3 .. 3.0e-3      0.35%
+#:    10.0      1.2e-3 .. 1.4e-3      0.16%   <- this default
+#:    12.0      5.0e-4 .. 6.7e-4      0.07%
+#:    15.0      0.0    .. 1.7e-4      0.02%
+#:    20.0      0.0                   0.00%   <- detects NOTHING on the sample
+#:
+#: 10.0 is chosen as the point where the rule still DETECTS something real (~1 bar in 850,
+#: a genuinely extreme move) while the worst-case contamination of a floor-sized window
+#: sits ~6x inside :data:`MAX_OUTLIER_FRACTION_DEFAULT`. A higher threshold buys headroom
+#: that is not needed and trends towards the defect the classic rule already had at 12.0,
+#: where it passed every window only because the threshold exceeded the largest z-score
+#: present -- a detector that detects nothing is not a safety control.
+ROBUST_Z_SCORE_THRESHOLD_DEFAULT = float(
+    os.environ.get("MARKET_DATA_ROBUST_Z_THRESHOLD", "10.0")
+)
+
+#: DATA-03 (A). The contamination BUDGET: the share of bars in a window that may be flagged
+#: as extreme before the window is refused outright. This is what preserves a real safety
+#: guarantee after whole-window rejection is dropped -- bounded contamination instead of
+#: zero contamination.
+#:
+#: 1% against a measured worst case of 0.16% at the default threshold, i.e. ~6x headroom, so
+#: ordinary volatility never trips it but a feed whose extreme-move rate rises six-fold --
+#: a real change in the data, not a quiet market -- does.
+MAX_OUTLIER_FRACTION_DEFAULT = float(
+    os.environ.get("MARKET_DATA_MAX_OUTLIER_FRACTION", "0.01")
+)
+
+#: DATA-03 (A), THE SECOND GUARD. The fraction budget above answers "are there too many
+#: extreme points?", which is the fat-tail question. It cannot answer "is this single point
+#: physically impossible?", because one bad tick is a vanishing fraction of a large window --
+#: and DATA-02 established that a genuine single-bar spike MUST still refuse the window.
+#:
+#: The old rule conflated the two: one threshold, one response, so it could only ever treat
+#: "many ordinary large moves" and "one impossible tick" identically -- and because real data
+#: always contains the former, it had to reject everything to catch the latter. Separating
+#: them is what lets both be right.
+#:
+#: Expressed as an ABSOLUTE single-bar log-return bound rather than a robust-z multiple,
+#: deliberately. A robust-z ceiling moves with the window's own dispersion, so in a quiet
+#: market MAD shrinks and an ordinary move would breach it -- the same self-referential
+#: defect that made the classic z-score the wrong estimator. An absolute bound does not.
+#:
+#: MEASURED (same live sample, 36,000 bars across BTC/ETH/DOGE):
+#:   largest real single-bar |log-return|   0.0048 .. 0.0084   (<= 1.008x)
+#:   this ceiling, log(2)                   0.6931              (2.00x)   <- 82x above real
+#:   DATA-02's 50x spike fixture            3.9116              (49.98x)
+#:   DATA-02's sine-pool spike fixture      7.0457              (1148x)
+#:
+#: log(2) sits in the middle of a ~465x gap between the largest real move and the smallest
+#: fabricated one, and it has a physical reading: a tradeable instrument does not double or
+#: halve inside one bar. Set well above any plausible real move -- crypto flash crashes do
+#: tens of percent in a minute, and all of those still pass -- so this refuses bad ticks and
+#: venue errors, not volatility.
+#:
+#: PRICE COLUMNS ONLY. Volume routinely doubles between adjacent bars, so applying a
+#: doubling ceiling to it would refuse ordinary trading activity.
+MAX_BAR_LOG_MOVE_DEFAULT = float(
+    os.environ.get("MARKET_DATA_MAX_BAR_LOG_MOVE", str(math.log(2)))
+)
+
+#: The columns :data:`MAX_BAR_LOG_MOVE_DEFAULT` applies to.
+PRICE_COLUMNS = ("open", "high", "low", "close")
+
+#: DATA-03 (A). ``FLAG_AND_ADMIT`` by default. Env-overridable to ``reject_window`` to
+#: restore the pre-DATA-03 behaviour without a code change.
+OUTLIER_POLICY_DEFAULT = OutlierPolicy(
+    os.environ.get("MARKET_DATA_OUTLIER_POLICY", OutlierPolicy.FLAG_AND_ADMIT.value)
+)
+
 
 @dataclass
 class ValidationConfig:
@@ -284,8 +401,19 @@ class ValidationConfig:
     max_gap_minutes: float = 5.0
 
     # Outlier detection
-    outlier_method: OutlierMethod = OutlierMethod.Z_SCORE
+    #: DATA-03 (C): robust by default. ``Z_SCORE`` remains selectable and unchanged.
+    outlier_method: OutlierMethod = OutlierMethod.ROBUST_Z_SCORE
+    #: DATA-03 (A): per-point by default. See :class:`OutlierPolicy`.
+    outlier_policy: OutlierPolicy = field(default_factory=lambda: OUTLIER_POLICY_DEFAULT)
     z_score_threshold: float = field(default_factory=lambda: Z_SCORE_THRESHOLD_DEFAULT)
+    robust_z_threshold: float = field(
+        default_factory=lambda: ROBUST_Z_SCORE_THRESHOLD_DEFAULT
+    )
+    max_outlier_fraction: float = field(
+        default_factory=lambda: MAX_OUTLIER_FRACTION_DEFAULT
+    )
+    #: DATA-03 (A): the magnitude ceiling. See :data:`MAX_BAR_LOG_MOVE_DEFAULT`.
+    max_bar_log_move: float = field(default_factory=lambda: MAX_BAR_LOG_MOVE_DEFAULT)
     iqr_multiplier: float = field(default_factory=lambda: IQR_MULTIPLIER_DEFAULT)
     percent_change_threshold: float = 0.05  # 5%
     
@@ -308,7 +436,10 @@ class ValidationConfig:
             "min_quality_score": self.min_quality_score,
             "max_gap_minutes": self.max_gap_minutes,
             "outlier_method": self.outlier_method.value,
+            "outlier_policy": self.outlier_policy.value,
             "z_score_threshold": self.z_score_threshold,
+            "robust_z_threshold": self.robust_z_threshold,
+            "max_outlier_fraction": self.max_outlier_fraction,
             "gap_strategy": self.gap_strategy.value,
             "enable_fallback": self.enable_fallback,
         }
@@ -440,9 +571,33 @@ class OutlierDetector:
         config: ValidationConfig,
         symbol: str = "UNKNOWN",
     ) -> Tuple[pd.DataFrame, List[ValidationIssue]]:
-        """Detect and handle outliers.
+        """Detect outliers, then apply :class:`OutlierPolicy` to what was found.
 
-        DATA-03. ``symbol`` is threaded through purely so a refusal says WHICH instrument
+        DATA-03, RESOLVED AS A+C
+        ------------------------
+        This function used to raise on the first exceedance of any detector, which fused
+        two separate questions: "is any bar in this window extreme?" and "is this window
+        unusable?". Measured over 12,000 live 1m bars each of BTC/USDT, ETH/USDT and
+        DOGE/USDT, 100% of >=10,000-bar windows contain at least one extreme log-return at
+        every threshold that detects anything at all -- so fusing them made Requirement
+        19.11's >=10,000-bar correctness floor unsatisfiable, and no value of
+        ``MARKET_DATA_Z_SCORE_THRESHOLD`` could fix it (``P(reject) = 1 - (1-p)^n -> 1``).
+
+        The resolution, now the default:
+
+        * **(A)** :attr:`OutlierPolicy.FLAG_AND_ADMIT` -- flag the extreme bars, report how
+          many, admit the window as observed, and refuse only when the flagged FRACTION
+          exceeds :attr:`ValidationConfig.max_outlier_fraction`. The guarantee becomes
+          *bounded* contamination rather than *zero* contamination, which is a promise real
+          market data can actually keep.
+        * **(C)** :attr:`OutlierMethod.ROBUST_Z_SCORE` -- median/MAD instead of mean/std, so
+          the scale is not corrupted by the points being detected, with a threshold fitted
+          to the measured return distribution. See :meth:`_robust_z_scores`.
+
+        ``REJECT_WINDOW`` remains available and byte-for-byte unchanged for any caller that
+        explicitly wants all-or-nothing.
+
+        ``symbol`` is threaded through purely so a refusal says WHICH instrument
         was refused. Every message on this path interpolated the literal string
         ``'UNKNOWN'`` -- not a fallback that happened to trigger, but the only value it
         could ever produce, because the symbol was never a parameter. The caller
@@ -456,27 +611,252 @@ class OutlierDetector:
 
         Defaulted rather than required, so existing callers are unaffected.
         """
-        issues = []
+        issues: List[ValidationIssue] = []
         df = df.copy()
-        
-        if method == OutlierMethod.Z_SCORE:
-            outlier_count = cls._z_score_filter(df, config.z_score_threshold, symbol)
-        elif method == OutlierMethod.IQR:
-            outlier_count = cls._iqr_filter(df, config.iqr_multiplier, symbol)
-        elif method == OutlierMethod.PERCENT_CHANGE:
-            outlier_count = cls._percent_change_filter(
-                df, config.percent_change_threshold, symbol
+
+        policy = getattr(config, "outlier_policy", OutlierPolicy.REJECT_WINDOW)
+        flags = cls._flags_for(df, method, config)
+
+        # ── DATA-03 (A): detection is now separate from the response ─────────
+        # Under REJECT_WINDOW the behaviour and the message are byte-for-byte what they
+        # were, so nothing that deliberately selects the strict policy changes.
+        if policy == OutlierPolicy.REJECT_WINDOW:
+            for col, mask in flags.items():
+                if bool(mask.any()):
+                    raise DataValidationError(
+                        f"Found {int(mask.sum())} outliers in {col} log-returns using "
+                        f"{method.value} for {symbol}. Dataset rejected - no synthetic "
+                        f"data allowed."
+                    )
+            return df, issues
+
+        # ── FLAG_AND_ADMIT ───────────────────────────────────────────────────
+        # NO BAR IS MODIFIED, EXCLUDED OR WINSORISED, deliberately. Two reasons, and the
+        # first is the measurement: what this rule calls an "outlier" in real crypto data
+        # is overwhelmingly an ORDINARY LARGE MOVE, not corrupt data -- so the bar is the
+        # venue's own true observation and replacing it would be the fabrication. Second,
+        # this module forbids synthetic data everywhere else (``_synthetic_fill``,
+        # ``GapHandler``'s refusal, and this very function's own historical message), and
+        # winsorising a close price is manufacturing a price that never traded. Excluding
+        # the bar instead would punch a hole in the series that ``GapHandler`` would then
+        # refuse on the next step, trading one unsatisfiable gate for another.
+        #
+        # So the window is admitted AS OBSERVED, with the contamination counted and
+        # reported, and the budget is what keeps a real guarantee in place.
+        # The magnitude ceiling, checked BEFORE the fraction budget: a single impossible
+        # tick must refuse the window no matter how small a share of it that tick is.
+        # DATA-02's requirement, preserved. See MAX_BAR_LOG_MOVE_DEFAULT.
+        cls._refuse_impossible_bar_moves(df, config, symbol)
+
+        budget = float(getattr(config, "max_outlier_fraction", 1.0))
+        for col, mask in flags.items():
+            total = int(mask.size)
+            count = int(mask.sum())
+            if total <= 0 or count <= 0:
+                continue
+
+            fraction = count / total
+            threshold = cls._threshold_for(method, config)
+            stamps = [str(s) for s in mask.index[mask][:20]]
+
+            if fraction > budget:
+                raise DataValidationError(
+                    f"Found {count} outliers in {total} {col} log-returns "
+                    f"({fraction:.4%}) using {method.value} for {symbol}, which exceeds "
+                    f"the {budget:.4%} contamination budget. Dataset rejected - this is "
+                    f"not ordinary volatility but a feed whose extreme-move rate has "
+                    f"changed materially."
+                )
+
+            issues.append(
+                ValidationIssue(
+                    issue_type="outliers_detected",
+                    severity="warning",
+                    timestamp=None,
+                    message=(
+                        f"Flagged {count} of {total} {col} log-returns "
+                        f"({fraction:.4%}) as extreme for {symbol} using "
+                        f"{method.value} at threshold {threshold}. Within the "
+                        f"{budget:.4%} budget, so the window is admitted AS OBSERVED -- "
+                        f"no bar was modified, excluded or winsorised."
+                    ),
+                    details={
+                        "column": col,
+                        "outlier_count": count,
+                        "sample_size": total,
+                        "outlier_fraction": fraction,
+                        "method": method.value,
+                        "threshold": threshold,
+                        "max_outlier_fraction": budget,
+                        "policy": OutlierPolicy.FLAG_AND_ADMIT.value,
+                        "symbol": symbol,
+                        "flagged_timestamps": stamps,
+                        "flagged_timestamps_truncated": count > len(stamps),
+                    },
+                )
             )
-        else:
-            outlier_count = 0
-        
-        if outlier_count > 0:
-            raise DataValidationError(
-                f"Found {outlier_count} outliers in {method.value} "
-                f"for {symbol}. Dataset rejected - no synthetic data allowed."
-            )
-        
+
         return df, issues
+
+    @classmethod
+    def _refuse_impossible_bar_moves(
+        cls, df: pd.DataFrame, config: ValidationConfig, symbol: str
+    ) -> None:
+        """Refuse the window if any single PRICE bar moved further than is physically credible.
+
+        DATA-02 required that a genuine single-bar price spike still rejects the window, and
+        DATA-03's fraction budget cannot deliver that on its own: one bad tick in a
+        10,000-bar window is 0.01% contamination, far inside any usable budget. So the two
+        guards answer different questions and both are needed --
+
+            fraction budget : "are there too many extreme points?"   (fat tails)
+            this ceiling    : "is any single point impossible?"      (bad ticks)
+
+        -- and the pre-DATA-03 rule had only one threshold for both, which is why it could
+        not catch the second without rejecting all real data for the first.
+
+        Checked against :data:`PRICE_COLUMNS` only: volume doubling between adjacent bars is
+        ordinary trading activity, not a data error.
+        """
+        ceiling = float(getattr(config, "max_bar_log_move", MAX_BAR_LOG_MOVE_DEFAULT))
+        if ceiling <= 0 or not np.isfinite(ceiling):
+            return
+
+        for col in PRICE_COLUMNS:
+            if col not in df.columns:
+                continue
+            series = pd.to_numeric(df[col], errors="coerce")
+            if series.notna().sum() < 2 or (series.dropna() <= 0).any():
+                # Non-positive or unusable prices are StructuralValidator's and
+                # CandleIntegrityValidator's to refuse; log of a non-positive is not this
+                # function's verdict to give.
+                continue
+
+            moves = cls._log_returns(series).abs()
+            if moves.empty:
+                continue
+
+            breach = moves > ceiling
+            if not bool(breach.any()):
+                continue
+
+            worst = float(moves.max())
+            first = breach.index[breach][0]
+            raise DataValidationError(
+                f"Found an implausible single-bar move (a magnitude outlier) in {col} "
+                f"for {symbol}: "
+                f"|log-return| {worst:.4f} (a {math.exp(worst):.2f}x move) at {first} "
+                f"exceeds the {ceiling:.4f} ({math.exp(ceiling):.2f}x) ceiling, in "
+                f"{int(breach.sum())} bar(s). A tradeable instrument does not move that "
+                f"far inside one bar, so this is a bad tick or a venue error rather than "
+                f"volatility. Dataset rejected - no synthetic data allowed."
+            )
+
+    @classmethod
+    def _threshold_for(cls, method: OutlierMethod, config: ValidationConfig) -> float:
+        """The number the chosen method actually compares against."""
+        if method == OutlierMethod.ROBUST_Z_SCORE:
+            return float(getattr(config, "robust_z_threshold",
+                                 ROBUST_Z_SCORE_THRESHOLD_DEFAULT))
+        if method == OutlierMethod.Z_SCORE:
+            return float(config.z_score_threshold)
+        if method == OutlierMethod.IQR:
+            return float(config.iqr_multiplier)
+        if method == OutlierMethod.PERCENT_CHANGE:
+            return float(config.percent_change_threshold)
+        return 0.0
+
+    @classmethod
+    def _flags_for(
+        cls,
+        df: pd.DataFrame,
+        method: OutlierMethod,
+        config: ValidationConfig,
+    ) -> Dict[str, pd.Series]:
+        """Per-column boolean masks of which points are extreme. Never raises.
+
+        DATA-03: the detectors used to raise from inside the loop, which is what made
+        "detected" and "rejected" the same event and left no way to ask how MANY points
+        were extreme -- the first one aborted the computation. Returning the masks lets
+        :meth:`detect` apply a policy to a complete answer.
+
+        Masks are indexed by the log-return's own index (the bar index minus its first
+        element), so a flagged point maps back to the bar that produced it.
+        """
+        flags: Dict[str, pd.Series] = {}
+        for col in ["close", "volume"]:
+            if col not in df.columns:
+                continue
+
+            returns = cls._log_returns(df[col])
+            if method == OutlierMethod.PERCENT_CHANGE:
+                if col != "close":
+                    continue
+                changes = df["close"].pct_change().abs().dropna()
+                if len(changes) < 1:
+                    continue
+                flags[col] = changes > float(config.percent_change_threshold)
+                continue
+
+            if method == OutlierMethod.ROBUST_Z_SCORE:
+                if len(returns) < 3:
+                    continue
+                flags[col] = cls._robust_z_scores(returns) > float(
+                    getattr(config, "robust_z_threshold",
+                            ROBUST_Z_SCORE_THRESHOLD_DEFAULT)
+                )
+            elif method == OutlierMethod.Z_SCORE:
+                if len(returns) < 3:
+                    continue
+                flags[col] = pd.Series(
+                    np.abs(stats.zscore(returns)) > float(config.z_score_threshold),
+                    index=returns.index,
+                )
+            elif method == OutlierMethod.IQR:
+                if len(returns) < 4:
+                    continue
+                q1 = returns.quantile(0.25)
+                q3 = returns.quantile(0.75)
+                iqr = q3 - q1
+                lower = q1 - float(config.iqr_multiplier) * iqr
+                upper = q3 + float(config.iqr_multiplier) * iqr
+                flags[col] = (returns < lower) | (returns > upper)
+
+        return flags
+
+    @classmethod
+    def _robust_z_scores(cls, returns: pd.Series) -> pd.Series:
+        """``|x - median| / (1.4826 * MAD)``. DATA-03 option (C).
+
+        WHY THE CLASSIC Z-SCORE IS THE WRONG ESTIMATOR, MEASURED
+        --------------------------------------------------------
+        ``stats.zscore`` divides by the standard deviation, which is computed FROM the same
+        points it is being used to judge -- so a few extreme log-returns inflate the scale
+        and thereby DEFLATE every other point's score. That is the textbook masking effect,
+        and it is present here at a size that matters. Over 12,000 live 1m bars:
+
+            symbol      std        1.4826*MAD   ratio   max|z|   max|robust z|
+            BTC/USDT    4.591e-4   3.081e-4     1.49    10.47    15.60
+            ETH/USDT    6.730e-4   4.890e-4     1.38    11.30    15.57
+            DOGE/USDT   8.185e-4   5.606e-4     1.46    10.27    14.99
+
+        The classic scale is ~1.4x too large on every instrument, and the largest robust
+        score exceeds the largest classic one -- the classic rule was hiding its own most
+        extreme points. So the old rule was not merely mis-thresholded; the quantity it
+        computed was corrupted by its own inputs. The median and the MAD both have a 50%
+        breakdown point, so neither moves when a minority of points are extreme.
+
+        A zero MAD means more than half the returns are identical -- a flat or halted
+        series. Every score is then 0 and nothing is flagged, which is correct: there is no
+        dispersion to be extreme relative to. Such a series is a GAP/staleness problem and
+        is ``GapHandler``'s and ``_validate_row_count``'s to refuse, not this function's to
+        reinterpret.
+        """
+        median = returns.median()
+        mad = (returns - median).abs().median()
+        if mad == 0 or not np.isfinite(mad):
+            return pd.Series(np.zeros(len(returns)), index=returns.index)
+        return (returns - median).abs() / (MAD_TO_SIGMA * mad)
     
     @classmethod
     def _log_returns(cls, series: pd.Series) -> pd.Series:
@@ -512,9 +892,17 @@ class OutlierDetector:
         the 5.733e-7 the normal model in ``Z_SCORE_THRESHOLD_DEFAULT``'s comment assumes --
         understated 6,396x, because crypto log-returns are fat-tailed.
 
-        NOT CHANGED HERE. Whether to keep window rejection or move to per-point handling
-        governs what data the platform will trade on, so it is DATA-03's recorded design
-        decision rather than something to adjust in passing.
+        RESOLVED. DATA-03's design decision was taken as option **A+C**: per-point handling
+        (:class:`OutlierPolicy.FLAG_AND_ADMIT`) with a robust, distribution-fitted detector
+        (:attr:`OutlierMethod.ROBUST_Z_SCORE`). Both are now the defaults, so this method is
+        no longer on the default path -- it runs only when a caller explicitly selects
+        ``OutlierMethod.Z_SCORE``.
+
+        This method still raises on any exceedance, which is correct for what it is: the
+        strict, classic rule, reachable on request. The policy that decides whether raising
+        is the right response now lives in :meth:`detect`, so selecting ``Z_SCORE`` with
+        ``FLAG_AND_ADMIT`` gets classic scores with per-point handling rather than this
+        method's all-or-nothing refusal.
         ``scripts/measure_market_data_outlier_reality.py`` reproduces the measurement
         against the live venue.
         """
@@ -865,7 +1253,15 @@ class MarketDataValidator:
         missing_values = df.isna().sum().sum()
         duplicate_ts = df_original_len - len(df) if df_original_len > len(df) else 0
         ohlc_violations = sum(1 for i in issues if i.issue_type == "ohlc_violations")
-        outliers = sum(1 for i in issues if i.issue_type == "outliers_detected")
+        # DATA-03: the COUNT of flagged points, not the count of issue records. This was
+        # `sum(1 for i in issues ...)`, which could only ever report 0 (the detector raised
+        # instead of reporting) or, once it started reporting, 1 per column rather than the
+        # number of outliers -- a field named `outliers_detected` that did not hold one.
+        outliers = sum(
+            int(i.details.get("outlier_count", 0) or 0)
+            for i in issues
+            if i.issue_type == "outliers_detected"
+        )
         gaps = sum(1 for i in issues if i.issue_type == "data_gaps")
         
         # Max gap duration
