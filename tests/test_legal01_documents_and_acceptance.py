@@ -802,18 +802,48 @@ def test_records_of_processing_activities_exist():
         assert required in text, f"the ROPA does not record {required.lower()}"
 
 
+def _squash(text: str) -> str:
+    """Collapse whitespace and markdown emphasis.
+
+    These documents are prose with line wraps, blockquote prefixes and bold
+    markers, so a phrase that reads as one sentence can contain '\\n> ' or '**'
+    in the middle. Asserting on the raw text makes a test that fails when a
+    paragraph is rewrapped, which is a test about formatting pretending to be a
+    test about content.
+    """
+    return re.sub(r"[\s>*_`]+", " ", text).strip()
+
+
 def test_the_ropa_records_its_own_gaps():
     """A ROPA that lists only what is in order is a sales document.
 
-    The unappointed representatives, the unexecuted DPAs and the unknown
-    Supabase region all have to be IN it, because a supervisory authority
-    reading it will find them anyway and the difference between disclosed and
-    discovered is the whole of good faith here.
+    A supervisory authority reading it will find the gaps anyway, and the
+    difference between disclosed and discovered is the whole of good faith here.
+
+    Asserts the OPEN gaps specifically rather than any particular gap, because
+    gaps get closed -- an earlier version of this test asserted the Supabase
+    region was unknown and then failed the moment that was established, which
+    made a closed gap look like a regression.
     """
     text = ROPA.read_text(encoding="utf-8", errors="replace")
-    assert "Known gaps" in text or "KNOWN GAPS" in text
-    assert "not appointed" in text.lower()
-    assert "Supabase region not confirmed" in text or "region not yet confirmed" in text
+    squashed = _squash(text)
+
+    assert "Known gaps" in text or "KNOWN GAPS" in text, (
+        "the ROPA must have a gaps section"
+    )
+    # The two that are genuinely still open, and are appointments rather than code.
+    assert "not appointed" in squashed.lower(), (
+        "the unappointed Article 27 representatives must be recorded"
+    )
+    assert "DPAs" in text and "SCCs" in text, (
+        "the unconfirmed processor DPAs/SCCs must be recorded"
+    )
+    # Closed gaps should be marked closed rather than deleted, so the record
+    # shows what was done rather than only what remains.
+    assert "CLOSED" in text, (
+        "closed gaps should be marked CLOSED rather than removed, so the ROPA "
+        "reads as a history rather than only a snapshot"
+    )
 
 
 def test_the_ropa_records_what_is_not_processed():
@@ -834,4 +864,140 @@ def test_the_ropa_does_not_overstate_the_copilot():
     text = ROPA.read_text(encoding="utf-8", errors="replace")
     assert "never persisted" in text, (
         "the ROPA should record that copilot history is not actually stored"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  11. THE REMAINING GDPR ARTEFACTS, AND THE MASKING THEY SURFACED
+# ══════════════════════════════════════════════════════════════════════════
+
+RUNBOOK = REPO / "docs" / "legal" / "BREACH_RESPONSE_RUNBOOK.md"
+DPIA = REPO / "docs" / "legal" / "DPIA_SCREENING.md"
+
+
+def test_the_breach_runbook_exists_and_carries_the_72_hour_clock():
+    """Privacy section 10 commits to 72-hour notification. A commitment with no
+    procedure behind it is the exact pattern this finding was opened about -- and
+    72 hours is not long enough to invent a process in.
+    """
+    assert RUNBOOK.is_file(), f"{RUNBOOK.relative_to(REPO)} is missing"
+    text = RUNBOOK.read_text(encoding="utf-8", errors="replace")
+
+    assert "72" in text
+    # The clock starts on AWARENESS, not on completing the investigation. Getting
+    # that wrong is how an organisation misses the deadline while believing it has
+    # time left.
+    assert "aware" in text.lower()
+    assert "not when we finish investigating" in text or "AWARE, not when" in text
+    # Article 33(4) phased notification: a partial notice inside 72h beats a
+    # complete one after.
+    assert "phase" in text.lower()
+    # Must name the actual containment tooling, or it is a template rather than a
+    # runbook for THIS platform.
+    for tool in ("rotate_database_password.py", "rotate_jwt_secret.py",
+                 "rotate_master_encryption_keys.py",
+                 "audit_secrets_in_git_history.py"):
+        assert tool in text, f"the runbook does not reference {tool}"
+
+
+def test_the_runbook_states_that_losing_data_is_also_a_breach():
+    """VAULT-01 is a live example: two customers' credentials are unreadable
+    because a key was lost. Irrecoverable loss is a breach even though nobody
+    gained access, and a runbook that only imagines intrusions would miss it.
+    """
+    text = RUNBOOK.read_text(encoding="utf-8", errors="replace")
+    assert "VAULT-01" in text
+    assert "SEC-01" in text, (
+        "the runbook should cite the platform's own incidents rather than "
+        "hypotheticals"
+    )
+    assert "irrecoverab" in text.lower() or "Losing data" in text
+
+
+def test_the_runbook_records_that_article_27_blocks_its_own_notification_step():
+    """Without an appointed representative there is no designated route to an
+    EEA/UK supervisory authority. A runbook that did not say so would read as
+    complete while containing a hole at the one step with a legal deadline.
+    """
+    # Squashed: the phrase sits inside a markdown blockquote and wraps across
+    # lines, so the raw text contains '\n> ' and '**' in the middle of it.
+    squashed = _squash(RUNBOOK.read_text(encoding="utf-8", errors="replace"))
+    assert "Article 27" in squashed
+    assert "not yet appointed" in squashed.lower()
+    assert "blocking" in squashed.lower()
+
+
+def test_the_dpia_screening_exists_and_reaches_a_conclusion():
+    """A screening that hedges is not a screening. It must answer the one
+    question -- is a DPIA required -- and say why."""
+    assert DPIA.is_file(), f"{DPIA.relative_to(REPO)} is missing"
+    text = DPIA.read_text(encoding="utf-8", errors="replace")
+
+    # All three Article 35(3) limbs must be addressed individually, not waved at.
+    assert text.count("Not met.") >= 3, (
+        "each of the three Article 35(3) triggers must be assessed separately"
+    )
+    assert "NOT MANDATORY" in text, "the screening must reach a conclusion"
+    # And it must not oversell that conclusion.
+    assert "borderline" in text.lower(), (
+        "the screening should say the result is borderline rather than presenting "
+        "a one-and-a-half-out-of-nine score as comfortable"
+    )
+    assert "not legal advice" in text.lower()
+
+
+def test_the_dpia_screening_does_not_claim_financial_data_is_special_category():
+    """A real trap. Financial data is sensitive in the ordinary sense but is NOT
+    an Article 9 special category, and conflating the two would produce a wrong
+    mandatory-DPIA conclusion in the cautious-looking direction.
+    """
+    text = DPIA.read_text(encoding="utf-8", errors="replace")
+    assert "not a special category under Article 9" in text
+
+
+def test_clarity_masks_the_authenticated_area():
+    """Found by writing the DPIA screening, and fixed in the same change.
+
+    Clarity's default masking covers form inputs but not page text. On a trading
+    platform the text is the sensitive part: balances, position sizes, P&L,
+    strategy logic. Applied at the single <main> landmark so every authenticated
+    route is masked by default rather than per page.
+    """
+    app = APP_JSX.read_text(encoding="utf-8", errors="replace")
+    assert 'data-clarity-mask="true"' in app, (
+        "authenticated pages must be masked from Clarity session replay"
+    )
+    # It has to be on the shell's <main>, not on some leaf component, or a new
+    # page added later is unmasked by default.
+    main_at = app.index("id=\"main-content\"")
+    mask_at = app.index('data-clarity-mask="true"')
+    assert abs(mask_at - main_at) < 2000, (
+        "the mask attribute should sit on the authenticated <main> landmark so it "
+        "covers every route inside the shell"
+    )
+
+
+def test_the_privacy_policy_discloses_the_masking():
+    """A protection the user is not told about cannot reassure them, and claiming
+    it without doing it would be the false-statement problem again. Both halves
+    have to hold.
+    """
+    text = _documents_text()
+    assert "masked" in text.lower()
+    assert "balances" in text.lower(), (
+        "the Policy should say specifically what is not captured, since 'we mask "
+        "sensitive data' is the kind of claim a reader cannot check"
+    )
+
+
+def test_the_ropa_records_the_supabase_region():
+    """A ROPA that cannot say where the primary database sits is missing one of
+    the things a ROPA is for. The repository only ever held a placeholder, but
+    the running system's own pooler hostname carried the answer.
+    """
+    text = ROPA.read_text(encoding="utf-8", errors="replace")
+    assert "ap-southeast-1" in text
+    assert "Singapore" in text
+    assert "region not yet confirmed" not in text, (
+        "the region gap is closed and the ROPA should no longer claim otherwise"
     )

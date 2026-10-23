@@ -746,6 +746,32 @@ function ShellGrid({ toasts, removeToast }) {
         <main
           id="main-content"
           tabIndex={-1}
+          // LEGAL-01 / data minimisation (GDPR Art 5(1)(c)).
+          //
+          // MASK EVERY AUTHENTICATED PAGE FROM MICROSOFT CLARITY SESSION REPLAY.
+          //
+          // Clarity records pointer movement, clicks and scrolling, and its
+          // default masking covers form inputs but NOT page text. On a trading
+          // platform the text is the sensitive part: account balances, position
+          // sizes, P&L, strategy logic and exchange-connection screens all render
+          // as ordinary text and would otherwise appear in a replay.
+          //
+          // Found by writing docs/legal/DPIA_SCREENING.md -- the screening
+          // concluded a full DPIA is probably not MANDATORY, and then turned up
+          // this, which is a real minimisation problem independent of that
+          // question and fixable with an attribute rather than with legal
+          // argument.
+          //
+          // Applied at the one <main> landmark for authenticated pages, so it
+          // covers every route inside the shell by default rather than relying on
+          // each new page remembering. The public marketing pages render outside
+          // this element and stay unmasked, which is the point: they carry no
+          // personal data and are where the analytics are actually useful.
+          //
+          // Clarity honours data-clarity-mask on a subtree. The ACCOUNT-WIDE
+          // masking mode in the Clarity dashboard is a separate, owner-side
+          // setting; this does not depend on it.
+          data-clarity-mask="true"
           style={{
             gridColumn: 2,
             gridRow: 2,
