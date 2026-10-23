@@ -22,25 +22,7 @@ os.environ["SUPABASE_JWT_SECRET"] = "dev-secret-change-in-production"
 # Set DEFAULT_EXCHANGE for websocket tests
 os.environ["DEFAULT_EXCHANGE"] = "binance"
 
-# ── TEMPORARY DIAGNOSTIC, TO BE REMOVED IN THIS SAME BRANCH ────────────────────
-# tests/property/test_protected_logic_containment.py::
-# test_trace_and_export_surfaces_contain_no_protected_logic fails in CI (Python 3.11.17)
-# while passing locally (3.12) across seeds. The reported error comes from inside
-# Hypothesis's own shrinker -- `ValueError: 48 is not in list` at
-# intervalsets.index_from_char_in_shrink_order, where 48 is ord('0') -- reached via
-# `shrink_interesting_test_cases`, which means Hypothesis DID find a failing example and
-# then crashed minimising it. The crash masks the actual assertion.
-#
-# Disabling the shrink phase makes CI report the real failure instead of the shrinker's
-# own bug. PROPERTY_SETTINGS does not set `phases`, so this profile supplies it.
-if os.environ.get("KIRO_NO_SHRINK", "1") == "1":
-    from hypothesis import Phase, settings as _hyp_settings
 
-    _hyp_settings.register_profile(
-        "kiro_noshrink", phases=[p for p in Phase if p is not Phase.shrink]
-    )
-    _hyp_settings.load_profile("kiro_noshrink")
-# ── END TEMPORARY DIAGNOSTIC ───────────────────────────────────────────────────
 
 # Set VYOMQUANT_MODE=safe to override .env file's paper mode and ensure SQLite fallback
 os.environ["VYOMQUANT_MODE"] = "safe"
