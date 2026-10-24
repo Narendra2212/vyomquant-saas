@@ -6607,6 +6607,17 @@
   ],
   [
    "paper_sessions",
+   "abandoned_reason",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "paper_sessions",
    "config",
    "jsonb",
    "",
@@ -6710,6 +6721,17 @@
    "bigint",
    "",
    "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "paper_sessions",
+   "last_heartbeat_at",
+   "timestamp with time zone",
+   "",
+   "YES",
    "",
    "NO",
    "",
@@ -15860,6 +15882,11 @@
    "paper_sessions",
    "idx_paper_sessions_running",
    "CREATE INDEX idx_paper_sessions_running ON public.paper_sessions USING btree (user_id) WHERE (session_state = 'RUNNING'::text)"
+  ],
+  [
+   "paper_sessions",
+   "idx_paper_sessions_running_for_reconcile",
+   "CREATE INDEX idx_paper_sessions_running_for_reconcile ON public.paper_sessions USING btree (session_state) WHERE (session_state = 'RUNNING'::text)"
   ],
   [
    "paper_sessions",
@@ -26499,7 +26526,7 @@
    "paper_sessions",
    "chk_paper_session_state",
    "c",
-   "CHECK ((session_state = ANY (ARRAY['CREATED'::text, 'RUNNING'::text, 'PAUSED'::text, 'STOPPED'::text])))"
+   "CHECK ((session_state = ANY (ARRAY['CREATED'::text, 'RUNNING'::text, 'PAUSED'::text, 'STOPPED'::text, 'ABANDONED'::text])))"
   ],
   [
    "plan_features",
