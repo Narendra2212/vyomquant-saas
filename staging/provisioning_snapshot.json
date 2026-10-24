@@ -1023,7 +1023,7 @@
       "timestamp with time zone",
       "",
       "NO",
-      "timezone('utc'::text, now())",
+      "now()",
       "NO",
       "",
       "NEVER"
@@ -25160,17 +25160,12 @@
     ],
     [
       "migrations/056_vault01_credential_validity_state.sql",
-      "216f6ef8abc8da8079a6b35623f6e3b13aec99a6927022be1fbef8f30781c0a9",
+      "48973332bbc2e6bc804b1a515332dd29e96f2a305dcff231ba2b1fdb3b1bda05",
       "step1"
     ],
     [
       "migrations/057_ref01_referral_wallet_four_state_shape.sql",
       "e7de8c5e3e6f23f198652b3b673921057791971d28deb2756e003d93d36b4800",
-      "step1"
-    ],
-    [
-      "migrations/056_vault01_credential_validity_state.sql",
-      "48973332bbc2e6bc804b1a515332dd29e96f2a305dcff231ba2b1fdb3b1bda05",
       "step1"
     ],
     [
@@ -26155,11 +26150,6 @@
       "exchange_keys",
       "trg_exchange_keys_updated_at",
       "update_exchange_keys_updated_at"
-    ],
-    [
-      "exchange_keys",
-      "update_exchange_keys_updated_at",
-      "update_updated_at_column"
     ],
     [
       "legal_acceptances",
