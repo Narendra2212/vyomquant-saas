@@ -590,6 +590,16 @@ REVIEWED: Tuple[Allowed, ...] = (
             "means persistence is unavailable and is remembered as such, and anything else returns "
             "True so the real statement runs and its real failure surfaces. An inconclusive probe "
             "must not be reported as an unapplied migration."),
+    Allowed(f"{_P}/paper_repository.py", "touch_session_heartbeat", 0, 4112, Outcome.LOGS,
+            "the heartbeat is the liveness mark PAPER-04's reconciliation reads; it is written "
+            "once per loop iteration and the loop iterates continuously, so a failed write is "
+            "retried within seconds and raising would kill a live trading session over a "
+            "bookkeeping row. THE BOUNDED CONSEQUENCE, stated rather than assumed: if every "
+            "attempt failed for ABANDON_AFTER_SECONDS the session would be marked ABANDONED while "
+            "still running. That is a terminal, VISIBLE state the operator and the client both "
+            "see, and it is recoverable by reset-and-start -- which is strictly better than the "
+            "RUNNING-forever orphan this whole mechanism exists to remove. exc_info=True carries "
+            "the cause into the log."),
     Allowed(f"{_P}/paper_session_service.py", "_emit", 0, 1314, Outcome.LOGS,
             "the event is already recorded in paper_events at its sequence when delivery is "
             "attempted, so a reconnecting client replays it (Requirements 19.8, 19.9). A delivery "
@@ -607,6 +617,21 @@ REVIEWED: Tuple[Allowed, ...] = (
             "None tells the caller the loop did not start while the session is RUNNING with an "
             "open feed, which is what it needs in order to stop it; the log line names the "
             "session. Raising here would leave that session running with nobody able to name it."),
+    Allowed(f"{_P}/paper_session_service.py", "reconcile_orphaned_sessions", 0, 4613,
+            Outcome.LOGS,
+            "the read that finds stale RUNNING sessions failed, so NO session was changed -- the "
+            "log line says exactly that. This sweep runs at boot and on every heartbeat tick, so "
+            "the next tick retries; raising would turn a failed bookkeeping read into a failed "
+            "boot, and refusing to start is a far worse answer to 'I could not list orphans' than "
+            "listing none. The orphans it would have found keep their RUNNING rows, which is the "
+            "state they were already in."),
+    Allowed(f"{_P}/paper_session_service.py", "reconcile_orphaned_sessions", 1, 4649,
+            Outcome.LOGS,
+            "ONE session's transition to ABANDONED failed, inside a loop over all of them. It is "
+            "logged with the session named and the exception type, and the sweep continues over "
+            "the rest -- the alternative is that a single unreconcilable row stops every other "
+            "orphan from ever being reconciled. That session stays RUNNING and is picked up again "
+            "by the next sweep, so nothing is lost and nothing is silently final."),
     Allowed(f"{_P}/paper_session_service.py", "release_session_resources", 0, 2769, Outcome.LOGS,
             "a leak must not be silent: the un-released registrations are logged at error level "
             "and the stop is NOT reported complete (Requirement 19.12), while the remaining "

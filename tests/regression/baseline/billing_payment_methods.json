@@ -105,6 +105,7 @@
           "handler": "delete_payment_method",
           "module": "backend_app.routers.billing",
           "parameters": {
+            "_baseline_note_mfa": "SEC-15 AUTHORISES this re-record: the `user` parameter's dependency changed from get_current_user to require_aal2 on this billing mutation, so resuming a subscription / deleting a payment method now requires MFA (AAL2). Unlike the admin mutations in auth_admin_role.json, which ADD a separate `_mfa` parameter beside get_current_user, the billing handlers REPLACE the dependency: require_aal2 itself depends on get_current_user and returns the user, so declaring both would be a redundant second authentication. That single-dependency form is asserted, against the live dependency list, in tests/test_sec15_billing_mutations_require_aal2.py -- including that get_current_user is NOT also declared. NOTHING IS REMOVED and no other parameter, return or refusal changed. Note what is deliberately NOT gated: cancel_subscription keeps get_current_user, and its absence from the gate is asserted too -- gating it would stop a customer who has not enrolled in MFA from stopping their own billing, which is a consumer-protection harm rather than a security control.",
             "db": {
               "annotation": "Session",
               "depends_on": "get_payment_methods_db"
@@ -114,7 +115,7 @@
             },
             "user": {
               "annotation": "dict",
-              "depends_on": "get_current_user"
+              "depends_on": "require_aal2"
             }
           },
           "raises": [

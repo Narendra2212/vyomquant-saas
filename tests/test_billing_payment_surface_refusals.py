@@ -60,7 +60,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from backend_app.core.dependencies import get_current_user
+from backend_app.core.dependencies import get_current_user, require_aal2
 from backend_app.core.rate_limit import limiter
 from backend_app.main import app
 
@@ -101,13 +101,24 @@ def client() -> Iterator[TestClient]:
     ``get_request_supabase`` is deliberately NOT overridden: none of the three handlers under
     test depends on it. ``get_db`` is not overridden either, so the DELETE case below is decided
     by a real ``payment_methods`` lookup rather than by a double that was told what to answer.
+
+    ``require_aal2`` IS overridden, and only because SEC-15 later put it in front of
+    ``delete_payment_method``. Without the override the real gate answers 403 before the
+    handler runs, so the DELETE case -- which asserts 404 for an id that belongs to no row --
+    failed on a refusal that was CORRECT, while no longer measuring the refusal it is about.
+    Overriding it here does not weaken SEC-15: that the gate is present on that handler is
+    asserted independently, against the live dependency list, in
+    ``tests/test_sec15_billing_mutations_require_aal2.py``. This file is about what the
+    handler says once a caller is allowed to reach it.
     """
     limiter.reset()
     app.dependency_overrides[get_current_user] = lambda: _USER
+    app.dependency_overrides[require_aal2] = lambda: _USER
     try:
         yield TestClient(app, raise_server_exceptions=False)
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(require_aal2, None)
         limiter.reset()
 
 
