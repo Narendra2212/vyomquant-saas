@@ -1623,6 +1623,116 @@
    "NEVER"
   ],
   [
+   "legal_acceptances",
+   "accepted_at",
+   "timestamp with time zone",
+   "",
+   "NO",
+   "now()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "age_confirmed",
+   "boolean",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "context",
+   "text",
+   "",
+   "NO",
+   "'signup'::text",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "declared_country",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "document_version",
+   "text",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "documents",
+   "ARRAY",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "id",
+   "uuid",
+   "",
+   "NO",
+   "gen_random_uuid()",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "ip_address",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "user_agent",
+   "text",
+   "",
+   "YES",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
+   "legal_acceptances",
+   "user_id",
+   "uuid",
+   "",
+   "NO",
+   "",
+   "NO",
+   "",
+   "NEVER"
+  ],
+  [
    "library_ratings",
    "created_at",
    "timestamp with time zone",
@@ -13858,9 +13968,6 @@
  ],
  "extensions": [
   [
-   "pgcrypto"
-  ],
-  [
    "plpgsql"
   ]
  ],
@@ -14483,16 +14590,6 @@
  ],
  "functions": [
   [
-   "armor",
-   "bytea",
-   false
-  ],
-  [
-   "armor",
-   "bytea, text[], text[]",
-   false
-  ],
-  [
    "create_referral_code_for_user",
    "user_uuid uuid",
    false
@@ -14503,49 +14600,9 @@
    true
   ],
   [
-   "crypt",
-   "text, text",
-   false
-  ],
-  [
-   "dearmor",
-   "text",
-   false
-  ],
-  [
    "decrement_available_discount",
    "target_user_id uuid",
    true
-  ],
-  [
-   "decrypt",
-   "bytea, bytea, text",
-   false
-  ],
-  [
-   "decrypt_iv",
-   "bytea, bytea, bytea, text",
-   false
-  ],
-  [
-   "digest",
-   "bytea, text",
-   false
-  ],
-  [
-   "digest",
-   "text, text",
-   false
-  ],
-  [
-   "encrypt",
-   "bytea, bytea, text",
-   false
-  ],
-  [
-   "encrypt_iv",
-   "bytea, bytea, bytea, text",
-   false
   ],
   [
    "fn_get_library_recent_ratings",
@@ -14564,22 +14621,7 @@
   ],
   [
    "gen_random_bytes",
-   "integer",
-   false
-  ],
-  [
-   "gen_random_uuid",
-   "",
-   false
-  ],
-  [
-   "gen_salt",
-   "text",
-   false
-  ],
-  [
-   "gen_salt",
-   "text, integer",
+   "n integer",
    false
   ],
   [
@@ -14603,19 +14645,14 @@
    false
   ],
   [
-   "hmac",
-   "bytea, bytea, text",
-   false
-  ],
-  [
-   "hmac",
-   "text, text, text",
-   false
-  ],
-  [
    "increment_ml_addon",
    "target_user_id uuid",
    true
+  ],
+  [
+   "legal_acceptances_refuse_mutation",
+   "",
+   false
   ],
   [
    "library_strategies_mirror_price",
@@ -14695,106 +14732,6 @@
   [
    "paper_session_guard",
    "",
-   false
-  ],
-  [
-   "pgp_armor_headers",
-   "text, OUT key text, OUT value text",
-   false
-  ],
-  [
-   "pgp_key_id",
-   "bytea",
-   false
-  ],
-  [
-   "pgp_pub_decrypt",
-   "bytea, bytea",
-   false
-  ],
-  [
-   "pgp_pub_decrypt",
-   "bytea, bytea, text",
-   false
-  ],
-  [
-   "pgp_pub_decrypt",
-   "bytea, bytea, text, text",
-   false
-  ],
-  [
-   "pgp_pub_decrypt_bytea",
-   "bytea, bytea",
-   false
-  ],
-  [
-   "pgp_pub_decrypt_bytea",
-   "bytea, bytea, text",
-   false
-  ],
-  [
-   "pgp_pub_decrypt_bytea",
-   "bytea, bytea, text, text",
-   false
-  ],
-  [
-   "pgp_pub_encrypt",
-   "text, bytea",
-   false
-  ],
-  [
-   "pgp_pub_encrypt",
-   "text, bytea, text",
-   false
-  ],
-  [
-   "pgp_pub_encrypt_bytea",
-   "bytea, bytea",
-   false
-  ],
-  [
-   "pgp_pub_encrypt_bytea",
-   "bytea, bytea, text",
-   false
-  ],
-  [
-   "pgp_sym_decrypt",
-   "bytea, text",
-   false
-  ],
-  [
-   "pgp_sym_decrypt",
-   "bytea, text, text",
-   false
-  ],
-  [
-   "pgp_sym_decrypt_bytea",
-   "bytea, text",
-   false
-  ],
-  [
-   "pgp_sym_decrypt_bytea",
-   "bytea, text, text",
-   false
-  ],
-  [
-   "pgp_sym_encrypt",
-   "text, text",
-   false
-  ],
-  [
-   "pgp_sym_encrypt",
-   "text, text, text",
-   false
-  ],
-  [
-   "pgp_sym_encrypt_bytea",
-   "bytea, text",
-   false
-  ],
-  [
-   "pgp_sym_encrypt_bytea",
-   "bytea, text, text",
    false
   ],
   [
@@ -15253,6 +15190,31 @@
    "invoices",
    "ix_invoices_user_id",
    "CREATE INDEX ix_invoices_user_id ON public.invoices USING btree (user_id)"
+  ],
+  [
+   "legal_acceptances",
+   "idx_legal_acceptances_declared_country",
+   "CREATE INDEX idx_legal_acceptances_declared_country ON public.legal_acceptances USING btree (declared_country) WHERE (declared_country IS NOT NULL)"
+  ],
+  [
+   "legal_acceptances",
+   "idx_legal_acceptances_user_accepted_at",
+   "CREATE INDEX idx_legal_acceptances_user_accepted_at ON public.legal_acceptances USING btree (user_id, accepted_at DESC)"
+  ],
+  [
+   "legal_acceptances",
+   "idx_legal_acceptances_version",
+   "CREATE INDEX idx_legal_acceptances_version ON public.legal_acceptances USING btree (document_version)"
+  ],
+  [
+   "legal_acceptances",
+   "legal_acceptances_pkey",
+   "CREATE UNIQUE INDEX legal_acceptances_pkey ON public.legal_acceptances USING btree (id)"
+  ],
+  [
+   "legal_acceptances",
+   "uq_legal_acceptances_user_version",
+   "CREATE UNIQUE INDEX uq_legal_acceptances_user_version ON public.legal_acceptances USING btree (user_id, document_version)"
   ],
   [
    "library_ratings",
@@ -17359,6 +17321,15 @@
    "true"
   ],
   [
+   "legal_acceptances",
+   "legal_acceptances_owner_select",
+   "PERMISSIVE",
+   "authenticated",
+   "SELECT",
+   "(user_id = auth.uid())",
+   ""
+  ],
+  [
    "library_ratings",
    "library_ratings_delete_own",
    "PERMISSIVE",
@@ -18962,6 +18933,11 @@
    "id"
   ],
   [
+   "legal_acceptances",
+   "legal_acceptances_pkey",
+   "id"
+  ],
+  [
    "library_ratings",
    "library_ratings_pkey",
    "id"
@@ -20260,6 +20236,46 @@
   ],
   [
    "invoices",
+   "service_role",
+   "UPDATE"
+  ],
+  [
+   "legal_acceptances",
+   "authenticated",
+   "SELECT"
+  ],
+  [
+   "legal_acceptances",
+   "service_role",
+   "DELETE"
+  ],
+  [
+   "legal_acceptances",
+   "service_role",
+   "INSERT"
+  ],
+  [
+   "legal_acceptances",
+   "service_role",
+   "REFERENCES"
+  ],
+  [
+   "legal_acceptances",
+   "service_role",
+   "SELECT"
+  ],
+  [
+   "legal_acceptances",
+   "service_role",
+   "TRIGGER"
+  ],
+  [
+   "legal_acceptances",
+   "service_role",
+   "TRUNCATE"
+  ],
+  [
+   "legal_acceptances",
    "service_role",
    "UPDATE"
   ],
@@ -24707,7 +24723,27 @@
   ],
   [
    "migrations/050_mkt03_settlement_atomic_transition.sql",
-   "ed79a7aad99cd2693f33c2e105fa6f34703bdd8abf19bd150ffa420e45b9f988",
+   "06ee1147d1ce7deea183c34411be5ffd06145ebcea07352e3299ead47f6dff0c",
+   "step1"
+  ],
+  [
+   "migrations/051_deploy05_profiles_referral_columns.sql",
+   "107f6129c66eb720e0c5cc1eb2479527c15309befcb9c174a793db4c4ce720a4",
+   "step1"
+  ],
+  [
+   "migrations/052_legal_acceptance.sql",
+   "6eb22e79848468b342e263ccf7f2f1476be2d88b0ba6922b4a477e9246551b06",
+   "step1"
+  ],
+  [
+   "migrations/053_legal_acceptance_age_and_jurisdiction.sql",
+   "e1a4fca8bc158cffab358488179cc92747d6f841c274de71bf4701b93b89c03d",
+   "step1"
+  ],
+  [
+   "migrations/055_dbalm02_identity_types_uncovered.sql",
+   "9476c2a951acbc217f8d6d41e1e286c408ebbb611d437bb7321f84d864f71abe",
    "step1"
   ],
   [
@@ -24869,6 +24905,11 @@
   ],
   [
    "invoices",
+   true,
+   false
+  ],
+  [
+   "legal_acceptances",
    true,
    false
   ],
@@ -25337,6 +25378,10 @@
    "postgres"
   ],
   [
+   "legal_acceptances",
+   "postgres"
+  ],
+  [
    "library_ratings",
    "postgres"
   ],
@@ -25674,6 +25719,11 @@
    "exchange_keys",
    "trg_exchange_keys_updated_at",
    "update_exchange_keys_updated_at"
+  ],
+  [
+   "legal_acceptances",
+   "trg_legal_acceptances_append_only",
+   "legal_acceptances_refuse_mutation"
   ],
   [
    "library_ratings",
@@ -26066,6 +26116,30 @@
    "uq_exchange_keys_user_exchange",
    "u",
    "UNIQUE (user_id, exchange_id)"
+  ],
+  [
+   "legal_acceptances",
+   "chk_legal_acceptances_context",
+   "c",
+   "CHECK ((context = ANY (ARRAY['signup'::text, 're_acceptance'::text, 'backfill'::text])))"
+  ],
+  [
+   "legal_acceptances",
+   "chk_legal_acceptances_declared_country_shape",
+   "c",
+   "CHECK (((declared_country IS NULL) OR (declared_country ~ '^[A-Z]{2}$'::text)))"
+  ],
+  [
+   "legal_acceptances",
+   "chk_legal_acceptances_documents_nonempty",
+   "c",
+   "CHECK ((array_length(documents, 1) >= 1))"
+  ],
+  [
+   "legal_acceptances",
+   "chk_legal_acceptances_version_shape",
+   "c",
+   "CHECK ((document_version ~ '^\\d{4}-\\d{2}-\\d{2}$'::text))"
   ],
   [
    "library_ratings",
