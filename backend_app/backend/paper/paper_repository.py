@@ -4086,6 +4086,28 @@ def count_running_sessions(supabase: Any, user_id: Any) -> int:
     return len(rows)
 
 
+#: Substrings that identify a schema error -- "no such column/table/value" -- as opposed to
+#: a transient failure. The same three PostgREST/Postgres markers
+#: ``dashboard_aggregation_service._MISSING_COLUMN_MARKERS`` uses, plus ``23514`` for a
+#: CHECK violation, which is how an unapplied 054 rejects the ABANDONED state rather than
+#: the column. A timeout must never be mistaken for an unapplied migration, and an
+#: unapplied migration must never be mistaken for a timeout.
+_MISSING_SCHEMA_MARKERS = (
+    "42703", "23514", "does not exist", "could not find", "undefinedcolumn",
+)
+
+#: Set once per process the first time a heartbeat fails for a SCHEMA reason, so the
+#: deployment defect is reported loudly exactly once instead of once per loop iteration
+#: per session -- which would be thousands of identical lines and read as noise.
+_HEARTBEAT_SCHEMA_REPORTED = False
+
+
+def _looks_like_missing_schema(exc: BaseException) -> bool:
+    """Is this exception "the schema does not have that", rather than a transient failure?"""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _MISSING_SCHEMA_MARKERS)
+
+
 def touch_session_heartbeat(supabase: Any, *, user_id: Any, session_id: Any) -> None:
     """Record that this session's loop is alive, right now. PAPER-04.
 
@@ -4097,6 +4119,22 @@ def touch_session_heartbeat(supabase: Any, *, user_id: Any, session_id: Any) -> 
     Never raises. A heartbeat that could fail the loop would make the liveness record the
     thing that kills the session it is reporting on; a missed beat is self-correcting on
     the next iteration, and the staleness window is far wider than one interval.
+
+    BUT A MISSING COLUMN IS NOT A MISSED BEAT, AND CONFLATING THEM HID THIS ENTIRELY
+    ------------------------------------------------------------------------------
+    This swallowed every exception at ``debug`` level. Migration 054, which adds the
+    column, shipped in PR #92 and was never applied to production -- so this UPDATE failed
+    with ``UndefinedColumn`` on EVERY iteration of EVERY session, logged nothing above
+    debug, and the liveness record silently never existed. Measured against production
+    2026-10-24: the write, the ``list_stale_running_sessions`` read that names the same
+    column, and the five-state CHECK were all refused. The half of PAPER-04 recorded as
+    delivered was decorative, and this handler is why nobody found out.
+
+    So a SCHEMA error is now reported at ``error``, ONCE per process, while a transient
+    failure stays at ``debug``. The distinction is the one
+    ``dashboard_aggregation_service._MISSING_COLUMN_MARKERS`` already draws for the same
+    reason: "no such column" is a deployment defect that will not fix itself on the next
+    iteration, and logging it per-iteration would flood rather than inform.
     """
     try:
         require_persistence(supabase)
@@ -4109,7 +4147,22 @@ def touch_session_heartbeat(supabase: Any, *, user_id: Any, session_id: Any) -> 
             .eq("id", sid)
             .execute()
         )
-    except Exception:  # noqa: BLE001 - see the docstring
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        if _looks_like_missing_schema(exc):
+            global _HEARTBEAT_SCHEMA_REPORTED
+            if not _HEARTBEAT_SCHEMA_REPORTED:
+                _HEARTBEAT_SCHEMA_REPORTED = True
+                logger.error(
+                    "[paper-session] PAPER-04: paper_sessions.last_heartbeat_at cannot be "
+                    "written (%s). This is a DEPLOYMENT defect, not a missed beat: no "
+                    "session can declare liveness, so reconcile_orphaned_sessions can "
+                    "never see an orphan and an abandoned session will sit at RUNNING "
+                    "forever. Apply backend_app/migrations/"
+                    "054_paper04_abandoned_session_state.sql. Reported once per process.",
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+            return
         logger.debug(
             "[paper-session] heartbeat not recorded for %s; the next iteration will retry",
             session_id,
@@ -4172,6 +4225,7 @@ def transition_session_state(
     started_at: Any = None,
     paused_at: Any = None,
     stopped_at: Any = None,
+    abandoned_reason: Any = None,
 ) -> Dict[str, Any]:
     """Move one session from ``from_state`` to ``to_state``, guarded on the state it was read at.
 
@@ -4191,7 +4245,19 @@ def transition_session_state(
 
     The three lifecycle timestamps are written only when named, following
     :func:`update_session_feed`: an operation recording ``stopped_at`` must not blank the
-    ``started_at`` the session has carried since it began.
+    ``started_at`` the session has carried since it began. ``abandoned_reason`` follows the
+    same rule.
+
+    WHY ``abandoned_reason`` IS A PARAMETER HERE
+    --------------------------------------------
+    Migration 054 added the column and commented it "set by the boot-time reconciliation
+    pass", and nothing could set it: this was the only write path to ``session_state`` and
+    it had no way to carry a reason, so ``reconcile_orphaned_sessions`` built the sentence
+    and passed it to a log line. The column was inert and the row was left unable to answer
+    the one question 054 created it for -- whether a human stopped this session or its
+    process died. ``STOPPED`` and ``ABANDONED`` are different states, but a reader looking at
+    an ``ABANDONED`` row still could not tell WHY, and "no heartbeat since 14:02" and "the
+    host was redeployed" are different operational events.
 
     Raises:
         PaperConcurrencyConflict: the statement matched no row. Exactly three causes, and they are
@@ -4212,6 +4278,8 @@ def transition_session_state(
         values["paused_at"] = _instant(paused_at, "paused_at")
     if stopped_at is not None:
         values["stopped_at"] = _instant(stopped_at, "stopped_at")
+    if abandoned_reason is not None:
+        values["abandoned_reason"] = _require_text(abandoned_reason, "abandoned_reason")
 
     rows = _execute(
         supabase.table(SESSIONS_TABLE)

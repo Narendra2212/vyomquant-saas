@@ -49,7 +49,14 @@ REGION = "ap-southeast-1"
 #: (kind, identifier, declaring-migration, note). kind is column|table|constraint.
 #: `column` identifiers are "table.column"; `constraint` identifiers are "table/conname".
 DECLARED_OBJECTS = [
-    # ── backend_app/migrations/017_plan_entitlements.sql -- NEVER APPLIED ──────
+    # ── backend_app/migrations/017_plan_entitlements.sql ───────────────────────
+    # This heading said "NEVER APPLIED" until 2026-10-24, when the probe reported 4/4
+    # declared objects present. It has since been applied. The heading is corrected rather
+    # than deleted because the original finding -- that the deployed schema is NOT a prefix
+    # of the migration sequence, 037 applied while 017 was not -- is the reason this
+    # inventory exists, and a reader needs to know that gap was real. What must not survive
+    # is the standing claim that it is still open: an inventory that asserts a state nobody
+    # re-measured is the defect it was written to replace.
     ("column", "profiles.plan_limit_overrides", "017_plan_entitlements.sql",
      "Contracted capacity of the custom Enterprise tier, read by "
      "SubscriptionEngine.get_effective_quotas. Its absence is SILENT: "
@@ -65,6 +72,41 @@ DECLARED_OBJECTS = [
      "Rejects a non-object in plan_limit_overrides, which the reader would otherwise "
      "silently ignore."),
 
+    # ── backend_app/migrations/054_paper04_abandoned_session_state.sql ─────────
+    # PAPER-04's terminal state. Inventoried because it shipped in PR #92 and WAS NEVER
+    # APPLIED, and nothing noticed for the most instructive reason available: every
+    # mechanism that depended on it fails in a way the code swallows.
+    #
+    #   * touch_session_heartbeat's UPDATE -> UndefinedColumn on last_heartbeat_at, caught
+    #     by a try/except that logs at DEBUG, so the liveness record silently never
+    #     existed.
+    #   * list_stale_running_sessions' SELECT names the same column -> UndefinedColumn, so
+    #     reconcile_orphaned_sessions logged one warning and changed nothing.
+    #   * chk_paper_session_state still admitted four states, so the RUNNING -> ABANDONED
+    #     transition the whole finding is about would have been rejected with 23514 had the
+    #     read ever returned a row to transition.
+    #
+    # Measured against production 2026-10-24, before applying: all three refused. So the
+    # half of PAPER-04 the ledger recorded as DELIVERED was decorative. That is what this
+    # inventory is for -- an object declared in a merged migration is not an object that
+    # exists.
+    ("column", "paper_sessions.last_heartbeat_at",
+     "054_paper04_abandoned_session_state.sql",
+     "The liveness mark the session loop writes at the top of every iteration and "
+     "reconciliation reads the staleness of. Its absence is SILENT: "
+     "paper_repository.touch_session_heartbeat catches the UndefinedColumn and logs at "
+     "debug, so a session never declares liveness and reconciliation cannot read it."),
+    ("column", "paper_sessions.abandoned_reason",
+     "054_paper04_abandoned_session_state.sql",
+     "Why a session ended up ABANDONED, so an operator can tell 'no heartbeat since "
+     "14:02' from 'the host was redeployed'. 054's own COMMENT says it is set by the "
+     "reconciliation pass."),
+    ("constraint", "paper_sessions/chk_paper_session_state",
+     "054_paper04_abandoned_session_state.sql",
+     "Recreated by 054 to admit the FIFTH state, ABANDONED. Present either way -- 009 "
+     "declares the four-state version -- so this entry is satisfied by the constraint "
+     "existing and NOT by it admitting ABANDONED; the five-state shape is asserted "
+     "separately in tests/test_paper04_abandoned_sessions_are_reconciled.py."),
     # ── backend_app/migrations/055_deploy05_migration_ledger.sql ──────────────
     # DEPLOY-05's own ledger, inventoried like anything else so the thing that records
     # evidence is itself subject to the same evidence check.
