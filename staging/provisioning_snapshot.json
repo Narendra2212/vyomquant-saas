@@ -920,6 +920,17 @@
     ],
     [
       "exchange_keys",
+      "can_trade",
+      "boolean",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
       "created_at",
       "timestamp with time zone",
       "",
@@ -986,11 +997,33 @@
     ],
     [
       "exchange_keys",
+      "is_active",
+      "boolean",
+      "",
+      "NO",
+      "true",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
+      "last_validated_at",
+      "timestamp with time zone",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
       "updated_at",
       "timestamp with time zone",
       "",
       "NO",
-      "now()",
+      "timezone('utc'::text, now())",
       "NO",
       "",
       "NEVER"
@@ -1001,6 +1034,17 @@
       "uuid",
       "",
       "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
+      "validation_status",
+      "text",
+      "",
+      "YES",
       "",
       "NO",
       "",
@@ -15336,6 +15380,11 @@
     ],
     [
       "exchange_keys",
+      "idx_exchange_keys_unreadable",
+      "CREATE INDEX idx_exchange_keys_unreadable ON public.exchange_keys USING btree (user_id, exchange_id) WHERE (validation_status = 'unreadable'::text)"
+    ],
+    [
+      "exchange_keys",
       "idx_exchange_keys_user_id",
       "CREATE INDEX idx_exchange_keys_user_id ON public.exchange_keys USING btree (user_id)"
     ],
@@ -25106,7 +25155,17 @@
     ],
     [
       "migrations/056_mkt05_subscriber_live_authorization_window.sql",
-      "55069cb676201570ea605bfc42ea874f043a365d2e5329ccd7265cb60db380d0",
+      "b7d06806daf15cd39a7b5f11904e49e5977586fac15eda091fe15f884ddda656",
+      "step1"
+    ],
+    [
+      "migrations/056_vault01_credential_validity_state.sql",
+      "216f6ef8abc8da8079a6b35623f6e3b13aec99a6927022be1fbef8f30781c0a9",
+      "step1"
+    ],
+    [
+      "migrations/057_ref01_referral_wallet_four_state_shape.sql",
+      "e7de8c5e3e6f23f198652b3b673921057791971d28deb2756e003d93d36b4800",
       "step1"
     ],
     [
@@ -26091,6 +26150,11 @@
       "exchange_keys",
       "trg_exchange_keys_updated_at",
       "update_exchange_keys_updated_at"
+    ],
+    [
+      "exchange_keys",
+      "update_exchange_keys_updated_at",
+      "update_updated_at_column"
     ],
     [
       "legal_acceptances",

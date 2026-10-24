@@ -225,21 +225,47 @@ def test_056_bounds_a_live_marketplace_deployment():
         )
 
 
-def test_056_self_test_catches_a_constraint_refusal():
-    """MKT-03's lesson, applied here before it can bite.
+def test_056_self_test_cannot_skip():
+    """MKT-03's lesson, and the first version of 056 learned it the hard way.
 
-    Migration 050 was un-appliable to production for weeks because its own self-exercise
-    tripped a CHECK its handler did not catch, so the exception propagated and took the
-    whole migration down. 056's handler must catch the same class.
+    056 originally self-tested by INSERTing an unbounded live marketplace deployment and
+    requiring ``check_violation``. Against the real production database that SKIPPED
+    rather than proving anything: ``strategy_deployments`` there has four NOT NULL columns
+    with no default (``strategy_id``, ``user_id``, ``version_id``, ``version``), three of
+    them carrying foreign keys, so the fixture tripped ``not_null_violation`` and the
+    handler -- correctly, so the migration could still apply -- skipped.
+
+    A self-test that skips reports success either way. That is exactly what let migration
+    050 sit un-appliable to production for weeks.
+
+    So 056 now reads the INSTALLED constraint out of ``pg_constraint`` and evaluates it
+    against a truth table as a plain SELECT. This test pins the two properties that make
+    that version trustworthy: it needs no fixture row, and it covers the cases that must
+    be ADMITTED as well as the ones that must be refused.
     """
     text = _MIGRATION_056.read_text(encoding="utf-8")
-    assert "WHEN check_violation THEN" in text, (
-        "056's self-test must catch check_violation where it expects the CHECK to refuse, "
-        "or an expected refusal becomes a failed migration"
+
+    assert "pg_get_constraintdef" in text, (
+        "056's self-test must read the INSTALLED constraint rather than assume the file's "
+        "own text is what the database has"
     )
-    assert "MIGRATION_056_SELF_TEST_ROLLBACK" in text, (
-        "056's self-test must roll its own fixture rows back"
+    assert "INSERT INTO public.strategy_deployments" not in text, (
+        "056's self-test must not depend on inserting a strategy_deployments row: that "
+        "needs a user, a profile, a strategy and a version to satisfy four NOT NULL "
+        "columns and three foreign keys, and every link in that chain is another way for "
+        "the test to skip instead of proving something"
     )
+    assert "RAISE EXCEPTION" in text and "self-test FAILED" in text, (
+        "056's self-test must fail the migration when the bound is wrong, not warn"
+    )
+
+    # It must cover the admit cases, not only the refusals. A constraint that wrongly
+    # refused a first-party live deployment would be a serious regression that a
+    # refusal-only test would never notice.
+    for admitted in ("FIRST-PARTY live deployment", "paper marketplace deployment"):
+        assert admitted in text, (
+            f"056's truth table must include the {admitted!r} case, which must be ADMITTED"
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

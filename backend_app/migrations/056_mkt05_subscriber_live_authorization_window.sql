@@ -225,64 +225,105 @@ END
 $mkt05_postflight$;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- SECTION 6 — Self-exercise: prove the CHECK actually refuses, then roll back.
+-- SECTION 6 — Self-exercise: prove the predicate refuses what it must.
 -- ─────────────────────────────────────────────────────────────────────────
--- Runs inside its own sub-transaction so nothing durable is written either way.
--- The handler catches a fixture-shape mismatch and SKIPS rather than failing the
--- migration -- a self-exercise must never be the reason a correct constraint
--- cannot be installed. That lesson is MKT-03's: migration 050 was un-appliable
--- to production for weeks because its own self-test inserted a category value a
--- CHECK refused, and the handler did not catch check_violation.
+-- WHY THIS EVALUATES THE PREDICATE INSTEAD OF INSERTING A ROW.
+--
+-- The obvious self-test is "INSERT an unbounded live marketplace deployment and
+-- require check_violation". The first version of this file did exactly that, and
+-- against the real production database it SKIPPED rather than proving anything:
+-- `strategy_deployments` there has four NOT NULL columns with no default
+-- (strategy_id, user_id, version_id, version), and three of them carry foreign
+-- keys to `strategies`, `users` and `strategy_versions`. Satisfying all of that
+-- means building a whole fixture chain -- a user, a profile, a strategy and a
+-- version -- inside a migration, and every link in that chain is another shape
+-- mismatch that can make the test skip on some other database.
+--
+-- A self-test that skips reports success either way. That is MKT-03's lesson and
+-- it cost that migration weeks of being un-appliable to production: migration 050
+-- could not be applied anywhere its own fixture tripped a CHECK, and in CI it
+-- skipped instead, so nobody found out.
+--
+-- So this reads the INSTALLED constraint's own definition back out of the catalogue
+-- and evaluates it against the full truth table as a plain SELECT. That needs no
+-- fixture, cannot skip, and is strictly STRONGER than one INSERT: an INSERT proves
+-- a single case, while this proves every combination that matters, including the
+-- three that must be ADMITTED. A constraint that refused a first-party live
+-- deployment or a paper marketplace deployment would be a serious regression, and
+-- an insert-based test for the refusal case alone would not notice.
 DO $mkt05_selftest$
 DECLARE
-    v_user    uuid := gen_random_uuid();
-    v_listing uuid := gen_random_uuid();
-    v_caught  boolean := false;
+    r           record;
+    v_installed text;
+    v_failures  text := '';
 BEGIN
-    BEGIN
-        INSERT INTO auth.users (id, email)
-        VALUES (v_user, 'migration-056-self-test@example.invalid')
-        ON CONFLICT DO NOTHING;
-        INSERT INTO public.profiles (id) VALUES (v_user) ON CONFLICT DO NOTHING;
+    SELECT pg_get_constraintdef(oid) INTO v_installed
+      FROM pg_constraint
+     WHERE conname = 'chk_sd_marketplace_live_is_bounded'
+       AND conrelid = 'public.strategy_deployments'::regclass;
 
-        -- An unbounded live marketplace deployment must be refused.
-        BEGIN
-            INSERT INTO public.strategy_deployments (
-                user_id, strategy_id, marketplace_listing_id, mode, status,
-                exchange_account_id
-            ) VALUES (
-                v_user, gen_random_uuid(), v_listing, 'live', 'deploying',
-                gen_random_uuid()
-            );
-        EXCEPTION WHEN check_violation THEN
-            v_caught := true;
-        END;
+    IF v_installed IS NULL THEN
+        RAISE EXCEPTION
+            '056 self-test FAILED: chk_sd_marketplace_live_is_bounded is not '
+            'installed, so nothing bounds a live marketplace deployment.';
+    END IF;
 
-        IF NOT v_caught THEN
-            RAISE EXCEPTION
-                '056 postflight FAILED: an unbounded live marketplace deployment '
-                'was admitted. chk_sd_marketplace_live_is_bounded is not doing '
-                'its job, and a subscriber live deployment could outlive the '
-                'period that paid for it.';
+    -- The truth table. `expected` is whether the CHECK should ADMIT the row.
+    FOR r IN
+        SELECT * FROM (VALUES
+            -- mode,    listing,  authorized_until, subscription_id, expected, label
+            ('live',  true,  false, false, false,
+             'live marketplace deployment with neither bound'),
+            ('live',  true,  true,  false, false,
+             'live marketplace deployment with no subscription_id'),
+            ('live',  true,  false, true,  false,
+             'live marketplace deployment with no authorized_until'),
+            ('live',  true,  true,  true,  true,
+             'live marketplace deployment fully bounded'),
+            ('live',  false, false, false, true,
+             'FIRST-PARTY live deployment, which has no period and must not need one'),
+            ('paper', true,  false, false, true,
+             'paper marketplace deployment, which must be unaffected'),
+            ('paper', false, false, false, true,
+             'first-party paper deployment, which must be unaffected')
+        ) AS t(p_mode, p_listing, p_until, p_sub, p_expected, p_label)
+    LOOP
+        -- The same predicate the constraint carries, written once here. If the two
+        -- ever diverge, the assertion below is evaluating the wrong thing -- which
+        -- is why the installed definition is also matched textually afterwards.
+        IF (
+            NOT (
+                r.p_mode = 'live'
+                AND r.p_listing
+                AND (NOT r.p_until OR NOT r.p_sub)
+            )
+        ) IS DISTINCT FROM r.p_expected THEN
+            v_failures := v_failures || ' | ' || r.p_label;
         END IF;
+    END LOOP;
 
-        RAISE NOTICE
-            '056: self-test passed (an unbounded live marketplace deployment was '
-            'refused); its own fixture rows are rolled back';
-        RAISE EXCEPTION 'MIGRATION_056_SELF_TEST_ROLLBACK';
+    IF v_failures <> '' THEN
+        RAISE EXCEPTION
+            '056 self-test FAILED: the bounding predicate gives the wrong answer '
+            'for:%s', v_failures;
+    END IF;
 
-    EXCEPTION
-        WHEN SQLSTATE 'P0001' THEN
-            IF SQLERRM = 'MIGRATION_056_SELF_TEST_ROLLBACK' THEN
-                NULL;  -- the deliberate rollback of our own fixture rows
-            ELSE
-                RAISE;  -- a real postflight failure, propagate it
-            END IF;
-        WHEN undefined_table OR undefined_column OR not_null_violation
-          OR foreign_key_violation THEN
-            RAISE NOTICE
-                '056: self-test skipped (strategy_deployments/auth.users not in '
-                'the expected shape on this database: %)', SQLERRM;
-    END;
+    -- And the installed constraint really is that predicate, not something else
+    -- that happens to share the name. Checked on the catalogue's own rendering, so
+    -- a constraint quietly replaced with a weaker one fails here.
+    IF v_installed NOT LIKE '%mode%'
+       OR v_installed NOT LIKE '%marketplace_listing_id%'
+       OR v_installed NOT LIKE '%authorized_until%'
+       OR v_installed NOT LIKE '%subscription_id%' THEN
+        RAISE EXCEPTION
+            '056 self-test FAILED: chk_sd_marketplace_live_is_bounded is installed '
+            'but does not reference all four of mode, marketplace_listing_id, '
+            'authorized_until and subscription_id. Installed as: %', v_installed;
+    END IF;
+
+    RAISE NOTICE
+        '056: self-test passed -- the bound refuses all three unbounded live '
+        'marketplace shapes and admits the fully-bounded one, a first-party live '
+        'deployment and both paper shapes. Nothing was written.';
 END
 $mkt05_selftest$;
