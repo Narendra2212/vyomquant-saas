@@ -8377,6 +8377,72 @@
       "NEVER"
     ],
     [
+      "recorded_migrations",
+      "evidence",
+      "text",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "recorded_migrations",
+      "filename",
+      "text",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "recorded_migrations",
+      "objects_verified",
+      "integer",
+      "",
+      "NO",
+      "0",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "recorded_migrations",
+      "recorded_at",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "now()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "recorded_migrations",
+      "recorded_by",
+      "text",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "recorded_migrations",
+      "verification",
+      "text",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
       "referral_codes",
       "code",
       "character varying",
@@ -11260,6 +11326,17 @@
     ],
     [
       "strategy_deployments",
+      "authorized_until",
+      "timestamp with time zone",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "strategy_deployments",
       "close_requested_at",
       "timestamp with time zone",
       "",
@@ -11462,6 +11539,17 @@
       "uuid",
       "",
       "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "strategy_deployments",
+      "subscription_id",
+      "uuid",
+      "",
+      "YES",
       "",
       "NO",
       "",
@@ -16297,6 +16385,16 @@
       "CREATE UNIQUE INDEX reconciliation_mismatches_pkey ON public.reconciliation_mismatches USING btree (id)"
     ],
     [
+      "recorded_migrations",
+      "idx_recorded_migrations_verification",
+      "CREATE INDEX idx_recorded_migrations_verification ON public.recorded_migrations USING btree (verification)"
+    ],
+    [
+      "recorded_migrations",
+      "pk_recorded_migrations",
+      "CREATE UNIQUE INDEX pk_recorded_migrations ON public.recorded_migrations USING btree (filename)"
+    ],
+    [
       "referral_codes",
       "idx_referral_codes_code",
       "CREATE INDEX idx_referral_codes_code ON public.referral_codes USING btree (code)"
@@ -16850,6 +16948,11 @@
       "strategy_backtests",
       "strategy_backtests_pkey",
       "CREATE UNIQUE INDEX strategy_backtests_pkey ON public.strategy_backtests USING btree (id)"
+    ],
+    [
+      "strategy_deployments",
+      "idx_sd_live_authorization_window",
+      "CREATE INDEX idx_sd_live_authorization_window ON public.strategy_deployments USING btree (authorized_until) WHERE ((mode = 'live'::text) AND (authorized_until IS NOT NULL))"
     ],
     [
       "strategy_deployments",
@@ -19361,6 +19464,11 @@
       "reconciliation_mismatches",
       "reconciliation_mismatches_pkey",
       "id"
+    ],
+    [
+      "recorded_migrations",
+      "pk_recorded_migrations",
+      "filename"
     ],
     [
       "referral_codes",
@@ -22525,6 +22633,41 @@
       "UPDATE"
     ],
     [
+      "recorded_migrations",
+      "service_role",
+      "DELETE"
+    ],
+    [
+      "recorded_migrations",
+      "service_role",
+      "INSERT"
+    ],
+    [
+      "recorded_migrations",
+      "service_role",
+      "REFERENCES"
+    ],
+    [
+      "recorded_migrations",
+      "service_role",
+      "SELECT"
+    ],
+    [
+      "recorded_migrations",
+      "service_role",
+      "TRIGGER"
+    ],
+    [
+      "recorded_migrations",
+      "service_role",
+      "TRUNCATE"
+    ],
+    [
+      "recorded_migrations",
+      "service_role",
+      "UPDATE"
+    ],
+    [
       "referral_codes",
       "anon",
       "DELETE"
@@ -24948,12 +25091,22 @@
     ],
     [
       "migrations/054_paper04_abandoned_session_state.sql",
-      "19bfe49cb4510a1535eaeee74c169adc763e039262da5fef0e824fc686913d90",
+      "668aed96ad469b6a7d261f49274c97706ae229b9f8d48ab81a144c013f55309f",
       "step1"
     ],
     [
       "migrations/055_dbalm02_identity_types_uncovered.sql",
-      "9476c2a951acbc217f8d6d41e1e286c408ebbb611d437bb7321f84d864f71abe",
+      "35428a3059602c3cb242b768c5d64b071c033a39f45546da5828b5c734fa2518",
+      "step1"
+    ],
+    [
+      "migrations/055_deploy05_migration_ledger.sql",
+      "426223d1ce4b370a973b2ccbf2e9099f73f08fa903725eed70c974020a8e3646",
+      "step1"
+    ],
+    [
+      "migrations/056_mkt05_subscriber_live_authorization_window.sql",
+      "55069cb676201570ea605bfc42ea874f043a365d2e5329ccd7265cb60db380d0",
       "step1"
     ],
     [
@@ -25340,6 +25493,11 @@
     ],
     [
       "reconciliation_mismatches",
+      true,
+      false
+    ],
+    [
+      "recorded_migrations",
       true,
       false
     ],
@@ -25765,6 +25923,10 @@
     ],
     [
       "reconciliation_mismatches",
+      "postgres"
+    ],
+    [
+      "recorded_migrations",
       "postgres"
     ],
     [
@@ -26796,6 +26958,24 @@
       "UNIQUE (referral_code)"
     ],
     [
+      "recorded_migrations",
+      "chk_recorded_migrations_evidence_not_blank",
+      "c",
+      "CHECK ((length(btrim(evidence)) > 0))"
+    ],
+    [
+      "recorded_migrations",
+      "chk_recorded_migrations_objects_not_negative",
+      "c",
+      "CHECK ((objects_verified >= 0))"
+    ],
+    [
+      "recorded_migrations",
+      "chk_recorded_migrations_verification",
+      "c",
+      "CHECK ((verification = ANY (ARRAY['EVIDENCE_PROBED'::text, 'APPLIED_BY_TOOL'::text])))"
+    ],
+    [
       "referral_codes",
       "referral_codes_code_key",
       "u",
@@ -26998,6 +27178,12 @@
       "chk_sd_live_needs_account",
       "c",
       "CHECK (((mode <> 'live'::text) OR (exchange_account_id IS NOT NULL)))"
+    ],
+    [
+      "strategy_deployments",
+      "chk_sd_marketplace_live_is_bounded",
+      "c",
+      "CHECK ((NOT ((mode = 'live'::text) AND (marketplace_listing_id IS NOT NULL) AND ((authorized_until IS NULL) OR (subscription_id IS NULL)))))"
     ],
     [
       "strategy_deployments",

@@ -714,6 +714,14 @@ _EXPIRY_SWEEP_HANDLER = {
                 "status",
                 "stopped_at",
                 "updated_at",
+                # MKT-05: the sweep now signals a LIVE marketplace deployment
+                # differently from a paper one -- `mode` is what it discriminates on,
+                # and `close_requested_at` is the RT-21 durable flatten request it
+                # sets instead of jumping the row to 'stopped' for something that is
+                # actually running in another process. `mode` is created by migration
+                # 004e, `close_requested_at` by the RT-21 migration.
+                "mode",
+                "close_requested_at",
             }
         ),
         "paper_sessions": frozenset(

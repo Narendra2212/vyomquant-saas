@@ -39,7 +39,8 @@ from uuid import UUID
 import redis
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, validator
+from pydantic import (BaseModel, ConfigDict, Field, ValidationError,
+                      field_validator, validator)
 
 from backend_app.backend.ml_node_types import detect_ml_nodes
 from backend_app.core.auth_middleware import decode_token_local
@@ -3293,6 +3294,52 @@ class DeployMarketplaceStrategyRequest(BaseModel):
         None, description="Opaque per-session runtime options."
     )
 
+    # ── MKT-05: live trading for the subscribed period ───────────────────────────────
+    # These three are the subscriber's OWN resources, not the owner's, and that is what
+    # makes them safe to accept here. `exchange_account_id` and `risk_config_id` are
+    # references the server resolves against rows the CALLER owns
+    # (`deployment_binding.load_owned_exchange_account` / `load_owned_risk_config`), so
+    # naming another user's account is a 404 rather than a privilege escalation. Neither
+    # is ever a credential: 004e's header records that `exchange_account_id` is a handle
+    # and that keys are read only in `master_executor` via
+    # `credential_vault.load_decrypted_keys`.
+    #
+    # Nothing here lets the subscriber see or supply any part of the owner's
+    # Protected_Logic -- the strategy, its graph, its plan and its version are still
+    # resolved entirely server-side from the Listing and the Subscription.
+    mode: str = Field(
+        "paper",
+        description=(
+            "'paper' (default, unchanged behaviour) or 'live'. A 'live' deployment places "
+            "real orders and is permitted only for the duration of the subscribed period."
+        ),
+    )
+    exchange_account_id: Optional[str] = Field(
+        None,
+        description=(
+            "The caller's OWN exchange account to trade through. Required when mode is "
+            "'live'; refused when mode is 'paper', which binds no account."
+        ),
+    )
+    risk_config_id: Optional[str] = Field(
+        None,
+        description="The caller's OWN risk settings row to apply. Optional, live only.",
+    )
+
+    @field_validator("mode")
+    @classmethod
+    def _mode_is_a_known_spelling(cls, value: str) -> str:
+        """Accept exactly the two spellings ``chk_sd_mode`` admits.
+
+        Validated here rather than left to the database so an unknown value is a 422 that
+        names the field, not a ``23514`` surfacing as a 500 -- the same reason
+        ``deployment_binding.assert_account_required_for_live`` exists for its own CHECK.
+        """
+        text = str(value or "").strip().lower()
+        if text not in _DEPLOY_MODES:
+            raise ValueError(f"mode must be one of {sorted(_DEPLOY_MODES)}")
+        return text
+
 
 #: The set of fields a subscriber may send to the deploy endpoint. Any other key is a 422 that
 #: names the key(s) but never their value (Requirement 7.6). It is exactly Requirement 7.5's
@@ -3301,8 +3348,34 @@ class DeployMarketplaceStrategyRequest(BaseModel):
 #: subscription identifier, because every one of those is resolved server-side from the
 #: authenticated session and the Listing (Requirement 7.7).
 _DEPLOY_ALLOWED_FIELDS = frozenset(
-    {"symbol", "timeframe", "capital", "session_options"}
+    {
+        "symbol",
+        "timeframe",
+        "capital",
+        "session_options",
+        # MKT-05. The subscriber's own trading resources, never the owner's. See
+        # DeployMarketplaceStrategyRequest's own comment for why these three are safe to
+        # accept where a strategy/graph/version field is not.
+        "mode",
+        "exchange_account_id",
+        "risk_config_id",
+    }
 )
+
+#: The deployment modes this endpoint accepts, which must stay exactly the vocabulary
+#: ``004e_deployment_bindings.sql``'s ``chk_sd_mode CHECK (mode IN ('paper','live'))``
+#: admits. Declared here as data so ``tests/test_mkt05_subscriber_live_deployment.py`` can
+#: assert the two agree instead of trusting that they do.
+_DEPLOY_MODES = frozenset({"paper", "live"})
+
+#: Stable wire codes for the MKT-05 live-deploy refusals. Separate from the marketplace
+#: catalogue for the same reason ``DEPLOY_REQUEST_INVALID`` is: these are request-shape and
+#: resource-ownership refusals, not marketplace-domain ones.
+DEPLOY_LIVE_NEEDS_ACCOUNT = "DEPLOY_LIVE_NEEDS_ACCOUNT"
+DEPLOY_ACCOUNT_NOT_FOUND = "DEPLOY_ACCOUNT_NOT_FOUND"
+DEPLOY_PAPER_TAKES_NO_ACCOUNT = "DEPLOY_PAPER_TAKES_NO_ACCOUNT"
+DEPLOY_LIVE_NEEDS_BOUNDED_PERIOD = "DEPLOY_LIVE_NEEDS_BOUNDED_PERIOD"
+DEPLOY_LIVE_COLUMNS_UNAVAILABLE = "DEPLOY_LIVE_COLUMNS_UNAVAILABLE"
 
 #: The stable code the deploy endpoint answers an unaccepted or malformed field with. Not a
 #: member of the shared marketplace catalogue: ``design.md`` -> "The error code catalogue" has no
@@ -3655,6 +3728,182 @@ async def deploy_marketplace_strategy(
         deployment_payload["exchange_symbol"] = deploy_request.symbol
     if deploy_request.capital is not None:
         deployment_payload["initial_capital"] = deploy_request.capital
+
+    # ── MKT-05: a LIVE deployment, bounded by the subscribed period ──────────────────
+    #
+    # Everything above is unchanged, so a paper deploy (the default) behaves exactly as it
+    # did. The live branch adds three things and nothing else: proof the caller owns the
+    # trading resources they named, the live vocabulary on the row, and the instant the
+    # authorisation ends.
+    #
+    # WHAT THIS REUSES FROM THE FIRST-PARTY PATH, AND WHAT IT DELIBERATELY DOES NOT.
+    # `deployment_binding.load_owned_exchange_account` and `load_owned_risk_config` are
+    # called directly, because they are the SECURITY half: each resolves the named row
+    # scoped to the caller, so naming another user's exchange account is a 404 rather than
+    # a way to trade through it. The rest of `evaluate_binding` -- symbol availability,
+    # timeframe support, model verification, gap policy -- is NOT run here, and that is a
+    # scope statement rather than an oversight: this path does not let the subscriber
+    # choose the strategy's market at all. The symbol and timeframe come from the OWNER's
+    # version, which the owner already deployed and which `resolve_binding_market` already
+    # validated for them. Wiring the subscriber's optional `symbol` through those checks is
+    # the remaining work on this finding and is recorded as such.
+    if deploy_request.mode == "live":
+        # The entitlement resolver has already refused a null or past `period_expiry`
+        # before this point, so an entitling result always carries a future instant. This
+        # re-reads it rather than assuming, because a live deployment with no end instant
+        # is the one outcome this feature must never produce -- and `056`'s
+        # `chk_sd_marketplace_live_is_bounded` would refuse the row anyway, as a 500. A
+        # named 409 is the better answer.
+        if not entitlement.period_expiry or not entitlement.subscription_id:
+            await _audit_marketplace_refusal(
+                actor_id=user_id,
+                listing_id=lib_id,
+                operation="deploy",
+                reason=DEPLOY_LIVE_NEEDS_BOUNDED_PERIOD,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": DEPLOY_LIVE_NEEDS_BOUNDED_PERIOD,
+                    "message": (
+                        "This subscription does not carry both an end date and an "
+                        "identifier, so a live deployment bounded by it cannot be created."
+                    ),
+                },
+            )
+
+        if not deploy_request.exchange_account_id:
+            # Requirement 13.6's shape, answered as a 422 that names the field rather than
+            # letting `chk_sd_live_needs_account` surface as a 500 -- exactly what
+            # `deployment_binding.assert_account_required_for_live` exists to do for the
+            # first-party path.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": DEPLOY_LIVE_NEEDS_ACCOUNT,
+                    "message": (
+                        "A live deployment must name an exchange account to trade "
+                        "through. Send exchange_account_id."
+                    ),
+                },
+            )
+
+        from backend_app.backend import deployment_binding as _db_binding
+
+        # Column support first: writing `mode`/`exchange_account_id` to a database where
+        # 004e is unapplied is a PGRST204, and writing the row WITHOUT them would store a
+        # live deployment as paper -- silently trading nothing while the subscriber
+        # believes they are live. Refuse instead, the same disposition
+        # `assert_binding_storable` takes for the first-party path.
+        try:
+            columns_supported = await _maybe_await(
+                _db_binding.binding_columns_supported(svc)
+            )
+        except Exception:  # noqa: BLE001 - treated as unsupported, never as supported
+            columns_supported = False
+        if not columns_supported:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": DEPLOY_LIVE_COLUMNS_UNAVAILABLE,
+                    "message": (
+                        "This database cannot record a live deployment binding yet. Apply "
+                        "backend_app/migrations/004e_deployment_bindings.sql and "
+                        "056_mkt05_subscriber_live_authorization_window.sql."
+                    ),
+                },
+            )
+
+        # Ownership. A 404 for an account the caller does not own, never a 403: the two
+        # are indistinguishable to a caller who owns neither, and a 403 would confirm the
+        # row exists for somebody.
+        try:
+            account = await _maybe_await(
+                _db_binding.load_owned_exchange_account(
+                    svc, user_id, deploy_request.exchange_account_id
+                )
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"deploy_strategy live account load failed: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": MARKETPLACE_READ_FAILED,
+                    "message": "Could not read the named exchange account.",
+                },
+            )
+        if not account:
+            await _audit_marketplace_refusal(
+                actor_id=user_id,
+                listing_id=lib_id,
+                operation="deploy",
+                reason=DEPLOY_ACCOUNT_NOT_FOUND,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": DEPLOY_ACCOUNT_NOT_FOUND,
+                    "message": "No such exchange account for this account holder.",
+                },
+            )
+
+        if deploy_request.risk_config_id:
+            try:
+                await _maybe_await(
+                    _db_binding.load_owned_risk_config(
+                        svc, user_id, deploy_request.risk_config_id
+                    )
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"deploy_strategy live risk-config load failed: {exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error": MARKETPLACE_READ_FAILED,
+                        "message": "Could not read the named risk configuration.",
+                    },
+                )
+            deployment_payload["risk_config_id"] = deploy_request.risk_config_id
+
+        deployment_payload["environment"] = "live"
+        deployment_payload["mode"] = "live"
+        deployment_payload["exchange_account_id"] = deploy_request.exchange_account_id
+        # The venue comes from the ACCOUNT, never from the request: a live deployment must
+        # trade on the exchange its credentials are for, and letting the caller name one
+        # would allow an account/venue mismatch that only surfaces at the first order.
+        account_venue = (
+            account.get("exchange_id")
+            if isinstance(account, dict)
+            else getattr(account, "exchange_id", None)
+        )
+        if account_venue:
+            deployment_payload["exchange_id"] = account_venue
+
+        # The two columns that bound it. `056`'s CHECK makes this pair mandatory for a live
+        # marketplace row, so a future edit that drops either one fails loudly at the
+        # database rather than producing an unbounded live deployment.
+        deployment_payload["subscription_id"] = entitlement.subscription_id
+        deployment_payload["authorized_until"] = _isoformat_instant(
+            entitlement.period_expiry
+        )
+    elif deploy_request.exchange_account_id or deploy_request.risk_config_id:
+        # A paper deployment binds no account, so accepting one would store a reference
+        # nothing reads -- the same "a value nothing applies" defect DEPLOY-01 exists to
+        # close. Named rather than ignored.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": DEPLOY_PAPER_TAKES_NO_ACCOUNT,
+                "message": (
+                    "A paper deployment binds no exchange account or risk "
+                    "configuration. Send mode='live' to trade through one."
+                ),
+            },
+        )
 
     try:
         deploy_resp = (
@@ -5467,6 +5716,37 @@ async def admin_reinstate_subscription(
         "cause": result.cause,
         "settlement_written": False,
     }
+
+
+def _isoformat_instant(value) -> Optional[str]:
+    """MKT-05: render an instant for ``strategy_deployments.authorized_until``.
+
+    The entitlement resolver's ``period_expiry`` arrives as whatever it read -- a
+    ``datetime`` once parsed, or the ISO string PostgREST returned for the ``TIMESTAMPTZ``.
+    Both are accepted and a string is passed through unchanged rather than reparsed and
+    reformatted, because a round trip is a chance to change the value and there is nothing
+    to gain by taking it.
+
+    A naive ``datetime`` is stamped UTC, matching how every other instant in this codebase
+    is stored. Returning ``None`` for an unreadable value is safe here ONLY because the
+    caller refuses to build a live deployment without a usable ``period_expiry`` before
+    reaching this, and ``056``'s ``chk_sd_marketplace_live_is_bounded`` refuses the row
+    even if that check were ever removed.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    isoformat = getattr(value, "isoformat", None)
+    if isoformat is None:
+        return None
+    tzinfo = getattr(value, "tzinfo", None)
+    if tzinfo is None and hasattr(value, "replace"):
+        from datetime import timezone as _tz
+
+        value = value.replace(tzinfo=_tz.utc)
+        isoformat = value.isoformat
+    return isoformat()
 
 
 async def _maybe_await(value):
