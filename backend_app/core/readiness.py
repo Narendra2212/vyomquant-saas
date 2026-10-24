@@ -212,6 +212,57 @@ async def probe_telemetry() -> DependencyReport:
     return await _probe_with_timeout("telemetry", _ping, required=False)
 
 
+async def probe_credential_vault_keys() -> DependencyReport:
+    """Can the configured master key still decrypt stored exchange credentials? (VAULT-01)
+
+    NOT REQUIRED, and that is a deliberate judgement rather than timidity. A wrong master
+    key is caught at boot by
+    ``credential_key_integrity.assert_master_key_can_read_stored_credentials``, which
+    refuses to start -- so a serving pod reaching a mismatch here is an edge case, and the
+    value of reporting it is diagnostic.
+
+    More importantly, gating readiness on it would be actively harmful. The remedy for an
+    unreadable credential is for the user to RE-ENTER it, through this very API. Taking
+    every pod out of rotation would remove the only route to the fix while changing
+    nothing about the cause. A metrics outage must not become a total outage (see
+    QuestDB above); neither must a credential-integrity finding.
+
+    Reported here so the condition is visible on the dependency surface rather than only
+    in a boot log nobody re-reads.
+    """
+    import asyncio
+
+    from backend_app.core import credential_key_integrity as cki
+
+    try:
+        report = await asyncio.wait_for(
+            asyncio.to_thread(cki.check_master_key_integrity),
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return DependencyReport(
+            "credential_vault_keys", UNKNOWN, False,
+            f"probe exceeded {PROBE_TIMEOUT_SECONDS}s",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return DependencyReport(
+            "credential_vault_keys", UNKNOWN, False, _safe_detail(exc))
+
+    # UNDETERMINED is UNKNOWN, not DOWN: not being able to read the sample is not a
+    # finding about the key, and reporting it as DOWN would cry wolf on every database
+    # blip. The three-state vocabulary exists for exactly this distinction.
+    if report.verdict == cki.UNDETERMINED:
+        state = UNKNOWN
+    elif report.healthy:
+        state = UP
+    else:
+        state = DOWN
+    return DependencyReport(
+        "credential_vault_keys", state, False,
+        f"{report.verdict}: {report.summary()}",
+    )
+
+
 async def evaluate_readiness() -> ReadinessReport:
     """Probe every dependency and decide whether this instance should take traffic.
 
@@ -224,6 +275,7 @@ async def evaluate_readiness() -> ReadinessReport:
     try:
         gathered = await asyncio.gather(
             probe_database(), probe_redis(), probe_telemetry(),
+            probe_credential_vault_keys(),
             return_exceptions=True,
         )
         for item in gathered:
@@ -250,5 +302,6 @@ async def evaluate_readiness() -> ReadinessReport:
 __all__ = [
     "UP", "DOWN", "UNKNOWN", "PROBE_TIMEOUT_SECONDS",
     "DependencyReport", "ReadinessReport",
-    "probe_redis", "probe_database", "probe_telemetry", "evaluate_readiness",
+    "probe_redis", "probe_database", "probe_telemetry",
+    "probe_credential_vault_keys", "evaluate_readiness",
 ]

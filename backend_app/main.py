@@ -345,7 +345,36 @@ async def lifespan(app: FastAPI):
             f"FATAL: DEV_MODE=true is not allowed in {settings.ENV.upper()} environment. "
             "Set DEV_MODE=false or use ENV=development/ENV=testing for local development."
         )
-    
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THE MASTER KEY CAN STILL READ WHAT IT PROTECTS  (VAULT-01)
+    # ══════════════════════════════════════════════════════════════════════
+    # A master encryption key was once replaced without re-encrypting the credentials
+    # it protected, and nothing detected it -- not a health check, not a test, not an
+    # alarm. The four affected ciphertext values are permanently unrecoverable; the
+    # cost was nil only because live trading is hard-gated off and two rows were
+    # affected. The same event after launch silently breaks every funded exchange
+    # connection, and the first symptom would be a ValueError from
+    # APIKeyVault._decrypt at order time.
+    #
+    # Placed here, after the configuration checks and before any service is
+    # initialised or any port is bound, so a deployment whose key cannot read the
+    # vault never accepts a request. That is the entire point: it makes a wrong key a
+    # FAILED DEPLOYMENT -- ECS keeps the previous task definition, which has the key
+    # that works -- instead of a data disaster discovered at first order.
+    #
+    # Unlike the checks above this one, it reaches the database. So it refuses the
+    # boot on exactly one verdict, KEY_MISMATCH, where rows were read and EVERY
+    # in-scope value failed. An unreadable sample (UNDETERMINED) and a partial
+    # failure (DEGRADED) are logged loudly and allowed through, because refusing to
+    # start on a dependency blip or on one poisoned row would be a self-inflicted
+    # outage. See the module docstring for why each verdict behaves as it does.
+    # Regression: tests/test_vault01_master_key_decryptability_check.py
+    from backend_app.core.credential_key_integrity import (
+        assert_master_key_can_read_stored_credentials,
+    )
+    assert_master_key_can_read_stored_credentials()
+
     logger.info(" ALGO22 server starting up...")
     
     # 

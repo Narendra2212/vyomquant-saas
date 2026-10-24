@@ -405,6 +405,13 @@ _LATENCY_NORMAL_CEILING_MS = 500
 #: What a latency STATUS reads as when no probe measured one. The figure beside it is ``None``.
 LATENCY_UNAVAILABLE = "unavailable"
 
+#: The one spelling VAULT-01 introduces, taken from the module that defines it so this
+#: reader and the writer share a single source. Imported at module level and safe from a
+#: cycle: ``core.credential_key_integrity`` imports nothing from ``backend`` at import time.
+from backend_app.core.credential_key_integrity import (
+    UNREADABLE_STATUS as _UNREADABLE_CREDENTIAL_STATUS,
+)
+
 #: A venue a probe measured and reached, and whose credential nothing contradicts.
 VENUE_STATUS_CONNECTED = "connected"
 
@@ -429,8 +436,17 @@ _CREDENTIAL_VALID_STATUSES = frozenset({"valid", "validated", "verified", "activ
 #: ``validation_status`` spellings that assert it does not. ``unvalidated`` and ``pending`` are
 #: deliberately in NEITHER set: they are the unknown, and the unknown is not a negative fact
 #: about the credential - it just cannot support a ``can_trade`` of ``True``.
+#: ``unreadable`` is imported rather than spelled, so the writer that sets it
+#: (``scripts/quarantine_undecryptable_exchange_keys.py``) and this reader cannot drift --
+#: migration 056 deliberately adds no CHECK constraint on ``validation_status``, and this
+#: shared constant is what takes its place. It is a KNOWN NEGATIVE and belongs in this set:
+#: the stored ciphertext opens under no configured master key, so the credential is gone
+#: and the user must re-enter it (VAULT-01). It is deliberately a different word from
+#: ``revoked``/``invalid``, which say the VENUE rejected a key we could read -- the user's
+#: remedy is the same but the cause, and therefore the message, is not.
 _CREDENTIAL_INVALID_STATUSES = frozenset(
-    {"revoked", "invalid", "expired", "failed", "error", "unauthorized", "denied", "disabled", "inactive"}
+    {"revoked", "invalid", "expired", "failed", "error", "unauthorized", "denied", "disabled", "inactive",
+     _UNREADABLE_CREDENTIAL_STATUS}
 )
 
 
