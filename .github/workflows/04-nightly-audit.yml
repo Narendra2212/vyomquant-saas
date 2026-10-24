@@ -93,3 +93,81 @@ jobs:
           path: |
             *.md
             reports/
+
+  # ───────────────────────────────────────────────────────────────────────────────
+  #  SEC-01: watch git history for a recoverable live credential.
+  #
+  #  SEC-01's own closing note names this as the remaining control: "The defect class
+  #  was never one careless file; it was that nothing watched for this." Rotation fixed
+  #  the three credentials that had leaked; this is what notices the fourth.
+  #
+  #  WHY IT IS A SEPARATE JOB AND NOT A STEP IN THE ONE ABOVE. Three reasons, each of
+  #  which would silently defeat it as a step:
+  #
+  #   1. FULL HISTORY. `audit_secrets_in_git_history.py` greps every commit. The audit
+  #      job above checks out at the default depth of 1, so the sweep would scan a
+  #      single commit, find nothing, and report clean -- the worst possible failure
+  #      mode for this particular check. `fetch-depth: 0` is load-bearing here.
+  #   2. IT MUST FAIL LOUDLY. Every step in the job above carries
+  #      `continue-on-error: true`, which is right for a dependency or size report and
+  #      wrong for "a live production credential is readable from git". This job has no
+  #      such escape: the script exits non-zero when it finds one, and that fails the
+  #      run.
+  #   3. AWS CREDENTIALS. The sweep is only meaningful because it compares history
+  #      against the CURRENT value of every secret in Secrets Manager; a static scanner
+  #      cannot do that. CI's Trivy secret scan catches a secret-SHAPED string, which is
+  #      a different and complementary question.
+  #
+  #  SCOPE, STATED HONESTLY: this compares against secrets that exist in Secrets Manager
+  #  at the time it runs, so a credential that leaked and was then deleted from AWS is
+  #  invisible to it. That gap is recorded in SEC-01 rather than papered over.
+  # ───────────────────────────────────────────────────────────────────────────────
+  secret-history-sweep:
+    name: Secret History Sweep (git history vs live Secrets Manager)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      AWS_REGION: ap-southeast-1
+
+    steps:
+      - name: Checkout code with FULL history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Load-bearing: the sweep scans every commit. See the comment above.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Confirm the checkout is not shallow
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" != "false" ]; then
+            echo "::error::The checkout is shallow, so the sweep would scan one commit"
+            echo "and report clean. Refusing to run a check that cannot fail."
+            exit 1
+          fi
+          echo "full history: $(git rev-list --count HEAD) commits"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sweep git history against every live secret
+        # Deliberately NOT continue-on-error. A recoverable live credential is an
+        # incident, not a report.
+        run: python scripts/audit_secrets_in_git_history.py
+
+      - name: Upload the sweep report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secret-history-sweep
+          path: |
+            reports/
+          if-no-files-found: ignore
