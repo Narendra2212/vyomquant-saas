@@ -378,7 +378,15 @@ BEGIN
             author_id, source_strategy_id, name, category, symbol, timeframe,
             exchange_id, moderation_status, is_active
         ) VALUES (
-            v_owner, gen_random_uuid(), 'migration-050-self-test', 'trend',
+            -- 'trend_following', NOT 'trend'. library_strategies carries a CHECK named
+            -- valid_category admitting exactly mean_reversion / trend_following /
+            -- market_making / arbitrage / momentum / ml_hybrid / other. 'trend' is in
+            -- none of them, so this INSERT raised check_violation -- which the handler
+            -- below did not catch -- and took the whole migration down with it. This file
+            -- therefore could never be applied to any database carrying that constraint,
+            -- including real production, where it failed exactly this way. Measured
+            -- against the real constraint definition via pg_get_constraintdef, not guessed.
+            v_owner, gen_random_uuid(), 'migration-050-self-test', 'trend_following',
             'BTC/USDT', '1h', 'binance', 'approved', true
         ) RETURNING id INTO v_library;
         INSERT INTO public.library_subscriptions (
@@ -388,9 +396,16 @@ BEGIN
             gen_random_uuid(), v_library, v_buyer, v_owner, 'pending', 1000, 900, 100,
             'USD'
         ) RETURNING id INTO v_sub;
-    EXCEPTION WHEN undefined_table OR undefined_column OR not_null_violation THEN
+    -- `check_violation` IS IN THIS LIST DELIBERATELY, and its absence was the second
+    -- half of the defect above. This handler's own message says the self-test should be
+    -- SKIPPED when the fixture tables are "not in the expected shape on this database" --
+    -- a CHECK constraint refusing a fixture value is exactly that situation, and it was
+    -- the one shape that fell through and failed the migration instead. A self-exercise
+    -- must never be the reason a correct function cannot be installed.
+    EXCEPTION WHEN undefined_table OR undefined_column OR not_null_violation
+                OR check_violation OR foreign_key_violation THEN
         RAISE NOTICE '050: self-test skipped (library_strategies/library_subscriptions '
-                     'not in the expected shape on this database)';
+                     'not in the expected shape on this database: %)', SQLERRM;
         RAISE EXCEPTION 'MIGRATION_050_SELF_TEST_ROLLBACK';
     END;
 
