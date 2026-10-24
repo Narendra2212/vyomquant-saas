@@ -73,8 +73,12 @@ export default function DownloadPage() {
 
   // No `handleDownload`. There is nothing to hand a click to, and a control that starts a
   // request which can only 403 is exactly the non-functional control Requirement 19.4 forbids.
-  // `downloadAnalyticsApi` is not imported here for the same reason: an artifact nobody can
-  // fetch has no download to count.
+  // There is no download-tracking call here either, for the same reason: an artifact
+  // nobody can fetch has no download to count. DEPLOY-05 has since REMOVED the
+  // `downloadAnalyticsApi` module this comment used to name - it wrote to a
+  // `download_analytics` table that was declared in no migration and had no writer, and
+  // the admin dashboard's read of it threw a missing-relation error at every admin who
+  // opened that tab.
 
   const activeReqs = SYSTEM_REQUIREMENTS[activePlatform.startsWith('linux') ? 'linux' : activePlatform] || SYSTEM_REQUIREMENTS.windows
 
