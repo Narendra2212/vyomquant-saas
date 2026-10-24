@@ -1,0 +1,56 @@
+{
+  "Comment_1": "INF-03 ROUTE (A): the least-privilege policy that lets the deploy identity create and use the terraform state backend. PREPARED, NOT ATTACHED -- attaching it is a permission change and belongs to the account owner.",
+  "Comment_2": "Apply with:  aws iam put-user-policy --user-name github-actions --policy-name VyomQuantTerraformStateBackend --policy-document file://infra/iam/terraform-state-backend-policy.json   then:  python scripts/bootstrap_terraform_state.py --apply",
+  "Comment_3": "SCOPED TO TWO NAMED RESOURCES. s3:CreateBucket cannot be scoped to a bucket that does not exist yet in the usual sense, so it is granted on the exact ARN of the bucket terraform/backend.tf expects and no other. Measured denials this replaces: s3:CreateBucket ('no identity-based policy allows'), dynamodb:DescribeTable, dynamodb:ListTables.",
+  "Comment_4": "DELIBERATELY ABSENT: s3:DeleteBucket, s3:DeleteObjectVersion and dynamodb:DeleteTable. Terraform never needs to destroy its own backend, and a state backend that the deploy identity can delete is a backend one bad command can lose. State history is the thing that makes a bad apply recoverable.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateAndConfigureTheStateBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketPolicy",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
+      ],
+      "Resource": "arn:aws:s3:::vyomquant-terraform-state"
+    },
+    {
+      "Sid": "ReadAndWriteStateObjectsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::vyomquant-terraform-state/*"
+    },
+    {
+      "Sid": "CreateAndUseTheLockTable",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:273709947018:table/vyomquant-terraform-locks"
+    },
+    {
+      "Sid": "ListTablesIsAccountScopedByAwsDesign",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:ListTables"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
