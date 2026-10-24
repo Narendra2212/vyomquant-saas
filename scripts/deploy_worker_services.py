@@ -11,11 +11,24 @@ WHY THE INACTIVE REVISIONS CANNOT SIMPLY BE RE-REGISTERED
 =========================================================
 Measured: `vyomquant-worker-backtest-production:1`, `-command-production:1` and
 `-dag-production:1` all name the image `vyomquant-api:latest` -- a BARE repository
-reference, which Docker resolves against Docker Hub rather than ECR, and the ECR
-repository holds 305 images and NO `latest` tag. They also use a different role
-generation (`VyomQuantEcsTaskExecutionRole-production`) from the revision actually serving
-traffic (`ecsTaskExecutionRole`). That set is an abandoned naming generation which could
-never have pulled an image.
+reference, which ECS resolves against Docker Hub rather than ECR, so the ECR repository
+is never consulted and the pull cannot succeed.
+
+CORRECTION (2026-10-24): this paragraph used to add "and the ECR repository holds 305
+images and NO `latest` tag". That is FALSE. `vyomquant-api:latest` IS in ECR -- pushed
+2026-10-16, digest sha256:dd21c65e..., carrying the second tag
+a1fcaab9366868783d4a7c25595db1ee62f3f261. The conclusion was right and the reason was
+wrong, which is the dangerous combination: it points at the wrong repair. Pushing a
+`latest` tag, the obvious fix for "tag absent", would have changed nothing, because a
+bare reference never reaches ECR to find it. The bare-reference defect is the whole
+cause.
+
+They also use a different role generation (`VyomQuantEcsTaskExecutionRole-production`)
+from the revision actually serving traffic (`ecsTaskExecutionRole`) -- confirmed, both
+roles exist. And the cluster their naming generation implies,
+`vyomquant-cluster-production`, DOES NOT EXIST: the only cluster in the account is
+`vyomquant-cluster`. So that set is an abandoned naming generation that named an
+unreachable image in a cluster that was never created.
 
 So this takes the TEMPLATE from the revision that demonstrably works -- `vyomquant-api`'s
 current ACTIVE revision, with its full ECR URI at a real commit tag, its roles, its log
@@ -23,18 +36,48 @@ group, its env and its secrets -- and takes ONLY the `command` from the INACTIVE
 revisions. That is the one thing those revisions got right and the one thing the template
 does not have.
 
-ROUTE (B) OF TWO, AND IT IS THE SHORTCUT
-========================================
-INF-03 records two routes. (A) grant the deploy identity `s3:CreateBucket` +
-`dynamodb:CreateTable`, run `scripts/bootstrap_terraform_state.py --apply`, and let
-terraform own the result -- slower, and the only route that leaves the infrastructure
-described by the repository. (B) is this script: it works with permissions already held
-(`ecs:RegisterTaskDefinition` and `ecs:CreateService` are both PERMITTED, measured) and
-leaves services terraform does not know about, which a later `terraform apply` would try
-to create again unless they are `terraform import`ed first.
+ROUTE (B) OF TWO -- AND ROUTE (A) TURNED OUT NOT TO BE REACHABLE FROM HERE
+==========================================================================
+This file used to end "(A) IS PREFERRED", route (A) being: grant the deploy identity
+s3:CreateBucket + dynamodb:CreateTable, bootstrap the backend, and let terraform own the
+result -- "the only route that leaves the infrastructure described by the repository".
 
-(A) IS PREFERRED. This exists so that (B) is a deliberate, recorded shortcut with its
-consequence stated, rather than an undocumented sequence of console clicks.
+Route (A)'s permissions and backend were then actually done (2026-10-24): the policy is
+attached, `s3://vyomquant-terraform-state` and the `vyomquant-terraform-lock` table
+exist, and `terraform init` succeeds against the remote backend with locking. So the
+blocker INF-03 recorded is genuinely gone.
+
+The first real `terraform plan` is what killed the preference. Measured:
+
+    Plan: 91 to add, 0 to change, 0 to destroy
+
+Zero to change, against a live production account, because terraform's state is empty
+AND its names match nothing that exists. The config calls the cluster
+`vyomquant-cluster-production` and the service `vyomquant-api-service-production`; the
+account has one cluster, `vyomquant-cluster`, running one service,
+`vyomquant-api-service-cjema2sl`. So that plan does not adopt production -- it proposes a
+SECOND one: a new VPC, 6 subnets, 3 NAT gateways, a new ALB, a new CloudFront
+distribution, a new cluster, 7 services and 8 secrets (the last of which would collide by
+name and fail the apply partway, after the NAT gateways were already billing).
+
+It does not even get that far with the committed defaults. The plan EXITS NON-ZERO on
+alb.tf's own precondition -- a prod environment requires `enable_custom_domain=true`, and
+the default is false -- so there is currently no applyable plan at all.
+
+Nor does `-target`ing just the workers help: `aws_ecs_service.workers` attaches to
+`aws_subnet.private[*]` and `aws_security_group.ecs_tasks`, both resources of the
+unbuilt VPC, so targeting the workers drags in the new network and lands them where
+they have no route to the live database or Redis.
+
+Making (A) real therefore means `terraform import`-ing ~84 existing resources and
+reconciling every name -- a production-blast-radius project of its own, not a step in
+this finding. It should be its own ledger entry.
+
+(B) is this script. It works with permissions already held (`ecs:RegisterTaskDefinition`
+and `ecs:CreateService`, both measured PERMITTED) and puts the workers in the cluster
+that actually exists, on the network the api service actually uses. It leaves services
+terraform does not know about -- which is now a far smaller objection than it looked,
+since terraform knows about NONE of the 84 resources already running.
 
 SAFETY
 ======
@@ -228,8 +271,8 @@ def main() -> int:
             failures += 1
             continue
         print(f"   command taken from {source_td}: {command}")
-        print(f"   its image was {src_container.get('image')!r} "
-              f"(ignored -- that is why it never ran)")
+        print(f"   its image was {src_container.get('image')!r} -- ignored: a bare "
+              f"reference resolves to Docker Hub, never ECR, so it could not pull")
 
         family = f"vyomquant-worker-{key}"
         definition = build_task_definition(template, command, family)
