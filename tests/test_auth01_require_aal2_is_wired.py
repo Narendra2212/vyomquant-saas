@@ -189,6 +189,12 @@ def test_aal2_does_not_substitute_for_identity():
 EXPECTED_AAL2_HANDLERS = [
     ("backend_app.routers.exchange", "store_keys"),
     ("backend_app.routers.exchange", "delete_connection"),
+    # SEC-15: the contract's fourth bullet, "Billing/payment mutations". Only the two
+    # that move money TOWARD the platform are gated; see
+    # tests/test_sec15_billing_mutations_require_aal2.py for why cancellation is not,
+    # and why that asymmetry is the design rather than an omission.
+    ("backend_app.routers.billing", "resume_subscription"),
+    ("backend_app.routers.billing", "delete_payment_method"),
 ]
 
 #: Handlers that must NOT require AAL2 -- the docstring's "DO NOT apply globally" rule.
@@ -199,6 +205,11 @@ EXPECTED_UNGATED_HANDLERS = [
     ("backend_app.routers.exchange", "test_connection"),
     ("backend_app.routers.exchange", "test_stored_connection"),
     ("backend_app.routers.exchange", "get_exchange_capabilities"),
+    # SEC-15, and this one is a MUTATION listed here deliberately: gating cancellation
+    # would stop a customer without an enrolled factor from ending their own billing.
+    # That is a consumer-protection harm rather than a hardening. The reasoning, and the
+    # single condition that retires it, are in the route's own docstring.
+    ("backend_app.routers.billing", "cancel_subscription"),
 ]
 
 

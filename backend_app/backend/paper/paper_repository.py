@@ -3904,9 +3904,29 @@ def insert_session_event(
 # statement, and it refuses to be the place a business rule is spelled a second time.
 
 
-#: ``paper_sessions.session_state`` - ``chk_paper_session_state``, verbatim and in 009's order.
-#: These are also the four states of Requirement 17.7. ``paper_session_service`` imports THIS tuple
-#: rather than re-listing them, so the column vocabulary and the state machine cannot drift.
+#: ``paper_sessions.session_state`` - ``chk_paper_session_state``, verbatim and in 009's order,
+#: then 054's addition.
+#:
+#: PAPER-04: ``ABANDONED`` is a FIFTH state, and Requirement 17.7 names four. The deviation is
+#: the fix rather than a drift: none of the four can express "was RUNNING, and the process that
+#: ran its loop is gone" -- RUNNING is false, PAUSED invites a resume that cannot work, STOPPED
+#: makes an unplanned death indistinguishable from an orderly shutdown, and CREATED denies that
+#: it ever ran. See ``migrations/054_paper04_abandoned_session_state.sql`` for the full
+#: reasoning and for why it is ABANDONED rather than FAILED (nothing here is a claim about the
+#: strategy; the session may have been performing perfectly when its host disappeared).
+#:
+#: ``paper_session_service`` imports THIS tuple rather than re-listing them, so the column
+#: vocabulary and the state machine cannot drift.
+#:
+#: STILL THE FOUR. PAPER-04's fifth state (``ABANDONED``) is NOT added here yet, and the
+#: reason is an invariant this module is right to enforce: ``paper_session_service``'s
+#: ``_assert_machine_agrees()`` requires every value of this tuple to be a key of
+#: ``PAPER_SESSION_TRANSITIONS``, every edge there to have an entry in
+#: ``OPERATION_TRANSITIONS``, and that table to hold exactly Requirement 17.7's five
+#: operations. Adding the state here alone fails the first check; adding the edge fails the
+#: second; adding an operation fails the third. The vocabulary, the edge table, the
+#: operation table, the operations vocabulary and ``trg_paper_session_guard``'s permitted
+#: pairs are deliberately one coupled change, and migration 054 is only the first of them.
 SESSION_STATES: Tuple[str, ...] = ("CREATED", "RUNNING", "PAUSED", "STOPPED")
 
 #: ``paper_sessions.session_state`` at creation. 009 declares it as the column DEFAULT; it is
@@ -4050,6 +4070,82 @@ def count_running_sessions(supabase: Any, user_id: Any) -> int:
         f"{SESSIONS_TABLE} running count",
     )
     return len(rows)
+
+
+def touch_session_heartbeat(supabase: Any, *, user_id: Any, session_id: Any) -> None:
+    """Record that this session's loop is alive, right now. PAPER-04.
+
+    One column, written by the loop on each iteration. It is what makes
+    :func:`list_stale_running_sessions` able to tell "its runner is gone" from "another
+    worker is running it healthily" -- a distinction the row's state alone cannot make,
+    and which matters because ``startup.sh`` runs ``gunicorn --workers ${WORKERS:-2}``.
+
+    Never raises. A heartbeat that could fail the loop would make the liveness record the
+    thing that kills the session it is reporting on; a missed beat is self-correcting on
+    the next iteration, and the staleness window is far wider than one interval.
+    """
+    try:
+        require_persistence(supabase)
+        uid = _require_text(user_id, "user_id")
+        sid = _require_text(session_id, "session_id")
+        (
+            supabase.table("paper_sessions")
+            .update({"last_heartbeat_at": _utc_now()})
+            .eq("user_id", uid)
+            .eq("id", sid)
+            .execute()
+        )
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.debug(
+            "[paper-session] heartbeat not recorded for %s; the next iteration will retry",
+            session_id,
+            exc_info=True,
+        )
+
+
+def list_stale_running_sessions(supabase: Any, *, stale_before: Any) -> List[Dict[str, Any]]:
+    """Every ``RUNNING`` session whose loop has not beaten since ``stale_before``. PAPER-04.
+
+    The reconciliation population, and the predicate is deliberately conservative in one
+    direction: a row is returned only if its heartbeat is OLDER than the cutoff, or absent
+    AND the row itself was started before the cutoff. The second half is what stops a boot
+    that races a just-started session from abandoning it before it has written its first
+    beat, and what stops a session that predates the column from being abandoned purely
+    for having no heartbeat.
+
+    Unscoped by user, deliberately and unlike every other read here: this is the
+    platform's own maintenance pass, not a caller acting on their own data, and a
+    per-tenant version could only run for tenants something had already enumerated --
+    which is the enumeration gap that kept this unbuilt.
+    """
+    require_persistence(supabase)
+    cutoff = _require_text(stale_before, "stale_before")
+
+    beaten = (
+        supabase.table("paper_sessions")
+        .select("id,user_id,session_state,last_heartbeat_at,started_at,symbol")
+        .eq("session_state", "RUNNING")
+        .lt("last_heartbeat_at", cutoff)
+        .execute()
+    )
+    never_beaten = (
+        supabase.table("paper_sessions")
+        .select("id,user_id,session_state,last_heartbeat_at,started_at,symbol")
+        .eq("session_state", "RUNNING")
+        .is_("last_heartbeat_at", "null")
+        .lt("started_at", cutoff)
+        .execute()
+    )
+
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    for result in (beaten, never_beaten):
+        for row in (getattr(result, "data", None) or []):
+            key = str(row.get("id"))
+            if key not in seen:
+                seen.add(key)
+                rows.append(dict(row))
+    return rows
 
 
 def transition_session_state(

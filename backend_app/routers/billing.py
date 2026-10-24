@@ -55,7 +55,8 @@ from backend_app.core.cache import redis_manager
 from backend_app.core.dependencies import (create_request_supabase_async,
                                            get_current_user,
                                            get_request_supabase,
-                                           invalidate_profile_cache)
+                                           invalidate_profile_cache,
+                                           require_aal2)
 from backend_app.core.webhook_idempotency import (
     acquire_webhook_processing,
     mark_webhook_completed,
@@ -3481,10 +3482,23 @@ async def add_payment_method(
 @router.delete("/payment-methods/{method_id}")
 async def delete_payment_method(
     method_id: str,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_aal2),
     db: Session = Depends(get_payment_methods_db),
 ):
     """Delete a stored instrument. The lookup stays; its miss now names why the table is empty.
+
+    SEC-15: THIS ENDPOINT REQUIRES AAL2 (MFA). It is a destructive mutation of a stored
+    payment instrument, which is squarely inside ``require_aal2``'s "Billing/payment
+    mutations" bullet, and the product owner's Razorpay rationale does not reach it -- no
+    payment page is involved in deleting a saved card.
+
+    Customer impact of gating it is nil today, which is why it is gated without
+    hesitation: ``add_payment_method`` is an explicit refusal (above) and this table has
+    no writer, so the route can only ever answer 404. Gating it now means the dependency
+    is already correct if a writer is ever added, rather than being a step someone has to
+    remember at that point.
+
+    Regression: tests/test_sec15_billing_mutations_require_aal2.py
 
     Kept rather than removed, and kept ROW-DRIVEN: the ``PaymentMethodModel`` query is the only
     thing that decides this outcome, so a row that does exist is still deleted for the account
@@ -3697,6 +3711,38 @@ async def cancel_subscription(
     Cancel the user's active subscription at period end.
     Subscription remains active until next_billing_date.
     Server-authoritative: updates profiles.cancel_at_period_end and subscription_status.
+
+    SEC-15: THIS ROUTE IS DELIBERATELY *NOT* GATED ON AAL2, AND THAT IS A DECISION RATHER
+    THAN AN OMISSION.
+    ---------------------------------------------------------------------------------
+    ``require_aal2``'s contract names "Billing/payment mutations", and the other two
+    local-state billing mutations -- :func:`resume_subscription` and
+    :func:`delete_payment_method` -- now carry it. This one does not, because the money
+    moves the other way.
+
+    ``require_aal2`` is a hard 403 for any session at ``aal1``, and MFA enrolment is NOT
+    required to hold an account here (AUTH-01 states that consequence deliberately for
+    exchange-key mutation: "A customer who has not enrolled a [factor]..." must enrol
+    first). Applying it here would mean a paying customer who never enrolled a factor
+    CANNOT STOP THEIR OWN BILLING through the product, and would have to contact support
+    to stop being charged. That is a consumer-protection harm -- and a dark pattern -- of
+    a different kind from the risk it would mitigate, which is an attacker with a stolen
+    password cancelling a subscription the victim wanted. The attack costs the victim
+    nothing directly, because cancellation takes effect only at period end and
+    :func:`resume_subscription` -- which IS gated -- is how it would be reversed.
+
+    So the rule applied across these five routes is the direction of the money, not the
+    word "billing":
+
+        starts or resumes billing  ->  gated (or covered by the Razorpay rationale)
+        stops billing              ->  never gated
+
+    If MFA enrolment ever becomes mandatory before first payment, this reasoning expires
+    and the dependency should be added -- the lockout it avoids cannot happen once every
+    paying account has a factor. Until then,
+    ``tests/test_sec15_billing_mutations_require_aal2.py`` asserts this route stays
+    ungated, so a later well-intentioned "finish wiring SEC-15" cannot silently trap
+    customers in a subscription.
     """
     user_id = user["id"]
     try:
@@ -3751,12 +3797,31 @@ async def cancel_subscription(
 @limiter.limit("5/minute")
 async def resume_subscription(
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_aal2),
     supabase: Any = Depends(get_request_supabase),
 ):
     """
     Reverse a pending cancellation: restore subscription_status to active.
     Server-authoritative: clears cancel_at_period_end and restores active status.
+
+    SEC-15: THIS ENDPOINT REQUIRES AAL2 (MFA).
+    ``require_aal2``'s own security contract names "Billing/payment mutations" as a
+    surface it MUST cover, and this route RESUMES BILLING -- it is the one of the five
+    billing mutations where an attacker holding only a stolen password costs the victim
+    real money, by reversing a cancellation the victim chose.
+
+    The asymmetry with :func:`cancel_subscription` is deliberate and is the whole design;
+    see that function's docstring. Gating this one is safe because being blocked costs a
+    legitimate customer nothing: they cannot un-cancel until they enrol a factor, and
+    their subscription continues to run until period end either way. Checkout remains
+    available to re-subscribe.
+
+    The product owner's recorded hold rationale for this finding was Razorpay's own
+    checkout-time security. That genuinely covers ``create_checkout_session`` and
+    ``verify_razorpay_payment``; it does not reach this route, which mutates local
+    subscription state and never goes near a payment page.
+
+    Regression: tests/test_sec15_billing_mutations_require_aal2.py
     """
     user_id = user["id"]
     try:
