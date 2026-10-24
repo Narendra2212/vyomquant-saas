@@ -65,6 +65,25 @@ DECLARED_OBJECTS = [
      "Rejects a non-object in plan_limit_overrides, which the reader would otherwise "
      "silently ignore."),
 
+    # ── backend_app/migrations/055_deploy05_migration_ledger.sql ──────────────
+    # DEPLOY-05's own ledger, inventoried like anything else so the thing that records
+    # evidence is itself subject to the same evidence check.
+    ("table", "recorded_migrations", "055_deploy05_migration_ledger.sql",
+     "The migration ledger DEPLOY-04 claimed to write to and that was declared nowhere. "
+     "One row per migration whose application has been ESTABLISHED, with how. Absence of "
+     "a row means nobody checked -- never that the migration is unapplied. NOT alembic: "
+     "`alembic_version`'s single pointer asserts the applied set is a PREFIX of the "
+     "revision sequence, which production disproves (037 applied, 017 was not)."),
+    ("constraint", "recorded_migrations/chk_recorded_migrations_verification",
+     "055_deploy05_migration_ledger.sql",
+     "Restricts `verification` to EVIDENCE_PROBED or APPLIED_BY_TOOL, so 'we ran it' and "
+     "'we confirmed it' can never be recorded as the same claim -- the conflation that "
+     "made DEPLOY-04's close-out unverifiable."),
+    ("constraint", "recorded_migrations/chk_recorded_migrations_evidence_not_blank",
+     "055_deploy05_migration_ledger.sql",
+     "Refuses a row whose evidence is empty, so the ledger cannot fill with assertions "
+     "that cite nothing."),
+
     # ── migrations/referral_system_redesign.sql -- NEVER APPLIED ──────────────
     ("column", "profiles.referred_by_user_id", "referral_system_redesign.sql",
      "routers/auth.py:233 writes this with a service-role client on referral signup, so "
@@ -89,14 +108,14 @@ DELIBERATELY_ABSENT = [
     ("column", "profiles.api_calls_limit",
      "ZERO references anywhere in backend_app."),
     ("table", "download_analytics",
-     "Has NO declaration in any .sql in the repository, and nothing writes it: "
-     "downloadAnalyticsApi.track() is called from nowhere "
-     "(components/download/DownloadPage.jsx deliberately does not import it). The admin "
-     "dashboard's getStats() READ is the only live caller. This is a vestigial feature "
-     "needing a build-or-remove decision, not a missing table."),
-    ("table", "recorded_migrations",
-     "Declared nowhere in the repository. DEPLOY-04 claimed to write to a ledger that was "
-     "never designed. Building one is a design task; see DEPLOY-05."),
+     "RESOLVED by DEPLOY-05: the build-or-remove decision was taken as REMOVE, and the "
+     "feature is gone. It had no declaration in any .sql, no writer "
+     "(downloadAnalyticsApi.track() was called from nowhere), and the admin dashboard's "
+     "getStats() read was the only live caller -- which THREW a missing-relation error at "
+     "every admin who opened that tab rather than showing an empty panel. "
+     "algo22-terminal/src/lib/downloadAnalyticsApi.js is deleted and the Downloads tab is "
+     "removed. Kept listed here so a future reader who finds the name in git history sees "
+     "why production is right not to have the table."),
 ]
 
 

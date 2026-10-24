@@ -64,7 +64,9 @@ const notConfiguredError = () => {
 
 /**
  * Postgrest query-builder methods this app actually chains, enumerated from the call
- * sites in `lib/waitlistApi.js` and `lib/downloadAnalyticsApi.js`. Each returns the
+ * sites in `lib/waitlistApi.js`. (It also enumerated `lib/downloadAnalyticsApi.js`,
+ * which DEPLOY-05 removed as vestigial; the chain shapes below are unchanged, because
+ * `select('*').gte(...).eq(...)` is still what waitlistApi chains.) Each returns the
  * builder so a chain of any length terminates in an awaitable that resolves to the
  * not-configured result - `select('*').gte(...).eq(...)` used to die on the second
  * link, because `select` returned a plain result object with no `gte` on it.
