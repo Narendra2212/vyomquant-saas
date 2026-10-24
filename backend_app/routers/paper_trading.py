@@ -463,6 +463,37 @@ def _remember_runtime(
     )
 
 
+def sessions_hosted_here() -> List[Tuple[str, str]]:
+    """``(session_id, user_id)`` for every session whose loop is running IN THIS PROCESS.
+
+    PAPER-04's shutdown drain reads this. It is the one question the registry can answer
+    that no database query can: the row says ``RUNNING``, but only the process holding the
+    task knows whether *it* is the host, and ``startup.sh`` runs
+    ``gunicorn --workers ${WORKERS:-2}`` so "a RUNNING row" and "a row this process is
+    running" are different sets. Draining the first would abandon another worker's live
+    sessions -- the precise hazard that shaped the heartbeat design.
+
+    A snapshot, not a view: the caller is about to transition each entry, and the
+    underlying dict is mutated by ``_take_runtime`` from request handlers.
+    """
+    return [(sid, rt.user_id) for sid, rt in list(_SESSION_RUNTIMES.items())]
+
+
+async def drain_sessions_hosted_here(reason: str) -> Dict[str, Any]:
+    """Mark this process's sessions ABANDONED because it is shutting down. PAPER-04.
+
+    Resolves the service-role client itself -- the loop path's own identity, not a
+    request's -- and is a no-op when this process hosts nothing, which is the common case
+    for a worker that served no start.
+    """
+    hosted = sessions_hosted_here()
+    if not hosted:
+        return {"examined": 0, "abandoned": 0, "raced": 0, "errors": 0}
+    return await paper_sessions.abandon_sessions_hosted_here(
+        get_service_supabase(), hosted, reason=reason
+    )
+
+
 def _take_runtime(session_id: str, user_id: str) -> Optional[_SessionRuntime]:
     """Remove and return this caller's runtime for ``session_id``, or ``None``.
 

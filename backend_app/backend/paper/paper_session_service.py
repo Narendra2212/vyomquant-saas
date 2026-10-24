@@ -4634,8 +4634,8 @@ async def reconcile_orphaned_sessions(
         last_beat = row.get("last_heartbeat_at")
         reason = (
             f"no heartbeat since {last_beat or 'ever'}; the loop that was running this "
-            f"session no longer exists. Reconciled at boot after "
-            f"{cutoff_seconds:.0f}s without a beat."
+            f"session no longer exists. Reconciled after {cutoff_seconds:.0f}s "
+            f"without a beat."
         )
         try:
             repo.transition_session_state(
@@ -4645,6 +4645,12 @@ async def reconcile_orphaned_sessions(
                 from_state=STATE_RUNNING,
                 to_state=STATE_ABANDONED,
                 stopped_at=moment.isoformat(),
+                # Migration 054 created this column for exactly this sentence and its
+                # COMMENT says so. It was built here and passed only to logger.warning,
+                # so the column was inert and the row could not answer the question 054
+                # added it to answer: an operator reading an ABANDONED row could see THAT
+                # the host died but not WHEN it last beat or after how long we gave up.
+                abandoned_reason=reason,
             )
         except Exception as exc:  # noqa: BLE001
             # The guarded UPDATE matching no row is the EXPECTED outcome of two workers
@@ -4683,6 +4689,143 @@ async def reconcile_orphaned_sessions(
         summary["raced"],
         summary["errors"],
     )
+    return summary
+
+
+#: How often the reconciliation sweep runs while the process is alive.
+#:
+#: A THIRD of :data:`ABANDON_AFTER_SECONDS`, so an orphan is detected within one window
+#: plus one interval -- 900-1200s -- rather than "whenever something next boots". The
+#: boot-only pass this joins covered the redeploy case by accident: ``startup.sh`` uses
+#: ``--graceful-timeout 30``, so a redeploy produces a boot soon after, and the sweep ran
+#: then. What it did NOT cover is the sporadic death: a task killed by an escaped
+#: exception, a feed handle that never reconnects, or a gunicorn worker that survives
+#: while the task inside it does not. None of those produce a boot, so nothing ever
+#: looked, and the orphan sat at RUNNING indefinitely -- counting against Requirement
+#: 27.4's cap and reading as live -- which is the exact condition PAPER-04 describes.
+RECONCILE_INTERVAL_SECONDS = 300.0
+
+
+async def run_reconciliation_loop(
+    get_client: Any,
+    *,
+    interval: float = RECONCILE_INTERVAL_SECONDS,
+) -> None:
+    """Forever: reconcile, sleep. The timer the boot-only pass was missing. PAPER-04.
+
+    NO LEADER ELECTION, AND THAT IS THE EXISTING ARGUMENT RATHER THAN A NEW ONE.
+    :func:`reconcile_orphaned_sessions` is already safe to run from every worker and
+    repeatedly: it selects HEARTBEAT-STALE rows, so a live loop in any process is never
+    eligible whoever is asking, and it writes through a guarded UPDATE, so two workers
+    racing the same orphan means one matches and the other is a no-op. Adding
+    ``core.leader_lease`` here would put a Redis dependency in front of a property that is
+    already idempotent -- which that function's own docstring argues against, and it is
+    right. Running the sweep in every worker is therefore not duplication to be eliminated
+    but redundancy to be kept: one worker's dead event loop does not stop the others.
+
+    Never dies on a failed sweep, and never raises: cancelled on shutdown like every other
+    background loop. ``reconcile_orphaned_sessions`` already returns its failures as counts
+    rather than raising, so the ``except`` here is for a failure to RESOLVE the client.
+    """
+    import asyncio
+
+    while True:
+        try:
+            client = get_client() if callable(get_client) else get_client
+            if client is not None:
+                summary = await reconcile_orphaned_sessions(client)
+                if summary.get("abandoned"):
+                    logger.warning(
+                        "[paper-session] PAPER-04 periodic sweep abandoned %s orphaned "
+                        "session(s) (%s examined, %s raced, %s error(s))",
+                        summary.get("abandoned"), summary.get("examined"),
+                        summary.get("raced"), summary.get("errors"),
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[paper-session] PAPER-04 periodic reconciliation could not run: %s",
+                type(exc).__name__, exc_info=True,
+            )
+        await asyncio.sleep(interval)
+
+
+async def abandon_sessions_hosted_here(
+    supabase: Any,
+    sessions: Any,
+    *,
+    reason: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Mark sessions THIS process was hosting as ``ABANDONED``, because it is going away.
+
+    PAPER-04's hosting half, answered at the only moment the answer is certain.
+
+    WHY A SHUTDOWN HOOK AND NOT A WORKER SERVICE
+    --------------------------------------------
+    The finding asks for "a dedicated runtime worker service to run session loops outside
+    the web process". A worker service redeploys too, and nothing in this codebase resumes
+    a session -- so moving the loop there relocates the death rather than removing it, at
+    the cost of infrastructure that does not exist. What makes the death harmful is not
+    WHERE it happens but that the row goes on claiming to be RUNNING afterwards.
+
+    At shutdown this process knows something no sweep can know: exactly which sessions it
+    was hosting, and that their loops are ending NOW. So it records that directly, with an
+    accurate reason, instead of leaving a stale row for the staleness window to infer from
+    -- which turns a redeploy from "silently stops, discovered up to 1200s later" into
+    "marked at the moment it happens".
+
+    The periodic sweep remains the backstop for every death that gets no clean shutdown:
+    a SIGKILL, an OOM, a lost task. This is the prompt path, not the only one.
+
+    IT DOES NOT TOUCH A SESSION IT DOES NOT HOST. The population is this process's own
+    runtime registry, and each write is still the guarded
+    ``from_state=RUNNING`` UPDATE -- so a session the user stopped a moment earlier, or one
+    another worker has since taken over, is a no-op rather than a state this process had no
+    right to set.
+
+    Never raises: a shutdown must not fail because the thing recording damage could not run.
+    """
+    moment = now or datetime.now(timezone.utc)
+    summary: Dict[str, Any] = {"examined": 0, "abandoned": 0, "raced": 0, "errors": 0}
+    for session_id, user_id in list(sessions or []):
+        summary["examined"] += 1
+        try:
+            repo.transition_session_state(
+                supabase,
+                user_id=str(user_id),
+                session_id=str(session_id),
+                from_state=STATE_RUNNING,
+                to_state=STATE_ABANDONED,
+                stopped_at=moment.isoformat(),
+                abandoned_reason=reason,
+            )
+        except Exception as exc:  # noqa: BLE001
+            name = type(exc).__name__
+            if "Concurrency" in name or "Conflict" in name:
+                # Not RUNNING any more: its owner stopped it, or it was already
+                # reconciled. The expected outcome, not a failure.
+                summary["raced"] += 1
+            else:
+                summary["errors"] += 1
+                logger.warning(
+                    "[paper-session] PAPER-04: could not mark session %s ABANDONED on "
+                    "shutdown", session_id, exc_info=True,
+                )
+            continue
+        summary["abandoned"] += 1
+        logger.warning(
+            "[paper-session] PAPER-04: session %s marked ABANDONED - %s",
+            session_id, reason,
+        )
+    if summary["examined"]:
+        logger.warning(
+            "[paper-session] PAPER-04 shutdown drain: %s hosted session(s), %s abandoned, "
+            "%s already moved on, %s error(s)",
+            summary["examined"], summary["abandoned"], summary["raced"],
+            summary["errors"],
+        )
     return summary
 
 
@@ -4808,6 +4951,7 @@ __all__ = [
     "OPERATION_TRANSITIONS",
     "PAPER_SESSION_TRANSITIONS",
     "PAUSE_POLL_SECONDS",
+    "RECONCILE_INTERVAL_SECONDS",
     "RESET_BALANCE_CAUSE",
     "RESET_SNAPSHOT_CAUSE",
     "SESSION_OPERATIONS",
@@ -4851,6 +4995,7 @@ __all__ = [
     "ValidatedCapital",
     "apply_operation",
     "assert_strategy_supports_market",
+    "abandon_sessions_hosted_here",
     "assert_version_deployable",
     "assert_within_session_limit",
     "can_operate",
@@ -4867,12 +5012,14 @@ __all__ = [
     "pause_session",
     "plan_markets",
     "read_strategy_version",
+    "reconcile_orphaned_sessions",
     "recorded_capital",
     "release_session_resources",
     "reset_session",
     "resolve_capital_maximum_major",
     "resolve_concurrency_limit",
     "resume_session",
+    "run_reconciliation_loop",
     "safe_signal_payload",
     "session_loop",
     "session_not_found",

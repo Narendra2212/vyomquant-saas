@@ -269,6 +269,8 @@ _runtime_service_status: dict = {}
 
 # BILL-01: handle of the plan-expiry sweep task started in lifespan
 _plan_expiry_task = None
+#: PAPER-04's periodic reconciliation sweep. Cancelled on shutdown like `_plan_expiry_task`.
+_paper_reconcile_task = None
 # RT-08: handle of the resume-after-restart task started in lifespan
 _resume_task = None
 
@@ -542,8 +544,8 @@ async def lifespan(app: FastAPI):
     # before reconciling would serve its first requests with sessions still lying about
     # their state.
     try:
-        from backend_app.backend.paper.paper_session_service import \
-            reconcile_orphaned_sessions
+        from backend_app.backend.paper.paper_session_service import (
+            reconcile_orphaned_sessions, run_reconciliation_loop)
         from backend_app.core.dependencies import get_service_supabase
 
         _paper_recon = await reconcile_orphaned_sessions(get_service_supabase())
@@ -556,6 +558,25 @@ async def lifespan(app: FastAPI):
             _paper_recon.get("abandoned"),
             _paper_recon.get("raced"),
             _paper_recon.get("errors"),
+        )
+
+        # ── AND THEN KEEP SWEEPING (PAPER-04) ───────────────────────────────
+        # The boot pass above covered the redeploy case by accident: `--graceful-timeout
+        # 30` means a redeploy produces a boot soon after, so the sweep ran then. It did
+        # NOT cover a death that produces no boot -- a task killed by an escaped
+        # exception, a feed handle that never reconnects, a gunicorn worker that survives
+        # while the task inside it does not. Nothing re-ran the sweep, so those orphans
+        # sat at RUNNING indefinitely, counting against Requirement 27.4's cap and
+        # reading as live: the condition PAPER-04 describes, left in place by the half of
+        # it that shipped.
+        #
+        # Spawned rather than awaited, unlike the boot pass: this one never finishes.
+        # Deliberately runs in EVERY worker with no leader election -- the sweep selects
+        # heartbeat-stale rows and writes through a guarded UPDATE, so it is already
+        # idempotent, and one worker's dead event loop must not stop the others.
+        global _paper_reconcile_task
+        _paper_reconcile_task = asyncio.create_task(
+            run_reconciliation_loop(get_service_supabase)
         )
     except Exception as e:
         # `reconcile_orphaned_sessions` does not raise; this catches a failure to RESOLVE
@@ -650,6 +671,54 @@ async def lifespan(app: FastAPI):
 
     #  Graceful shutdown 
     logger.info(" Shutdown initiated  terminating all bots...")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  PAPER-04: RECORD THE DEATH OF THE SESSIONS THIS PROCESS WAS HOSTING
+    # ══════════════════════════════════════════════════════════════════════
+    # FIRST in the shutdown sequence, before any engine is stopped and while the database
+    # handle still works. Every paper session loop in this process is about to end, and
+    # this is the only moment anything knows WHICH sessions those are: the row says
+    # RUNNING, but `gunicorn --workers ${WORKERS:-2}` means "a RUNNING row" and "a row
+    # this process is running" are different sets, and draining the first would abandon
+    # another worker's live sessions.
+    #
+    # Without this, a redeploy left the row claiming RUNNING until the staleness window
+    # plus a sweep interval had passed -- up to 1200s of a session reading as live after
+    # its loop had stopped, which is PAPER-04's "die silently" exactly. With it, the row
+    # is accurate at the moment of the redeploy and carries a reason that names it.
+    #
+    # The periodic sweep stays the backstop for every death that gets NO clean shutdown:
+    # SIGKILL, OOM, a lost task. This is the prompt path, not the only one.
+    #
+    # Never raises: a shutdown must not fail because the thing recording damage could not
+    # run, and a session left at RUNNING is still visible to the sweep.
+    try:
+        from backend_app.routers.paper_trading import drain_sessions_hosted_here
+
+        _paper_drain = await drain_sessions_hosted_here(
+            "the web process hosting this session's loop shut down (redeploy or worker "
+            "restart). No bar was processed after this point; the session did not end on "
+            "its own terms and nothing resumed it."
+        )
+        if _paper_drain.get("examined"):
+            logger.info(
+                " PaperSessionDrain: %s hosted, %s abandoned, %s already moved on, "
+                "%s error(s)",
+                _paper_drain.get("examined"), _paper_drain.get("abandoned"),
+                _paper_drain.get("raced"), _paper_drain.get("errors"),
+            )
+    except Exception as e:
+        logger.warning(f" PaperSessionDrain shutdown error: {e}")
+
+    # PAPER-04: stop the periodic reconciliation sweep
+    if _paper_reconcile_task is not None:
+        _paper_reconcile_task.cancel()
+        try:
+            await _paper_reconcile_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f" PaperSessionReconciliation shutdown error: {e}")
 
     # Runtime Service: ConsistencyChecker — stop background check loop
     try:
