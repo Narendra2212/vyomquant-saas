@@ -3927,7 +3927,21 @@ def insert_session_event(
 #: second; adding an operation fails the third. The vocabulary, the edge table, the
 #: operation table, the operations vocabulary and ``trg_paper_session_guard``'s permitted
 #: pairs are deliberately one coupled change, and migration 054 is only the first of them.
-SESSION_STATES: Tuple[str, ...] = ("CREATED", "RUNNING", "PAUSED", "STOPPED")
+#:
+#: PAPER-04 adds ``ABANDONED`` as a FIFTH value where Requirement 17.7 names four. The
+#: deviation IS the fix: none of the four can express "was RUNNING, and the process that
+#: ran its loop is gone". ``migrations/054`` carries the reasoning, including why it is
+#: ABANDONED rather than FAILED.
+#:
+#: Changing this tuple alone is not possible, by design, and it is worth knowing that
+#: before trying: ``paper_session_service._assert_machine_agrees()`` requires every value
+#: here to be a key of ``PAPER_SESSION_TRANSITIONS``, every edge there to appear in
+#: ``OPERATION_TRANSITIONS``, and that table to match ``SESSION_OPERATIONS`` exactly --
+#: while ``trg_paper_session_guard`` independently refuses any pair absent from
+#: ``paper_session_allowed_transitions``. Five places, one change.
+SESSION_STATES: Tuple[str, ...] = (
+    "CREATED", "RUNNING", "PAUSED", "STOPPED", "ABANDONED",
+)
 
 #: ``paper_sessions.session_state`` at creation. 009 declares it as the column DEFAULT; it is
 #: spelled here as well because :func:`insert_session` writes the column explicitly - a payload

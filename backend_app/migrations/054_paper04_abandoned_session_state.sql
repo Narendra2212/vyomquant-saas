@@ -145,4 +145,33 @@ CREATE INDEX IF NOT EXISTS idx_paper_sessions_running_for_reconcile
     ON public.paper_sessions (session_state)
     WHERE session_state = 'RUNNING';
 
+-- ── THE TWO NEW EDGES, FOR trg_paper_session_guard ──────────────────────────
+--
+-- 009 seeds `paper_session_allowed_transitions` with "six pairs, no seventh, and no
+-- self-edge", and `paper_session_guard()` refuses any pair absent from it with a
+-- 23514. So the CHECK constraint above is necessary but NOT sufficient: without
+-- these rows the trigger would reject RUNNING -> ABANDONED at the database after the
+-- Python state machine had already accepted it -- precisely the failure
+-- `_assert_machine_agrees`'s own docstring warns about ("a machine this module and
+-- trg_paper_session_guard disagree about ... would surface as a 23514 on a user's
+-- pause").
+--
+--   RUNNING   -> ABANDONED   the reconciliation pass, and its only writer
+--   ABANDONED -> CREATED     reset; the same edge STOPPED already has
+--
+-- There is deliberately NO ABANDONED -> RUNNING. The loop's in-flight position --
+-- which bar it had reached, which resting orders it was watching -- lived in the dead
+-- process and was never persisted, so a resume would restart across a gap of unknown
+-- length while reporting a continuity it does not have. Reset-and-start discards the
+-- gap honestly and begins a NEW equity series
+-- (paper_equity_snapshots.series_index = previous + 1), which is what actually
+-- happened.
+--
+-- Idempotent, like 009's own seed.
+INSERT INTO public.paper_session_allowed_transitions (from_state, to_state)
+VALUES
+    ('RUNNING',   'ABANDONED'),
+    ('ABANDONED', 'CREATED')
+ON CONFLICT (from_state, to_state) DO NOTHING;
+
 COMMIT;

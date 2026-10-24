@@ -268,24 +268,52 @@ class TestTheMachine:
     in this file failed at collection, which is the loudest possible answer and the intended one.
     """
 
-    def test_the_four_states_are_the_columns_four(self) -> None:
+    def test_the_states_are_the_columns_states(self) -> None:
+        """Requirement 17.7's four, plus PAPER-04's fifth.
+
+        The point of this assertion is unchanged -- the service and the repository must
+        name the SAME vocabulary as the column, so the state machine and
+        ``chk_paper_session_state`` cannot drift. ``ABANDONED`` is a deliberate deviation
+        from the requirement's four: none of them can express "was RUNNING, and the
+        process that ran its loop is gone", which is the one fact PAPER-04 exists to make
+        recordable. Migration 054 carries the reasoning and extends both the CHECK
+        constraint and ``paper_session_allowed_transitions``.
+        """
         assert service.SESSION_STATES == repo.SESSION_STATES == (
             "CREATED",
             "RUNNING",
             "PAUSED",
             "STOPPED",
+            "ABANDONED",
         )
 
-    def test_the_five_operations_are_requirement_17_7s_five(self) -> None:
-        assert service.SESSION_OPERATIONS == (
+    def test_requirement_17_7s_five_are_the_five_a_user_can_ask_for(self) -> None:
+        """PAPER-04 added a SIXTH operation, and the requirement's five are still these.
+
+        ``abandon`` is a SYSTEM operation: it exists because every edge must have one
+        (``_assert_machine_agrees``: "an edge with no operation is an edge nothing can
+        take") and no route reaches it. The route layer iterates
+        ``USER_SESSION_OPERATIONS``, so adding a system operation can never accidentally
+        expose one as an API verb -- which is what this pair of assertions pins.
+        """
+        assert service.USER_SESSION_OPERATIONS == (
             "start",
             "pause",
             "resume",
             "stop",
             "reset",
         )
+        assert service.SESSION_OPERATIONS == (
+            "start",
+            "pause",
+            "resume",
+            "stop",
+            "reset",
+            "abandon",
+        )
+        assert "abandon" not in service.USER_SESSION_OPERATIONS
 
-    def test_the_machine_flattens_to_009s_six_pairs(self) -> None:
+    def test_the_machine_flattens_to_the_seeded_pairs(self) -> None:
         """The seed is parsed and compared in ``tests/test_submission_state_agreement.py``.
 
         Here the six pairs are transcribed so this file fails on its own if an edge is added or
@@ -299,6 +327,12 @@ class TestTheMachine:
                 ("RUNNING", "STOPPED"),
                 ("PAUSED", "STOPPED"),
                 ("STOPPED", "CREATED"),
+                # PAPER-04, seeded by 054. No ("ABANDONED", "RUNNING"): the loop's
+                # in-flight position died with its process and was never persisted, so a
+                # resume would cross a gap of unknown length while reporting a continuity
+                # it does not have.
+                ("RUNNING", "ABANDONED"),
+                ("ABANDONED", "CREATED"),
             }
         )
 

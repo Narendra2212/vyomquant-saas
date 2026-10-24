@@ -492,6 +492,49 @@ async def lifespan(app: FastAPI):
         service_status["reconciliation_scheduler"] = "INACTIVE"
         logger.warning(f" ReconciliationScheduler: INACTIVE — {e}")
 
+    # ── PAPER-04: mark paper sessions whose loop died as ABANDONED ───────────
+    #
+    # A ONE-SHOT PASS AT BOOT, not a loop, which is why it belongs here and does not
+    # repeat PAPER-04's own recorded defect. The session LOOPS still run in this process
+    # and still die on redeploy -- that half needs the worker service INF-03 covers, and
+    # this is not a substitute for it. What this fixes is that the death used to be
+    # INVISIBLE: the row sat at RUNNING forever, counted against Requirement 27.4's
+    # concurrency cap, and read as live to every client while no figure it reported would
+    # ever advance again.
+    #
+    # Safe to run from every gunicorn worker concurrently, which matters because
+    # startup.sh runs `--workers ${WORKERS:-2}`: the population is heartbeat-STALE rows
+    # rather than RUNNING rows, so a session another worker is healthily running is never
+    # eligible, and the write is a guarded UPDATE so a race is a no-op rather than a
+    # double write. Needs no leader election for that reason.
+    #
+    # Awaited rather than spawned: it is bounded (one indexed read plus one UPDATE per
+    # orphan, and RUNNING is capped at 20 per user), and a startup that reported ACTIVE
+    # before reconciling would serve its first requests with sessions still lying about
+    # their state.
+    try:
+        from backend_app.backend.paper.paper_session_service import \
+            reconcile_orphaned_sessions
+        from backend_app.core.dependencies import get_service_supabase
+
+        _paper_recon = await reconcile_orphaned_sessions(get_service_supabase())
+        service_status["paper_session_reconciliation"] = (
+            "ACTIVE" if not _paper_recon.get("errors") else "DEGRADED"
+        )
+        logger.info(
+            " PaperSessionReconciliation: %s examined, %s abandoned, %s raced, %s error(s)",
+            _paper_recon.get("examined"),
+            _paper_recon.get("abandoned"),
+            _paper_recon.get("raced"),
+            _paper_recon.get("errors"),
+        )
+    except Exception as e:
+        # `reconcile_orphaned_sessions` does not raise; this catches a failure to RESOLVE
+        # it or the Persistence_Layer handle. Either way a boot must not fail because the
+        # thing that reports damage could not run.
+        service_status["paper_session_reconciliation"] = "INACTIVE"
+        logger.warning(f" PaperSessionReconciliation: INACTIVE — {e}")
+
     # ── BILL-01: expire lapsed one-time (Razorpay) plan purchases ───────────
     global _plan_expiry_task
     try:
