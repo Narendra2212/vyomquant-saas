@@ -47,7 +47,23 @@ logger = logging.getLogger("ExchangeRouter")
 #: ("column exchange_keys.updated_at does not exist") on every call — four occurrences in a
 #: twelve-hour CloudWatch window — and the handler swallowed into an empty list, so an account
 #: holding stored credentials was told it had none.
-_EXCHANGE_KEYS_PROJECTION = "exchange_id, created_at"
+#: `id` IS SELECTED HERE, AND IT ONLY BECAME SELECTABLE WITH MIGRATION 058.
+#:
+#: EXCH-03: `exchange_keys` had NO `id` column -- eleven columns, PRIMARY KEY the composite
+#: `(user_id, exchange_id)` -- while `deployment_binding.load_owned_exchange_account`
+#: resolves a deployment's `exchange_account_id` with `.eq("id", ...)`. So every live
+#: deployment answered 404, and no client could obtain a usable handle from here either.
+#: `058_exch03_exchange_keys_stable_handle.sql` adds `id` as a unique handle beside that
+#: composite key, which remains the primary key and remains what
+#: `api_key_vault.load_decrypted_keys(user_id, exchange_id)` resolves credentials by.
+#:
+#: ORDER OF OPERATIONS MATTERS AND WAS LEARNED THE HARD WAY: an earlier attempt added `id`
+#: here BEFORE the migration existed, and `tests/test_exchange_connections_read_regression`
+#: `.py`'s fake -- which refuses any column outside this set -- caught it. That fake was
+#: right. Selecting a column the table does not have raises `42703`, which this endpoint
+#: correctly reports as a 503, taking the whole listing down for every caller. Keep this
+#: constant, that fixture and the migration set in step.
+_EXCHANGE_KEYS_PROJECTION = "id, exchange_id, created_at"
 
 #: The machine-readable code a connections read that DID NOT COMPLETE answers with, alongside
 #: HTTP 503. The same never-swallow rule ``routers/paper_trading.py`` (``PAPER_READ_FAILED``)
@@ -679,7 +695,21 @@ async def list_exchanges(
         for row in keys:
             exchange_id = (row.get("exchange_id") or "unknown").lower()
             exchanges.append({
+                # A synthesised composite, kept because the existing exchange UI and
+                # `api.exchange.delete` already read it. It is NOT a row key and NOT a
+                # usable `exchange_account_id`; `account_id` below is.
                 "id": f"{user['id']}_{exchange_id}",
+                # EXCH-03: the real `exchange_keys.id` (migration 058), which is what a
+                # deployment's `exchange_account_id` must carry. Added ALONGSIDE `id`
+                # rather than replacing it, so nothing already consuming this response
+                # changes meaning underneath it.
+                #
+                # Passed through as-is and never defaulted to the composite above: a row
+                # with no handle cannot be bound to a deployment, and substituting a value
+                # that resolves to nothing would turn that into a 404 at deploy time
+                # reading as "your account is missing" rather than "this account has no
+                # handle".
+                "account_id": row.get("id"),
                 "exchange_id": exchange_id,
                 "name": exchange_id.upper(),
                 "credential_configured": True,

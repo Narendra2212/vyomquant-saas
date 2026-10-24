@@ -930,6 +930,160 @@ describe('deploy (MKT-05): the control a subscriber uses to run what they paid f
     expect(alertSpy).not.toHaveBeenCalled();
   });
 
+  // ─────────────────────────────────────────────────────────────────────────────────────
+  // MKT-05 live deployment, bounded by the subscribed period.
+  //
+  // The backend accepts `mode: 'live'` with the caller's OWN `exchange_account_id`, stamps
+  // the deployment with the subscription that authorises it and the instant that
+  // authorisation ends, and refuses to create one without both. This page is the only way
+  // a trader reaches that, so these cases are about the two things a UI can get wrong with
+  // real money: sending live when the trader did not ask for it, and sending an account id
+  // that is not one.
+  //
+  // `expectNoDialogAndOnlyLibrary` is NOT used below. The live path legitimately reads
+  // `api.exchange.list()` to populate the account selector, so the correct assertion is
+  // "library and exchange, nothing else" rather than "library only".
+  // ─────────────────────────────────────────────────────────────────────────────────────
+
+  const ACCOUNT = {
+    // A `GET /api/exchanges/` entry. BOTH ids are present on purpose, so a test
+    // catches the wrong one being sent: `account_id` is the real `exchange_keys.id`
+    // (migration 058, EXCH-03) and the only value a deployment can store, while `id` is
+    // the synthesised `{user_id}_{exchange_id}` composite kept for the existing exchange
+    // UI, which resolves to nothing.
+    account_id: 'acct-real-uuid',
+    id: 'user-1_binance',
+    exchange_id: 'binance',
+    name: 'BINANCE',
+  };
+
+  const expectOnlyLibraryAndExchange = () => {
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const paths = calledPaths(mockApi);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.filter((p) => !p.startsWith('library.') && !p.startsWith('exchange.')))
+      .toEqual([]);
+  };
+
+  const chooseLive = async (user) => {
+    mockApi.exchange.list.mockResolvedValue([ACCOUNT]);
+    await user.click(screen.getByTestId('deploy-mode-live'));
+    return screen.findByTestId('deploy-live-fields');
+  };
+
+  it('opens on paper, so live is never the default', async () => {
+    signIn();
+    await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    expect(screen.getByTestId('deploy-mode-paper').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByTestId('deploy-mode-live').getAttribute('aria-checked')).toBe('false');
+    // No live fields and no exchange read until live is actually chosen.
+    expect(screen.queryByTestId('deploy-live-fields')).toBeNull();
+    expect(mockApi.exchange.list).not.toHaveBeenCalled();
+  });
+
+  it('reads the caller\'s exchange accounts only once live is chosen', async () => {
+    signIn();
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await chooseLive(user);
+
+    await waitFor(() => expect(mockApi.exchange.list).toHaveBeenCalledTimes(1));
+  });
+
+  it('sends mode and the REAL account id, not the synthesised composite', async () => {
+    signIn();
+    mockApi.library.deploy.mockResolvedValue({ deployment_id: 'dep-live', library_id: LISTING_ID });
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    await chooseLive(user);
+
+    // One account, so it is preselected -- picking one of SEVERAL on the trader's behalf
+    // would be choosing which account trades their money, which this page does not do.
+    await waitFor(() =>
+      expect(screen.getByTestId('deploy-account-select').value).toBe('acct-real-uuid'));
+    await user.click(screen.getByRole('button', { name: /deploy live/i }));
+
+    await waitFor(() => expect(mockApi.library.deploy).toHaveBeenCalledWith(LISTING_ID, {
+      mode: 'live',
+      exchange_account_id: 'acct-real-uuid',
+    }));
+    expectOnlyLibraryAndExchange();
+  });
+
+  it('refuses to submit live with no account chosen, and says why on the control', async () => {
+    signIn();
+    mockApi.exchange.list.mockResolvedValue([ACCOUNT, { ...ACCOUNT, account_id: 'acct-2', name: 'KRAKEN' }]);
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    await user.click(screen.getByTestId('deploy-mode-live'));
+    await screen.findByTestId('deploy-live-fields');
+
+    // TWO accounts, so nothing is preselected.
+    await waitFor(() => expect(screen.getByTestId('deploy-account-select').value).toBe(''));
+    const button = screen.getByRole('button', { name: /deploy live/i });
+    expect(button.hasAttribute('disabled')).toBe(true);
+
+    await user.click(button);
+    expect(mockApi.library.deploy).not.toHaveBeenCalled();
+  });
+
+  it('still sends a paper deployment with no mode when paper is kept', async () => {
+    signIn();
+    mockApi.library.deploy.mockResolvedValue({ deployment_id: 'dep-paper', library_id: LISTING_ID });
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+
+    await user.click(screen.getByRole('button', { name: /^deploy$/i }));
+
+    // No `mode` key at all. The server defaults to paper, and the existing
+    // "empty body when every field is blank" property must survive this change.
+    await waitFor(() => expect(mockApi.library.deploy).toHaveBeenCalledWith(LISTING_ID, {}));
+    expectNoDialogAndOnlyLibrary();
+  });
+
+  it('does not offer an account whose real id is missing', async () => {
+    signIn();
+    // A row with no `account_id` cannot be deployed against -- sending the composite would
+    // 404 and look like a missing account rather than a bad id -- so it must not appear.
+    mockApi.exchange.list.mockResolvedValue([{ id: 'user-1_binance', exchange_id: 'binance' }]);
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    await user.click(screen.getByTestId('deploy-mode-live'));
+
+    expect(await screen.findByTestId('deploy-no-accounts')).not.toBeNull();
+    expect(screen.queryByTestId('deploy-account-select')).toBeNull();
+  });
+
+  it('reports a failed account read as a failure, not as "you have no accounts"', async () => {
+    signIn();
+    mockApi.exchange.list.mockRejectedValue(new Error('EXCHANGE_CONNECTIONS_READ_FAILED'));
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    await user.click(screen.getByTestId('deploy-mode-live'));
+
+    // An empty list and a read that did not complete are different statements, and this
+    // one must not claim the account holder has no exchange connected.
+    expect(await screen.findByTestId('deploy-accounts-error')).not.toBeNull();
+    expect(screen.queryByTestId('deploy-no-accounts')).toBeNull();
+    expect(screen.queryByTestId('deploy-account-select')).toBeNull();
+  });
+
+  it('tells a live deployer the period bound before they commit', async () => {
+    signIn();
+    const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
+    await screen.findByTestId('deploy-panel');
+    const panel = await chooseLive(user);
+
+    // The bound is the thing a subscriber most needs to know, because it is what makes
+    // this deployment stop. Asserted on the rendered text, not on a comment.
+    expect(panel.textContent).toMatch(/real orders/i);
+    expect(panel.textContent).toMatch(/subscription/i);
+  });
+
   it('opens the named Listing directly when the URL carries ?listing_id and intent=deploy', async () => {
     signIn();
     const detail = listingDetail();

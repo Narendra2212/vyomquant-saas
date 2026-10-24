@@ -25169,6 +25169,11 @@
       "step1"
     ],
     [
+      "migrations/058_exch03_exchange_keys_stable_handle.sql",
+      "417d23b430e62ffa549934952a507330c4d6d5ff60b0aacb57b9f436bd7f05d8",
+      "step1"
+    ],
+    [
       "migrations/add_billing_currency_and_dag_hash.sql",
       "4b2ac2899820d0a43407671ab4b4648af994d98210a66347c6c05a022740719f",
       "step1"

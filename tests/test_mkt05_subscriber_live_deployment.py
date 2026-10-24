@@ -322,3 +322,105 @@ def test_resume_reads_the_window_off_the_row():
         "rebuild_for_resume must carry authorized_until from the deployment row, or a "
         "resumed live marketplace deployment would come back unbounded"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EXCH-03: a deployment must be able to name an exchange account
+# ══════════════════════════════════════════════════════════════════════════════
+
+_MIGRATION_058 = (
+    _ROOT / "backend_app" / "migrations"
+    / "058_exch03_exchange_keys_stable_handle.sql"
+)
+
+
+def test_058_gives_exchange_keys_a_single_column_handle():
+    """EXCH-03. ``load_owned_exchange_account`` resolves a deployment's
+    ``exchange_account_id`` with ``.eq("id", ...)``, and ``exchange_keys`` had no ``id``
+    column at all -- eleven columns, primary key the composite
+    ``(user_id, exchange_id)``, measured against production. So that query raised
+    ``42703``, the resolver's own ``except/continue`` swallowed it as "table
+    unavailable", and EVERY live deployment answered 404 -- first-party as well as
+    marketplace.
+
+    The migration adds the handle. This asserts it is still declared and still unique,
+    because without uniqueness a handle does not identify an account.
+    """
+    text = _MIGRATION_058.read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS id" in text, (
+        "058 must add the id handle; without it no live deployment can name an account"
+    )
+    assert "uq_exchange_keys_id" in text, (
+        "058 must make the handle unique, or it does not identify one account"
+    )
+    assert "SET NOT NULL" in text, (
+        "a NULL handle is a row no deployment can name, so the column must be NOT NULL"
+    )
+
+
+def test_058_does_not_replace_the_primary_key():
+    """The composite ``(user_id, exchange_id)`` stays the primary key, deliberately.
+
+    It is the real constraint -- one credential per user per venue -- and it is what
+    ``api_key_vault.load_decrypted_keys(user_id, exchange_id)`` resolves credentials by.
+    Replacing the primary key of a table holding encrypted customer credentials to add a
+    lookup handle would be a far larger risk than adding a column beside it.
+    """
+    text = _MIGRATION_058.read_text(encoding="utf-8")
+
+    # Comment lines are stripped before any of this is judged. The file's header
+    # DISCUSSES the primary key at length -- explaining why it is left alone -- and a
+    # scan that read those sentences as statements would be checking prose.
+    statements = "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("--")
+    ).upper()
+
+    assert "DROP CONSTRAINT" not in statements, (
+        "058 must not drop a constraint: the composite primary key is what "
+        "api_key_vault.load_decrypted_keys resolves credentials by"
+    )
+    for forbidden in ("ADD PRIMARY KEY", "EXCHANGE_KEYS_PKEY"):
+        assert forbidden not in statements, (
+            f"058 must not touch the primary key ({forbidden.lower()} found in a "
+            "statement). The handle is added beside it, not instead of it."
+        )
+
+
+def test_058_accepts_both_live_shapes():
+    """The from-source shape and production's shape differ, and both must pass.
+
+    ``migrations/003_create_exchange_keys_table.sql`` declares ``id TEXT PRIMARY KEY``,
+    so a database provisioned from repository source already has a handle -- as text, and
+    as the primary key. Production's table was never created by that migration and had no
+    handle at all, so 058 adds one as ``uuid``.
+
+    An earlier draft asserted ``data_type='uuid'`` in its postflight, which would have
+    failed on every CI run. The postflight must accept either.
+    """
+    text = _MIGRATION_058.read_text(encoding="utf-8")
+    assert "'uuid', 'text', 'character varying'" in text, (
+        "058's postflight must accept a text handle as well as a uuid one, or it fails on "
+        "every database provisioned from repository source (003 declares id TEXT)"
+    )
+
+
+def test_the_resolver_still_looks_up_by_the_handle():
+    """Pins the dependency from the other end.
+
+    If ``load_owned_exchange_account`` is ever changed to resolve by something other than
+    ``id``, 058's whole reason for existing goes with it -- and this test, rather than a
+    404 in production, is where that should surface.
+    """
+    import inspect
+
+    from backend_app.backend import deployment_binding
+
+    source = inspect.getsource(deployment_binding.load_owned_exchange_account)
+    assert '.eq("id", exchange_account_id)' in source, (
+        "load_owned_exchange_account no longer resolves by `id`. If that is deliberate, "
+        "058's handle may be unnecessary -- but check first, because this is the lookup "
+        "that answered 404 for every live deployment before the handle existed."
+    )
+    assert "exchange_keys" in inspect.getsource(deployment_binding).split(
+        "EXCHANGE_ACCOUNT_TABLES"
+    )[1][:200], "exchange_keys must remain one of the candidate account tables"

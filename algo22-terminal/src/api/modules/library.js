@@ -476,14 +476,34 @@ export const libraryApi = {
    * `POST /api/library/{library_id}/deploy` (`deploy_marketplace_strategy`, rate-limited
    * 10/60s). The subscriber-safe path: the server binds a new `strategy_deployments` row to
    * the OWNER's current version and never copies `buy_logic`/`sell_logic`/`risk`/
-   * `indicators` into a row the caller owns. Runs as a PAPER deployment — there is no live
-   * path for a marketplace Listing today.
+   * `indicators` into a row the caller owns.
    *
-   * `body` accepts only `symbol`, `timeframe`, `capital` and `session_options`; any other key
-   * is a 422 that names the field but never echoes the value. All four are optional.
+   * `mode` selects the Execution_Environment and defaults to `'paper'`, so an existing
+   * caller that omits it is unaffected.
+   *
+   * `mode: 'live'` PLACES REAL ORDERS, and is permitted only for the duration of the
+   * subscribed period. It requires `exchange_account_id` — the caller's OWN exchange
+   * account, which is the `account_id` field of an `api.exchange.list()` entry, NOT its
+   * `id` (that one is a synthesised `{user_id}_{exchange_id}` composite kept for the
+   * existing exchange UI). `risk_config_id` is optional. Naming an account the caller does
+   * not own is a 404, never a 403, so the response cannot be used to discover whether an
+   * id exists for somebody else.
+   *
+   * The server stamps the deployment with the subscription that authorises it and the
+   * instant that authorisation ends, and refuses to create a live marketplace deployment
+   * without both (`chk_sd_marketplace_live_is_bounded`, migration 056). A live deployment
+   * stops placing orders the moment the paid period ends — enforced on the order path
+   * every tick, not by a background sweep.
+   *
+   * `body` accepts only `symbol`, `timeframe`, `capital`, `session_options`, `mode`,
+   * `exchange_account_id` and `risk_config_id`; any other key is a 422 that names the
+   * field but never echoes the value. A paper request carrying an account or risk config
+   * is also a 422 rather than a silently ignored field.
    *
    * @param {string} listingId
-   * @param {{symbol?: string, timeframe?: string, capital?: number, session_options?: Object}} [body]
+   * @param {{symbol?: string, timeframe?: string, capital?: number,
+   *          session_options?: Object, mode?: 'paper'|'live',
+   *          exchange_account_id?: string, risk_config_id?: string}} [body]
    * @returns {Promise<Object>} `{deployment_id, library_id, granted_via, message}`.
    */
   deploy: (listingId, body = {}) =>
