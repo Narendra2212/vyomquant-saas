@@ -666,6 +666,34 @@ jobs:
       - name: Fail on schema drift from the committed baseline
         run: python scripts/verify_schema_drift.py --dsn "$PROVISION_DATABASE_URL"
 
+      # `if: always()` so this still runs when the step above FAILED, which is the only
+      # time it is wanted. The database here was just provisioned from repository source
+      # twice over, so its shape is by definition what the repository produces -- the one
+      # kind of database allowed to define the baseline. No local PostgreSQL is needed to
+      # refresh a stale baseline any more: download this artifact, diff it against
+      # staging/provisioning_snapshot.json, and commit it if the delta is accounted for by
+      # the migrations added since.
+      #
+      # Deliberately an ARTIFACT and not a commit. A stale baseline and a missing
+      # migration produce an identical report with opposite fixes, so a job that
+      # auto-refreshed the baseline would silently convert every missing migration into a
+      # new expectation -- it would answer the question this check exists to ask.
+      - name: Upload a refreshed baseline candidate for comparison
+        if: always()
+        run: |
+          python scripts/verify_schema_drift.py \
+            --dsn "$PROVISION_DATABASE_URL" \
+            --write-baseline reports/provisioning_snapshot.candidate.json
+
+      - name: Attach the baseline candidate
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: provisioning-snapshot-candidate
+          path: reports/provisioning_snapshot.candidate.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Run every database security and integrity probe
         run: python staging/run_all_probes.py
 
