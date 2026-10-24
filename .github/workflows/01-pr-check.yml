@@ -769,6 +769,7 @@ jobs:
                  tests/test_sec07_profiles_platform_columns_postgres.py \
                  tests/test_sec09_marketplace_evidence_service_role_only_postgres.py \
                  tests/test_sec16_strategy_deployments_guard_postgres.py \
+                 tests/test_dbalm02_identity_coverage_postgres.py \
                  tests/test_tenant01_cross_tenant_matrix_postgres.py \
                  tests/test_tenant01_restricted_payment_methods_role_postgres.py \
                  tests/test_tenant02_fee_records_rls_postgres.py \
