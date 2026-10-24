@@ -1,6 +1,8 @@
 {
-  "Comment_1": "INF-03 ROUTE (A): the least-privilege policy that lets the deploy identity create and use the terraform state backend. PREPARED, NOT ATTACHED -- attaching it is a permission change and belongs to the account owner.",
-  "Comment_2": "Apply with:  aws iam put-user-policy --user-name github-actions --policy-name VyomQuantTerraformStateBackend --policy-document file://infra/iam/terraform-state-backend-policy.json   then:  python scripts/bootstrap_terraform_state.py --apply",
+  "Comment_1": "INF-03 ROUTE (A): the least-privilege policy that lets the deploy identity create and use the terraform state backend. ATTACHED AND IN EFFECT since 2026-10-24, with the account owner's approval, as MANAGED policy arn:aws:iam::273709947018:policy/VyomQuantTerraformStateBackend (964 bytes).",
+  "Comment_2": "ATTACHED AS MANAGED, NOT INLINE, and not by choice: `put-user-policy` fails with `LimitExceeded: Maximum policy size of 2048 bytes exceeded` because this user's six inline policies already occupy 1982 of 2048. Managed needed a free slot and the user held 10 of 10 (`PoliciesPerUser`), so AmazonECSTaskExecutionRolePolicy was detached from the USER -- proven redundant first: all six of its actions are already covered by this user's ecr:* and logs:* grants, and the two roles that genuinely need it (ecsTaskExecutionRole, VyomQuantEcsTaskExecutionRole-production) carry it independently, so no task's pull or log path depends on the user's copy. Revert with scripts/attach_terraform_state_policy.py --detach.",
+  "Comment_2b": "Reproduce with:  aws iam create-policy --policy-name VyomQuantTerraformStateBackend --policy-document file://infra/iam/terraform-state-backend-policy.json  then  aws iam attach-user-policy --user-name github-actions --policy-arn <arn>  then  python scripts/bootstrap_terraform_state.py --apply",
+  "Comment_2c": "VERIFIED 2026-10-24 by iam:SimulatePrincipalPolicy against the real resource ARNs -- 12/12 actions `allowed` -- and then by effect: the bucket and lock table now exist, versioned, AES256, all four public-access blocks true, LockID/HASH/String, PAY_PER_REQUEST. Note the bucket-probe that used to verify this reported DENIED at the same moment, because it probed a DIFFERENT bucket name than the one granted below; see bootstrap_terraform_state.can_create_bucket.",
   "Comment_3": "SCOPED TO TWO NAMED RESOURCES. s3:CreateBucket cannot be scoped to a bucket that does not exist yet in the usual sense, so it is granted on the exact ARN of the bucket terraform/backend.tf expects and no other. Measured denials this replaces: s3:CreateBucket ('no identity-based policy allows'), dynamodb:DescribeTable, dynamodb:ListTables.",
   "Comment_4": "DELIBERATELY ABSENT: s3:DeleteBucket, s3:DeleteObjectVersion and dynamodb:DeleteTable. Terraform never needs to destroy its own backend, and a state backend that the deploy identity can delete is a backend one bad command can lose. State history is the thing that makes a bad apply recoverable.",
   "Version": "2012-10-17",
@@ -42,7 +44,7 @@
         "dynamodb:GetItem",
         "dynamodb:DeleteItem"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:273709947018:table/vyomquant-terraform-locks"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:273709947018:table/vyomquant-terraform-lock"
     },
     {
       "Sid": "ListTablesIsAccountScopedByAwsDesign",
