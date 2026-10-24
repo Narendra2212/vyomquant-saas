@@ -617,6 +617,26 @@ REVIEWED: Tuple[Allowed, ...] = (
             "None tells the caller the loop did not start while the session is RUNNING with an "
             "open feed, which is what it needs in order to stop it; the log line names the "
             "session. Raising here would leave that session running with nobody able to name it."),
+    Allowed(f"{_P}/paper_session_service.py", "abandon_sessions_hosted_here", 0, 4804,
+            Outcome.LOGS,
+            "ONE session's transition to ABANDONED failed while this process shuts down, "
+            "inside a loop over the sessions it was hosting. A lost race -- the user "
+            "stopped it, or the sweep got there first -- is counted separately and is the "
+            "EXPECTED outcome of a guarded UPDATE matching nothing; anything else is "
+            "logged at warning with the session named, and the drain continues over the "
+            "rest. Raising would abandon the remaining sessions' records to the staleness "
+            "window instead, and would fail a shutdown over bookkeeping. Each of them is "
+            "still picked up by the periodic sweep, so the worst case is the delay this "
+            "drain exists to remove, not a lost record."),
+    Allowed(f"{_P}/paper_session_service.py", "run_reconciliation_loop", 0, 4746,
+            Outcome.LOGS,
+            "the periodic sweep could not run this cycle -- in practice a failure to "
+            "RESOLVE the client, since reconcile_orphaned_sessions returns its own "
+            "failures as counts rather than raising. The loop sleeps and tries again, "
+            "which is the whole point of it being a loop; letting the exception out would "
+            "end the sweep permanently and silently restore the boot-only behaviour this "
+            "function was added to replace. asyncio.CancelledError is re-raised by the "
+            "preceding handler, so a shutdown is not swallowed."),
     Allowed(f"{_P}/paper_session_service.py", "reconcile_orphaned_sessions", 0, 4613,
             Outcome.LOGS,
             "the read that finds stale RUNNING sessions failed, so NO session was changed -- the "
