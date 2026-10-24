@@ -24769,11 +24769,6 @@
    "step1"
   ],
   [
-   "migrations/054_paper04_abandoned_session_state.sql",
-   "19bfe49cb4510a1535eaeee74c169adc763e039262da5fef0e824fc686913d90",
-   "step1"
-  ],
-  [
    "migrations/055_dbalm02_identity_types_uncovered.sql",
    "9476c2a951acbc217f8d6d41e1e286c408ebbb611d437bb7321f84d864f71abe",
    "step1"
