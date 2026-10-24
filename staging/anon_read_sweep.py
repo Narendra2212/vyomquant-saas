@@ -149,6 +149,25 @@ CHECK_OVERRIDES = {
     # gap introduced by adding the table in Phase 9 without its seed override, which
     # test_every_readable_table_was_actually_exercised correctly refused to pass.
     "referral_obligations": {"currency": "USD"},
+    # LEGAL-01 migrations 052/053. Exactly the same gap this file's `referral_obligations`
+    # comment above describes: the table landed without its seed override, so the sweep
+    # could not insert a row and reported it NOT PROVEN -- meaning cross-tenant isolation
+    # was not being measured for the table that records who accepted which legal document.
+    # Its four CHECKs, read from pg_constraint rather than guessed:
+    #   chk_legal_acceptances_context                 context IN ('signup','re_acceptance','backfill')
+    #   chk_legal_acceptances_version_shape           document_version ~ '^\d{4}-\d{2}-\d{2}$'
+    #   chk_legal_acceptances_documents_nonempty      array_length(documents, 1) >= 1
+    #   chk_legal_acceptances_declared_country_shape  declared_country IS NULL OR ~ '^[A-Z]{2}$'
+    # `context` has a DEFAULT of 'signup' but still needs the entry, because the sweep
+    # synthesises a value for every column rather than omitting it and letting the default
+    # apply. `declared_country` is nullable, but a synthesised `probe-xxxxxxxx` string
+    # would violate its shape CHECK, so it is pinned to a real ISO-3166-1 alpha-2 code.
+    "legal_acceptances": {
+        "context": "signup",
+        "document_version": "2026-01-01",
+        "documents": ["terms_of_service"],
+        "declared_country": "IN",
+    },
 }
 
 #: Tables whose rows are created for a profile by a trigger, so an explicit insert hits
