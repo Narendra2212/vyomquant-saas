@@ -315,10 +315,19 @@ def main() -> int:
     ap.add_argument("--dsn", help="database to check (defaults to staging/pg_dsn.txt)")
     ap.add_argument("--baseline", default=str(DEFAULT_BASELINE),
                     help="snapshot JSON from scripts/verify_provisioning.py")
+    ap.add_argument(
+        "--write-baseline", metavar="PATH",
+        help="write this database's snapshot to PATH in baseline format and exit 0, "
+             "comparing nothing. For REFRESHING a stale baseline from a database that "
+             "was just provisioned from repository source -- which is the only kind of "
+             "database whose shape is allowed to define the baseline. Pointing this at "
+             "production would enshrine production's drift as the expectation, which is "
+             "the opposite of what this script is for.",
+    )
     args = ap.parse_args()
 
     baseline_path = pathlib.Path(args.baseline)
-    if not baseline_path.exists():
+    if not baseline_path.exists() and not args.write_baseline:
         print(f"no baseline at {baseline_path}")
         print("produce one first:  python scripts/verify_provisioning.py")
         return 2
@@ -330,6 +339,47 @@ def main() -> int:
             print("no --dsn given and staging/pg_dsn.txt does not exist")
             return 2
         dsn = dsn_file.read_text(encoding="utf-8").strip()
+
+    # ── refresh mode ────────────────────────────────────────────────────────────
+    # A stale baseline and a missing migration produce the same report, and they have
+    # opposite fixes -- which is why this writes to a path the caller names rather than
+    # over the committed baseline, and why CI uploads the result as an artifact for a
+    # human to compare and commit instead of self-healing the check that guards it.
+    if args.write_baseline:
+        try:
+            snapshot = live_snapshot(dsn)
+            version = _server_version(dsn)
+        except psycopg2.Error as exc:
+            print(f"could not read the database: {str(exc).splitlines()[0]}")
+            print(f"  database = {redact(dsn)}")
+            return 2
+        out = pathlib.Path(args.write_baseline)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Match the indentation of the baseline this would replace, read off that file
+        # rather than assumed. verify_provisioning.py writes indent=1 and the committed
+        # baseline is indent=2; writing the wrong one reformats all ~27,000 lines and
+        # buries the handful of rows a reviewer actually needs to see. sort_keys=True
+        # either way, so the ordering is stable.
+        indent = 2
+        if baseline_path.exists():
+            lines = baseline_path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > 1:
+                second = lines[1]
+                indent = (len(second) - len(second.lstrip())) or 2
+        out.write_text(json.dumps(snapshot, indent=indent, sort_keys=True) + "\n",
+                       encoding="utf-8")
+        print("=" * 78)
+        print("SCHEMA SNAPSHOT WRITTEN (no comparison performed)")
+        print("=" * 78)
+        print(f"database : {redact(dsn)}")
+        print(f"server   : {version}")
+        print(f"written  : {out}  (indent={indent}, matching {baseline_path.name})")
+        for key in sorted(snapshot):
+            print(f"   {key:<32} {len(snapshot[key])}")
+        print("\nCompare against the committed baseline before replacing it. Drift means")
+        print("EITHER a stale baseline OR a missing migration, and only a human can say")
+        print("which -- this file is evidence for that decision, not the decision.")
+        return 0
 
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")

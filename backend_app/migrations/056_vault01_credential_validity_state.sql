@@ -73,26 +73,63 @@
 --  credential_key_integrity.UNREADABLE_STATUS and used by both the writer and the
 --  reader, so it cannot drift even without a constraint.
 --
+--  THIS FILE REPAIRS PRODUCTION DRIFT, IT DOES NOT INVENT A SCHEMA
+--  ---------------------------------------------------------------
+--  migrations/003_create_exchange_keys_table.sql ALREADY declares updated_at
+--  (TIMESTAMPTZ NOT NULL DEFAULT NOW()), a trg_exchange_keys_updated_at trigger
+--  and an update_exchange_keys_updated_at() function. routers/exchange.py:36-50
+--  records the consequence: production's table carries none of them, so
+--  "production's table was never created by that migration and the repo's SQL
+--  does not describe it."
+--
+--  So on a CLEAN PROVISION the updated_at half of this file is a no-op, and on
+--  PRODUCTION it closes the gap. It deliberately uses migrations/003's own
+--  names, bodies and defaults -- not variants of them -- so the two databases
+--  converge on one shape instead of on two that merely both work. An earlier
+--  revision of this file got that wrong in two ways worth recording, because
+--  both are invisible to the drift check:
+--
+--    * It ran CREATE OR REPLACE FUNCTION update_updated_at_column(), which
+--      001_strategy_architecture.sql defines and FOUR triggers share
+--      (exchange_keys, objects, strategy_deployments, strategy_versions). It
+--      replaced NEW.updated_at = NOW() with timezone('utc', now()), changing
+--      the behaviour of every one of them. Equivalent only because production's
+--      TimeZone is UTC -- measured, difference 00:00:00 -- but a value-shifting
+--      change on any server that is not. The drift check compares function
+--      NAMES, so the count stayed 85 and it would never have been reported.
+--      This file no longer touches that function.
+--    * It created a SECOND trigger beside trg_exchange_keys_updated_at rather
+--      than the canonical one, so a clean provision ended up with two triggers
+--      doing the same job. It now installs only migrations/003's trigger, and
+--      drops the stray name wherever the earlier revision already created it.
+--
 --  IDEMPOTENT, and safe to run against a database that already has it.
 -- ============================================================================
 
 BEGIN;
 
 -- ---------------------------------------------------------------------------
---  updated_at: the column both projections already name.
+--  updated_at: the column both projections already name, declared exactly as
+--  migrations/003 declares it -- DEFAULT NOW(), not a UTC-wrapped variant, so a
+--  clean provision and production agree.
+--
 --  Backfilled from created_at rather than now(), so an untouched row does not
 --  claim it was modified at migration time. "last changed" is what the
 --  dashboard renders as last_sync; now() would make every stale row look fresh.
 -- ---------------------------------------------------------------------------
 ALTER TABLE public.exchange_keys
-    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 UPDATE public.exchange_keys
    SET updated_at = created_at
  WHERE updated_at IS NULL;
 
+-- ADD COLUMN IF NOT EXISTS does not alter an existing column's default, and the
+-- first revision of this file set it to timezone('utc', now()) on production.
+-- Stated explicitly so both databases end on migrations/003's NOW(): a no-op on a
+-- clean provision, a correction on production.
 ALTER TABLE public.exchange_keys
-    ALTER COLUMN updated_at SET DEFAULT timezone('utc'::text, now());
+    ALTER COLUMN updated_at SET DEFAULT NOW();
 
 ALTER TABLE public.exchange_keys
     ALTER COLUMN updated_at SET NOT NULL;
@@ -139,22 +176,31 @@ COMMENT ON COLUMN public.exchange_keys.can_trade IS
     'a negative finding nobody measured.';
 
 -- ---------------------------------------------------------------------------
---  Keep updated_at honest on every future write, using the function 001 already
---  defines and attaches to every table it creates. Created here only if some
---  earlier migration has not already defined it.
+--  Keep updated_at honest on every future write, using migrations/003's OWN
+--  dedicated function and trigger names and its exact body.
+--
+--  update_exchange_keys_updated_at() is specific to this table, so CREATE OR
+--  REPLACE on it is safe: only this one trigger calls it. That is precisely why
+--  migrations/003 declared a dedicated function instead of reusing the shared
+--  update_updated_at_column(), and why this file must not reach for the shared
+--  one either.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+CREATE OR REPLACE FUNCTION public.update_exchange_keys_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = timezone('utc'::text, now());
+    NEW.updated_at = NOW();
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
+-- The stray name an earlier revision of THIS file created, which left a clean
+-- provision carrying two triggers for one job. Dropped wherever it exists.
 DROP TRIGGER IF EXISTS update_exchange_keys_updated_at ON public.exchange_keys;
-CREATE TRIGGER update_exchange_keys_updated_at
+
+DROP TRIGGER IF EXISTS trg_exchange_keys_updated_at ON public.exchange_keys;
+CREATE TRIGGER trg_exchange_keys_updated_at
     BEFORE UPDATE ON public.exchange_keys
-    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+    FOR EACH ROW EXECUTE FUNCTION public.update_exchange_keys_updated_at();
 
 -- ---------------------------------------------------------------------------
 --  A partial index on the quarantined rows. The boot check reads "every row NOT

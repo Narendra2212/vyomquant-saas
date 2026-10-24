@@ -421,6 +421,90 @@ def test_the_migration_is_idempotent():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  THE MIGRATION MUST NOT CREATE DRIFT OF ITS OWN
+# ══════════════════════════════════════════════════════════════════════════════
+#  exchange_keys is the one table where the repository and production genuinely
+#  disagree: migrations/003_create_exchange_keys_table.sql declares updated_at, a
+#  trg_exchange_keys_updated_at trigger and an update_exchange_keys_updated_at()
+#  function, and production's table -- never created by that migration, as
+#  routers/exchange.py:36-50 records -- had none of them. So 056 runs against two
+#  different starting shapes and has to land both on ONE result.
+#
+#  The first revision of 056 did not, in two ways that the schema-drift check cannot
+#  see. These tests exist because that check would not have caught either.
+
+CANONICAL_DDL = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "migrations", "003_create_exchange_keys_table.sql",
+)
+
+
+def executable_sql(path: str) -> str:
+    """The migration with `--` comments stripped.
+
+    These assertions are about what the file DOES. 056's header discusses the shared
+    function at length precisely to explain why it must not be touched, and a naive
+    substring search over the whole file would read that explanation as the offence.
+    """
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    kept = []
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith("--"):
+            continue
+        kept.append(line.split("--")[0] if "--" in line else line)
+    return "\n".join(kept)
+
+
+def test_the_migration_does_not_touch_the_shared_updated_at_function():
+    """`update_updated_at_column()` is declared in 001_strategy_architecture.sql and
+    shared by four triggers (exchange_keys, objects, strategy_deployments,
+    strategy_versions). 056's first revision CREATE OR REPLACE'd it with a
+    timezone('utc', now()) body, silently changing all four. Harmless only because
+    production's TimeZone is UTC -- measured difference 00:00:00 -- and invisible to the
+    drift check, which compares function NAMES, so the count stayed 85."""
+    sql = executable_sql(MIGRATION)
+    assert "update_updated_at_column" not in sql, (
+        "056 must not redefine the shared updated_at function; it is used by triggers "
+        "on other tables and replacing it changes their behaviour"
+    )
+
+
+def test_the_migration_uses_the_canonical_trigger_name():
+    """One trigger per job. The first revision created a second trigger beside
+    migrations/003's, so a clean provision ended up with two doing the same thing."""
+    sql = executable_sql(MIGRATION)
+    with open(CANONICAL_DDL, encoding="utf-8") as fh:
+        canonical = fh.read()
+    assert "trg_exchange_keys_updated_at" in canonical, "canonical DDL moved"
+    assert re.search(r"CREATE TRIGGER\s+trg_exchange_keys_updated_at", sql), \
+        "056 must install migrations/003's trigger, not a variant of it"
+    created = re.findall(r"CREATE TRIGGER\s+(\w+)", sql)
+    assert created == ["trg_exchange_keys_updated_at"], \
+        f"056 creates {created}; exactly one canonical trigger is correct"
+    # And it must clean up the stray name its own first revision left behind.
+    assert "DROP TRIGGER IF EXISTS update_exchange_keys_updated_at" in sql
+
+
+def test_the_migration_matches_the_canonical_updated_at_default():
+    """migrations/003 declares DEFAULT NOW(). A UTC-wrapped variant is a different
+    default in information_schema and therefore drift, even where it computes the same
+    instant."""
+    sql = executable_sql(MIGRATION)
+    with open(CANONICAL_DDL, encoding="utf-8") as fh:
+        canonical = fh.read()
+    assert re.search(r"updated_at\s+TIMESTAMPTZ\s+NOT NULL\s+DEFAULT\s+NOW\(\)",
+                     canonical, re.I), "canonical default moved"
+    assert re.search(r"ALTER COLUMN updated_at SET DEFAULT NOW\(\)", sql, re.I), \
+        "056 must state the canonical default explicitly, because ADD COLUMN IF NOT " \
+        "EXISTS does not change an existing column's default"
+    assert "timezone('utc'" not in sql.lower(), \
+        "no column default or trigger body in 056 may be a UTC-wrapped variant of " \
+        "NOW(); migrations/003 uses NOW() and the two databases must agree"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  THE READINESS SURFACE
 # ══════════════════════════════════════════════════════════════════════════════
 
