@@ -600,8 +600,24 @@ def _no_on_demand_venue_quotes():
     A test that needs the real function restores it itself with ``monkeypatch.setattr``,
     which still wins for the duration of that test -- see
     ``tests/test_paper02_on_demand_quote.py::_with_venue``.
+
+    THE IMPORT IS OPTIONAL, for the same reason ``_sqlite_lane_schema_bootstrap`` and
+    ``_restore_shared_redis_singleton`` above make theirs optional, and this fixture
+    originally forgot to. ``01-pr-check.yml``'s ``frontend-build`` job runs
+    ``tests/test_no_secrets_in_bundle.py -m frontend_bundle`` in an environment that
+    installs only pytest. Autouse means every collected test requests this fixture, so an
+    unguarded ``from backend_app...`` here fails at SETUP with
+    ``ModuleNotFoundError: No module named 'pydantic'`` -- and that is precisely what it
+    did: the bundle secret sweep errored on both tests and therefore never scanned
+    anything. A blocking check for a leaked credential in a shipped bundle was inert for
+    the same reason the step order was changed to protect it. A test that does not import
+    the backend at all must not be made to.
     """
-    from backend_app.backend import paper_trading_service as pts
+    try:
+        from backend_app.backend import paper_trading_service as pts
+    except Exception:
+        yield
+        return
 
     async def _refuse(symbol, exchange_id=None, *, timeout=None):
         return None
