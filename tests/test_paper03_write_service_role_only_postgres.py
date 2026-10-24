@@ -61,6 +61,34 @@ _INSERT_ONLY_TABLES = [
 ]
 _ALL_TABLES = _RW_TABLES + _INSERT_ONLY_TABLES
 
+# WHY THIS FILE NOW MOVES THE REAL TABLES ASIDE INSTEAD OF DESTROYING THEM.
+#
+# This file needs its mirrors to be named `public.paper_*` exactly, because it applies
+# `043_paper_trading_service_role_only_write.sql` VERBATIM from disk and that migration
+# names `public.paper_sessions` and friends literally (it also builds
+# `has_table_privilege('authenticated', 'public.' || tbl, ...)` strings in its own
+# postflight). So the mirrors cannot simply be built in a scratch schema.
+#
+# What this file used to do was `DROP TABLE public.paper_* CASCADE` on the way in AND on
+# the way out -- destroying whatever the database already had under those names and never
+# putting it back. On a disposable replica that is invisible. In the `provisioning` CI
+# lane it was not: that lane provisions the full schema once and then runs every
+# PostgreSQL-gated file in ONE pytest invocation, and this file is listed immediately
+# before `test_paper05_apply_fill_atomic_postgres.py`. So this file deleted the real
+# `paper_*` tables, and PAPER-05's own module-scoped `_require_migration_048` fixture then
+# probed `to_regclass('public.paper_accounts')`, got NULL, and skipped all 10 of its
+# atomicity tests -- reporting "paper_* tables are absent" about a database the same job
+# had just provisioned them into. That skip was recorded in the ledger as not root-caused.
+# This is the cause.
+#
+# `ALTER TABLE ... SET SCHEMA` is the primitive used rather than `RENAME TO`: renaming
+# within `public` would leave the original's indexes and constraints occupying the names
+# (`paper_accounts_pkey` and siblings) that the mirror's own PRIMARY KEY then tries to
+# create, which collides. Moving the table to another schema takes its indexes,
+# constraints, policies and grants with it, freeing the names completely, and moving it
+# back restores all of them along with every row.
+_STASH_SCHEMA = "paper03_stash"
+
 
 def _connect():
     conn = psycopg2.connect(DSN)
@@ -72,6 +100,44 @@ def _roles_present(cur) -> bool:
     cur.execute("SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role')")
     found = {r[0] for r in cur.fetchall()}
     return {"anon", "authenticated", "service_role"} <= found
+
+
+def _exists(cur, qualified: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (qualified,))
+    return bool(cur.fetchone()[0])
+
+
+def _stash_real_tables(cur) -> list[str]:
+    """Move any real ``public.paper_*`` table into the stash schema and report which.
+
+    Self-healing on the way in: if the stash schema already holds tables, a previous run
+    of this file died between its setup and its teardown, so those are the real tables and
+    whatever is sitting in ``public`` under the same name is a leftover mirror. Restoring
+    first makes this file safe to re-run after a crash instead of leaving the database
+    permanently short of its real paper schema.
+    """
+    cur.execute(f"CREATE SCHEMA IF NOT EXISTS {_STASH_SCHEMA}")
+    for tbl in _ALL_TABLES:
+        if _exists(cur, f"{_STASH_SCHEMA}.{tbl}"):
+            cur.execute(f"DROP TABLE IF EXISTS public.{tbl} CASCADE")
+            cur.execute(f"ALTER TABLE {_STASH_SCHEMA}.{tbl} SET SCHEMA public")
+
+    stashed: list[str] = []
+    for tbl in _ALL_TABLES:
+        if not _exists(cur, f"public.{tbl}"):
+            continue
+        cur.execute(f"ALTER TABLE public.{tbl} SET SCHEMA {_STASH_SCHEMA}")
+        stashed.append(tbl)
+    return stashed
+
+
+def _restore_real_tables(cur, stashed: list[str]) -> None:
+    """Drop this file's mirrors and move the real tables back under their own names."""
+    for tbl in stashed:
+        cur.execute(f"DROP TABLE IF EXISTS public.{tbl} CASCADE")
+        if _exists(cur, f"{_STASH_SCHEMA}.{tbl}"):
+            cur.execute(f"ALTER TABLE {_STASH_SCHEMA}.{tbl} SET SCHEMA public")
+    cur.execute(f"DROP SCHEMA IF EXISTS {_STASH_SCHEMA} CASCADE")
 
 
 @pytest.fixture(scope="module")
@@ -92,6 +158,7 @@ def db():
         "LANGUAGE sql STABLE AS $$ SELECT current_setting('test.paper03_uid', true)::uuid $$"
     )
 
+    stashed = _stash_real_tables(cur)
     _create_mirror_tables(cur)
     try:
         yield conn
@@ -99,6 +166,9 @@ def db():
         for tbl in _ALL_TABLES:
             cur.execute(f"DROP TABLE IF EXISTS public.{tbl} CASCADE")
         cur.execute("DROP FUNCTION IF EXISTS public.auth_uid()")
+        # Put back exactly what was borrowed, so a file that runs after this one in the
+        # same pytest invocation still finds the schema the lane provisioned.
+        _restore_real_tables(cur, stashed)
         conn.close()
 
 
