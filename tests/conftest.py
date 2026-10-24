@@ -22,6 +22,8 @@ os.environ["SUPABASE_JWT_SECRET"] = "dev-secret-change-in-production"
 # Set DEFAULT_EXCHANGE for websocket tests
 os.environ["DEFAULT_EXCHANGE"] = "binance"
 
+
+
 # Set VYOMQUANT_MODE=safe to override .env file's paper mode and ensure SQLite fallback
 os.environ["VYOMQUANT_MODE"] = "safe"
 
