@@ -1046,8 +1046,22 @@ class BotRunner:
 
                 # ── ATOMIC EXECUTION + EXPOSURE UPDATE ─────────────────────
                 # STEP 1: Generate execution_id for idempotency and locking using the deterministic logic
+                #
+                # `from datetime import datetime` USED TO BE HERE, and it made `datetime` a
+                # LOCAL NAME for the whole of `_inner_loop` -- Python decides that at compile
+                # time, from the presence of the binding, not from where it sits. Line 22
+                # already imports the same name at module level, so the local import was pure
+                # redundancy, but it meant every use of `datetime` EARLIER in this function
+                # raised `UnboundLocalError: cannot access local variable 'datetime' where it
+                # is not associated with a value`.
+                #
+                # Nothing used it earlier until MKT-05 added the authorization-window check at
+                # the top of the tick, which is now the first `datetime.now(timezone.utc)` in
+                # the function -- so a latent defect became four failing tests
+                # (test_deploy01_execution_config_enforcement x3, test_rt02_builder_strategy_*)
+                # and a bot that could not execute a single tick. The new code was correct; the
+                # redundant re-import was not.
                 import uuid
-                from datetime import datetime
 
                 from backend_app.core.models.execution_record import \
                     generate_execution_id

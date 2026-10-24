@@ -938,34 +938,64 @@ class TestBillingJsxUI:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _handler_source(name: str) -> str:
+    """The FULL source of one handler in ``routers/billing.py``.
+
+    These two tests used to slice a fixed 2,000-CHARACTER window from
+    ``source.index('async def cancel_subscription')`` and assert the broadcast appeared
+    inside it. That is a measurement of the handler's LENGTH dressed up as a measurement
+    of its behaviour: both handlers grew past 2,000 characters -- SEC-15 added
+    ``Depends(require_aal2)`` to ``resume_subscription`` and both gained explanatory
+    comments -- and the broadcast, still present and still executed, fell outside the
+    window. The assertions failed while the property they name remained true.
+
+    Reading the function's own extent with ``ast`` asks the question the test names, and
+    cannot be broken by the next line of documentation. It is still a structural test
+    rather than a behavioural one, which is a separate limitation and not this one.
+    """
+    import ast
+    import os
+
+    path = os.path.join(os.path.dirname(__file__), "..", "backend_app", "routers",
+                        "billing.py")
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == name:
+            segment = ast.get_source_segment(source, node)
+            assert segment, f"could not read the source of {name}"
+            return segment
+    raise AssertionError(f"routers/billing.py defines no handler named {name}")
+
+
 class TestRealtimeSync:
     def test_cancel_broadcasts_ws(self):
         """Cancel endpoint must broadcast cancellation via RealtimeSync."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        cancel_idx = source.index('async def cancel_subscription')
-        cancel_section = source[cancel_idx:cancel_idx + 2000]
+        cancel_section = _handler_source("cancel_subscription")
         assert "RealtimeSync.sync_subscription_change" in cancel_section
         assert "subscription_cancelled" in cancel_section
 
     def test_resume_broadcasts_ws(self):
         """Resume endpoint must broadcast resumption via RealtimeSync."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        resume_idx = source.index('async def resume_subscription')
-        resume_section = source[resume_idx:resume_idx + 2000]
+        resume_section = _handler_source("resume_subscription")
         assert "RealtimeSync.sync_subscription_change" in resume_section
         assert "cancellation_reversed" in resume_section
+
+    def test_the_helper_reads_a_whole_handler_not_a_fixed_window(self):
+        """Negative control for the fix above: prove the extracted text is the function's
+        real extent, so these assertions cannot pass merely because the window was
+        widened to swallow a neighbouring handler's broadcast."""
+        cancel = _handler_source("cancel_subscription")
+        resume = _handler_source("resume_subscription")
+        assert cancel.startswith("async def cancel_subscription")
+        assert resume.startswith("async def resume_subscription")
+        # Each handler's body is its own: neither contains the other's definition.
+        assert "async def resume_subscription" not in cancel
+        assert "async def cancel_subscription" not in resume
+        # And the old 2,000-character window really was too small, which is why this
+        # changed at all.
+        assert len(cancel) > 2000 and len(resume) > 2000
 
 
 # ═══════════════════════════════════════════════════════════════════════════
