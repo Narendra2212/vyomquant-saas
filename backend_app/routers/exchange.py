@@ -47,6 +47,23 @@ logger = logging.getLogger("ExchangeRouter")
 #: ("column exchange_keys.updated_at does not exist") on every call — four occurrences in a
 #: twelve-hour CloudWatch window — and the handler swallowed into an empty list, so an account
 #: holding stored credentials was told it had none.
+#: DO NOT ADD `id` HERE. `public.exchange_keys` HAS NO `id` COLUMN.
+#:
+#: Measured against the real production database (2026-10-24): `exchange_keys` carries 11
+#: columns and its PRIMARY KEY is the composite `(user_id, exchange_id)`. There is no
+#: single-column surrogate key. Selecting `id` here raises `42703 column
+#: exchange_keys.id does not exist`, which this endpoint's own read-failure path then
+#: correctly reports as a 503 -- so the whole listing breaks.
+#:
+#: This was tried while wiring MKT-05's live deploy, because
+#: `deployment_binding.load_owned_exchange_account` resolves an `exchange_account_id` with
+#: `.eq("id", ...)`. It does not work, and the reason it does not work is a schema
+#: divergence worth recording rather than routing around: see MKT-05's ledger entry. The
+#: synthesised `{user_id}_{exchange_id}` composite below is NOT a usable
+#: `exchange_account_id` either.
+#:
+#: `tests/test_exchange_connections_read_regression.py`'s fake refuses any column outside
+#: this set, which is how the attempt was caught before it reached a real database.
 _EXCHANGE_KEYS_PROJECTION = "exchange_id, created_at"
 
 #: The machine-readable code a connections read that DID NOT COMPLETE answers with, alongside
@@ -679,6 +696,9 @@ async def list_exchanges(
         for row in keys:
             exchange_id = (row.get("exchange_id") or "unknown").lower()
             exchanges.append({
+                # A synthesised composite, NOT a row key, and NOT usable as a deployment's
+                # `exchange_account_id` -- `exchange_keys` has no single-column id to
+                # offer. See the `_EXCHANGE_KEYS_PROJECTION` note.
                 "id": f"{user['id']}_{exchange_id}",
                 "exchange_id": exchange_id,
                 "name": exchange_id.upper(),

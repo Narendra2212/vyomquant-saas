@@ -529,6 +529,12 @@ const StrategyMarketplace = () => {
   const [deployTimeframe, setDeployTimeframe] = useState('');
   const [deployCapital, setDeployCapital] = useState('');
   const [deployLoading, setDeployLoading] = useState(false);
+  // MKT-05 live deployment. `deployMode` defaults to 'paper' so the panel opens on the
+  // safe option and a trader has to choose live deliberately.
+  const [deployMode, setDeployMode] = useState('paper');
+  const [deployAccountId, setDeployAccountId] = useState('');
+  const [deployAccounts, setDeployAccounts] = useState(null);
+  const [deployAccountsError, setDeployAccountsError] = useState('');
 
   /*
     ── THE ENTITLEMENT GATES ────────────────────────────────────────────────────────────────
@@ -927,12 +933,73 @@ const StrategyMarketplace = () => {
   // Deploy Flow (MKT-05)
   //
   // The subscriber-safe path: `api.library.deploy` binds a new `strategy_deployments` row to
-  // the OWNER's current version without copying its logic. It always runs as PAPER today —
-  // there is no live-trading path for a marketplace Listing in this backend yet, so this
-  // button never risks real capital regardless of what the trader enters below.
+  // the OWNER's current version without copying its logic.
+  //
+  // PAPER is the default and is unchanged. LIVE places real orders and is permitted only
+  // for the duration of the subscribed period: the server stamps the deployment with the
+  // subscription that authorises it and the instant that authorisation ends, refuses to
+  // create one without both, and the order path refuses orders past that instant on every
+  // tick rather than relying on a background sweep.
+
+  // The caller's own exchange accounts, loaded only when live is actually selected.
+  //
+  // `listConnections()` (`GET /api/exchanges/connections`, i.e. `exchange_connections`)
+  // and NOT `list()` (`exchange_keys`), because `exchange_account_id` has to be a single
+  // column a deployment row can store and `exchange_keys` has no such column: measured
+  // against production, its PRIMARY KEY is the composite `(user_id, exchange_id)` and
+  // there is no surrogate id at all. `list()`'s `id` field is a synthesised
+  // `{user_id}_{exchange_id}` string that resolves to nothing.
+  //
+  // `exchange_connections` does carry an `id`, which is what
+  // `deployment_binding.load_owned_exchange_account` matches on. Note that this is the
+  // table recording connection STATE rather than the one holding credentials, and the two
+  // are not kept in step today -- so this list can legitimately come back empty for an
+  // account that does have credentials stored. That divergence is recorded against MKT-05
+  // rather than papered over here, because guessing an id would produce a 404 at deploy
+  // time that reads as "your account is missing" instead of "this app asked for the wrong
+  // thing".
+  const loadDeployAccounts = async () => {
+    setDeployAccountsError('');
+    try {
+      const rows = await api.exchange.listConnections();
+      const list = Array.isArray(rows) ? rows : (rows?.connections ?? []);
+      const usable = (Array.isArray(list) ? list : [])
+        .filter((row) => typeof row?.id === 'string' && row.id)
+        .map((row) => ({ account_id: row.id, exchange_id: row.exchange_id, name: row.name }));
+      setDeployAccounts(usable);
+      // Only auto-select when there is exactly one. Picking one of several on the
+      // trader's behalf is choosing which account trades real money for them.
+      if (usable.length === 1) setDeployAccountId(usable[0].account_id);
+    } catch (err) {
+      console.error(err);
+      // An empty list and a failed read are different statements, and this one must not
+      // report "you have no exchange accounts" about a request that did not complete.
+      setDeployAccounts(null);
+      setDeployAccountsError(
+        errorMessage(err, 'Could not read your exchange accounts.'),
+      );
+    }
+  };
+
+  const handleDeployModeChange = (nextMode) => {
+    setDeployMode(nextMode);
+    if (nextMode === 'live' && deployAccounts === null && !deployAccountsError) {
+      loadDeployAccounts();
+    }
+  };
+
   const handleDeploy = async (strat) => {
     const listingId = strat?.listing_id;
     if (!listingId) return;
+
+    const live = deployMode === 'live';
+    if (live && !deployAccountId) {
+      // Refused here as well as by the server, so the trader is told which field is
+      // missing without spending a rate-limited request to find out.
+      notify('error', 'Choose the exchange account this live deployment should trade through.');
+      return;
+    }
+
     setDeployLoading(true);
     try {
       const body = {};
@@ -942,13 +1009,24 @@ const StrategyMarketplace = () => {
         const capital = Number(deployCapital);
         if (Number.isFinite(capital) && capital >= 0) body.capital = capital;
       }
+      // `mode` is sent only when live. The server defaults to paper, and an all-blank
+      // paper submission stays `{}` — the property this page's own tests already pin.
+      if (live) {
+        body.mode = 'live';
+        body.exchange_account_id = deployAccountId;
+      }
 
       const result = await api.library.deploy(listingId, body);
       const message = typeof result?.message === 'string' && result.message
         ? result.message
-        : 'Deployment created. It runs as a paper session.';
+        : live
+          ? 'Live deployment created. It stops when your subscription period ends.'
+          : 'Deployment created. It runs as a paper session.';
       notify('success', message);
-      navigate('/app/paper-trading');
+      // A live deployment is not a paper session, so sending the trader to the paper
+      // screen would be telling them to look in the wrong place for it. `/app/live-trading`
+      // and not `/app/deployments`: the latter is not a route this app has.
+      navigate(live ? '/app/live-trading' : '/app/paper-trading');
     } catch (err) {
       console.error(err);
       notify('error', errorMessage(err, 'Failed to deploy this strategy.'));
@@ -1464,8 +1542,95 @@ const StrategyMarketplace = () => {
                 <SectionHeader
                   level={3}
                   title="Deploy this strategy"
-                  subtitle="Runs as a paper session against the owner's current version. Every field below is optional."
+                  subtitle="Runs against the owner's current version. Symbol, timeframe and capital are optional."
                 />
+
+                {/* MKT-05: the Execution_Environment choice. Paper is preselected, so
+                    live is always a deliberate act rather than a default the trader
+                    discovers after the fact. */}
+                <div
+                  className="flex flex-wrap gap-2"
+                  role="radiogroup"
+                  aria-label="Execution environment"
+                  data-testid="deploy-mode"
+                >
+                  {[
+                    { value: 'paper', label: 'Paper', hint: 'Simulated. No real orders.' },
+                    { value: 'live', label: 'Live', hint: 'Places real orders.' },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={deployMode === option.value}
+                      disabled={deployLoading}
+                      onClick={() => handleDeployModeChange(option.value)}
+                      data-testid={`deploy-mode-${option.value}`}
+                      className={`flex flex-col items-start gap-0.5 px-3 py-2 rounded-sm border text-left ${
+                        deployMode === option.value
+                          ? 'border-accent-primary bg-surface-inset'
+                          : 'border-line-default'
+                      }`}
+                    >
+                      <span className="text-body text-content-primary">{option.label}</span>
+                      <span className="text-micro text-content-secondary">{option.hint}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {deployMode === 'live' && (
+                  <div className="flex flex-col gap-3" data-testid="deploy-live-fields">
+                    {/* Said plainly and before the control, not as small print after it.
+                        The period bound is the thing a subscriber most needs to know,
+                        because it is what makes this deployment stop. */}
+                    <div className="text-micro text-content-secondary border border-line-default rounded-sm px-3 py-2">
+                      This places <strong className="text-content-primary">real orders</strong> through
+                      your own exchange account, and runs only while your subscription to this
+                      strategy is active. When the period ends it stops placing orders and its
+                      position is closed.
+                    </div>
+
+                    {deployAccountsError ? (
+                      <div
+                        className="text-micro text-status-danger"
+                        data-testid="deploy-accounts-error"
+                      >
+                        {deployAccountsError}
+                      </div>
+                    ) : deployAccounts === null ? (
+                      <div className="text-micro text-content-secondary">
+                        Loading your exchange accounts…
+                      </div>
+                    ) : deployAccounts.length === 0 ? (
+                      <div
+                        className="text-micro text-content-secondary"
+                        data-testid="deploy-no-accounts"
+                      >
+                        You have no connected exchange account to trade through. Connect one
+                        before deploying live.
+                      </div>
+                    ) : (
+                      <label className="flex flex-col gap-1 text-micro text-content-secondary">
+                        Exchange account
+                        <select
+                          value={deployAccountId}
+                          onChange={(e) => setDeployAccountId(e.target.value)}
+                          disabled={deployLoading}
+                          data-testid="deploy-account-select"
+                          className="bg-surface-inset border border-line-default rounded-sm px-3 py-2 text-body text-content-primary"
+                        >
+                          <option value="">Select an account…</option>
+                          {deployAccounts.map((account) => (
+                            <option key={account.account_id} value={account.account_id}>
+                              {account.name || account.exchange_id}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex flex-wrap gap-3">
                   <label className="flex flex-col gap-1 text-micro text-content-secondary">
                     Symbol
@@ -1502,14 +1667,27 @@ const StrategyMarketplace = () => {
                     />
                   </label>
                 </div>
+                {/* `intent="live"` is this design system's own name for a control that
+                    acts on real money (design.md §5.1), so the button carries the
+                    distinction rather than this page inventing a colour for it. */}
                 <CommandButton
-                  intent="primary"
+                  intent={deployMode === 'live' ? 'live' : 'primary'}
                   icon={ArrowRight}
                   loading={deployLoading}
                   loadingLabel="Deploying"
+                  // Disabled rather than allowed-then-refused when live has no account
+                  // selected: a control should not look available when pressing it cannot
+                  // work. `disabledReason` is mandatory, not decoration -- CommandButton
+                  // THROWS without it (Requirement 15.3: a disabled control must say why).
+                  disabled={deployMode === 'live' && !deployAccountId}
+                  disabledReason={
+                    deployMode === 'live' && !deployAccountId
+                      ? 'Select the exchange account this live deployment should trade through'
+                      : undefined
+                  }
                   onClick={() => handleDeploy(strat)}
                 >
-                  Deploy
+                  {deployMode === 'live' ? 'Deploy live' : 'Deploy'}
                 </CommandButton>
               </div>
             )}
