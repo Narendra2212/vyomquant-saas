@@ -53,7 +53,13 @@ import sys
 
 REGION = "ap-southeast-1"
 BUCKET = "vyomquant-terraform-state"
-LOCK_TABLE = "vyomquant-terraform-locks"
+#: SINGULAR, because `terraform/providers.tf`'s backend block is the authority on this
+#: name and says `dynamodb_table = "vyomquant-terraform-lock"`. This constant read
+#: "...-locks" until 2026-10-24, which would have created a table terraform then could
+#: not find -- `terraform init` fails on a missing lock table, so the bootstrap would have
+#: reported success and left the backend unusable. Caught before the first apply, by
+#: reading the backend block rather than trusting the constant.
+LOCK_TABLE = "vyomquant-terraform-lock"
 
 
 def aws(*args: str) -> tuple[int, str, str]:
@@ -92,34 +98,97 @@ def table_state() -> str:
     return f"UNKNOWN ({err.splitlines()[-1] if err else '?'})"
 
 
+#: Every action the backend actually needs, against the resource ARN it needs it on.
+#: Split by resource because that distinction is where the previous probe went wrong:
+#: s3:PutObject is granted on the OBJECT ARN (`bucket/*`), so simulating it against the
+#: bucket ARN returns implicitDeny on a policy that is in fact correct.
+REQUIRED_PERMISSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        f"arn:aws:s3:::{BUCKET}",
+        ("s3:CreateBucket", "s3:PutBucketVersioning",
+         "s3:PutEncryptionConfiguration", "s3:PutBucketPublicAccessBlock",
+         "s3:ListBucket"),
+    ),
+    (f"arn:aws:s3:::{BUCKET}/*", ("s3:GetObject", "s3:PutObject")),
+    (
+        f"arn:aws:dynamodb:{REGION}:273709947018:table/{LOCK_TABLE}",
+        ("dynamodb:CreateTable", "dynamodb:DescribeTable",
+         "dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"),
+    ),
+)
+
+
 def can_create_bucket() -> tuple[bool, str]:
-    """Probe with a name that cannot collide. Nothing is created when it is denied."""
-    probe = f"{BUCKET}-permission-probe-delete-me"
-    code, _, err = aws(
-        "s3api", "create-bucket", "--bucket", probe,
-        "--create-bucket-configuration", f"LocationConstraint={REGION}",
-    )
-    if code == 0:
-        aws("s3api", "delete-bucket", "--bucket", probe)
-        return True, "permitted (probe bucket created and deleted)"
-    if "AccessDenied" in err:
-        return False, "DENIED - no identity-based policy allows s3:CreateBucket"
-    return False, err.splitlines()[-1] if err else "unknown failure"
+    """Ask IAM for the authorization decision, instead of provoking one.
+
+    THIS USED TO CREATE A BUCKET. It called create-bucket on
+    ``vyomquant-terraform-state-permission-probe-delete-me`` and read success as proof.
+    Two things were wrong with that, and the second one made this script report the
+    opposite of the truth:
+
+    1. A readiness check documented as reporting "without creating anything" created a
+       real, billable, globally-named bucket on every successful run, and deleted it on a
+       separate call that could fail and leave it behind.
+    2. The probe name is NOT the resource the policy grants. The least-privilege policy
+       at infra/iam/terraform-state-backend-policy.json scopes s3:CreateBucket to the
+       exact ARN of the state bucket -- on purpose, so this identity cannot create
+       arbitrary buckets. So once route (A) was actually attached and working, this probe
+       still came back "DENIED - no identity-based policy allows s3:CreateBucket" and the
+       script still printed BLOCKED ON IAM. Measured 2026-10-24: probe DENIED while
+       simulate-principal-policy returned `allowed` for s3:CreateBucket on the real ARN,
+       and `--apply` then succeeded.
+
+    Same failure mode as the `--status ALL` bug this file's docstring describes: a probe
+    that cannot observe the thing it claims to measure, reporting absence.
+
+    simulate-principal-policy evaluates the identity's real policies against the real
+    resource ARNs and writes nothing. Needs iam:SimulatePrincipalPolicy; when that is
+    unavailable the verdict is UNDETERMINED rather than a guess, because reporting
+    "denied" on a failure to measure is what caused this.
+    """
+    arn = identity()
+    if arn.startswith("UNKNOWN"):
+        return False, f"UNDETERMINED - cannot resolve caller identity ({arn})"
+
+    denied: list[str] = []
+    for resource, actions in REQUIRED_PERMISSIONS:
+        code, out, err = aws(
+            "iam", "simulate-principal-policy",
+            "--policy-source-arn", arn,
+            "--action-names", *actions,
+            "--resource-arns", resource,
+            "--output", "json",
+        )
+        if code != 0:
+            tail = err.splitlines()[-1] if err else "no output"
+            return False, f"UNDETERMINED - iam:SimulatePrincipalPolicy failed ({tail})"
+        for result in json.loads(out).get("EvaluationResults", []):
+            if result.get("EvalDecision") != "allowed":
+                denied.append(
+                    f"{result.get('EvalActionName')} on {resource}"
+                    f" -> {result.get('EvalDecision')}"
+                )
+
+    if denied:
+        return False, "DENIED - " + "; ".join(denied)
+    total = sum(len(a) for _, a in REQUIRED_PERMISSIONS)
+    return True, f"permitted ({total} actions simulated allowed, nothing created)"
 
 
 def report() -> int:
     print("=" * 78)
     print("INF-03: terraform remote-state backend readiness")
     print("=" * 78)
+    bucket, table = bucket_state(), table_state()
     print(f"  identity         {identity()}")
     print(f"  region           {REGION}")
-    print(f"  s3://{BUCKET}  {bucket_state()}")
-    print(f"  dynamodb {LOCK_TABLE}  {table_state()}")
+    print(f"  s3://{BUCKET}  {bucket}")
+    print(f"  dynamodb {LOCK_TABLE}  {table}")
     allowed, why = can_create_bucket()
-    print(f"  s3:CreateBucket  {why}")
+    print(f"  backend IAM      {why}")
     print()
 
-    if bucket_state() == "PRESENT" and table_state() == "PRESENT":
+    if bucket == "PRESENT" and table == "PRESENT":
         print("READY. `terraform init` can use the remote backend, and INF-03's worker")
         print("services can be applied from terraform/ecs.tf's worker_definitions.")
         return 0
@@ -135,12 +204,27 @@ def report() -> int:
         print("   (c) run terraform with LOCAL state, accepting that the state file then")
         print("       lives on whoever ran it and CI cannot apply afterwards.")
         print()
-        print("NOT a remedy, and measured rather than assumed: hand-creating the services")
-        print("with ecs register-task-definition / create-service. Both calls ARE")
-        print("permitted for this identity, but zero worker task-definition revisions")
-        print("exist, so they would mean transcribing by hand what terraform encodes")
-        print("(image, roles, log group, subnets, security groups, secrets) -- producing")
-        print("infrastructure the committed source does not describe.")
+        print("THE ALTERNATIVE, and this text used to describe it wrongly: hand-creating")
+        print("the services with ecs register-task-definition / create-service. Both")
+        print("calls ARE permitted for this identity. The claim that followed -- 'zero")
+        print("worker task-definition revisions exist' -- was FALSE, and false because")
+        print("of a bug in the probe behind it: it passed --status ALL to")
+        print("list-task-definitions, which accepts only ACTIVE / INACTIVE /")
+        print("DELETE_IN_PROGRESS, so every call failed validation and the resulting")
+        print("zeros were read as absence. Re-measured: 249 revisions exist across 13")
+        print("families, and each of the three production worker families holds one")
+        print("INACTIVE revision carrying its roles, secrets, log group and command.")
+        print()
+        print("So route (B) is real and is implemented in")
+        print("scripts/deploy_worker_services.py, which takes the TEMPLATE from the")
+        print("api revision that actually works and only the COMMAND from those")
+        print("INACTIVE revisions -- they all name the image 'vyomquant-api:latest', a")
+        print("tag absent from ECR, which is why they never ran.")
+        print()
+        print("(A) IS STILL PREFERRED. Route B leaves services terraform does not know")
+        print("about, which a later apply would try to create again unless they are")
+        print("terraform import-ed first. The IAM policy route (A) needs is prepared at")
+        print("infra/iam/terraform-state-backend-policy.json.")
         return 1
 
     print("The backend is incomplete but this identity CAN create it. Re-run with")
