@@ -189,6 +189,45 @@ class ExchangeWebSocketListener:
         
         logger.info(f"STEP 3: WebSocket listener stopped for {listener_key}")
     
+    @staticmethod
+    def _load_keys(tenant_id: str, exchange_id: str) -> Optional[Dict[str, Any]]:
+        """This tenant's decrypted exchange credentials, or ``None``. Never raises.
+
+        RT-16. Returns ``None`` -- which the caller treats as "do not open the stream" --
+        for every failure: no vault, no stored credential for the pair, or a credential
+        that cannot be decrypted. That last case is not hypothetical: VAULT-01 records
+        that every stored ``exchange_keys`` ciphertext is currently undecryptable, so this
+        returning ``None`` is the EXPECTED state today rather than an error path.
+
+        Failing closed matters more here than it usually would, because the alternative is
+        not "degraded" but "actively harmful": an unauthenticated client cached in the
+        shared pool under this pair's key (CONN-01). See the call site.
+        """
+        try:
+            # Same import `api_ws/ws_routes.py` uses (:36), so there is one vault
+            # accessor rather than a second way in.
+            from backend_app.core.dependencies import get_vault
+
+            vault = get_vault()
+            if vault is None:
+                return None
+            keys = vault.load_decrypted_keys(tenant_id, exchange_id)
+        except Exception as exc:  # noqa: BLE001 - reported, never raised; see docstring
+            logger.warning(
+                "RT-16: could not load credentials for %s:%s (%s); no private order "
+                "stream will be opened for this pair",
+                tenant_id,
+                exchange_id,
+                type(exc).__name__,
+            )
+            return None
+
+        if not isinstance(keys, dict):
+            return None
+        if not keys.get("api_key") or not keys.get("secret_key"):
+            return None
+        return keys
+
     async def _listen_for_orders(
         self,
         tenant_id: str,
@@ -203,12 +242,56 @@ class ExchangeWebSocketListener:
         listener_key = f"{tenant_id}:{exchange_id}"
         
         try:
-            # Get or create exchange connection
+            # ── RT-16: watch_orders() IS A PRIVATE CHANNEL AND NEEDS CREDENTIALS ──
+            #
+            # This called `get_or_create_exchange(user_id=tenant_id,
+            # exchange_id=exchange_id)` with no api_key, no secret and no password, then
+            # awaited `exchange.watch_orders()` -- an authenticated, per-account channel.
+            # Two separate consequences, and the second is the worse one:
+            #
+            #  1. IT CANNOT WORK. An unauthenticated ccxt.pro client cannot subscribe to
+            #     a private order stream. The loop below catches every exception and
+            #     sleeps 1 second, so the failure would not surface as a crash: it would
+            #     spin once per second, forever, logging an error that reads like a
+            #     transient network problem while no fill was ever delivered.
+            #  2. IT POISONS THE SHARED POOL FOR EVERYONE ELSE. CONN-01 records exactly
+            #     this, in `tests/test_conn01_pool_lifecycle_and_shutdown.py`:
+            #     "`core/consistency_checker.py` and
+            #     `backend/exchange_websocket_listener.py` call `get_or_create_exchange`
+            #     with no credentials at all. Whichever caller populated the pool key
+            #     first won, so if one of those won the race an UNAUTHENTICATED client
+            #     was pooled." The pool is keyed on (user, exchange), so this listener
+            #     winning the race would hand an unauthenticated client to every
+            #     credentialed caller for that pair.
+            #
+            # Credentials are resolved the same way the one private stream that DOES work
+            # resolves them -- `api_ws/ws_routes.py::ws_user` at :813-817 -- rather than
+            # by a second mechanism.
+            keys = self._load_keys(tenant_id, exchange_id)
+            if keys is None:
+                # REFUSE, rather than connect unauthenticated. A listener that cannot
+                # authenticate delivers nothing, and connecting anyway would place a
+                # useless client in the shared pool under this pair's key. Returning
+                # leaves `_fallback_monitor`/`OrderWatchdog` as the only reconciliation
+                # path, which is what the platform already relies on.
+                logger.error(
+                    "RT-16: refusing to open a private order stream for %s without "
+                    "credentials. watch_orders() is an authenticated channel, and an "
+                    "unauthenticated client would both fail silently in a 1-per-second "
+                    "retry loop and be cached in the shared connection pool under this "
+                    "pair's key (CONN-01). No order stream is open for this pair.",
+                    listener_key,
+                )
+                return
+
             exchange = await get_or_create_exchange(
-                user_id=tenant_id,
-                exchange_id=exchange_id
+                tenant_id,
+                exchange_id,
+                keys["api_key"],
+                keys["secret_key"],
+                keys.get("password"),
             )
-            
+
             logger.info(f"STEP 3: WebSocket connected for {listener_key}")
             
             while self._running:
