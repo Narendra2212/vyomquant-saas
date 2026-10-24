@@ -723,6 +723,13 @@ _EXPIRY_SWEEP_HANDLER = {
                 "session_state",
                 "stopped_at",
                 "updated_at",
+                # PAPER-04: the liveness pair the orphan-reconciliation pass reads.
+                # `last_heartbeat_at` is created by migration 054; `started_at` by 009.
+                # Both are SELECTed by `paper_repository.list_stale_running_sessions`, and
+                # this manifest is what keeps a mistyped column from reaching production
+                # as a 42703 (Requirement 24.9).
+                "last_heartbeat_at",
+                "started_at",
             }
         ),
     },

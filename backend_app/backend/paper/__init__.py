@@ -506,6 +506,13 @@ _PAPER_REPOSITORY_HANDLER = {
                 "stopped_at",
                 "created_at",
                 "updated_at",
+                # PAPER-04, created by migration 054. `last_heartbeat_at` is written by the
+                # running session loop and read by `list_stale_running_sessions`;
+                # `abandoned_reason` records why a session_state=ABANDONED row was
+                # abandoned. Declared here because this manifest is what stops a mistyped
+                # column reaching production as a PostgreSQL 42703 (Requirement 24.9).
+                "last_heartbeat_at",
+                "abandoned_reason",
             }
         ),
         # Task 24.4. Written for the one ``paper_error`` record Requirement 14.5 names on a dropped

@@ -397,6 +397,29 @@ DOCUMENTED_UNSCOPED_READS: FrozenSet[str] = frozenset(
         # price, user_id=user_id)` - called once per pair with that pair's own user_id - so no
         # tenant's order is ever read or acted on under another tenant's identity.
         "get_open_legacy_limit_order_pairs",
+        # PAPER-04. The platform's own maintenance sweep, and unscoped BY NECESSITY for the
+        # same reason as the entry above: its question is "which RUNNING sessions, across
+        # every tenant, have stopped beating", which no single tenant's predicate can
+        # answer. A per-tenant version could only run for tenants something had already
+        # enumerated, and nothing enumerates them - which is exactly the gap that kept this
+        # reconciliation unbuilt while orphaned sessions sat at RUNNING forever.
+        #
+        # Compensating controls, and they are narrower than the PAPER-07 read's:
+        #  * it selects identity and liveness ONLY - id, user_id, session_state,
+        #    last_heartbeat_at, started_at, symbol. No balance, equity, price, quantity,
+        #    order or fill, and nothing from the frozen config.
+        #  * nothing it returns reaches a client. The only consumer is
+        #    `reconcile_orphaned_sessions`, which uses each row to issue ONE write
+        #    re-scoped to that row's own user_id via
+        #    `transition_session_state(user_id=..., session_id=...)` - so no tenant's
+        #    session is ever written under another tenant's identity.
+        #  * the write it drives is state-only (RUNNING -> ABANDONED) and is itself guarded
+        #    on from_state, so it cannot alter a session that is not already orphaned.
+        #  * service-role only: it runs from the application's own boot path, never from a
+        #    request.
+        # See the function's own docstring, "Unscoped by user, deliberately and unlike every
+        # other read here".
+        "list_stale_running_sessions",
     }
 )
 

@@ -228,9 +228,10 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import (
     Any,
@@ -456,6 +457,10 @@ STATE_CREATED = "CREATED"
 STATE_RUNNING = "RUNNING"
 STATE_PAUSED = "PAUSED"
 STATE_STOPPED = "STOPPED"
+#: PAPER-04. "Was RUNNING, and the process that ran its loop is gone." Written only by the
+#: boot-time reconciliation pass via :data:`OPERATION_ABANDON`, never by a user: no route
+#: reaches it. See migrations/054 for why none of the other four states can carry this fact.
+STATE_ABANDONED = "ABANDONED"
 
 #: The six permitted edges of Requirement 17.7, as an adjacency map - the same shape
 #: ``paper_order_state.PAPER_ORDER_TRANSITIONS`` and
@@ -472,11 +477,19 @@ STATE_STOPPED = "STOPPED"
 #: again, and the equity series that follows is a NEW series
 #: (``paper_equity_snapshots.series_index = previous + 1``, Requirement 17.15) rather than a
 #: continuation of one that ended.
+#: PAPER-04 adds two edges to 009's six, and migration 054 seeds the matching pairs into
+#: ``paper_session_allowed_transitions`` so this module and ``trg_paper_session_guard``
+#: still describe one machine.
 PAPER_SESSION_TRANSITIONS: Dict[str, Tuple[str, ...]] = {
     STATE_CREATED: (STATE_RUNNING,),
-    STATE_RUNNING: (STATE_PAUSED, STATE_STOPPED),
+    STATE_RUNNING: (STATE_PAUSED, STATE_STOPPED, STATE_ABANDONED),
     STATE_PAUSED: (STATE_RUNNING, STATE_STOPPED),
     STATE_STOPPED: (STATE_CREATED,),
+    #: No ``ABANDONED -> RUNNING``: the loop's in-flight position lived in the dead
+    #: process and was never persisted, so a resume would cross a gap of unknown length
+    #: while reporting continuity it does not have. Reset starts a NEW equity series,
+    #: which is what actually happened.
+    STATE_ABANDONED: (STATE_CREATED,),
 }
 
 OPERATION_START = "start"
@@ -484,9 +497,30 @@ OPERATION_PAUSE = "pause"
 OPERATION_RESUME = "resume"
 OPERATION_STOP = "stop"
 OPERATION_RESET = "reset"
+#: PAPER-04. The one SYSTEM operation: performed by the boot-time reconciliation pass, not
+#: by a user, and reachable from no route. It is listed in :data:`SESSION_OPERATIONS`
+#: because ``_assert_machine_agrees`` is right to demand that every edge have an operation
+#: -- "an edge with no operation is an edge nothing can take" -- and this edge IS taken.
+OPERATION_ABANDON = "abandon"
 
-#: The five operations of Requirement 17.7, in the order the requirement names them.
+#: The five operations of Requirement 17.7, in the order the requirement names them, plus
+#: PAPER-04's system operation last. The five user operations remain the first five, so a
+#: reader comparing this to the requirement still sees it; ``abandon`` is distinguished by
+#: having no route rather than by being absent from here, which it cannot be.
 SESSION_OPERATIONS: Tuple[str, ...] = (
+    OPERATION_START,
+    OPERATION_PAUSE,
+    OPERATION_RESUME,
+    OPERATION_STOP,
+    OPERATION_RESET,
+    OPERATION_ABANDON,
+)
+
+#: The five a user can ask for. ``abandon`` is excluded deliberately: the route layer should
+#: iterate THIS, so that adding a system operation can never accidentally expose one as an
+#: API verb. ``SESSION_OPERATIONS`` stays the full vocabulary the state machine is checked
+#: against.
+USER_SESSION_OPERATIONS: Tuple[str, ...] = (
     OPERATION_START,
     OPERATION_PAUSE,
     OPERATION_RESUME,
@@ -508,7 +542,12 @@ OPERATION_TRANSITIONS: Dict[str, Mapping[str, str]] = {
     OPERATION_PAUSE: {STATE_RUNNING: STATE_PAUSED},
     OPERATION_RESUME: {STATE_PAUSED: STATE_RUNNING},
     OPERATION_STOP: {STATE_RUNNING: STATE_STOPPED, STATE_PAUSED: STATE_STOPPED},
-    OPERATION_RESET: {STATE_STOPPED: STATE_CREATED},
+    # PAPER-04: ``ABANDONED`` resets by the same edge ``STOPPED`` does. Both are terminal
+    # and both discard what came before, so reset is one operation with two sources, the
+    # way ``stop`` already is.
+    OPERATION_RESET: {STATE_STOPPED: STATE_CREATED, STATE_ABANDONED: STATE_CREATED},
+    # PAPER-04's system operation. No route reaches it; see OPERATION_ABANDON.
+    OPERATION_ABANDON: {STATE_RUNNING: STATE_ABANDONED},
 }
 
 #: Which of the sixteen Paper_Channel types records each operation (Requirement 19.2 fixes the
@@ -4419,6 +4458,15 @@ async def session_loop(
             break
         state = normalise_state(row.get("session_state"))
         if state == STATE_PAUSED:
+            # PAPER-04: a PAUSED session is alive -- its loop is sitting right here,
+            # polling -- so it beats too. Without this, a long pause would look exactly
+            # like a dead loop and the next boot would abandon it. The abandon predicate
+            # only selects RUNNING rows, so this is belt-and-braces rather than
+            # load-bearing; it is here because "PAUSED still beats" is the kind of fact
+            # that stops being true when someone later widens that predicate.
+            repo.touch_session_heartbeat(
+                supabase, user_id=user_id, session_id=session_id
+            )
             await asyncio.sleep(PAUSE_POLL_SECONDS)
             continue
         if state != STATE_RUNNING:
@@ -4430,6 +4478,18 @@ async def session_loop(
                 processed,
             )
             break
+
+        # PAPER-04: declare liveness BEFORE the step, not after.
+        #
+        # `step_session` blocks until the feed yields the next event, which on a 1-minute
+        # timeframe is up to a minute and on a quiet or degraded feed can be longer.
+        # Beating afterwards would make a healthy session's heartbeat age track its BAR
+        # INTERVAL rather than its liveness, so the staleness window would have to exceed
+        # the slowest timeframe the platform offers in order not to abandon live sessions
+        # -- and a window that wide cannot notice a real death promptly. Beating first
+        # makes the heartbeat mean "this loop reached the top of its iteration", which is
+        # the fact reconciliation needs.
+        repo.touch_session_heartbeat(supabase, user_id=user_id, session_id=session_id)
 
         try:
             step = await step_session(
@@ -4477,6 +4537,153 @@ async def session_loop(
             processed += 1
 
     return processed
+
+
+#: PAPER-04. How long a ``RUNNING`` session may go without a heartbeat before the next
+#: reconciliation pass calls it abandoned.
+#:
+#: The loop beats once per iteration, at the TOP of the iteration (see
+#: :func:`session_loop`), so a healthy session's heartbeat age is bounded by how long one
+#: iteration takes to come round -- not by its bar interval. 15 minutes is therefore many
+#: multiples of a healthy gap while still noticing a death inside the window an operator
+#: would care about. It is deliberately NOT tuned to the bar interval: a session on a 1d
+#: timeframe beats just as often as one on 1m, because the beat marks the loop reaching the
+#: top of its iteration rather than a bar arriving.
+#:
+#: Erring long is the safe direction. Too short abandons live sessions, which stops real
+#: in-flight paper trading; too long leaves an orphan reading as RUNNING for longer, which
+#: is the status quo this fixes and is merely slow rather than wrong.
+ABANDON_AFTER_SECONDS = float(os.environ.get("PAPER_ABANDON_AFTER_SECONDS", "900"))
+
+
+async def reconcile_orphaned_sessions(
+    supabase: Any,
+    *,
+    now: Optional[datetime] = None,
+    abandon_after_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Mark every ``RUNNING`` session whose loop has stopped beating as ``ABANDONED``.
+
+    PAPER-04's second half: "a boot-time reconciliation pass that resumes or fails a
+    RUNNING session whose task is gone". It fails them rather than resuming them, and
+    :data:`PAPER_SESSION_TRANSITIONS` records why there is no resume edge to take.
+
+    WHY THIS IS SAFE TO RUN FROM EVERY WEB WORKER, AND REPEATEDLY
+    ------------------------------------------------------------
+    ``startup.sh`` runs ``gunicorn --workers ${WORKERS:-2}``, so a naive boot sweep is a
+    worse defect than the one it fixes: worker B restarting while worker A healthily runs
+    sessions would abandon A's LIVE sessions and report real in-flight trading as a crash.
+    Two things prevent that, and neither depends on knowing which process owns a row:
+
+    * the population is HEARTBEAT-STALE rows, not RUNNING rows. A live loop in any process
+      keeps beating, so it is never eligible, whoever is asking.
+    * the write is ``repo.transition_session_state(from_state=RUNNING, ...)``, a guarded
+      UPDATE. Two workers racing the same orphan means one matches the row and the other
+      matches nothing, so the second is a no-op rather than a double write.
+
+    It needs no leader election for the same reason, which is the point: a lease would add
+    a Redis dependency to a correctness property that is already idempotent.
+
+    WHAT IT DOES NOT DO
+    -------------------
+    It does not restart anything. PAPER-04's first half -- running session loops outside
+    the web process -- needs the worker service INF-03 covers, and this pass is not a
+    substitute for it: it makes a death VISIBLE and the row's state TRUE, which is what
+    lets an operator and the owner see that it happened at all. Before this, an orphan sat
+    at ``RUNNING`` forever, counted against Requirement 27.4's concurrency cap, and read as
+    live to every client.
+
+    Never raises. A reconciliation pass that could fail a boot would make the thing that
+    reports damage into a cause of it; every outcome is counted and returned instead.
+    """
+    cutoff_seconds = (
+        ABANDON_AFTER_SECONDS if abandon_after_seconds is None
+        else float(abandon_after_seconds)
+    )
+    moment = now or datetime.now(timezone.utc)
+    cutoff = (moment - timedelta(seconds=cutoff_seconds)).isoformat()
+
+    summary: Dict[str, Any] = {
+        "examined": 0, "abandoned": 0, "raced": 0, "errors": 0,
+        "cutoff": cutoff, "abandon_after_seconds": cutoff_seconds,
+    }
+
+    try:
+        stale = repo.list_stale_running_sessions(supabase, stale_before=cutoff)
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning(
+            "[paper-session] PAPER-04 reconciliation could not read the stale RUNNING "
+            "sessions; no session was changed",
+            exc_info=True,
+        )
+        summary["errors"] = 1
+        return summary
+
+    summary["examined"] = len(stale)
+    if not stale:
+        logger.info(
+            "[paper-session] PAPER-04 reconciliation: no RUNNING session has a heartbeat "
+            "older than %ss",
+            cutoff_seconds,
+        )
+        return summary
+
+    for row in stale:
+        session_id = str(row.get("id"))
+        user_id = str(row.get("user_id"))
+        last_beat = row.get("last_heartbeat_at")
+        reason = (
+            f"no heartbeat since {last_beat or 'ever'}; the loop that was running this "
+            f"session no longer exists. Reconciled at boot after "
+            f"{cutoff_seconds:.0f}s without a beat."
+        )
+        try:
+            repo.transition_session_state(
+                supabase,
+                user_id=user_id,
+                session_id=session_id,
+                from_state=STATE_RUNNING,
+                to_state=STATE_ABANDONED,
+                stopped_at=moment.isoformat(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # The guarded UPDATE matching no row is the EXPECTED outcome of two workers
+            # racing, or of the session having been stopped by its owner between the read
+            # and the write. Counted separately from a real error so the log distinguishes
+            # "someone else got there first" from "this is broken".
+            name = type(exc).__name__
+            if "Concurrency" in name or "Conflict" in name:
+                summary["raced"] += 1
+                logger.info(
+                    "[paper-session] PAPER-04: session %s was no longer RUNNING when the "
+                    "abandon landed (another worker or its owner got there first)",
+                    session_id,
+                )
+            else:
+                summary["errors"] += 1
+                logger.warning(
+                    "[paper-session] PAPER-04: could not abandon session %s",
+                    session_id,
+                    exc_info=True,
+                )
+            continue
+
+        summary["abandoned"] += 1
+        logger.warning(
+            "[paper-session] PAPER-04: session %s marked ABANDONED - %s",
+            session_id,
+            reason,
+        )
+
+    logger.warning(
+        "[paper-session] PAPER-04 reconciliation complete: %s examined, %s abandoned, "
+        "%s raced, %s error(s)",
+        summary["examined"],
+        summary["abandoned"],
+        summary["raced"],
+        summary["errors"],
+    )
+    return summary
 
 
 def spawn_session_loop(
