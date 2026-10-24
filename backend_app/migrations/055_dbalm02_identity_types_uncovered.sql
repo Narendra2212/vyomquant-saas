@@ -175,7 +175,15 @@ BEGIN
         qual       text,
         with_check text
     ) ON COMMIT DROP;
-    DELETE FROM dbalm02_saved_policies;
+    -- NO `DELETE FROM` here, unlike 998's otherwise-identical block. `ON COMMIT DROP`
+    -- means this table cannot outlive the transaction that created it, so it is always
+    -- empty at this point and the delete was defensive copying rather than a real
+    -- safeguard. It also tripped `test_no_destructive_statements`, which forbids
+    -- DELETE/DROP/TRUNCATE anywhere in `backend_app/migrations/` (Requirement 24.7) and
+    -- reads the statement without knowing the target is a temp table of this block's own
+    -- making. 998 escapes that check only because it lives in `migrations/hardening/`,
+    -- which the scanner does not cover -- not because the statement is any more correct
+    -- there.
 
     FOREACH spec SLICE 1 IN ARRAY specs
     LOOP

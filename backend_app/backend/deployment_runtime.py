@@ -95,6 +95,7 @@ def build_runtime_blueprint(
     market_type: Optional[str] = None,
     paper_fallback_exchange: Optional[str] = None,
     execution_config: Optional[Mapping[str, Any]] = None,
+    authorized_until: Any = None,
 ) -> Dict[str, Any]:
     """The blueprint ``fleet.start_bot`` is given for one deployment.
 
@@ -112,6 +113,15 @@ def build_runtime_blueprint(
     ``master_executor.evaluate_deployment_execution_limits`` for where it is consulted. An
     absent or empty ``execution_config`` is a no-op, so every deployment that never set
     these fields behaves exactly as before.
+
+    ``authorized_until`` (MKT-05) is the instant a marketplace deployment's paid
+    subscription period ends, travelling by the same route and for the same reason as
+    ``execution_config``. ``None`` for a first-party deployment, which is entitled by
+    ownership and has no period. It is consulted by
+    ``master_executor.evaluate_authorization_window`` on every tick, so that a live
+    marketplace deployment stops placing orders when its period ends WITHOUT depending on
+    the 30-second expiry sweep worker being alive -- see that function's docstring for why
+    a poller is not an acceptable sole enforcement for a money guarantee.
 
     Raises:
         RuntimeBlueprintError: no graph, no symbol/timeframe, or no venue.
@@ -165,6 +175,11 @@ def build_runtime_blueprint(
         "mode": str(mode),
         "market_type": _text(market_type),
         "execution_config": dict(execution_config or {}),
+        # MKT-05. Written unconditionally, including as `None`, so that a blueprint always
+        # answers the question "is this deployment time-bounded?" explicitly rather than by
+        # the absence of a key. `master_executor._coerce_authorized_until` refuses an
+        # unreadable value rather than reading it as "no limit".
+        "authorized_until": authorized_until,
     }
     return runtime
 
@@ -215,6 +230,13 @@ async def rebuild_for_resume(
         # them (``strategy_deployments.execution_config``, absent entirely on a database
         # where 004e is unapplied, hence ``.get`` rather than a required key).
         execution_config=row.get("execution_config"),
+        # MKT-05: a resumed marketplace deployment must keep the SAME authorization window
+        # it was deployed with. Carrying it is what makes a restart unable to extend a paid
+        # period: the row is the source, and a row whose window has already closed produces
+        # a bot that refuses its first order rather than one that trades until the next
+        # sweep notices. `.get` because the column is absent on a database where 056 is
+        # unapplied, which is the same no-op case as a first-party deployment.
+        authorized_until=row.get("authorized_until"),
     )
     return blueprint, mode != "live"
 
