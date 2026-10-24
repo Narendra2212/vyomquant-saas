@@ -101,7 +101,7 @@ const { mockApi } = vi.hoisted(() => {
     assets: fns(['list', 'get']),
     auth: fns(['login', 'logout', 'me']),
     dataQuality: fns(['get']),
-    exchange: fns(['list', 'listConnections']),
+    exchange: fns(['list']),
     market: fns(['candles', 'ticker']),
     orders: fns(['list', 'place']),
     strategies: fns(['list', 'get', 'deploy']),
@@ -946,11 +946,13 @@ describe('deploy (MKT-05): the control a subscriber uses to run what they paid f
   // ─────────────────────────────────────────────────────────────────────────────────────
 
   const ACCOUNT = {
-    // An `exchange_connections` row. `id` is the real key a deployment's
-    // `exchange_account_id` can store -- `exchange_keys` has no such column at all (its
-    // PRIMARY KEY is the composite `(user_id, exchange_id)`, measured against
-    // production), which is why the selector reads connections rather than keys.
-    id: 'acct-real-uuid',
+    // A `GET /api/exchanges/` entry. BOTH ids are present on purpose, so a test
+    // catches the wrong one being sent: `account_id` is the real `exchange_keys.id`
+    // (migration 058, EXCH-03) and the only value a deployment can store, while `id` is
+    // the synthesised `{user_id}_{exchange_id}` composite kept for the existing exchange
+    // UI, which resolves to nothing.
+    account_id: 'acct-real-uuid',
+    id: 'user-1_binance',
     exchange_id: 'binance',
     name: 'BINANCE',
   };
@@ -965,7 +967,7 @@ describe('deploy (MKT-05): the control a subscriber uses to run what they paid f
   };
 
   const chooseLive = async (user) => {
-    mockApi.exchange.listConnections.mockResolvedValue([ACCOUNT]);
+    mockApi.exchange.list.mockResolvedValue([ACCOUNT]);
     await user.click(screen.getByTestId('deploy-mode-live'));
     return screen.findByTestId('deploy-live-fields');
   };
@@ -979,7 +981,7 @@ describe('deploy (MKT-05): the control a subscriber uses to run what they paid f
     expect(screen.getByTestId('deploy-mode-live').getAttribute('aria-checked')).toBe('false');
     // No live fields and no exchange read until live is actually chosen.
     expect(screen.queryByTestId('deploy-live-fields')).toBeNull();
-    expect(mockApi.exchange.listConnections).not.toHaveBeenCalled();
+    expect(mockApi.exchange.list).not.toHaveBeenCalled();
   });
 
   it('reads the caller\'s exchange accounts only once live is chosen', async () => {
@@ -989,10 +991,10 @@ describe('deploy (MKT-05): the control a subscriber uses to run what they paid f
 
     await chooseLive(user);
 
-    await waitFor(() => expect(mockApi.exchange.listConnections).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockApi.exchange.list).toHaveBeenCalledTimes(1));
   });
 
-  it('sends mode and the account id the deployment row can actually store', async () => {
+  it('sends mode and the REAL account id, not the synthesised composite', async () => {
     signIn();
     mockApi.library.deploy.mockResolvedValue({ deployment_id: 'dep-live', library_id: LISTING_ID });
     const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
@@ -1014,7 +1016,7 @@ describe('deploy (MKT-05): the control a subscriber uses to run what they paid f
 
   it('refuses to submit live with no account chosen, and says why on the control', async () => {
     signIn();
-    mockApi.exchange.listConnections.mockResolvedValue([ACCOUNT, { ...ACCOUNT, id: 'acct-2', name: 'KRAKEN' }]);
+    mockApi.exchange.list.mockResolvedValue([ACCOUNT, { ...ACCOUNT, account_id: 'acct-2', name: 'KRAKEN' }]);
     const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
     await screen.findByTestId('deploy-panel');
     await user.click(screen.getByTestId('deploy-mode-live'));
@@ -1047,7 +1049,7 @@ describe('deploy (MKT-05): the control a subscriber uses to run what they paid f
     signIn();
     // A row with no `account_id` cannot be deployed against -- sending the composite would
     // 404 and look like a missing account rather than a bad id -- so it must not appear.
-    mockApi.exchange.listConnections.mockResolvedValue([{ exchange_id: 'binance' }]);
+    mockApi.exchange.list.mockResolvedValue([{ id: 'user-1_binance', exchange_id: 'binance' }]);
     const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
     await screen.findByTestId('deploy-panel');
     await user.click(screen.getByTestId('deploy-mode-live'));
@@ -1058,7 +1060,7 @@ describe('deploy (MKT-05): the control a subscriber uses to run what they paid f
 
   it('reports a failed account read as a failure, not as "you have no accounts"', async () => {
     signIn();
-    mockApi.exchange.listConnections.mockRejectedValue(new Error('EXCHANGE_CONNECTIONS_READ_FAILED'));
+    mockApi.exchange.list.mockRejectedValue(new Error('EXCHANGE_CONNECTIONS_READ_FAILED'));
     const { user } = await openDetail(listingDetail(), ACTIVE_SUBSCRIPTION);
     await screen.findByTestId('deploy-panel');
     await user.click(screen.getByTestId('deploy-mode-live'));

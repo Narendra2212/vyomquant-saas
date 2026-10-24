@@ -108,12 +108,29 @@ OWNER: Dict[str, Any] = {
     "role": "authenticated",
 }
 
-#: ``public.exchange_keys``, column for column, as the LIVE database holds it. Queried directly
-#: against production. ``updated_at`` and ``id`` are ABSENT ON PURPOSE: they are what
-#: ``migrations/003_create_exchange_keys_table.sql`` declares and what production does not have,
-#: and their absence here is what turns the pre-fix projection into a real 42703.
+#: ``public.exchange_keys``, column for column, as the LIVE database holds it. Queried
+#: directly against production, and RE-QUERIED 2026-10-24 -- both times matter, because the
+#: live shape moved between them.
+#:
+#: ``id`` IS NOW PRESENT. ``058_exch03_exchange_keys_stable_handle.sql`` added it (EXCH-03)
+#: and it is applied in production: `deployment_binding.load_owned_exchange_account`
+#: resolves a deployment's ``exchange_account_id`` with ``.eq("id", ...)``, this table had
+#: no such column, and so every live deployment answered 404. The column is a HANDLE, not
+#: an identity -- the primary key remains the composite ``(user_id, exchange_id)`` and the
+#: vault still resolves credentials by it.
+#:
+#: ``updated_at`` REMAINS ABSENT FROM THIS SET, AND THAT IS NOW A DELIBERATE NARROWING
+#: RATHER THAN A STATEMENT ABOUT PRODUCTION. The re-query found ``updated_at`` present in
+#: the live table, so this file's original claim that production lacks it is no longer
+#: true. It is kept out of this set anyway, because what this fixture exists to do is make
+#: the pre-fix projection raise a real ``42703`` -- that is the incident it was written for
+#: (four production failures in a twelve-hour window) and the regression it still guards.
+#: Adding ``updated_at`` here would retire that guard for a column no handler selects.
+#: Recorded rather than silently corrected, so the next reader knows the live table has
+#: moved and does not take this set as a current description of it.
 EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = frozenset(
     {
+        "id",
         "user_id",
         "exchange_id",
         "encrypted_api_key",
@@ -131,8 +148,12 @@ TABLE_COLUMNS: Dict[str, FrozenSet[str]] = {
     "strategies": STRATEGIES_COLUMNS,
 }
 
-#: Columns the migration declares and production does not have. Referencing either is the defect.
-COLUMNS_ABSENT_IN_PRODUCTION: Tuple[str, ...] = ("updated_at", "id")
+#: Columns this handler must not reference, because selecting one raises ``42703`` against
+#: the shape this file's fixture models. ``id`` is NO LONGER among them: migration 058
+#: added it for EXCH-03 and the projection now selects it deliberately. ``updated_at``
+#: stays, as the guard for the original incident -- see ``EXCHANGE_KEYS_COLUMNS`` for why
+#: that is a narrowed guard rather than a claim about the live table.
+COLUMNS_ABSENT_IN_PRODUCTION: Tuple[str, ...] = ("updated_at",)
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 EXCHANGE_ROUTER_SOURCE: Path = REPO_ROOT / "backend_app" / "routers" / "exchange.py"

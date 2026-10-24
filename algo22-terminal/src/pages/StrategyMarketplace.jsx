@@ -943,29 +943,27 @@ const StrategyMarketplace = () => {
 
   // The caller's own exchange accounts, loaded only when live is actually selected.
   //
-  // `listConnections()` (`GET /api/exchanges/connections`, i.e. `exchange_connections`)
-  // and NOT `list()` (`exchange_keys`), because `exchange_account_id` has to be a single
-  // column a deployment row can store and `exchange_keys` has no such column: measured
-  // against production, its PRIMARY KEY is the composite `(user_id, exchange_id)` and
-  // there is no surrogate id at all. `list()`'s `id` field is a synthesised
-  // `{user_id}_{exchange_id}` string that resolves to nothing.
+  // `list()` (`GET /api/exchanges/`, i.e. `exchange_keys`) because that is the table
+  // holding the credentials a live deployment actually trades with, and `account_id`
+  // rather than `id` because those are different things in that response:
   //
-  // `exchange_connections` does carry an `id`, which is what
-  // `deployment_binding.load_owned_exchange_account` matches on. Note that this is the
-  // table recording connection STATE rather than the one holding credentials, and the two
-  // are not kept in step today -- so this list can legitimately come back empty for an
-  // account that does have credentials stored. That divergence is recorded against MKT-05
-  // rather than papered over here, because guessing an id would produce a 404 at deploy
-  // time that reads as "your account is missing" instead of "this app asked for the wrong
-  // thing".
+  //   * `account_id` is the real `exchange_keys.id` -- the handle
+  //     `deployment_binding.load_owned_exchange_account` resolves, and the only value
+  //     `strategy_deployments.exchange_account_id` can store. It exists because of
+  //     migration 058 (EXCH-03): before that this table had no single-column handle at
+  //     all, and EVERY live deployment, first-party included, answered 404.
+  //   * `id` is a synthesised `{user_id}_{exchange_id}` composite kept for the existing
+  //     exchange UI. Sending it would resolve to nothing.
+  //
+  // A row without a handle is filtered out rather than offered with a substituted value:
+  // a 404 at deploy time reads as "your account is missing" instead of "this app asked
+  // for the wrong thing".
   const loadDeployAccounts = async () => {
     setDeployAccountsError('');
     try {
-      const rows = await api.exchange.listConnections();
-      const list = Array.isArray(rows) ? rows : (rows?.connections ?? []);
-      const usable = (Array.isArray(list) ? list : [])
-        .filter((row) => typeof row?.id === 'string' && row.id)
-        .map((row) => ({ account_id: row.id, exchange_id: row.exchange_id, name: row.name }));
+      const rows = await api.exchange.list();
+      const usable = (Array.isArray(rows) ? rows : [])
+        .filter((row) => typeof row?.account_id === 'string' && row.account_id);
       setDeployAccounts(usable);
       // Only auto-select when there is exactly one. Picking one of several on the
       // trader's behalf is choosing which account trades real money for them.
