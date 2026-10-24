@@ -19,6 +19,7 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional, Tuple
 
@@ -154,6 +155,107 @@ def settle_exposure(*, side: str, qty: Decimal, previous_exposure: Decimal, resu
     else:
         new_exposure = max(Decimal("0"), (previous_exposure - filled_qty).quantize(Decimal("0.00000001")))
     return filled_qty, new_exposure
+
+
+def _coerce_authorized_until(raw: Any) -> Optional[datetime]:
+    """Read ``authorized_until`` off a blueprint, whatever shape it arrived in.
+
+    A blueprint built in-process carries a ``datetime``; one rebuilt from a
+    ``strategy_deployments`` row on resume carries whatever PostgREST serialised the
+    ``TIMESTAMPTZ`` to, which is an ISO-8601 string. Both are accepted.
+
+    AN UNPARSEABLE VALUE IS NOT TREATED AS "NO LIMIT". Returning ``None`` for a value that
+    was *present but unreadable* would silently convert a bounded live deployment into an
+    unbounded one -- the exact failure this feature exists to prevent. A naive datetime is
+    read as UTC, matching how every other instant in this codebase is stored, so the
+    comparison in :func:`evaluate_authorization_window` can never raise on a
+    naive/aware mismatch.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo is not None else raw.replace(tzinfo=timezone.utc)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            raise RuntimeError(
+                "authorized_until was present on this deployment's blueprint but could "
+                f"not be read as an instant: {raw!r}. Refusing to start rather than "
+                "treating an unreadable expiry as no expiry, which would let a live "
+                "marketplace deployment outlive the period that paid for it."
+            )
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    raise RuntimeError(
+        "authorized_until was present on this deployment's blueprint with an "
+        f"unsupported type {type(raw).__name__}. Refusing to start rather than treating "
+        "it as no expiry."
+    )
+
+
+def evaluate_authorization_window(
+    authorized_until: Optional[datetime],
+    *,
+    now: datetime,
+) -> Optional[str]:
+    """MKT-05: refuse an order once a marketplace deployment's paid period has ended.
+
+    Returns ``None`` when the order may proceed, or a refusal reason when it may not --
+    the same contract as :func:`evaluate_deployment_execution_limits`, so the caller
+    treats both identically.
+
+    WHY THIS IS ON THE ORDER PATH AND NOT LEFT TO THE EXPIRY SWEEP
+    ----------------------------------------------------------------
+    ``backend/marketplace/expiry_sweep.py`` already expires Subscriptions and moves the
+    matching ``strategy_deployments`` rows to ``'stopped'`` every 30 seconds. For a PAPER
+    marketplace deployment that is the whole story, because the subscriber deploy path
+    starts no runtime at all. For a LIVE deployment it is not sufficient, for two
+    independent reasons, and both are reasons about somebody's money:
+
+      1. THE SWEEP DOES NOT STOP A RUNTIME. It writes the deployment row directly. A bot
+         running in another process keeps placing real orders against a row that reads
+         ``'stopped'``. ``backend/deployment_state.py``'s own docstring names that class
+         of defect as the reason it exists.
+
+      2. THE SWEEP IS A POLLER. A guarantee about real money must not depend on a worker
+         being alive. This platform has already shipped with worker services absent from
+         production entirely -- OPS-TRAIN-01, where the training worker had no production
+         task definition and queued jobs sat QUEUED forever.
+
+    So the end of the window is enforced HERE, in the same function call chain that
+    constructs the order, on every tick. With the sweep worker dead, a live marketplace
+    deployment still stops trading the moment its period ends.
+
+    ``authorized_until`` IS ``None`` FOR EVERY DEPLOYMENT THAT HAS NO PERIOD
+    -------------------------------------------------------------------------
+    A first-party deployment is entitled by ownership and has no period, so this is a
+    complete no-op for it -- and for every deployment that predates MKT-05. Only a
+    marketplace deployment carries the column, and
+    ``chk_sd_marketplace_live_is_bounded`` (migration 056) makes it impossible for a LIVE
+    marketplace deployment to exist without one. So "``None`` means unbounded" is safe
+    here precisely because the database refuses the one case where it would not be.
+
+    THE COMPARISON IS ``>=``, NOT ``>``
+    -------------------------------------
+    ``marketplace/entitlement_resolver.py`` treats ``now >= period_expiry`` as EXPIRED,
+    and ``tests/property/test_entitlement_expiry_boundary.py`` pins that boundary to the
+    microsecond. Using ``>`` here would admit one order at exactly the expiry instant
+    that the resolver would refuse a new deployment for, which is a disagreement about
+    when a paid period ends. The two must read the same.
+    """
+    if authorized_until is None:
+        return None
+
+    if now >= authorized_until:
+        return (
+            "this deployment's marketplace subscription period ended at "
+            f"{authorized_until.isoformat()} (now {now.isoformat()}), so it is no "
+            "longer authorized to place orders"
+        )
+    return None
 
 
 def evaluate_deployment_execution_limits(
@@ -352,6 +454,21 @@ class BotRunner:
         self.execution_config: Dict[str, Any] = (
             dict(raw_execution_config) if isinstance(raw_execution_config, dict) else {}
         )
+
+        # MKT-05: the instant this deployment's marketplace subscription period ends,
+        # threaded in by `deployment_runtime.build_runtime_blueprint` from
+        # `strategy_deployments.authorized_until`. `None` for a first-party deployment,
+        # which is entitled by ownership and has no period, and for every blueprint built
+        # before MKT-05 -- in which case `evaluate_authorization_window` is a complete
+        # no-op. See that function's docstring for why the window is enforced here, on the
+        # order path, rather than left to the 30-second expiry sweep.
+        self.authorized_until: Optional[datetime] = _coerce_authorized_until(
+            strategy_blueprint.get("authorized_until")
+        )
+        #: Latch so the durable stop is requested ONCE rather than on every tick after
+        #: expiry. The order refusal itself is unconditional and re-evaluated every tick;
+        #: only the stop request is latched.
+        self._authorization_stop_requested = False
 
         # ── ML block ─────────────────────────────────────────────────────
         self.ml_model_path = strategy_blueprint.get("ml_model_path")
@@ -746,6 +863,33 @@ class BotRunner:
 
                 # ── FIX ME-3: is_reduce_only from explicit payload field ──
                 is_reduce = order_payload.get("reduce_only", False)
+
+                # ── MKT-05: has this deployment's paid period ended? ──────
+                # FIRST, before every other check, because an unauthorized deployment
+                # should not be evaluated against its limits at all -- the question is not
+                # "is this order within bounds" but "may this deployment still trade".
+                # Re-evaluated every tick rather than cached, so a clock that crosses the
+                # boundary mid-run is honoured without a restart.
+                authorization_reason = evaluate_authorization_window(
+                    self.authorized_until, now=datetime.now(timezone.utc)
+                )
+                if authorization_reason is not None:
+                    logger.warning(
+                        f"Bot {self.user_id}/{self.symbol}: order refused -- "
+                        f"{authorization_reason}"
+                    )
+                    # Refuse the order unconditionally, then ask for a durable stop ONCE.
+                    # The refusal is what protects the money; the stop request is what
+                    # stops this bot spinning for the rest of the process's life. It goes
+                    # through `DeploymentStateStore` rather than writing 'stopped'
+                    # directly, because the owning process is the only thing that knows
+                    # this bot's `recovered_exposure_coins` and so the only thing that can
+                    # flatten the position correctly -- see `request_close`'s RT-21
+                    # contract and `FleetManager._honour_close_request`.
+                    if not self._authorization_stop_requested:
+                        self._authorization_stop_requested = True
+                        await self._request_authorization_stop()
+                    continue
 
                 # ── DEPLOY-01: per-deployment execution_config limits ─────
                 # Consulted BEFORE the risk-engine check and before any order_id/lock is
@@ -1263,6 +1407,69 @@ class BotRunner:
     # ══════════════════════════════════════════════════════════════════════
     #  SHUTDOWN
     # ══════════════════════════════════════════════════════════════════════
+
+    async def _request_authorization_stop(self) -> None:
+        """MKT-05: this deployment's paid period ended -- flatten it and ask it to stop.
+
+        Called at most once per process, latched by ``_authorization_stop_requested``. The
+        ORDER REFUSAL in ``_inner_loop`` is what protects the money and is unconditional;
+        this is what keeps an unauthorized bot from spinning for the rest of the process's
+        life holding an open position nobody is paying for.
+
+        ``close_position`` is called DIRECTLY rather than through
+        ``DeploymentStateStore.request_close``, and that is the whole reason this lives on
+        ``BotRunner`` instead of in the expiry sweep: ``close_position``'s own docstring
+        records that only the process actually running this bot knows
+        ``recovered_exposure_coins``, which exists nowhere else. This IS that process, so
+        the flatten happens now rather than on the next heartbeat of whoever notices.
+
+        NEITHER FAILURE RAISES. The loop must keep refusing orders even if the flatten or
+        the status write fails -- an exception here would kill the tick loop and with it
+        the refusal, which is the one thing that must not stop. Both are logged at ERROR
+        with the deployment named, which is what an operator needs to finish the job by
+        hand.
+        """
+        deployment_id = str(
+            self.blueprint.get("deployment_id", self.blueprint.get("id", "")) or ""
+        )
+
+        try:
+            closed, detail = await self.close_position()
+            logger.warning(
+                "MKT-05: deployment %s past its authorization window -- flatten %s: %s",
+                deployment_id or "<unidentified>",
+                "succeeded" if closed else "did not complete",
+                detail,
+            )
+        except Exception as exc:  # noqa: BLE001 - must not kill the refusing loop
+            logger.error(
+                "MKT-05: deployment %s past its authorization window and the flatten "
+                "RAISED (%s). Orders are still being refused, but this position is open "
+                "and needs closing by hand.",
+                deployment_id or "<unidentified>",
+                exc,
+            )
+
+        if not deployment_id:
+            logger.error(
+                "MKT-05: a deployment past its authorization window carries no "
+                "deployment_id on its blueprint, so no durable stop could be requested. "
+                "Orders are still refused in this process, but nothing records that."
+            )
+            return
+
+        try:
+            from backend_app.backend.deployment_state import DeploymentStateStore
+
+            await DeploymentStateStore().request_stop(deployment_id)
+        except Exception as exc:  # noqa: BLE001 - must not kill the refusing loop
+            logger.error(
+                "MKT-05: could not record the stop of deployment %s after its "
+                "authorization window closed: %s. Orders are still refused in this "
+                "process; the row still reads as running.",
+                deployment_id,
+                exc,
+            )
 
     async def close_position(self) -> Tuple[bool, str]:
         """RT-21: flatten this bot's own recorded exposure, through the SAME gateway and

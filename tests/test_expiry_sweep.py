@@ -954,6 +954,11 @@ def test_running_deployments_of_the_expired_listing_are_stopped_for_that_purchas
     deployment of a different Listing, are different rows and stay running. Scoping by one
     column would stop one of them.
     """
+    # Every row carries ``mode``, because every real row does: migration 004e declares it
+    # ``NOT NULL DEFAULT 'paper'`` with ``chk_sd_mode CHECK (mode IN ('paper','live'))``.
+    # These fixtures omitted it while the sweep did not read it; MKT-05 made the sweep
+    # treat a live deployment differently from a paper one, so a fixture without ``mode``
+    # now represents a row that cannot exist.
     client = FakeSupabase(
         subscriptions=[_subscription("sub-1", "active", period_expiry=PAST)],
         deployments=[
@@ -962,30 +967,35 @@ def test_running_deployments_of_the_expired_listing_are_stopped_for_that_purchas
                 "user_id": PURCHASER,
                 "marketplace_listing_id": LISTING,
                 "status": "running",
+                "mode": "paper",
             },
             {
                 "id": "dep-mine-deploying",
                 "user_id": PURCHASER,
                 "marketplace_listing_id": LISTING,
                 "status": "deploying",
+                "mode": "paper",
             },
             {
                 "id": "dep-mine-already-stopped",
                 "user_id": PURCHASER,
                 "marketplace_listing_id": LISTING,
                 "status": "stopped",
+                "mode": "paper",
             },
             {
                 "id": "dep-other-user",
                 "user_id": "someone-else",
                 "marketplace_listing_id": LISTING,
                 "status": "running",
+                "mode": "paper",
             },
             {
                 "id": "dep-other-listing",
                 "user_id": PURCHASER,
                 "marketplace_listing_id": "listing-2",
                 "status": "running",
+                "mode": "paper",
             },
         ],
     )
@@ -1001,6 +1011,72 @@ def test_running_deployments_of_the_expired_listing_are_stopped_for_that_purchas
     assert by_id["dep-other-listing"]["status"] == "running"
     # An already-stopped deployment is not re-stopped, so no spurious ``stopped_at`` appears.
     assert "stopped_at" not in by_id["dep-mine-already-stopped"]
+
+
+def test_a_live_deployment_is_asked_to_stop_and_flatten_not_declared_stopped():
+    """MKT-05. The disposition for a LIVE marketplace deployment is different in kind, and
+    the difference is the point.
+
+    A paper marketplace deployment starts no runtime, so writing ``status='stopped'`` on
+    its row IS stopping it. A live one runs in another process which reads none of this:
+    forcing its row to ``'stopped'`` would leave a bot placing real orders against a row
+    that claims it is finished, holding an open position nobody is managing. That is the
+    defect ``backend/deployment_state.py``'s own docstring says it exists to prevent.
+
+    So a live row is moved to ``'stopping'`` -- the durable request the owning process
+    honours -- and given ``close_requested_at`` so the position is flattened (RT-21). It is
+    NOT given ``stopped_at``, because it has not stopped; only the owner may say that, and
+    only after the position is actually flat.
+    """
+    client = FakeSupabase(
+        subscriptions=[_subscription("sub-1", "active", period_expiry=PAST)],
+        deployments=[
+            {
+                "id": "dep-live",
+                "user_id": PURCHASER,
+                "marketplace_listing_id": LISTING,
+                "status": "running",
+                "mode": "live",
+            },
+            {
+                "id": "dep-paper",
+                "user_id": PURCHASER,
+                "marketplace_listing_id": LISTING,
+                "status": "running",
+                "mode": "paper",
+            },
+        ],
+    )
+
+    outcome = _run_sweep(client)
+
+    by_id = {r["id"]: r for r in client.rows("strategy_deployments")}
+    live, paper = by_id["dep-live"], by_id["dep-paper"]
+
+    # The live one is ASKED to stop, and asked to flatten.
+    assert live["status"] == "stopping", (
+        "a live deployment must be moved to 'stopping', the durable request its owning "
+        "process honours, not declared stopped by a sweep that cannot see its position"
+    )
+    assert _as_instant(live["close_requested_at"]) == NOW, (
+        "a live deployment past its paid period must carry an RT-21 flatten request; "
+        "without it the position is abandoned rather than closed"
+    )
+    assert "stopped_at" not in live, (
+        "'stopped_at' on a deployment that has only been asked to stop would make the row "
+        "claim something that has not happened yet"
+    )
+
+    # The paper one keeps exactly its pre-MKT-05 disposition.
+    assert paper["status"] == "stopped"
+    assert _as_instant(paper["stopped_at"]) == NOW
+    assert "close_requested_at" not in paper, (
+        "a paper deployment has no position to flatten and no runtime to honour the "
+        "request, so asking for one would be noise"
+    )
+
+    # Both were acted on, so the count still reflects the whole set.
+    assert outcome.deployments_stopped == 2
 
 
 def test_paper_sessions_are_stopped_only_from_the_two_states_that_permit_it() -> None:
