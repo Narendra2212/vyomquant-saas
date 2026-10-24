@@ -920,6 +920,17 @@
     ],
     [
       "exchange_keys",
+      "can_trade",
+      "boolean",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
       "created_at",
       "timestamp with time zone",
       "",
@@ -986,6 +997,28 @@
     ],
     [
       "exchange_keys",
+      "is_active",
+      "boolean",
+      "",
+      "NO",
+      "true",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
+      "last_validated_at",
+      "timestamp with time zone",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
       "updated_at",
       "timestamp with time zone",
       "",
@@ -1001,6 +1034,17 @@
       "uuid",
       "",
       "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
+      "validation_status",
+      "text",
+      "",
+      "YES",
       "",
       "NO",
       "",
@@ -15336,6 +15380,11 @@
     ],
     [
       "exchange_keys",
+      "idx_exchange_keys_unreadable",
+      "CREATE INDEX idx_exchange_keys_unreadable ON public.exchange_keys USING btree (user_id, exchange_id) WHERE (validation_status = 'unreadable'::text)"
+    ],
+    [
+      "exchange_keys",
       "idx_exchange_keys_user_id",
       "CREATE INDEX idx_exchange_keys_user_id ON public.exchange_keys USING btree (user_id)"
     ],
@@ -25107,6 +25156,11 @@
     [
       "migrations/056_mkt05_subscriber_live_authorization_window.sql",
       "55069cb676201570ea605bfc42ea874f043a365d2e5329ccd7265cb60db380d0",
+      "step1"
+    ],
+    [
+      "migrations/056_vault01_credential_validity_state.sql",
+      "48973332bbc2e6bc804b1a515332dd29e96f2a305dcff231ba2b1fdb3b1bda05",
       "step1"
     ],
     [

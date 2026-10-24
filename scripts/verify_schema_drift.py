@@ -355,15 +355,25 @@ def main() -> int:
             return 2
         out = pathlib.Path(args.write_baseline)
         out.parent.mkdir(parents=True, exist_ok=True)
-        # indent=1, sort_keys=True matches what verify_provisioning.py writes, so a
-        # refreshed file diffs against the committed one line-for-line.
-        out.write_text(json.dumps(snapshot, indent=1, sort_keys=True), encoding="utf-8")
+        # Match the indentation of the baseline this would replace, read off that file
+        # rather than assumed. verify_provisioning.py writes indent=1 and the committed
+        # baseline is indent=2; writing the wrong one reformats all ~27,000 lines and
+        # buries the handful of rows a reviewer actually needs to see. sort_keys=True
+        # either way, so the ordering is stable.
+        indent = 2
+        if baseline_path.exists():
+            lines = baseline_path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > 1:
+                second = lines[1]
+                indent = (len(second) - len(second.lstrip())) or 2
+        out.write_text(json.dumps(snapshot, indent=indent, sort_keys=True) + "\n",
+                       encoding="utf-8")
         print("=" * 78)
         print("SCHEMA SNAPSHOT WRITTEN (no comparison performed)")
         print("=" * 78)
         print(f"database : {redact(dsn)}")
         print(f"server   : {version}")
-        print(f"written  : {out}")
+        print(f"written  : {out}  (indent={indent}, matching {baseline_path.name})")
         for key in sorted(snapshot):
             print(f"   {key:<32} {len(snapshot[key])}")
         print("\nCompare against the committed baseline before replacing it. Drift means")
