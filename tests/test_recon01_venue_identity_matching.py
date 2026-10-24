@@ -157,16 +157,23 @@ def test_an_engine_created_order_open_at_the_venue_is_not_declared_a_ghost(db):
 
     results = _reconcile(_service(db, [_venue_order("V-1")]))
 
-    ghosts = [r for r in results if r.action == ReconciliationAction.INSERT_GHOST_ORDER]
+    ghosts = [
+        r for r in results
+        if r.action == ReconciliationAction.REPORT_UNATTRIBUTED_ORDER
+    ]
     assert ghosts == [], (
-        "the tenant's own open order was classified as a ghost. The venue reported "
-        "order V-1 and the DB row carries venue_order_id='V-1'; matching on order_id "
-        "alone (NULL here) is what broke the pairing."
+        "the tenant's own open order was classified as unattributable. The venue "
+        "reported order V-1 and the DB row carries venue_order_id='V-1'; matching on "
+        "order_id alone (NULL here) is what broke the pairing."
     )
 
 
 def test_no_duplicate_execution_record_is_committed_for_a_genuine_order(db):
-    """The ghost verdict is not advisory -- it INSERTs and COMMITs a second row."""
+    """Originally: the ghost verdict was not advisory, it INSERTed and COMMITted a second
+    row. That write is now gone entirely (RECON-01's policy answer), so this holds for two
+    independent reasons -- the order matches, and nothing in this path writes a row at
+    all. Kept because it is the property that mattered, and a future change that
+    reintroduces a write for an unmatched order would still have to pass it."""
     _row(db, venue_order_id="V-1", order_id=None)
     before = db.query(ExecutionRecordModel).count()
 
@@ -241,19 +248,29 @@ def test_venue_order_id_wins_when_a_row_carries_both(db):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def test_a_real_ghost_order_is_still_detected(db):
-    """The fix must not disable ghost detection -- only stop it firing on real rows.
+def test_a_genuinely_unattributable_venue_order_is_still_detected(db):
+    """The fix must not disable detection -- only stop it firing on real rows.
 
-    Nothing in the DB corresponds to V-UNKNOWN, which is what the ghost path exists for
-    (manual trading at the venue, or an order whose DB write was lost).
+    Nothing in the DB corresponds to V-UNKNOWN, which is what this path exists for
+    (manual trading at the venue, or an order whose DB write was lost). Detection is the
+    half that must survive; what changed is that it now REPORTS instead of writing.
     """
     _row(db, venue_order_id="V-1", order_id=None)
 
     results = _reconcile(_service(db, [_venue_order("V-1"), _venue_order("V-UNKNOWN")]))
 
-    ghosts = [r for r in results if r.action == ReconciliationAction.INSERT_GHOST_ORDER]
-    assert len(ghosts) == 1, f"expected exactly one ghost, got {[r.action for r in results]}"
-    assert ghosts[0].exchange_order_id == "V-UNKNOWN"
+    unattributed = [
+        r for r in results
+        if r.action == ReconciliationAction.REPORT_UNATTRIBUTED_ORDER
+    ]
+    assert len(unattributed) == 1, (
+        f"expected exactly one unattributed order, got {[r.action for r in results]}"
+    )
+    assert unattributed[0].exchange_order_id == "V-UNKNOWN"
+    # It has no row, so it has no execution id. A fabricated one is what the old
+    # `exec_ghost_<venue id>` string was.
+    assert unattributed[0].execution_id is None
+    assert _ghost_rows(db) == [], "a row was written for an unattributable venue order"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -3,8 +3,7 @@ Exchange Reconciliation Service
 
 STEP 3.4 — ORDER CONSISTENCY + EXCHANGE RECONCILIATION
 
-Ensures system state ALWAYS matches exchange reality.
-Prevents "ghost orders" and detects discrepancies.
+Detects divergence between this platform's record of open orders and the venue's.
 
 Reconciliation Loop:
 ┌─────────────────────────────────────────────────────────────────┐
@@ -15,7 +14,7 @@ Reconciliation Loop:
 │  3. Compare and reconcile:                                        │
 │                                                                  │
 │     Exchange has order, DB missing:                               │
-│     → INSERT into DB (ghost order detected)                       │
+│     → REPORT it. No row is created. See below.                    │
 │                                                                  │
 │     DB has order, exchange missing:                             │
 │     → Mark FILLED or CANCELLED (reconciliation)                   │
@@ -25,6 +24,19 @@ Reconciliation Loop:
 │                                                                  │
 │  4. Log all discrepancies                                         │
 └─────────────────────────────────────────────────────────────────┘
+
+THE FIRST CASE REPORTS AND DOES NOT WRITE, WHICH IS RECON-01'S ANSWER
+---------------------------------------------------------------------
+This module used to INSERT an ``execution_records`` row for a venue order it could not
+attribute -- ``strategy_id="reconciled"``, ``price=None``, ``status=EXECUTING``, no risk
+check -- and RECON-01 held that open as the one owner's policy decision left in it. The
+answer is NO: ``execution_records`` is the strategy-execution ledger, a row in it means
+"this platform executed this", and that is the one claim the platform is not entitled to
+make about an order it cannot explain. A reconciler detects divergence between two systems
+of record; it does not resolve it by editing one of them to agree with the other.
+
+The exposure is real either way, so the order is reported at ``error`` with every field
+the venue gave. ``_report_unattributed_order`` carries the full reasoning.
 """
 
 import asyncio
@@ -68,8 +80,17 @@ RECONCILIATION_LEADER_LOCK_TTL_SECONDS = 60
 
 
 class ReconciliationAction(Enum):
-    """Actions from reconciliation process."""
-    INSERT_GHOST_ORDER = "insert_ghost_order"
+    """Actions from reconciliation process.
+
+    ``INSERT_GHOST_ORDER`` WAS HERE AND IS GONE. RECON-01's one open question was whether
+    the platform should create an ``execution_records`` row for a venue order it cannot
+    attribute to any strategy. The answer is NO, and the member is removed rather than
+    left unused so nothing can emit it again: an enum value that names a forbidden write
+    is an invitation. :data:`REPORT_UNATTRIBUTED_ORDER` replaces it and is report-only.
+    """
+
+    #: A venue order with no ``execution_records`` row. REPORTED, never written.
+    REPORT_UNATTRIBUTED_ORDER = "report_unattributed_order"
     MARK_FILLED = "mark_filled"
     MARK_CANCELLED = "mark_cancelled"
     UPDATE_FILL_DATA = "update_fill_data"
@@ -78,8 +99,17 @@ class ReconciliationAction(Enum):
 
 @dataclass
 class ReconciliationResult:
-    """Result of a reconciliation operation."""
-    execution_id: str
+    """Result of a reconciliation operation.
+
+    ``execution_id`` is OPTIONAL, and ``None`` is the meaningful case: a
+    :data:`ReconciliationAction.REPORT_UNATTRIBUTED_ORDER` result describes a venue order
+    that has NO execution record, so there is no execution id to give. Returning a
+    fabricated one -- the ``exec_ghost_<venue id>`` string this module used to mint -- is
+    how a reader ends up believing a row exists. Consumers must handle ``None``;
+    ``_update_sync_timestamp`` filters it out rather than touching a row by a made-up key.
+    """
+
+    execution_id: Optional[str]
     action: ReconciliationAction
     old_state: Optional[str]
     new_state: Optional[str]
@@ -240,19 +270,18 @@ class ExchangeReconciliationService:
             
             # 3. Compare and reconcile
             
-            # CASE 1: Exchange has order, DB missing → INSERT (ghost order)
+            # CASE 1: the venue has an order with no execution_records row → REPORT it.
+            # It used to be INSERTed. RECON-01's open question was whether the platform
+            # should create a row for an order it cannot attribute to a strategy; the
+            # answer is no, and `_report_unattributed_order` carries the reasoning.
             for order_id, exchange_order in exchange_orders_by_id.items():
                 matching_db_order = self._find_db_order_by_exchange_id(db_orders, order_id)
                 
                 if not matching_db_order:
-                    result = await self._handle_ghost_order(
+                    result = await self._report_unattributed_order(
                         tenant_id, exchange_order
                     )
                     results.append(result)
-                    logger.warning(
-                        f"GHOST ORDER DETECTED: order_id={order_id} | "
-                        f"Inserted into DB with status={result.new_state}"
-                    )
             
             # CASE 2 & 3: DB has order, check against exchange
             for db_order in db_orders:
@@ -268,8 +297,13 @@ class ExchangeReconciliationService:
                     if result.action != ReconciliationAction.NO_ACTION:
                         results.append(result)
             
-            # Update last sync timestamp for all reconciled orders
-            self._update_sync_timestamp([r.execution_id for r in results])
+            # Update last sync timestamp for all reconciled orders.
+            # `None` is filtered: a REPORT_UNATTRIBUTED_ORDER result has no execution id
+            # because it has no row, and stamping "last synced" on a key that names
+            # nothing would be a write derived from an absence.
+            self._update_sync_timestamp(
+                [r.execution_id for r in results if r.execution_id]
+            )
             
             logger.info(
                 f"Reconciliation complete: {len(results)} actions, "
@@ -412,60 +446,84 @@ class ExchangeReconciliationService:
                 return order
         return None
     
-    async def _handle_ghost_order(
+    async def _report_unattributed_order(
         self,
         tenant_id: str,
         exchange_order: Dict[str, Any]
     ) -> ReconciliationResult:
+        """CASE 1: the venue has an order this platform has no record of. REPORT it.
+
+        RECON-01'S ONE OPEN QUESTION, ANSWERED: NO
+        ------------------------------------------
+        The question was whether the platform should create an ``execution_records`` row
+        for a venue order it cannot attribute to any strategy. It must not, and this
+        function used to do exactly that -- ``db.add()`` + ``db.commit()`` of a row with
+        ``strategy_id="reconciled"``, ``price=None``, ``status=EXECUTING``, and no risk
+        check -- on a live-money path.
+
+        Every field of that row was a false statement:
+
+        * ``strategy_id="reconciled"`` names no strategy. Anything that groups exposure or
+          performance by strategy gained a phantom one, and nothing could ever answer
+          "which strategy authorised this".
+        * ``price=None`` on an ``EXECUTING`` record leaves every downstream P&L and risk
+          computation without the one input it needs.
+        * ``status=EXECUTING`` asserts that this platform is executing the order. It is
+          not; the order arrived from somewhere this platform cannot see.
+        * No risk check ran, so the row contributed to exposure without ever having been
+          authorised against a limit -- the one thing the risk engine exists to prevent.
+
+        And ``execution_records`` is the strategy-execution ledger: a row in it means
+        "this platform executed this". For an order the platform cannot explain, that is
+        the one claim it is not entitled to make. A reconciler's job is to detect
+        divergence between two systems of record, not to resolve it by editing one of them
+        to agree with the other.
+
+        WHAT "NO" MUST NOT MEAN
+        -----------------------
+        It must not mean ignoring it. An unattributable open order at the venue is REAL
+        exposure on a real account -- plausibly a manual trade in the exchange UI, or this
+        platform's own order whose database write failed after the venue accepted it. The
+        second case is dangerous and the two are indistinguishable from here. So this
+        reports at ``error`` with every field the venue gave, which is the honest answer:
+        the platform has seen something it cannot account for, and says so, without
+        inventing a record of having done it.
+
+        Writes NOTHING: no row, and no state-machine entry either. The old code also
+        injected ``OrderState.SUBMITTED`` under the fabricated ``exec_ghost_<id>`` key,
+        which left the in-memory machine holding a state for an execution that did not
+        exist even after the row was rolled back.
         """
-        CASE 1: Exchange has order, DB missing → INSERT into DB.
-        
-        This is a "ghost order" - exists on exchange but not in our system.
-        Can happen due to:
-        - Network issues during order creation
-        - Race conditions
-        - Manual exchange trading
-        """
-        # Generate execution_id for this order
-        execution_id = f"exec_ghost_{exchange_order['order_id']}"
-        
-        # Create DB record
-        new_record = ExecutionRecordModel(
-            execution_id=execution_id,
-            tenant_id=UUID(tenant_id),
-            task_id=None,
-            strategy_id="reconciled",  # Unknown, from reconciliation
-            symbol=exchange_order['symbol'],
-            side=exchange_order['side'],
-            size=str(exchange_order['size']),
-            price=None,  # Unknown for ghost orders
-            status=ExecutionStatus.EXECUTING,
-            order_id=exchange_order['order_id'],
-            filled_size=str(exchange_order['filled_size']),
-            avg_price=str(exchange_order['avg_price']) if exchange_order['avg_price'] else None,
-            remaining_size=str(exchange_order['remaining_size']),
-            exchange_status=exchange_order['status'],
-            result={"source": "reconciliation", "note": "Ghost order detected"}
+        venue_order_id = exchange_order.get('order_id')
+        logger.error(
+            "UNATTRIBUTED VENUE ORDER (RECON-01): tenant=%s venue_order_id=%s "
+            "symbol=%s side=%s size=%s filled=%s avg_price=%s venue_status=%s. "
+            "The venue reports this order and this platform holds no execution_records "
+            "row for it. NO ROW HAS BEEN CREATED: the platform does not invent an "
+            "execution it cannot attribute to a strategy or check against a risk limit. "
+            "This is REAL exposure on a real account and needs a human -- either a manual "
+            "trade placed outside the platform, or a platform order whose database write "
+            "failed after the venue accepted it, and the two are not distinguishable from "
+            "here.",
+            tenant_id, venue_order_id, exchange_order.get('symbol'),
+            exchange_order.get('side'), exchange_order.get('size'),
+            exchange_order.get('filled_size'), exchange_order.get('avg_price'),
+            exchange_order.get('status'),
         )
-        
-        self.db.add(new_record)
-        self.db.commit()
-        
-        # Update state machine
-        current_state = self.state_machine.get_current_state(execution_id)
-        if not current_state:
-            # Initialize state (ghost order is already submitted/pending on exchange)
-            from backend_app.core.order_state_machine import OrderState
-            self.state_machine._current_states[execution_id] = OrderState.SUBMITTED
-        
+
         return ReconciliationResult(
-            execution_id=execution_id,
-            action=ReconciliationAction.INSERT_GHOST_ORDER,
+            # No execution exists, so there is no execution id. See the dataclass note.
+            execution_id=None,
+            action=ReconciliationAction.REPORT_UNATTRIBUTED_ORDER,
             old_state=None,
-            new_state="submitted",
-            exchange_order_id=exchange_order['order_id'],
-            filled_size=exchange_order['filled_size'],
-            avg_price=exchange_order['avg_price']
+            new_state=None,
+            exchange_order_id=venue_order_id,
+            filled_size=exchange_order.get('filled_size'),
+            avg_price=exchange_order.get('avg_price'),
+            discrepancy=(
+                "venue holds an open order with no execution_records row; reported, not "
+                "written, because the platform cannot attribute it to a strategy"
+            ),
         )
     
     async def _handle_missing_exchange_order(
@@ -704,8 +762,15 @@ class ExchangeReconciliationService:
             avg_price=exchange_order['avg_price']
         )
     
-    def _update_sync_timestamp(self, execution_ids: List[str]):
-        """Update last_exchange_sync timestamp for reconciled orders."""
+    def _update_sync_timestamp(self, execution_ids: List[Optional[str]]):
+        """Update last_exchange_sync timestamp for reconciled orders.
+
+        Defensive against ``None`` as well as the caller filtering it: a
+        ``REPORT_UNATTRIBUTED_ORDER`` result carries no execution id, and
+        ``execution_id = ANY(ARRAY[NULL])`` would match nothing while still committing a
+        transaction for no reason.
+        """
+        execution_ids = [eid for eid in execution_ids if eid]
         if not execution_ids:
             return
         

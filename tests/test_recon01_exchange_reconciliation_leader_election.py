@@ -382,12 +382,13 @@ def test_the_service_is_still_not_started_anywhere():
 
     THE REASON IT STILL HOLDS, which is a different one:
 
-    1. ``_handle_ghost_order`` does not report, it WRITES. A venue order the reconciler
-       cannot attribute to a DB row is inserted and committed as a new
-       ``execution_records`` row with ``strategy_id="reconciled"``, ``price=None`` and
-       status EXECUTING -- an execution no strategy owns, created on a live-money path with
-       no risk check. Whether the platform should manufacture position state for orders it
-       cannot explain is an owner's policy decision, not a wiring detail.
+    1. RESOLVED, and no longer a reason. This used to read: "``_handle_ghost_order`` does
+       not report, it WRITES ... whether the platform should manufacture position state
+       for orders it cannot explain is an owner's policy decision, not a wiring detail."
+       That decision has been taken -- the answer is NO -- and it is enforced rather than
+       recorded: the function is now ``_report_unattributed_order``, it writes nothing,
+       and ``INSERT_GHOST_ORDER`` has been removed from the action vocabulary so nothing
+       can emit it again. See tests/test_recon01_unattributed_order_policy.py.
     2. ``backend_app/core/models/execution_record.py`` records the invariant directly:
        "`OrderWatchdog` is the only owner of adjudication, and introducing a second one
        would be worse than the defect." OrderWatchdog is started in the lifespan and its
@@ -405,9 +406,12 @@ def test_the_service_is_still_not_started_anywhere():
     main_py = pathlib.Path(__file__).resolve().parent.parent / "backend_app" / "main.py"
     text = main_py.read_text(encoding="utf-8")
     assert "ExchangeReconciliationService(" not in text, (
-        "ExchangeReconciliationService is now constructed in main.py. Leader election "
-        "alone does not make it safe to start: nothing enumerates tenants yet "
-        "(RECON-01 blocker 2), so the loop would hold a lease and reconcile nobody."
+        "ExchangeReconciliationService is now constructed in main.py. Both of RECON-01's "
+        "named blockers are closed and its ghost-order policy is decided, but "
+        "execution_record.py's invariant still stands: OrderWatchdog is the only owner of "
+        "adjudication and it is already started, so this would be the second owner that "
+        "comment forbids. Starting it needs that invariant revisited, not just the "
+        "blockers cleared."
     )
     assert "start_reconciliation_loop" not in text, (
         "main.py now starts the reconciliation loop; see above"

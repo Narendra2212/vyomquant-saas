@@ -314,10 +314,11 @@ def test_the_service_is_still_not_started_in_the_web_process():
     BUT HOSTING IS NO LONGER THE DECIDING REASON, and this test does not rest on it.
     Two reasons survive regardless of where the loop would run:
 
-    1. ``_handle_ghost_order`` INSERTs and COMMITs a new ``execution_records`` row
-       (``strategy_id="reconciled"``, ``price=None``, status EXECUTING) for any venue order
-       it cannot attribute. Manufacturing position state for unexplained live orders is an
-       owner's policy call.
+    1. RESOLVED, and no longer one of them. This used to read: "``_handle_ghost_order``
+       INSERTs and COMMITs a new ``execution_records`` row ... manufacturing position
+       state for unexplained live orders is an owner's policy call." The call has been
+       made -- NO -- and the code now refuses rather than the ledger merely saying so.
+       See tests/test_recon01_unattributed_order_policy.py.
     2. ``backend_app/core/models/execution_record.py`` records that "`OrderWatchdog` is the
        only owner of adjudication, and introducing a second one would be worse than the
        defect" -- and OrderWatchdog is already started and already reconciles these same
