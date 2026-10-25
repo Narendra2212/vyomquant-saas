@@ -52,18 +52,36 @@ NATIVE_FIELD = {
     "okx": "clOrdId",
     "kucoin": "clientOid",
     "coinbase": "client_order_id",
-    "kraken": "userref",
+    # WS-03 / ccxt 4.5.90: WAS "userref". kraken's create path no longer mentions
+    # `userref` at all; it now reads our id via
+    # `safe_string_2(params, 'clientOrderId', 'cl_ord_id')`. Re-measured, not guessed.
+    "kraken": "cl_ord_id",
 }
 
 #: Venues whose ccxt implementation forwards OUR id. Measured, not assumed.
-FORWARDS_OUR_ID = {"binance", "bybit", "okx", "kucoin"}
+#:
+#: KRAKEN JOINED THIS SET ON ccxt 4.5.90, and it joined because the test below did its
+#: job. test_venue_does_not_forward_our_client_order_id was deliberately written as a
+#: CHARACTERISATION of measured reality rather than of desired behaviour, with its own
+#: docstring saying "if a future ccxt starts honouring our id on these venues, this test
+#: fails and the gap can be closed with evidence rather than hope". The WS-03 upgrade
+#: (4.3.92 -> 4.5.90, forced because every websocket was broken) made it fail exactly as
+#: designed, with the message "kraken now reads clientOrderId from params - re-measure
+#: DUP-01". Measured: it does.
+#:
+#: WHAT THIS DOES AND DOES NOT CHANGE FOR DUP-01. The SUBMIT half is now real on kraken --
+#: the platform's deterministic execution_id reaches the venue as `cl_ord_id`, so there is
+#: something for the venue to recognise a duplicate by. The CERTIFICATION half is
+#: unchanged: kraken is still UNSUPPORTED in SANDBOX_MECHANISMS (re-measured under 4.5.90
+#: and still true), so there is no sandbox to prove the venue actually REFUSES the second
+#: submission. "Our id arrives" and "the venue rejects a repeat of it" are different
+#: claims and only the first improved.
+FORWARDS_OUR_ID = {"binance", "bybit", "okx", "kucoin", "kraken"}
 
 #: Venues where our id does NOT reach the venue, with the measured reason.
 DOES_NOT_FORWARD = {
     "coinbase": "ccxt builds its own `client_order_id` as `id + '-' + self.uuid()`, "
                 "discarding any clientOrderId supplied in params",
-    "kraken": "no create*/edit* method mentions clientOrderId or userref at all, so the "
-              "parameter is passed through verbatim and the venue does not read it",
 }
 
 
@@ -157,22 +175,22 @@ def test_venue_does_not_forward_our_client_order_id(venue):
     src = _uncommented(_create_source(venue))
     reads_ours = bool(re.search(r"safe_string\w*\([^)]*['\"]clientOrderId['\"]", src))
 
-    if venue == "coinbase":
-        # ccxt constructs its own id and discards ours.
-        assert re.search(r"['\"]client_order_id['\"]\s*:\s*id\s*\+", src), (
-            "coinbase no longer self-generates client_order_id — re-measure DUP-01"
-        )
-        assert not reads_ours, (
-            "coinbase now reads clientOrderId from params — DUP-01 may be closed for "
-            "this venue; re-measure and move it to FORWARDS_OUR_ID"
-        )
-    else:  # kraken
-        assert not reads_ours, (
-            "kraken now reads clientOrderId from params — re-measure DUP-01"
-        )
-        assert "userref" not in src, (
-            "kraken now references userref — re-measure DUP-01"
-        )
+    # ONLY COINBASE REMAINS HERE. kraken was in this set until ccxt 4.5.90 and
+    # moved to FORWARDS_OUR_ID when this very assertion fired -- see the note on
+    # that constant for what did and did not change for DUP-01.
+    assert venue == "coinbase", (
+        f"{venue!r} is in DOES_NOT_FORWARD but this branch only characterises "
+        f"coinbase. Add its measured reason explicitly rather than letting it "
+        f"fall through unasserted."
+    )
+    # ccxt constructs its own id and discards ours.
+    assert re.search(r"['\"]client_order_id['\"]\s*:\s*id\s*\+", src), (
+        "coinbase no longer self-generates client_order_id; re-measure DUP-01"
+    )
+    assert not reads_ours, (
+        "coinbase now reads clientOrderId from params, so DUP-01 may be closed "
+        "for this venue; re-measure and move it to FORWARDS_OUR_ID"
+    )
 
 
 def test_binance_invents_a_client_order_id_when_none_is_supplied():
@@ -189,8 +207,19 @@ def test_binance_invents_a_client_order_id_when_none_is_supplied():
     retry is a new order.
     """
     src = _uncommented(_create_source("binance"))
-    assert re.search(r"uuid22\(\)", src), (
-        "binance no longer auto-generates a client order id — re-measure"
+    # THE BEHAVIOUR IS UNCHANGED; ONLY THE HELPER'S NAME MOVED. This asserted
+    # `uuid22()` until ccxt 4.5.90, where the same auto-generation is done by
+    # `request['newClientOrderId'] = self.generate_client_order_id(market)`.
+    # Measured on 4.5.90: `uuid22()` is absent from the create path and
+    # `generate_client_order_id` is present, so binance DOES still invent an id
+    # when none is supplied and this test's point still holds. The old assertion
+    # pinned an implementation detail one rename away from a false alarm; either
+    # spelling satisfies it now, and a venue that genuinely STOPPED inventing one
+    # would fail both.
+    assert re.search(r"uuid22\(\)|generate_client_order_id", src), (
+        "binance no longer auto-generates a client order id by any known "
+        "spelling; re-measure, because the warning in this docstring (a wire-level "
+        "reader seeing an id and wrongly inferring protection) would no longer apply"
     )
 
 

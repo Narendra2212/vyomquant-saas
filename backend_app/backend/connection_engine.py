@@ -382,11 +382,27 @@ class ConnectionEngine:
                 # anyway. Upstream ccxt fixed it later by deriving base and quote from
                 # instId; 4.4.1 and 4.4.50 do not carry that fix.
                 #
-                # Failing fast does NOT make the venue load - OKX markets still do not
-                # load on this ccxt. It stops reporting a deterministic library defect
-                # as a flaky connection, and stops charging every container start for
-                # retries that cannot help. The raised type is unchanged, so callers
-                # (AssetUniverse among them) see exactly what they saw before.
+                # THE MOTIVATING CASE IS NOW FIXED UPSTREAM, and this paragraph used to
+                # say the opposite: "Failing fast does NOT make the venue load - OKX
+                # markets still do not load on this ccxt". That was true on 4.3.92 and is
+                # FALSE on 4.5.90, which WS-03's upgrade brought in. Measured on 4.5.90:
+                # okx.py carries the `weird preopen markets` guard, and
+                # `okx.load_markets()` returns 4705 markets including CT/EUR -- the very
+                # CT-shaped pre-open instrument described above. So OKX is a venue whose
+                # markets load now, which it was not before.
+                #
+                # THIS BRANCH STAYS ANYWAY, and the reason is the first paragraph rather
+                # than the OKX anecdote: a TypeError raised inside the client library
+                # while parsing a venue response is deterministic whatever venue produced
+                # it, and retrying it three times with backoff charges every container
+                # start for attempts that cannot succeed. Keeping it costs nothing when no
+                # such defect exists and keeps the diagnosis honest when the next one
+                # appears. What changed is that it is now a general guard with no known
+                # live instance, not a workaround for a specific broken venue.
+                #
+                # It stops reporting a deterministic library defect as a flaky connection,
+                # and the raised type is unchanged, so callers (AssetUniverse among them)
+                # see exactly what they saw before.
                 from backend_app.core.dependencies import DEV_MODE
 
                 logger.error(

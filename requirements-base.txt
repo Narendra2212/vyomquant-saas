@@ -156,7 +156,44 @@ setuptools==84.2.1
 # PackageIndex.download) needed >= 78.1.1 and remains cleared.
 
 # --- Exchange Connectivity -----------------------------------------------
-ccxt[async]==4.3.92
+# WS-03: 4.3.92 -> 4.5.90, AND THE `[async]` EXTRA IS GONE BECAUSE ccxt REMOVED IT
+# (4.5.90 warns "does not provide the extra 'async'"; aiohttp is now a core dependency of
+# ccxt itself rather than something an extra pulls in).
+#
+# WHY THIS HAD TO MOVE. Every ccxt websocket stream failed in production with
+#   'aiohttp._websocket.reader_c.WebSocketReader' object has no attribute 'parse_frame'
+# 4.3.92's websocket client reaches for an aiohttp internal that aiohttp restructured in
+# 3.11. Reproduced locally and then in production the moment the market-data service was
+# first deployed: zero candles, a five-second error loop, and no mds:last_price key.
+# That is the whole websocket half of the platform -- paper-session candle streaming,
+# data_seeking_engine.stream_live_ohlcv, and watch_my_trades, which is RT-16's private
+# fill stream. REST was never affected, which is why DUP-01's Binance certification
+# passed on 4.3.92 and why fetch_venue_quote could still price a market order.
+#
+# WHY NOT PIN aiohttp DOWN INSTEAD, which is what ccxt/ccxt#24403 advises (3.10.11):
+# because the aiohttp pin below exists for four CVEs and 05-security.yml runs pip-audit
+# with NO suppressions. Downgrading reintroduces all four and fails the gate. The ccxt
+# side was the one that had to move. VERIFIED: ccxt 4.5.90 + aiohttp 3.14.4 returns a
+# real candle from watch_ohlcv('BTC/USDT','1m'), with the CVE pin untouched.
+#
+# THE TWO MEASUREMENTS THIS UPGRADE INVALIDATED WERE RE-RUN, NOT ASSUMED. Both are
+# documented as derived by measurement against 4.3.92:
+#   * exchange_executor.SANDBOX_MECHANISMS -- re-measured with
+#     staging/probe_exch01_sandbox_endpoints.py under 4.5.90: binance and bybit URL_SWAP,
+#     okx HEADER, coinbase/kraken/kucoin UNSUPPORTED, bitget still fails to leave
+#     production. IDENTICAL to the table, so no entry changes and EXCH-01's bitget block
+#     and DUP-01's permanently-blocked coinbase/kraken half both still stand. (That probe
+#     needed a fix first: its url-swap proof compared serialised JSON for equality, which
+#     held only because 4.3.92 replaced urls['api'] wholesale. 4.5.90 MERGES, so the
+#     proof reported "still on production" for binance while printing testnet URLs.)
+#   * the has['fetchOrder'] audit behind find_order_by_client_order_id -- re-run with
+#     scripts/audit_venue_client_order_id_support.py: binance/okx/kraken/kucoin SUPPORTED
+#     on both halves, bybit and coinbase submit-OK/lookup-unclear. Materially unchanged.
+#
+# NEW TRANSITIVE DEPENDENCIES ccxt now pulls: aiohappyeyeballs, aiohttp-fast-zlib,
+# coincurve, orjson, winloop, zlib-ng. All have wheels, and the Dockerfile installs with
+# --prefer-binary, so none adds a compiler to the image build.
+ccxt==4.5.90
 # CVE-2025-69223 (zip-bomb DoS via auto_decompress) and CVE-2026-69244 (OOB heap read in
 # the C response parser's error path) are fixed by 3.14.3. Both are on the client-parsing
 # path; this codebase's aiohttp usage is exclusively aiohttp.ClientSession (no
