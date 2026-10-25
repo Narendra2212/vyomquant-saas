@@ -3846,14 +3846,14 @@ async def walk_forward_optimization(
     if async_job:
         async def _run_walk_forward_background():
             try:
-                await redis_manager.hset(_status_key(job_id), {
+                await redis_manager.hset(_status_key(job_id), mapping={
                     "status": "running",
                     "progress": "0%",
                     "message": "Initializing walk-forward analysis..."
                 })
                 res = await _execute_walk_forward()
                 import json
-                await redis_manager.hset(_status_key(job_id), {
+                await redis_manager.hset(_status_key(job_id), mapping={
                     "status": res.get("status", "completed"),
                     "result": json.dumps(res),
                     "progress": "100%",
@@ -3861,7 +3861,7 @@ async def walk_forward_optimization(
                 })
             except Exception as e:
                 logger.error(f"Error in walk-forward background task: {e}")
-                await redis_manager.hset(_status_key(job_id), {
+                await redis_manager.hset(_status_key(job_id), mapping={
                     "status": "failed",
                     "error": str(e)
                 })

@@ -96,6 +96,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
+import re
 import subprocess
 import sys
 
@@ -112,15 +114,78 @@ TEMPLATE_FAMILY = "vyomquant-api"
 #: things to run for no reader.
 TEMPLATE_CONTAINER = "vyomquant-api"
 
-#: worker key -> (family of the INACTIVE revision to take the command from, service name)
-WORKERS = {
-    "backtest": ("vyomquant-worker-backtest-production:1",
-                 "vyomquant-worker-backtest-service"),
-    "command": ("vyomquant-worker-command-production:1",
-                "vyomquant-worker-command-service"),
-    "dag": ("vyomquant-worker-dag-production:1",
-            "vyomquant-worker-dag-service"),
+#: The INACTIVE revision that carries each worker's command, where one exists. Only three
+#: of the five workers have a registered family at all -- `marketplace_expiry` and
+#: `training` have none, which is why this script originally covered three of five and
+#: silently left the two that ecs.tf declares out of "all".
+INACTIVE_SOURCE = {
+    "backtest": "vyomquant-worker-backtest-production:1",
+    "command": "vyomquant-worker-command-production:1",
+    "dag": "vyomquant-worker-dag-production:1",
 }
+
+#: terraform/ecs.tf's `local.worker_definitions` is the SOURCE OF TRUTH for the command and
+#: the sizing, parsed rather than transcribed. Three reasons it is the authority and the
+#: INACTIVE revisions are not:
+#:
+#:   1. it covers all five workers; the registered families cover three;
+#:   2. it carries the sizing that was reasoned about -- `training` is 2048/8192 because
+#:      ml_safety's MemoryMonitor and ml_training_policy cap one run at 4096 MB, so the
+#:      256/512 this script used to hardcode for every worker would not have fit a single
+#:      training job at its own documented ceiling. Hardcoding would have produced a
+#:      service that starts and then OOMs on first real work;
+#:   3. tests/test_worker_deployment_coverage.py already parses the same block and fails
+#:      when a WorkerBase subclass has no entry, so there is one place to add a worker.
+#:
+#: The INACTIVE revisions are still read where they exist, and used as a CROSS-CHECK: if
+#: the registered command and ecs.tf disagree, that is reported rather than silently
+#: resolved in favour of either.
+ECS_TF = pathlib.Path("terraform/ecs.tf")
+
+_WORKER_RE = re.compile(
+    r"^\s*(?P<key>[a-z_]+)\s*=\s*\{\s*"
+    r"cpu\s*=\s*(?P<cpu>\d+)\s*,\s*"
+    r"memory\s*=\s*(?P<memory>\d+)\s*,\s*"
+    r"command\s*=\s*\[(?P<command>[^\]]*)\]\s*\}",
+    re.MULTILINE,
+)
+
+
+def worker_definitions() -> dict:
+    """Parse `local.worker_definitions` out of terraform/ecs.tf.
+
+    Returns ``{key: {"cpu": str, "memory": str, "command": [str, ...],
+    "service": str}}``. Raises SystemExit rather than returning a partial map: a silently
+    short list here means a worker nobody deploys and nobody notices is missing, which is
+    the exact defect INF-03 is about.
+    """
+    if not ECS_TF.exists():
+        raise SystemExit(f"{ECS_TF} not found (run from the repository root)")
+    text = ECS_TF.read_text(encoding="utf-8")
+    start = text.find("worker_definitions")
+    if start == -1:
+        raise SystemExit(
+            f"{ECS_TF} has no `worker_definitions` block. It is the source of truth for "
+            f"the worker commands and sizing; refusing to guess them."
+        )
+    out: dict = {}
+    for m in _WORKER_RE.finditer(text, start):
+        command = [part.strip().strip('"') for part in m.group("command").split(",")
+                   if part.strip()]
+        if not command:
+            continue
+        out[m.group("key")] = {
+            "cpu": m.group("cpu"),
+            "memory": m.group("memory"),
+            "command": command,
+            "service": f"vyomquant-worker-{m.group('key')}-service",
+        }
+    if not out:
+        raise SystemExit(
+            f"found `worker_definitions` in {ECS_TF} but parsed no entries from it. The "
+            f"block's shape has changed; fix the parser rather than deploying a subset."
+        )
+    return out
 
 
 def aws(*args: str) -> tuple:
@@ -159,7 +224,8 @@ def service_exists(name: str) -> bool:
     return any(s.get("status") in ("ACTIVE", "DRAINING") for s in services)
 
 
-def build_task_definition(template: dict, command: list, family: str) -> dict:
+def build_task_definition(template: dict, command: list, family: str,
+                          cpu: str, memory: str) -> dict:
     """The template's container, with the worker's command and no sidecar."""
     container = next(
         (dict(c) for c in template["containerDefinitions"]
@@ -175,6 +241,35 @@ def build_task_definition(template: dict, command: list, family: str) -> dict:
     # load balancer at it.
     container.pop("portMappings", None)
     container.pop("healthCheck", None)
+
+    # THE SIDECAR LEAVES REFERENCES BEHIND, and dropping the container without them makes
+    # RegisterTaskDefinition refuse the whole definition:
+    #
+    #     ClientException: Cannot depend on container 'questdb' because it does not exist
+    #
+    # Measured against vyomquant-api:237, which carries
+    # dependsOn=[{containerName: questdb, condition: START}] on the api container. All four
+    # workers failed on this at registration -- before any create-service -- so nothing was
+    # left half-made, but it is exactly the kind of inherited field that has to be pruned
+    # with the thing it refers to. Filtered by NAME against the containers that actually
+    # survive, rather than blanket-deleted, so a future template with a dependency between
+    # two kept containers would not be silently flattened.
+    surviving = {container["name"]}
+    for field in ("dependsOn", "volumesFrom", "links"):
+        value = container.get(field)
+        if not value:
+            container.pop(field, None)
+            continue
+        if field == "dependsOn":
+            kept = [d for d in value if d.get("containerName") in surviving]
+        elif field == "volumesFrom":
+            kept = [v for v in value if v.get("sourceContainer") in surviving]
+        else:
+            kept = [link for link in value if link.split(":")[0] in surviving]
+        if kept:
+            container[field] = kept
+        else:
+            container.pop(field, None)
     env = [e for e in container.get("environment", [])
            if e.get("name") not in ("PORT", "WORKERS")]
     container["environment"] = env
@@ -183,8 +278,11 @@ def build_task_definition(template: dict, command: list, family: str) -> dict:
         "family": family,
         "networkMode": template.get("networkMode", "awsvpc"),
         "requiresCompatibilities": template.get("requiresCompatibilities", ["FARGATE"]),
-        "cpu": "256",
-        "memory": "512",
+        # From ecs.tf, never hardcoded. This read "256"/"512" for every worker, which
+        # would have given `training` a twelfth of the memory its own resource policy caps
+        # one job at (4096 MB) -- a service that starts cleanly and then OOMs.
+        "cpu": cpu,
+        "memory": memory,
         "executionRoleArn": template["executionRoleArn"],
         "taskRoleArn": template.get("taskRoleArn", template["executionRoleArn"]),
         "containerDefinitions": [container],
@@ -194,7 +292,9 @@ def build_task_definition(template: dict, command: list, family: str) -> dict:
 def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--worker", choices=sorted(WORKERS) + ["all"], default="all")
+    definitions = worker_definitions()
+    p.add_argument("--worker", action="append", choices=sorted(definitions) + ["all"],
+                   help="repeatable; defaults to every worker in ecs.tf")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--plan", action="store_true", help="report only (default)")
     g.add_argument("--apply", action="store_true", help="register and create")
@@ -251,31 +351,50 @@ def main() -> int:
               "put a worker in the wrong place.")
         return 2
 
-    targets = sorted(WORKERS) if args.worker == "all" else [args.worker]
+    selected = args.worker or ["all"]
+    targets = sorted(definitions) if "all" in selected else sorted(set(selected))
+    print(f"source of truth: {ECS_TF} local.worker_definitions "
+          f"({len(definitions)} worker(s): {', '.join(sorted(definitions))})")
+
     failures = 0
     for key in targets:
-        source_td, service_name = WORKERS[key]
+        spec = definitions[key]
+        command, service_name = spec["command"], spec["service"]
         print("\n" + "-" * 78)
         print(f"worker: {key}")
         print("-" * 78)
-        src, err = describe(source_td)
-        if src is None:
-            print(f"   REFUSED: cannot read {source_td}: {err}")
-            failures += 1
-            continue
-        src_container = (src.get("containerDefinitions") or [{}])[0]
-        command = src_container.get("command")
-        if not command:
-            print(f"   REFUSED: {source_td} declares no command, which is the one thing "
-                  f"this script needs from it.")
-            failures += 1
-            continue
-        print(f"   command taken from {source_td}: {command}")
-        print(f"   its image was {src_container.get('image')!r} -- ignored: a bare "
-              f"reference resolves to Docker Hub, never ECR, so it could not pull")
+        print(f"   command from {ECS_TF}: {command}")
+
+        # Cross-check against the registered revision where one exists. Disagreement is
+        # reported, not resolved: if terraform and the registered revision describe
+        # different commands, someone needs to know which one they meant.
+        source_td = INACTIVE_SOURCE.get(key)
+        if source_td:
+            src, err = describe(source_td)
+            if src is None:
+                print(f"   note: {source_td} unreadable ({err}); proceeding on ecs.tf, "
+                      f"which is the authority anyway")
+            else:
+                src_container = (src.get("containerDefinitions") or [{}])[0]
+                registered = src_container.get("command")
+                if registered and list(registered) != list(command):
+                    print(f"   REFUSED: {ECS_TF} says {command} but {source_td} has "
+                          f"{registered}. Two sources disagree about what this worker "
+                          f"runs; resolve that before deploying either.")
+                    failures += 1
+                    continue
+                print(f"   cross-check {source_td}: command agrees")
+                print(f"   its image was {src_container.get('image')!r} -- ignored: a "
+                      f"bare reference resolves to Docker Hub, never ECR, so it could "
+                      f"not pull")
+        else:
+            print(f"   no registered revision exists for this worker, so there is "
+                  f"nothing to cross-check against -- ecs.tf is the only source. This "
+                  f"is why it was absent from this script's original 'all'.")
 
         family = f"vyomquant-worker-{key}"
-        definition = build_task_definition(template, command, family)
+        definition = build_task_definition(template, command, family,
+                                           spec["cpu"], spec["memory"])
         print(f"   would register : {family} cpu={definition['cpu']} "
               f"memory={definition['memory']}")
         print(f"   would create   : {service_name} desiredCount={args.desired_count}")
