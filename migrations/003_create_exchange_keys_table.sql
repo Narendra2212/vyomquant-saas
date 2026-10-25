@@ -9,8 +9,41 @@ BEGIN;
 -- CREATE TABLE: exchange_keys
 -- ══════════════════════════════════════════════════════════════════════════
 
+-- `id` IS `uuid`, AND READ THE NEXT PARAGRAPH BEFORE CHANGING IT BACK.
+--
+-- This column read `id TEXT PRIMARY KEY DEFAULT gen_random_uuid()` until 2026-10-25.
+-- That declaration was wrong in a way PostgreSQL hides: `gen_random_uuid()` RETURNS
+-- `uuid`, so every default-generated value was implicitly cast uuid -> text on the way
+-- in. The column held uuid values the whole time; only its declared type disagreed.
+--
+-- It mattered because this file is the ONLY place `exchange_keys` is created, while
+-- `backend_app/migrations/058_exch03_exchange_keys_stable_handle.sql` declares the same
+-- column `id UUID` (deliberately, to match `strategy_deployments.exchange_account_id
+-- uuid`, which is what makes a deployment's exchange account a single-column foreign
+-- handle). Two migrations declaring one column with two types means THE TYPE A REBUILT
+-- DATABASE GETS DEPENDS ON WHICH FILE RAN LAST -- exactly the
+-- `strategy_backtests.version` defect that 001/006 shipped and
+-- `016_strategy_backtests_version_label.sql` had to repair. On a table holding exchange
+-- API credentials that is not a cosmetic risk: a fresh environment could end up with a
+-- credential handle of a different type from the one the deployment binding expects.
+-- Caught by tests/test_schema_table_reference_drift.py::
+-- TestColumnTypesAreDeclaredOnce::test_the_divergence_inventory_has_not_grown.
+--
+-- PRODUCTION ALREADY CARRIES `uuid` (measured against the live database, which also
+-- carries `uq_exchange_keys_id` from 058), so `uuid` is not a new choice here -- it is
+-- the shape that actually exists, written down. 058 now agrees with this file instead of
+-- contradicting it.
+--
+-- NO `ALTER COLUMN ... TYPE` IS SHIPPED WITH THIS, deliberately. `CREATE TABLE IF NOT
+-- EXISTS` means this edit changes NEW databases only; a database provisioned from the
+-- old text declaration keeps `text`, and 058's `ADD COLUMN IF NOT EXISTS id UUID` is a
+-- no-op there. Retyping it would mean retyping a PRIMARY KEY on the credentials table,
+-- which 058's own comments considered and declined for that reason, and which production
+-- does not need because production is already `uuid`. If such a database is ever found,
+-- that retype is its own migration with its own backup -- not a silent side effect of
+-- this one.
 CREATE TABLE IF NOT EXISTS exchange_keys (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id TEXT NOT NULL,
     exchange_id TEXT NOT NULL,
     encrypted_api_key TEXT NOT NULL,
