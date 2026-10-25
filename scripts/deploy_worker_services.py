@@ -142,6 +142,52 @@ INACTIVE_SOURCE = {
 #: resolved in favour of either.
 ECS_TF = pathlib.Path("terraform/ecs.tf")
 
+#: NON-WORKER long-running services that are also just "the api image with a different
+#: command", and so belong on exactly the same deployment path.
+#:
+#: `mds` IS HERE RATHER THAN BUILT FROM Dockerfile.mds, AND THAT IS THE POINT.
+#: `Dockerfile.mds` cannot build. Its builder stage copies `requirements-base.txt` and
+#: `requirements-cpu.txt` into /app, and its final stage then runs
+#: `COPY --from=builder /app/requirements.txt .` -- a path nothing ever created there. That
+#: is why `vyomquant-mds:latest` in ECR was pushed 2026-07-20, the initial release, and has
+#: not moved since: no CI workflow references Dockerfile.mds at all (grepped), so the image
+#: could only ever have been built by hand, and today it cannot be built even that way.
+#:
+#: The consequence was worse than staleness. `backend_app/mds/main.py` gained PAPER-02's
+#: durable last-price write on 2026-10-14 (commit 0e754cce), three months AFTER that image
+#: was built, so deploying `vyomquant-mds:latest` would have started a process that
+#: publishes to `mds:data:*` but never writes `mds:last_price` -- healthy-looking and
+#: useless to `paper_trading_service.get_fresh_market_price`.
+#:
+#: So mds runs from the API IMAGE with a command override, which is what the four worker
+#: services already do and what 02-build.yml already keeps current on every push to main.
+#: Verified: everything mds imports is in the api image -- `ccxt[async]==4.3.92` (which
+#: bundles `ccxt.pro`) and `aiohttp==3.14.4` are both in requirements-base.txt, which
+#: requirements-cpu.txt includes and the main Dockerfile installs.
+#:
+#: SIZED 1024/3072, NOT ecs.tf's 256/512, and the disagreement is deliberate. mds is a
+#: websocket multiplexer that holds one ccxt connection per (exchange, symbol) for every
+#: subscriber, so its memory grows with the number of streams rather than being constant.
+#: 256/512 in ecs.tf matches the other workers and looks like the worker default applied
+#: without a second thought; the hand-made `vyomquant-mds:1` task definition -- the only
+#: artefact where anybody sized THIS service specifically -- says cpu 1024 / memory 3072.
+#: For the service that feeds every paper session's candles, the failure mode of being too
+#: small is an OOM loop under load at launch, so the considered figure wins. ecs.tf's mds
+#: block is updated to match so source and reality do not disagree.
+SIDECAR_SERVICES = {
+    "mds": {
+        "cpu": "1024",
+        "memory": "3072",
+        "command": ["python", "-m", "backend_app.mds.main"],
+        "service": "vyomquant-mds-service",
+        # The EXISTING family, so this becomes `vyomquant-mds:2` rather than inventing a
+        # second family for one service. Revision 1 is the hand-made 2026-07-20 definition
+        # naming the unbuildable image; leaving it in place keeps the history readable and
+        # a rollback target visible, while :2 is the one a service points at.
+        "family": "vyomquant-mds",
+    },
+}
+
 _WORKER_RE = re.compile(
     r"^\s*(?P<key>[a-z_]+)\s*=\s*\{\s*"
     r"cpu\s*=\s*(?P<cpu>\d+)\s*,\s*"
@@ -179,12 +225,25 @@ def worker_definitions() -> dict:
             "memory": m.group("memory"),
             "command": command,
             "service": f"vyomquant-worker-{m.group('key')}-service",
+            # Named explicitly rather than derived at the call site, because the
+            # non-worker entries below do NOT follow the vyomquant-worker-* shape and a
+            # derived name would have silently registered `vyomquant-worker-mds`.
+            "family": f"vyomquant-worker-{m.group('key')}",
         }
     if not out:
         raise SystemExit(
             f"found `worker_definitions` in {ECS_TF} but parsed no entries from it. The "
             f"block's shape has changed; fix the parser rather than deploying a subset."
         )
+    # The non-worker services share this deployment path exactly; see SIDECAR_SERVICES.
+    for key, spec in SIDECAR_SERVICES.items():
+        if key in out:
+            raise SystemExit(
+                f"{key!r} is declared both in {ECS_TF}'s worker_definitions and in this "
+                f"script's SIDECAR_SERVICES. One of them is wrong and guessing which "
+                f"would deploy the wrong command or the wrong sizing."
+            )
+        out[key] = dict(spec)
     return out
 
 
@@ -353,8 +412,13 @@ def main() -> int:
 
     selected = args.worker or ["all"]
     targets = sorted(definitions) if "all" in selected else sorted(set(selected))
+    from_tf = sorted(k for k in definitions if k not in SIDECAR_SERVICES)
     print(f"source of truth: {ECS_TF} local.worker_definitions "
-          f"({len(definitions)} worker(s): {', '.join(sorted(definitions))})")
+          f"({len(from_tf)} worker(s): {', '.join(from_tf)})")
+    if SIDECAR_SERVICES:
+        print(f"                 + SIDECAR_SERVICES in this script "
+              f"({len(SIDECAR_SERVICES)}: {', '.join(sorted(SIDECAR_SERVICES))}) -- "
+              f"non-worker services on the same path; see the constant for why")
 
     failures = 0
     for key in targets:
@@ -387,12 +451,17 @@ def main() -> int:
                 print(f"   its image was {src_container.get('image')!r} -- ignored: a "
                       f"bare reference resolves to Docker Hub, never ECR, so it could "
                       f"not pull")
+        elif key in SIDECAR_SERVICES:
+            print(f"   non-worker service, defined in this script's SIDECAR_SERVICES "
+                  f"rather than in {ECS_TF}'s worker_definitions -- read that constant "
+                  f"before changing the command or the sizing, both of which were chosen "
+                  f"against specific evidence.")
         else:
             print(f"   no registered revision exists for this worker, so there is "
                   f"nothing to cross-check against -- ecs.tf is the only source. This "
                   f"is why it was absent from this script's original 'all'.")
 
-        family = f"vyomquant-worker-{key}"
+        family = spec["family"]
         definition = build_task_definition(template, command, family,
                                            spec["cpu"], spec["memory"])
         print(f"   would register : {family} cpu={definition['cpu']} "
