@@ -1129,11 +1129,54 @@ class SharedRedisManager:
         return 0.0
 
     async def hset(self, key: str, name: str = None, value: str = None, mapping: dict = None) -> int:
-        """Proxy to cache hset method."""
+        """Proxy to cache hset method.
+
+        EVERY CALL THROUGH THIS METHOD FAILED IN PRODUCTION until 2026-10-25, and failed
+        silently, because the line below read::
+
+            await client.hset(key, name=name, value=value, mapping=mapping)
+
+        redis-py's signature is ``hset(name, key=None, value=None, mapping=None,
+        items=None)`` -- its ``name`` is the REDIS KEY and its ``key`` is the hash FIELD,
+        the opposite of this wrapper's parameter names. So ``key`` bound positionally to
+        redis-py's ``name`` and ``name=name`` bound to it again::
+
+            TypeError: HashCommands.hset() got multiple values for argument 'name'
+
+        caught by the ``except`` below, logged at WARNING, and swallowed into ``return 0``.
+        Observed firing every 10 seconds in all four worker services the moment INF-03's
+        workers were first deployed -- which is also why nobody had seen it: the loudest
+        caller is WorkerBase's heartbeat, and no worker had ever run in production.
+
+        WHAT WAS SILENTLY NOT BEING WRITTEN: ``worker:health:*`` (so WorkerBase's
+        "unhealthy after three consecutive failures" heartbeat, Requirement 26.5, reported
+        nothing at all and any liveness probe reading those keys saw an empty hash),
+        dag_task_queue's task data/status/result hashes, worker_registry and lease_manager
+        state, heartbeat_manager's component health, and strategies.py's walk-forward job
+        status.
+
+        The field is passed POSITIONALLY now, which is correct for both backends: redis-py
+        reads it as its ``key``, and the in-memory stub's own signature is
+        ``hset(key, name, value, mapping)`` in that order.
+        """
+        # THREE CALL SITES PASS A DICT AS `name` (strategies.py's walk-forward status
+        # writes, now fixed at source). Those were no-ops while this method was broken;
+        # with the call below fixed they would become `HSET key "{'status': ...}" None` --
+        # a garbage field containing a stringified dict, which is WORSE than the failure
+        # it replaced. So a mapping arriving in the field position is treated as the
+        # mapping it plainly is, and said out loud rather than silently reinterpreted.
+        if isinstance(name, dict) and mapping is None:
+            logger.warning(
+                "hset('%s', ...) received a dict as the field name; treating it as "
+                "`mapping`. Pass mapping=<dict> explicitly -- relying on this is one "
+                "refactor away from writing a stringified dict as a field name.", key,
+            )
+            mapping, name, value = name, None, None
+
         client = await self._get_active_cache()
         if client:
             try:
-                return await client.hset(key, name=name, value=value, mapping=mapping)
+                return await client.hset(key, name, value, mapping=mapping)
             except Exception as e:
                 logger.warning(f"HSET failed for '{key}': {e}")
         return 0
