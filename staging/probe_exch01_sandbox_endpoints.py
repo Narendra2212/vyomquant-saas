@@ -80,13 +80,62 @@ def probe(eid: str) -> dict:
     row["sandboxMode_option"] = (armed.options or {}).get("sandboxMode", "<absent>")
 
     # The two candidate proofs, evaluated independently.
+    #
+    # THE URL-SWAP PROOF USED TO BE A STRING COMPARISON AND THAT WAS VERSION-SPECIFIC.
+    # It read `row["armed_api"] == row["test_url"]`, i.e. the armed `urls['api']` had to
+    # serialise IDENTICALLY to `urls['test']`. That held on ccxt 4.3.92, whose
+    # set_sandbox_mode did a wholesale `self.urls['api'] = self.urls['test']`. On ccxt
+    # 4.5.90 the same call MERGES instead: keys that have a testnet counterpart are
+    # swapped and keys that do not (binance's `sapi`, `papi`, ...) are kept, so the armed
+    # map is a superset of `test` and the strings differ even though every swappable
+    # endpoint moved.
+    #
+    # The consequence was a probe that reported the opposite of the truth: under 4.5.90 it
+    # printed "*** NONE - ARMED BUT STILL ON PRODUCTION ***" for binance and bybit while
+    # its own `armed_api` line showed testnet.binancefuture.com. Believing it would have
+    # meant concluding that upgrading ccxt removes binance's sandbox -- and DUP-01's live
+    # certification on 2026-10-25 disproves that directly: it armed sandbox on binance via
+    # this same path and asserted all 7 resolved URLs were testnet hosts before submitting.
+    #
+    # So the proof is now STRUCTURAL rather than textual, and asks the question that
+    # actually matters: for every endpoint `test` provides, does the armed map now carry
+    # the test value rather than the production one? That is true on both ccxt versions,
+    # and it is the same principle
+    # scripts/certify_venue_duplicate_protection.assert_pointed_at_sandbox applies against
+    # a live client.
+    prod_map = (pristine.urls or {}).get("api")
+    test_map = (pristine.urls or {}).get("test")
+    armed_map = urls.get("api")
+
+    def _swapped(prod, test, armed) -> bool:
+        """Did every endpoint `test` declares move off its production value?"""
+        if isinstance(test, dict) and isinstance(armed, dict):
+            checked = 0
+            for key, test_value in test.items():
+                if key not in armed:
+                    return False
+                prod_value = prod.get(key) if isinstance(prod, dict) else None
+                if armed[key] != test_value:
+                    return False
+                # A key whose test and production values are identical proves nothing
+                # either way; it is only evidence when the two differ.
+                if prod_value is not None and prod_value != test_value:
+                    checked += 1
+            return checked > 0
+        if isinstance(test, str) and isinstance(armed, str):
+            return armed == test and armed != prod
+        return False
+
     row["proof_url_swap"] = bool(
         row["has_apiBackup"]
-        and row["armed_api"] == row["test_url"]
-        and row["armed_api"] != row["apiBackup"]
+        and test_map is not None
+        and _swapped(prod_map, test_map, armed_map)
     )
     row["proof_header"] = bool(row["headers_added"])
     row["any_proof"] = row["proof_url_swap"] or row["proof_header"]
+    #: Recorded so a future reader can tell "the swap happened" from "the serialisations
+    #: matched", which is the distinction that made the old proof wrong.
+    row["armed_api_equals_test_verbatim"] = row["armed_api"] == row["test_url"]
     return row
 
 
