@@ -7,6 +7,7 @@ Asynchronous worker for executing DAG tasks from the queue.
 import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -1001,3 +1002,128 @@ class WorkerPool:
 
 # Global worker pool
 worker_pool = WorkerPool(num_workers=4)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  THE PROCESS ENTRY POINT (INF-07)
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# WHY THIS EXISTS, AND WHAT ITS ABSENCE ACTUALLY COST
+# ---------------------------------------------------
+# `terraform/ecs.tf`'s `local.worker_definitions` has declared
+# `command = ["python", "-m", "backend_app.backend.dag_worker"]` for this module for as
+# long as the dag entry has existed. This module had NO `if __name__ == "__main__"` block
+# and no `run_worker`, so that command imported the module, built the
+# `worker_pool = WorkerPool(num_workers=4)` global above, fell off the end of the file and
+# exited with status 0.
+#
+# MEASURED IN PRODUCTION on 2026-10-25, when the worker services were first deployed:
+# tasks c247dbe435aa43d8ad123a4368211763 and 517076dbe99543009d5deb6354c1fd95 both reached
+# lastStatus STOPPED with `stoppedReason: "Essential container in task exited"` and
+# container `exitCode: 0`, each emitting exactly one log line (an unrelated pydantic
+# warning) and nothing else. ECS cannot distinguish that from a job that completed
+# successfully, so it restarted the task, forever. The service was scaled to
+# desiredCount=0 on diagnosis.
+#
+# `tests/test_worker_deployment_coverage.py` did not catch it because it asserts each
+# WorkerBase subclass is NAMED in a `python -m <module>` string in ecs.tf -- assurance
+# about a string, not about a process. See
+# `tests/test_inf07_declared_workers_are_runnable.py`, added with this, which asserts
+# runnability instead.
+#
+# ONE WORKER PER PROCESS, NOT THE POOL OF FOUR
+# --------------------------------------------
+# `WorkerPool(num_workers=4)` above is reachable from `routers/dag_tasks.py`'s admin
+# start/stop endpoints and is left exactly as it was -- that is the in-API path and not
+# this one's business. This entry point runs ONE DAGWorker and is scaled by ECS task
+# count, for three reasons:
+#
+#   * ecs.tf sizes this worker at cpu 256 / memory 512. Four concurrent DAG executions do
+#     not fit a quarter of a vCPU, and `core/database_pool.py` budgets connections per
+#     worker PROCESS (`worker_pool_size=2`), so four in-process workers quietly multiply
+#     this task's share of the Supabase pooler limit by four.
+#   * horizontal scaling already exists at the ECS layer. Two scaling dimensions that both
+#     have to be reasoned about together is worse than one, and only one of them is
+#     visible to an operator looking at the service.
+#   * it is SAFE to run many processes: DAGWorker claims through PostgreSQL and logs
+#     TASK_NOT_IN_DB / TASK_ALREADY_CLAIMED for a task it cannot claim, so a second
+#     process races to a no-op rather than to a double execution. That is what makes the
+#     ECS dimension the right one to use.
+#
+# `DAG_WORKER_CONCURRENCY` can raise the in-process count for a deployment that has also
+# raised the task's cpu/memory, but it DEFAULTS TO 1 so the committed configuration and
+# the committed sizing agree.
+
+#: In-process DAGWorker count. Keep at 1 unless the task's cpu/memory in
+#: `terraform/ecs.tf` has been raised to match -- see the note above on the connection
+#: budget in `core/database_pool.py`.
+DAG_WORKER_CONCURRENCY_ENV = "DAG_WORKER_CONCURRENCY"
+
+
+def _configured_concurrency() -> int:
+    """How many DAGWorkers this process should run. Never fewer than one."""
+    raw = (os.getenv(DAG_WORKER_CONCURRENCY_ENV) or "").strip()
+    if not raw:
+        return 1
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not an integer; running a single worker",
+            DAG_WORKER_CONCURRENCY_ENV, raw,
+        )
+        return 1
+    if value < 1:
+        logger.warning(
+            "%s=%d is less than 1; running a single worker", DAG_WORKER_CONCURRENCY_ENV,
+            value,
+        )
+        return 1
+    return value
+
+
+async def run_worker() -> None:
+    """Start the DAG worker(s) and stay alive until cancelled.
+
+    Deliberately the same shape as `workers/command_worker.run_worker` and
+    `workers/marketplace_expiry_worker.run_worker` -- the two workers that were already
+    runnable and that started cleanly in the same deployment this one failed. Keeping the
+    three identical means "how is a worker hosted" has one answer.
+
+    Every worker is stopped in the `finally`, so a SIGTERM from an ECS deployment drains
+    rather than abandoning an in-flight task.
+    """
+    count = _configured_concurrency()
+    workers = [DAGWorker(worker_id=f"dag-{i + 1}") for i in range(count)]
+    logger.info(
+        "DAG worker process starting with %d in-process worker(s): %s",
+        count, ", ".join(w.worker_id for w in workers),
+    )
+    started: list = []
+    try:
+        for worker in workers:
+            await worker.start()
+            started.append(worker)
+        logger.info("DAG worker process ready; %d worker(s) running", len(started))
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        for worker in reversed(started):
+            try:
+                await worker.stop()
+            except Exception:  # noqa: BLE001 - one worker's stop must not strand another
+                logger.exception("stopping %s failed", worker.worker_id)
+        logger.info("DAG worker process stopped")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+    try:
+        asyncio.run(run_worker())
+    except KeyboardInterrupt:
+        pass
