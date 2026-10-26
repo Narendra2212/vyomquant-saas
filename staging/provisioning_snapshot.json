@@ -987,7 +987,7 @@
     [
       "exchange_keys",
       "id",
-      "text",
+      "uuid",
       "",
       "NO",
       "gen_random_uuid()",
