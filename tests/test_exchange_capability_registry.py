@@ -206,17 +206,67 @@ def test_every_record_id_is_unique_and_lowercase(registry):
 def test_aliases_are_excluded_from_eligible_candidates(registry):
     """An alias must not inflate the connectivity denominator.
 
-    ccxt 4.3.92 self-declares 7 aliases (`gateio` for `gate`, `huobi` for `htx`, and so
-    on). Counting both names would make the 100-110 target easier to hit by double
-    counting the same venue, which is precisely the kind of inflation the brief forbids.
+    WHY THIS NO LONGER ASSERTS THAT ALIASES EXIST. It used to end with
+    `assert aliases, "no aliases detected at all"`, on the premise that "ccxt 4.3.92
+    self-declares 7 aliases (`gateio` for `gate`, `huobi` for `htx`, and so on)".
+    WS-03's upgrade to ccxt 4.5.90 made that premise false, and measurably so: ccxt now
+    ships 104 exchanges and ZERO with a truthy `alias` attribute, because the aliased ids
+    were DELETED rather than flagged -- `gateio`, `huobi`, `huobipro`, `okex`, `okex5`,
+    `coinbasepro` and `bitfinex2` are all absent from the module entirely. `binanceusdm`
+    and `kucoinfutures` survive but report `alias=False`; they are distinct venues now.
+    No id in 4.5.90 has a `self.id` that differs from the attribute name it is reached by.
+
+    So the double-counting risk this test guards is gone UPSTREAM, and an empty alias list
+    is the correct observation rather than a regressed signal. Asserting otherwise would
+    pin the test to a ccxt version this repository no longer installs.
+
+    WHAT IT ASSERTS INSTEAD, so the guard does not evaporate with the premise: the RULE,
+    exercised against a synthetic alias record. If ccxt ever reintroduces aliases -- or if
+    somebody adds one to the inventory by hand -- `eligible_candidates` must still exclude
+    it. That is the property the brief actually needs, and testing it directly means it no
+    longer depends on upstream happening to supply a specimen.
     """
     eligible = registry.eligible_candidates()
     assert all(not r.is_alias for r in eligible)
 
+    # Whatever ccxt currently ships, a real alias must be excluded.
     aliases = [r.exchange_id for r in registry.all_records() if r.is_alias]
-    assert aliases, "no aliases detected at all — the alias signal has regressed"
     for a in aliases:
-        assert a not in {r.exchange_id for r in eligible}
+        assert a not in {r.exchange_id for r in eligible}, (
+            f"{a} is flagged is_alias yet appears in eligible_candidates, which "
+            f"double-counts one venue under two names"
+        )
+
+    # And the rule itself, independent of upstream. A synthetic alias that satisfies
+    # EVERY other eligibility condition must still be refused, so the only thing keeping
+    # it out is the is_alias check.
+    canonical = next(
+        (r for r in eligible if r.capabilities.public_ticker), None
+    )
+    assert canonical is not None, (
+        "no eligible venue declares public_ticker, so this test cannot build a "
+        "representative synthetic alias; the inventory load has probably failed"
+    )
+
+    import copy
+
+    synthetic = copy.deepcopy(canonical)
+    synthetic.exchange_id = "kiro-synthetic-alias"
+    synthetic.display_name = "Synthetic Alias"
+    synthetic.is_alias = True
+    synthetic.canonical_id = canonical.exchange_id
+    registry._records[synthetic.exchange_id] = synthetic
+    try:
+        after = registry.eligible_candidates()
+        assert synthetic.exchange_id not in {r.exchange_id for r in after}, (
+            "eligible_candidates admitted a record with is_alias=True. The alias "
+            "exclusion is the only thing preventing one venue from being counted twice "
+            "in the 100-110 denominator, and it is not being applied."
+        )
+        # The canonical venue it aliases must be unaffected.
+        assert canonical.exchange_id in {r.exchange_id for r in after}
+    finally:
+        registry._records.pop(synthetic.exchange_id, None)
 
 
 def test_unknown_exchange_returns_none_not_a_fabricated_record(registry):
