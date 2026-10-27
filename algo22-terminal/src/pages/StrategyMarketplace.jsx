@@ -1566,7 +1566,7 @@ const StrategyMarketplace = () => {
                       data-testid={`deploy-mode-${option.value}`}
                       className={`flex flex-col items-start gap-0.5 px-3 py-2 rounded-sm border text-left ${
                         deployMode === option.value
-                          ? 'border-accent-primary bg-surface-inset'
+                          ? 'border-brand bg-surface-inset'
                           : 'border-line-default'
                       }`}
                     >
@@ -1590,7 +1590,7 @@ const StrategyMarketplace = () => {
 
                     {deployAccountsError ? (
                       <div
-                        className="text-micro text-status-danger"
+                        className="text-micro text-status-error"
                         data-testid="deploy-accounts-error"
                       >
                         {deployAccountsError}

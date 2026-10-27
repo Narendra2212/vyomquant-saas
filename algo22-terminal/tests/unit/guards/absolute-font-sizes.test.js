@@ -384,6 +384,34 @@ const DELETED_BY_THIS_SPEC = Object.freeze({
   'pages/Landing.jsx': Object.freeze({ was: 41, task: '9.2' }),
 });
 
+/**
+ * The pages that have MOVED since this spec measured them, and where they went.
+ *
+ * The third case, and neither of the two above describes it. `pages/LegalPage.jsx` was
+ * cleared by task 7.7 (15 → 0, recorded in `CLEARED_BY_THIS_SPEC`) and was later RELOCATED
+ * to `src/components/legal/` by the LEGAL-01 work, which grouped the policy documents with
+ * the consent banner and the re-acceptance gate. It was not deleted — `DELETED_BY_THIS_SPEC`
+ * would be a false statement about a file that is still shipped and still rendered — and it
+ * is no longer at the path §1.1 named, so a `CLEARED` entry alone measures `NOT SCANNED`
+ * and fails.
+ *
+ * `PAGE_FIXED_POINT` is left exactly as written, per the failure message's own instruction:
+ * §1.1's table records the tree the spec was read from, and that tree did have the file at
+ * `pages/`. This map is the explanation the message asks for.
+ *
+ * `to` is NOT decoration. The assertion below follows it and requires the file to be scanned
+ * at its new path and to still measure the count its clearance claimed — so a move cannot be
+ * used to park a page outside the guard. Both roots are in `SCAN_ROOTS`, so a move within
+ * `src/pages`, `src/components` or `src/lib` keeps the page held; a move anywhere else would
+ * fail here, which is the point.
+ */
+const MOVED_SINCE_THIS_SPEC = Object.freeze({
+  'pages/LegalPage.jsx': Object.freeze({
+    to: 'components/legal/LegalPage.jsx',
+    task: '7.7',
+  }),
+});
+
 describe('absolute-font-sizes: the patterns measure the tree they were written for', () => {
   it('reproduces requirements §1.1 per-page counts exactly', () => {
     const expected = {};
@@ -391,10 +419,16 @@ describe('absolute-font-sizes: the patterns measure the tree they were written f
     for (const relative of Object.keys(PAGE_FIXED_POINT)) {
       const cleared = CLEARED_BY_THIS_SPEC[relative];
       const deleted = DELETED_BY_THIS_SPEC[relative];
+      const moved = MOVED_SINCE_THIS_SPEC[relative];
       // A deleted page's only correct measurement is that the scan does not reach it.
       // Stating it as `NOT SCANNED` rather than as 0 is what keeps a deletion and a
       // clearance distinguishable, and what makes a restored file fail here.
-      if (deleted) expected[relative] = 'NOT SCANNED';
+      //
+      // A MOVED page reads the same way AT THE OLD PATH -- the scan genuinely does not
+      // reach it there any more -- but that is only half the statement, so the separate
+      // assertion after this loop follows `moved.to` and holds the file at its new path.
+      // Without that half, "moved" would be a way to retire a page from the guard.
+      if (deleted || moved) expected[relative] = 'NOT SCANNED';
       else expected[relative] = cleared ? cleared.now : PAGE_FIXED_POINT[relative];
       const file = SCANNED.find((f) => f.relative === relative);
       measured[relative] = file ? file.count : 'NOT SCANNED';
@@ -406,12 +440,15 @@ describe('absolute-font-sizes: the patterns measure the tree they were written f
         const file = SCANNED.find((f) => f.relative === relative);
         const cleared = CLEARED_BY_THIS_SPEC[relative];
         const deleted = DELETED_BY_THIS_SPEC[relative];
+        const moved = MOVED_SINCE_THIS_SPEC[relative];
         return `${relative} — ${
           deleted
             ? `task ${deleted.task} DELETED the file, so it must not be scanned at all`
-            : cleared
-              ? `task ${cleared.task} took it to ${cleared.now}`
-              : `requirements §1.1 says ${PAGE_FIXED_POINT[relative]}`
+            : moved
+              ? `the file MOVED to ${moved.to}, so it must not be scanned here`
+              : cleared
+                ? `task ${cleared.task} took it to ${cleared.now}`
+                : `requirements §1.1 says ${PAGE_FIXED_POINT[relative]}`
         }, measured ${measured[relative]}`
           + (file && file.count ? ` (${distribution(file.sizes)})` : '');
       });
@@ -432,6 +469,34 @@ describe('absolute-font-sizes: the patterns measure the tree they were written f
     // emptied, the loop above would pass over nothing.
     expect(Object.keys(PAGE_FIXED_POINT)).toHaveLength(14);
     expect(measured).toEqual(expected);
+
+    // The other half of MOVED_SINCE_THIS_SPEC. The loop above only established that the
+    // scan no longer reaches the OLD path, which on its own is indistinguishable from the
+    // page having left the guard. This follows each `to` and requires the file to be found
+    // at its new path, still measuring what its clearance claimed.
+    const relocated = Object.entries(MOVED_SINCE_THIS_SPEC).map(([from, record]) => {
+      const file = SCANNED.find((f) => f.relative === record.to);
+      const cleared = CLEARED_BY_THIS_SPEC[from];
+      const expectedCount = cleared ? cleared.now : PAGE_FIXED_POINT[from];
+      if (!file) {
+        return `${from} -> ${record.to}: NOT SCANNED at the new path either, so this page `
+          + 'is held by nothing. Either the path is wrong, or the file left SCAN_ROOTS '
+          + "('pages', 'components', 'lib') and the move needs a deliberate decision "
+          + 'rather than a redirect here.';
+      }
+      if (file.count !== expectedCount) {
+        return `${from} -> ${record.to}: expected ${expectedCount} absolute font sizes `
+          + `(task ${record.task}), measured ${file.count}`
+          + (file.count ? ` (${distribution(file.sizes)})` : '');
+      }
+      return null;
+    }).filter(Boolean);
+
+    expect(
+      relocated,
+      'A page recorded as MOVED is not being held at its new path. A move must relocate '
+        + 'the guarantee, not drop it:\n' + list(relocated),
+    ).toEqual([]);
 
     // A cleared page's recorded starting count is §1.1's own, and a cleared page
     // has no budget entry left (Requirement 1.5).

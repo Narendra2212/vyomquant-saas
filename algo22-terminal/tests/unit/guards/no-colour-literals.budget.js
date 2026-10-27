@@ -696,7 +696,13 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   //   `fontFamily: 'monospace'` twice — on the whole card and again on the tab buttons, so
   //   four legal documents rendered in a monospace stack. Requirement 3.1 reserves monospace
   //   for values whose alignment or literalness carries meaning; a refund policy is prose.
-  'pages/LegalPage.jsx': 0,
+  //   RELOCATED since: the LEGAL-01 work moved this page from `src/pages/` to
+  //   `src/components/legal/`, beside the consent banner and the re-acceptance gate. The
+  //   key follows the file — both roots are in SCAN_ROOTS, so the page stays held at 0 and
+  //   a colour literal returning to it still fails. Deleting the entry instead would have
+  //   been the one wrong move: it reads as "this file is gone" about a file that still
+  //   renders every policy document on the site.
+  'components/legal/LegalPage.jsx': 0,
   // 7 -> 0 at retail-ui-simplification task 7.8, in the same commit that deleted this page's
   // font-size entry (79 -> 0, the largest single-file count in the tree).
   //
