@@ -2552,29 +2552,41 @@ RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS = frozenset(
 #: first) WAS made resolvable by inlining it; these 2 (the loop's own
 #: ``.select``/``.eq`` calls) are the genuine, bounded exception.
 #:
-#: Raised 184 -> 185, and the two new sites are MEASURED rather than inferred.
-#: The pin had one unit of slack: the tree at ``2b00ec14^`` scans to 183 against
-#: a pin of 184. RT-24 (``2b00ec14``) took it to 185, and diffing the two skip
-#: sets attributes exactly two new records and removes none:
+#: Raised 184 -> 185 for RT-24's two new sites, then LOWERED 185 -> 183 by
+#: removing them. Both halves are kept here because the reasoning is the useful
+#: part.
+#:
+#: RT-24 (``2b00ec14``) added two unresolvable sites, measured by diffing the skip
+#: sets across the commit rather than inferred:
 #:
 #:     + backend_app/routers/library.py .update :: payload is not a literal dict
 #:     + backend_app/routers/library.py .update :: payload is not a literal dict
 #:
-#: Both are ``_patch_deployment_status``, the single helper that moves a
-#: ``strategy_deployments`` row out of ``'deploying'``. Its payload is its own
-#: PARAMETER, so no call site inside it can ever be a literal; the second one is
-#: the PGRST204 retry that drops the columns a deployment may not have. THE
-#: COLUMNS ARE NOT UNKNOWN, only invisible to this parser -- they are literal at
-#: both of the helper's callers and are ``status``, ``updated_at``, ``started_at``
-#: and ``error_message``, all declared on ``strategy_deployments``. Recorded here
-#: so the blind spot is documented rather than merely counted.
+#: Both were ``_patch_deployment_status``, the single helper that moves a
+#: ``strategy_deployments`` row out of ``'deploying'``. It took the payload as a
+#: PARAMETER, so no ``.update()`` inside it could ever be a literal.
 #:
-#: Inlining, which is what fixed PRIV-01's third site, is the wrong answer here:
-#: it would duplicate that retry-and-log fallback at each caller, and the whole
-#: point of the helper is that a missing optional column must not turn a bot that
-#: is ALREADY RUNNING into a 500. Resolved rose 1081 -> 1085 over the same
-#: commit, so RT-24's other new reads are covered.
-MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 185
+#: The pin was raised with the argument that inlining -- what fixed PRIV-01's
+#: third site -- would duplicate the helper's PGRST204 retry-and-log fallback at
+#: each caller, and that the whole point of the helper is that a missing optional
+#: column must not turn an ALREADY-RUNNING bot into a 500. That objection is
+#: correct about inlining AT THE CALLERS, and it is not the only way out: the
+#: helper now takes keyword arguments and writes each column set out at its own
+#: ``.update()`` call. The helper survives, the single retry-and-log fallback
+#: survives, every caller still calls one function -- and all three writes are
+#: literal, so this parser resolves them.
+#:
+#: That is why the pin comes DOWN rather than staying raised, which is what this
+#: counter's own failure message asks for ("make the new sites resolvable - a
+#: literal table name and a literal projection are all it takes"). 185 -> 183:
+#: the two sites are gone and the tree is now one BELOW where it sat before RT-24
+#: (183 at ``2b00ec14^`` against a pin of 184, so the slack is preserved).
+#:
+#: The win is not cosmetic. ``resolved`` rose 1085 -> 1089 at the same time: this
+#: guard now CHECKS the four columns that helper writes -- ``status``,
+#: ``updated_at``, ``started_at`` and ``error_message`` -- against the declared
+#: schema, where before it could only be told in a comment that they were fine.
+MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 183
 
 #: Call sites that DID resolve, as observed. The other half of the ratchet: a
 #: parser that stops matching would otherwise satisfy every assertion above.

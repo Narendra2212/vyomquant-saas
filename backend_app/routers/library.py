@@ -3633,15 +3633,14 @@ async def _start_marketplace_deployment(
 
     if started:
         _patch_deployment_status(
-            svc, deployment_id, {"status": "running", "started_at": now_iso,
-                                 "updated_at": now_iso}
+            svc, deployment_id, status="running", now_iso=now_iso, started_at=now_iso
         )
         return (True, message, "running")
 
     await _release_deployment_quota(user_id)
     _patch_deployment_status(
-        svc, deployment_id,
-        {"status": "failed", "error_message": str(message)[:500], "updated_at": now_iso},
+        svc, deployment_id, status="failed", now_iso=now_iso,
+        error_message=str(message)[:500],
     )
     return (False, message, "failed")
 
@@ -3666,16 +3665,48 @@ async def _release_deployment_quota(user_id: str) -> None:
         logger.warning(f"[RT-24] bot-slot quota release for {user_id} skipped: {exc}")
 
 
-def _patch_deployment_status(svc, deployment_id: str, payload: dict) -> None:
+def _patch_deployment_status(
+    svc,
+    deployment_id: str,
+    *,
+    status: str,
+    now_iso: str,
+    started_at: Optional[str] = None,
+    error_message: Optional[str] = None,
+) -> None:
     """One ``strategy_deployments`` UPDATE, tolerating a column a deployment may not have.
 
     ``error_message`` and ``started_at`` are not guaranteed present in every environment,
     and a PGRST204 naming one of them must not turn a started bot into a 500 -- the bot is
     already running by then, so raising would report failure for something that succeeded.
     Retried once without the optional columns, then logged.
+
+    WHY THE PAYLOAD IS BUILT AT EACH ``.update()`` AND NOT PASSED IN AS A DICT.
+    This took a ``payload: dict`` parameter, which made all of its writes invisible to
+    ``tests/test_schema_table_reference_drift.py``: that guard resolves a call site only
+    when the table name AND the payload are literals, and a dict arriving through a
+    parameter is neither readable nor checkable. Two unresolvable sites appeared when this
+    helper was added, taking the suite's blind spot past its pin -- and the guard's own
+    message is explicit that the fix is to make the sites resolvable rather than to raise
+    the pin. Writing each column set out at the ``.update()`` call does that, and it has
+    the side benefit of putting the exact columns this function can touch in plain sight.
+
+    The column sets are unchanged from the dict-passing version: a started deployment gets
+    status/started_at/updated_at, a failed one gets status/error_message/updated_at, and
+    the retry narrows to status/updated_at. Keys are still OMITTED rather than sent as
+    NULL, which matters -- PostgREST patches exactly the keys it receives, so sending
+    ``error_message: null`` on a successful start would erase a previous failure's reason.
     """
     try:
-        svc.table("strategy_deployments").update(payload).eq("id", deployment_id).execute()
+        if status == "running":
+            svc.table("strategy_deployments").update(
+                {"status": "running", "started_at": started_at, "updated_at": now_iso}
+            ).eq("id", deployment_id).execute()
+        else:
+            svc.table("strategy_deployments").update(
+                {"status": status, "error_message": error_message,
+                 "updated_at": now_iso}
+            ).eq("id", deployment_id).execute()
         return
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -3683,9 +3714,10 @@ def _patch_deployment_status(svc, deployment_id: str, payload: dict) -> None:
             f"retrying with the base columns only"
         )
 
-    minimal = {k: v for k, v in payload.items() if k in ("status", "updated_at")}
     try:
-        svc.table("strategy_deployments").update(minimal).eq("id", deployment_id).execute()
+        svc.table("strategy_deployments").update(
+            {"status": status, "updated_at": now_iso}
+        ).eq("id", deployment_id).execute()
     except Exception as exc:  # noqa: BLE001
         logger.error(
             f"[RT-24] deployment {deployment_id} could not be moved out of 'deploying': {exc}"
