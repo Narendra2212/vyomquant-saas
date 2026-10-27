@@ -14084,6 +14084,237 @@
       "NO",
       "",
       "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "created_at",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "now()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "id",
+      "uuid",
+      "",
+      "NO",
+      "gen_random_uuid()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "payout_id",
+      "uuid",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "settlement_id",
+      "uuid",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "finished_at",
+      "timestamp with time zone",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "id",
+      "uuid",
+      "",
+      "NO",
+      "gen_random_uuid()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "owners_processed",
+      "integer",
+      "",
+      "NO",
+      "0",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "payouts_created",
+      "integer",
+      "",
+      "NO",
+      "0",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "started_at",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "now()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "amount_minor",
+      "bigint",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "created_at",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "now()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "currency",
+      "text",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "id",
+      "uuid",
+      "",
+      "NO",
+      "gen_random_uuid()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "owner_id",
+      "uuid",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "period_end",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "period_start",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "reason",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "reference",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "settled_at",
+      "timestamp with time zone",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "status",
+      "text",
+      "",
+      "NO",
+      "'pending'::text",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "updated_at",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "now()",
+      "NO",
+      "",
+      "NEVER"
     ]
   ],
   "enum_types": [
@@ -14743,6 +14974,16 @@
       "training_jobs",
       "training_jobs_version_id_fkey",
       "FOREIGN KEY (version_id) REFERENCES strategy_versions(id) ON DELETE CASCADE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "marketplace_creator_payout_claims_payout_id_fkey",
+      "FOREIGN KEY (payout_id) REFERENCES marketplace_creator_payouts(id) ON DELETE CASCADE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "marketplace_creator_payout_claims_settlement_id_fkey",
+      "FOREIGN KEY (settlement_id) REFERENCES marketplace_settlements(id) ON DELETE RESTRICT"
     ]
   ],
   "functions": [
@@ -15170,6 +15411,16 @@
       "update_updated_at_column",
       "",
       false
+    ],
+    [
+      "create_creator_payout",
+      "p_owner_id uuid, p_period_start timestamp with time zone, p_period_end timestamp with time zone",
+      true
+    ],
+    [
+      "settle_creator_payout",
+      "p_payout_id uuid, p_status text, p_reference text, p_reason text",
+      true
     ]
   ],
   "indexes": [
@@ -17422,6 +17673,46 @@
       "webhook_events",
       "webhook_events_pkey",
       "CREATE UNIQUE INDEX webhook_events_pkey ON public.webhook_events USING btree (id)"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "idx_marketplace_creator_payout_claims_payout",
+      "CREATE INDEX idx_marketplace_creator_payout_claims_payout ON public.marketplace_creator_payout_claims USING btree (payout_id)"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "marketplace_creator_payout_claims_pkey",
+      "CREATE UNIQUE INDEX marketplace_creator_payout_claims_pkey ON public.marketplace_creator_payout_claims USING btree (id)"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "uq_creator_payout_claim_settlement",
+      "CREATE UNIQUE INDEX uq_creator_payout_claim_settlement ON public.marketplace_creator_payout_claims USING btree (settlement_id)"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "idx_marketplace_creator_payout_sweeps_finished",
+      "CREATE INDEX idx_marketplace_creator_payout_sweeps_finished ON public.marketplace_creator_payout_sweeps USING btree (finished_at)"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "marketplace_creator_payout_sweeps_pkey",
+      "CREATE UNIQUE INDEX marketplace_creator_payout_sweeps_pkey ON public.marketplace_creator_payout_sweeps USING btree (id)"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "idx_marketplace_creator_payouts_owner",
+      "CREATE INDEX idx_marketplace_creator_payouts_owner ON public.marketplace_creator_payouts USING btree (owner_id)"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "idx_marketplace_creator_payouts_status",
+      "CREATE INDEX idx_marketplace_creator_payouts_status ON public.marketplace_creator_payouts USING btree (status)"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "marketplace_creator_payouts_pkey",
+      "CREATE UNIQUE INDEX marketplace_creator_payouts_pkey ON public.marketplace_creator_payouts USING btree (id)"
     ]
   ],
   "policies": [
@@ -19206,6 +19497,42 @@
       "UPDATE",
       "(((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) = 'admin'::text)",
       "(((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) = 'admin'::text)"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "creator_payout_claims_service",
+      "PERMISSIVE",
+      "service_role",
+      "ALL",
+      "true",
+      "true"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "creator_payout_sweeps_service",
+      "PERMISSIVE",
+      "service_role",
+      "ALL",
+      "true",
+      "true"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "creator_payouts_owner_read",
+      "PERMISSIVE",
+      "authenticated",
+      "SELECT",
+      "(owner_id = auth.uid())",
+      ""
+    ],
+    [
+      "marketplace_creator_payouts",
+      "creator_payouts_service",
+      "PERMISSIVE",
+      "service_role",
+      "ALL",
+      "true",
+      "true"
     ]
   ],
   "primary_keys": [
@@ -19687,6 +20014,21 @@
     [
       "webhook_events",
       "webhook_events_pkey",
+      "id"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "marketplace_creator_payout_claims_pkey",
+      "id"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "marketplace_creator_payout_sweeps_pkey",
+      "id"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "marketplace_creator_payouts_pkey",
       "id"
     ]
   ],
@@ -24805,6 +25147,231 @@
       "webhook_events",
       "service_role",
       "UPDATE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "anon",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "anon",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "anon",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "anon",
+      "UPDATE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "authenticated",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "authenticated",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "authenticated",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "authenticated",
+      "UPDATE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "service_role",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "service_role",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "service_role",
+      "REFERENCES"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "service_role",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "service_role",
+      "TRIGGER"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "service_role",
+      "TRUNCATE"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "service_role",
+      "UPDATE"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "anon",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "anon",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "anon",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "anon",
+      "UPDATE"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "authenticated",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "authenticated",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "authenticated",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "authenticated",
+      "UPDATE"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "service_role",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "service_role",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "service_role",
+      "REFERENCES"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "service_role",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "service_role",
+      "TRIGGER"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "service_role",
+      "TRUNCATE"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "service_role",
+      "UPDATE"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "anon",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "anon",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "anon",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "anon",
+      "UPDATE"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "authenticated",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "authenticated",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "authenticated",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "authenticated",
+      "UPDATE"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "service_role",
+      "DELETE"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "service_role",
+      "INSERT"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "service_role",
+      "REFERENCES"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "service_role",
+      "SELECT"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "service_role",
+      "TRIGGER"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "service_role",
+      "TRUNCATE"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "service_role",
+      "UPDATE"
     ]
   ],
   "recorded_migrations": [
@@ -24830,7 +25397,7 @@
     ],
     [
       "migrations/003_create_exchange_keys_table.sql",
-      "ec5d29865075012dd241fcb461871c9b351e7f963240284a39715c89724bb6e5",
+      "03745750ad65939760d6879d5d5f6ad4e0ac8c010bf2c256098840cc70614f21",
       "step1"
     ],
     [
@@ -25171,6 +25738,11 @@
     [
       "migrations/058_exch03_exchange_keys_stable_handle.sql",
       "417d23b430e62ffa549934952a507330c4d6d5ff60b0aacb57b9f436bd7f05d8",
+      "step1"
+    ],
+    [
+      "migrations/059_mkt06_creator_payout_atomic.sql",
+      "4700c5d34dd87c0c267fcc4faec4ba0413b1b33f7b921daf0e386b79b14d53f0",
       "step1"
     ],
     [
@@ -25734,6 +26306,21 @@
       "webhook_events",
       true,
       false
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      true,
+      false
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      true,
+      false
+    ],
+    [
+      "marketplace_creator_payouts",
+      true,
+      false
     ]
   ],
   "sequences": [
@@ -26127,6 +26714,18 @@
     ],
     [
       "webhook_events",
+      "postgres"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "postgres"
+    ],
+    [
+      "marketplace_creator_payout_sweeps",
+      "postgres"
+    ],
+    [
+      "marketplace_creator_payouts",
       "postgres"
     ]
   ],
@@ -27398,6 +27997,36 @@
       "uq_webhook_events_provider_event",
       "u",
       "UNIQUE (provider, event_id)"
+    ],
+    [
+      "marketplace_creator_payout_claims",
+      "uq_creator_payout_claim_settlement",
+      "u",
+      "UNIQUE (settlement_id)"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "chk_creator_payout_amount_positive",
+      "c",
+      "CHECK ((amount_minor > 0))"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "chk_creator_payout_currency",
+      "c",
+      "CHECK ((currency = ANY (ARRAY['USD'::text, 'INR'::text])))"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "chk_creator_payout_period",
+      "c",
+      "CHECK ((period_end >= period_start))"
+    ],
+    [
+      "marketplace_creator_payouts",
+      "chk_creator_payout_status",
+      "c",
+      "CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text, 'rejected'::text])))"
     ]
   ]
 }

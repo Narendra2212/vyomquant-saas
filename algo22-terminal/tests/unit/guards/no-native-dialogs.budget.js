@@ -161,11 +161,17 @@ export const IN_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
  * Everything else. Budgeted so it cannot grow; no promise in this spec that it
  * shrinks, and no emptiness assertion over it.
  *
- * All five entries are pages and components design.md §17.2 defers by name, and
- * all five hold exactly one dialog. Each note below records the call, its line as
- * seeded, and the interaction it guards — so that when one of these surfaces is
+ * Every entry holds exactly one dialog. Each note below records the call, its line
+ * as seeded, and the interaction it guards — so that when one of these surfaces is
  * eventually migrated, the person doing it knows what they are replacing without
  * re-deriving it.
+ *
+ * Four of the five are pages and components design.md §17.2 defers BY NAME. The
+ * fifth, `components/legal/CookieConsent.jsx`, is not: it arrived with the LEGAL-01
+ * consent work after this group was written. It is called out in its own note rather
+ * than quietly joining the list, because "§17.2 defers it" was the entry criterion
+ * and this one does not meet it — and a budget whose membership rule has silently
+ * widened is a budget that no longer refuses anything.
  */
 export const OUT_OF_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
   // -- Deferred pages (§17.2) ------------------------------------------------
@@ -201,6 +207,29 @@ export const OUT_OF_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
   // Bare `confirm('Delete this entry permanently?')` at line 71, guarding the
   // waitlist delete. The Admin dashboard is deferred by §17.2. Bare form again.
   'components/admin/AdminDashboard.jsx': 1,
+  // `window.alert('Analytics turned off. No further data will be sent. Reload the
+  // page to fully unload scripts that were already running.')` at line 137, in the
+  // consent-toggle's `onClick` when the visitor turns analytics OFF. Arrived with
+  // the LEGAL-01 cookie-consent work, which is NOT a §17.2 deferral — this is the
+  // first entry in this group that §17.2 does not name, and it is recorded as a
+  // deliberate exception rather than silently absorbed.
+  //
+  // WHY IT IS BUDGETED AND NOT MIGRATED HERE. The two replacements this guard names
+  // both have a problem on this particular surface:
+  //
+  //   * `window.showToast` is installed by `AppShell`, and this toggle renders in
+  //     the footer on PUBLIC routes too, where `AppShell` is not mounted. Routing
+  //     the message through a transport that may not exist would silently drop a
+  //     caveat that exists for a legal reason — strictly worse than a dialog.
+  //   * `ds/Alert` is an in-page block, which this component has nowhere to put: it
+  //     renders as a single inline `<button>` inside a footer line.
+  //
+  // THE RIGHT FIX, recorded so it is not re-derived: render the caveat inline next
+  // to the toggle in a polite live region, which needs no transport, cannot be
+  // dismissed before it is read, and is reachable by a screen reader — none of which
+  // a `window.alert` is. That is a change to the consent surface's layout and copy
+  // placement, so it belongs to whoever owns that surface, not to a lint fix.
+  'components/legal/CookieConsent.jsx': 1,
 });
 
 /**

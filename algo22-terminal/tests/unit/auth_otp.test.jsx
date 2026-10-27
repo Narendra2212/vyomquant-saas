@@ -154,7 +154,19 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
       const emailInput = screen.getByPlaceholderText('trader@vyomquant.io');
       const passwordInput = screen.getByLabelText(/^Password$/i);
       const confirmInput = screen.getByLabelText(/^Confirm Password$/i);
-      const termsCheckbox = screen.getByRole('checkbox');
+
+      // LEGAL-01 put THREE declarations on this form, not one: an age attestation, the
+      // Terms/Risk agreement, and a country declaration that makes Terms section 3's
+      // restricted-jurisdiction clause enforceable. This used to read
+      // `screen.getByRole('checkbox')`, which threw "Found multiple elements" the moment
+      // the second box landed, and would silently have ticked only one of them if it had
+      // not. Counted, so a FOURTH declaration fails here with a clear reason rather than
+      // as an unexplained "signUp was not called".
+      const consents = screen.getAllByRole('checkbox');
+      expect(consents).toHaveLength(2);
+      const ageCheckbox = screen.getByRole('checkbox', { name: /at least 18/i });
+      const termsCheckbox = screen.getByRole('checkbox', { name: /agree to the/i });
+      const countrySelect = screen.getByLabelText(/which country are you in/i);
 
       fireEvent.change(emailInput, { target: { value: 'newuser@vyomquant.io' } });
       fireEvent.change(passwordInput, { target: { value: 'short' } });
@@ -173,14 +185,31 @@ describe('Phase Auth — Password + Email OTP Authentication', () => {
       expect(mismatchMsgs.length).toBeGreaterThan(0);
       expect(signUpSpy).not.toHaveBeenCalled();
 
-      // Match confirmation but leave terms unchecked
+      // Match confirmation but leave every declaration blank
       fireEvent.change(confirmInput, { target: { value: 'StrongAuth!2026' } });
       fireEvent.click(submitBtn);
       expect(await screen.findByText(/You must agree to the Terms and Risk Disclosure/i)).toBeDefined();
       expect(signUpSpy).not.toHaveBeenCalled();
 
-      // Check terms box and submit
+      // Each declaration is refused ON ITS OWN. Walked one at a time rather than filled in
+      // together, because that is the only way to show each gate is load-bearing: satisfying
+      // two of three must still refuse, and the message must name the one that is missing.
+      // The order mirrors the handler's own (`agreedToPolicies`, then `confirmedAge`, then
+      // `declaredCountry`), so each step's error is the next gate down.
       fireEvent.click(termsCheckbox);
+      fireEvent.click(submitBtn);
+      expect(
+        await screen.findByText(/You must confirm you meet the minimum age/i),
+      ).toBeDefined();
+      expect(signUpSpy).not.toHaveBeenCalled();
+
+      fireEvent.click(ageCheckbox);
+      fireEvent.click(submitBtn);
+      expect(await screen.findByText(/Please select the country you are in/i)).toBeDefined();
+      expect(signUpSpy).not.toHaveBeenCalled();
+
+      // Every declaration satisfied: India, which is not in RESTRICTED_COUNTRY_CODES.
+      fireEvent.change(countrySelect, { target: { value: 'IN' } });
       signUpSpy.mockResolvedValueOnce({
         data: { user: { id: 'usr_new' } },
         error: null,

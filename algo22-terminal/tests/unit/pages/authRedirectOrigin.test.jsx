@@ -396,7 +396,30 @@ const fillCredentials = ({ signup = false } = {}) => {
     fireEvent.change(document.getElementById('auth-confirm-password'), {
       target: { value: 'Str0ng!Passw0rd' },
     });
-    fireEvent.click(document.querySelector('input[type="checkbox"]'));
+
+    // LEGAL-01 added a second consent box (age) beside the Terms one, and a country
+    // declaration. This used to tick `querySelector('input[type="checkbox"]')` -- the FIRST
+    // box only -- so sign-up was refused before it ever reached Supabase and this file's two
+    // sign-up cases failed with "expected undefined to be defined", which says nothing about
+    // why.
+    //
+    // Every box is ticked rather than the two known ones by name: this helper's subject is
+    // the REDIRECT, not the consent copy, so it should keep working when a declaration is
+    // added. The count is asserted so "ticked them all" cannot quietly become "ticked none".
+    const consents = document.querySelectorAll('input[type="checkbox"]');
+    if (consents.length === 0) {
+      throw new Error(
+        'the sign-up form has no consent checkbox; this helper tick its boxes to get past '
+          + "LEGAL-01's gates, so a form with none means the selector is stale",
+      );
+    }
+    consents.forEach((box) => {
+      if (!box.checked) fireEvent.click(box);
+    });
+
+    // Not in RESTRICTED_COUNTRY_CODES, so it passes the jurisdiction gate too.
+    const country = document.querySelector('select');
+    if (country) fireEvent.change(country, { target: { value: 'IN' } });
   }
 };
 

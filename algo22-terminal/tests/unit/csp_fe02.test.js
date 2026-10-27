@@ -25,12 +25,31 @@
  *      CSP's script-src does not gate.
  *   3. src/bootstrap.js's isDummyValue/detectLocal/runBootstrap reproduce the exact behaviour
  *      the old inline scripts had: a dummy/placeholder/unset id gets a harmless local-only
- *      stub, a real-looking id gets the real third-party script injected.
+ *      stub, a real-looking id gets the real third-party script injected -- NOW ONLY ONCE
+ *      THE VISITOR HAS CONSENTED. See below.
+ *
+ * ANALYTICS IS GATED ON CONSENT, AND THAT CHANGED THIS FILE
+ *   `src/bootstrap.js` now ends with
+ *
+ *       installAnalyticsStubs(isLocal);
+ *       if (hasAnalyticsConsent()) { loadAnalytics(gaId, clarityId); }
+ *
+ *   and `src/legal/consent.hasAnalyticsConsent()` is FALSE until the visitor actively
+ *   chooses -- an absent decision is not permission. So the two cases below that assert a
+ *   real-looking id injects its loader now GRANT CONSENT FIRST; without that they were
+ *   asserting the pre-consent behaviour and failed as soon as the gate landed.
+ *
+ *   Granting it in the test rather than loosening the assertion is the point: the gate is a
+ *   privacy guarantee, so the file now pins BOTH directions -- consent granted loads the
+ *   script, and no decision loads nothing. The second direction had no test at all, which is
+ *   the half that actually matters if the gate regresses.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { CONSENT_VERSION } from '../../src/legal/consent.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_HTML_PATH = path.resolve(__dirname, '../../index.html');
@@ -113,6 +132,25 @@ describe('FE-02: index.html declares a real CSP with no inline-script escape hat
   });
 });
 
+/**
+ * The key `src/legal/consent.js` stores the decision under.
+ *
+ * Written directly rather than by importing `setAnalyticsConsent`, because `beforeEach`
+ * calls `vi.resetModules()` and the module instance the test would talk to is not the one
+ * `bootstrap.js` imports afterwards. The storage is the shared contract between them, so
+ * it is the thing to set. Derived from `CONSENT_VERSION` so a version bump fails loudly
+ * here instead of silently granting nothing.
+ */
+const CONSENT_STORAGE_KEY = `vq.analyticsConsent.v${CONSENT_VERSION}`;
+
+function grantConsent() {
+  window.localStorage.setItem(CONSENT_STORAGE_KEY, 'granted');
+}
+
+function clearConsent() {
+  window.localStorage.removeItem(CONSENT_STORAGE_KEY);
+}
+
 describe('FE-02: src/bootstrap.js reproduces the old inline scripts behaviour', () => {
   let isDummyValue;
   let detectLocal;
@@ -131,6 +169,10 @@ describe('FE-02: src/bootstrap.js reproduces the old inline scripts behaviour', 
     delete window.dataLayer;
     delete window.onerror;
     delete window.__VQ_LOCAL__;
+    // Start every case from NO DECISION, which is what a first-time visitor has and what
+    // `hasAnalyticsConsent()` treats as denied. Cleared rather than assumed absent, because
+    // jsdom's localStorage persists across cases in a file.
+    clearConsent();
     const mod = await import('../../src/bootstrap.js');
     isDummyValue = mod.isDummyValue;
     detectLocal = mod.detectLocal;
@@ -178,7 +220,8 @@ describe('FE-02: src/bootstrap.js reproduces the old inline scripts behaviour', 
     expect(typeof window.clarity).toBe('function');
   });
 
-  it('with a real-looking GA id: the gtag loader script is injected with that id', () => {
+  it('with a real-looking GA id AND consent: the gtag loader script is injected with that id', () => {
+    grantConsent();
     runBootstrap({ VITE_SENTRY_DSN: 'dummy', VITE_GA_TRACKING_ID: 'G-REAL123', VITE_CLARITY_PROJECT_ID: 'dummy' });
 
     const gaScript = document.querySelector('script[src*="googletagmanager.com"]');
@@ -187,11 +230,45 @@ describe('FE-02: src/bootstrap.js reproduces the old inline scripts behaviour', 
     expect(Array.isArray(window.dataLayer)).toBe(true);
   });
 
-  it('with a real-looking Clarity id: the clarity loader script is injected with that id', () => {
+  it('with a real-looking Clarity id AND consent: the clarity loader script is injected with that id', () => {
+    grantConsent();
     runBootstrap({ VITE_SENTRY_DSN: 'dummy', VITE_GA_TRACKING_ID: 'dummy', VITE_CLARITY_PROJECT_ID: 'real-clarity-id' });
 
     const clarityScript = document.querySelector('script[src*="clarity.ms/tag/real-clarity-id"]');
     expect(clarityScript).not.toBeNull();
+  });
+
+  it('with real ids but NO consent decision: nothing third-party is loaded', () => {
+    // The direction that matters. Both ids are real, so the only thing standing between the
+    // visitor and two third-party trackers is the consent gate -- and a first-time visitor
+    // has made no decision, which is not permission.
+    runBootstrap({
+      VITE_SENTRY_DSN: 'dummy',
+      VITE_GA_TRACKING_ID: 'G-REAL123',
+      VITE_CLARITY_PROJECT_ID: 'real-clarity-id',
+    });
+
+    expect(document.querySelector('script[src*="googletagmanager.com"]')).toBeNull();
+    expect(document.querySelector('script[src*="clarity.ms"]')).toBeNull();
+
+    // The stubs still go in, so page code calling gtag()/clarity() does not throw. That is
+    // the difference between "not tracking" and "broken".
+    expect(typeof window.gtag).toBe('function');
+    expect(typeof window.clarity).toBe('function');
+  });
+
+  it('with real ids and consent explicitly DENIED: nothing third-party is loaded', () => {
+    // Distinct from the case above: a recorded refusal, not an absent decision. They must
+    // behave the same, and only one of them is the library's default.
+    window.localStorage.setItem(CONSENT_STORAGE_KEY, 'denied');
+    runBootstrap({
+      VITE_SENTRY_DSN: 'dummy',
+      VITE_GA_TRACKING_ID: 'G-REAL123',
+      VITE_CLARITY_PROJECT_ID: 'real-clarity-id',
+    });
+
+    expect(document.querySelector('script[src*="googletagmanager.com"]')).toBeNull();
+    expect(document.querySelector('script[src*="clarity.ms"]')).toBeNull();
   });
 
   it('with a real-looking Sentry DSN: the Sentry loader script is injected', () => {

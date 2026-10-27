@@ -202,6 +202,21 @@ export function a11yRules(severity) {
 export const A11Y_ENFORCED_GLOBS = Object.freeze([
   'src/components/ds/**/*.{js,jsx,ts,tsx}',
   'src/components/landing/**/*.{js,jsx,ts,tsx}',
+  // Added when the LEGAL-01 work moved `LegalPage.jsx` out of `src/pages/` into
+  // `src/components/legal/`, beside the cookie-consent banner and the re-acceptance gate.
+  //
+  // The move silently took every legal surface OUT of a11y enforcement: these globs are
+  // what lints, `src/pages/**` no longer matched the file, and nothing replaced it. The
+  // guard caught it only because `IN_SCOPE_PAGES` still named the old path and the list
+  // asserts that every entry is actually reached — which is the whole reason that
+  // assertion exists ("Either way the page is NOT being held").
+  //
+  // These are the surfaces where losing it matters most: a consent banner and a
+  // re-acceptance gate are the two controls a user cannot proceed past, so a keyboard
+  // user who cannot operate them cannot use the product at all. Measured before being
+  // enforced -- all three files report ZERO findings today, so this goes straight in at
+  // `error` with no waiver.
+  'src/components/legal/**/*.{js,jsx,ts,tsx}',
   'src/pages/**/*.{js,jsx,ts,tsx}',
 ]);
 
