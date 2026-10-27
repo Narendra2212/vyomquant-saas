@@ -197,9 +197,107 @@ def measure_robust() -> int:
     return 0
 
 
+def _iqr_flags(rets: list[float], multiplier: float) -> list[bool]:
+    """Boxplot fence: outside ``[Q1 - k*IQR, Q3 + k*IQR]``."""
+    ordered = sorted(rets)
+    n = len(ordered)
+
+    def _q(p: float) -> float:
+        # Linear interpolation between order statistics, the same convention
+        # `numpy.percentile`'s default uses -- so a figure measured here matches one
+        # measured with numpy in the validator's own tests.
+        idx = p * (n - 1)
+        lo = int(math.floor(idx))
+        hi = min(lo + 1, n - 1)
+        frac = idx - lo
+        return ordered[lo] * (1 - frac) + ordered[hi] * frac
+
+    q1, q3 = _q(0.25), _q(0.75)
+    iqr = q3 - q1
+    if iqr <= 0:
+        return [False] * n
+    low, high = q1 - multiplier * iqr, q3 + multiplier * iqr
+    return [(r < low or r > high) for r in rets]
+
+
+def measure_legacy() -> int:
+    """DATA-02: fit the two LEGACY constants to real data, under the CURRENT policy.
+
+    ``Z_SCORE_THRESHOLD_DEFAULT`` and ``IQR_MULTIPLIER_DEFAULT`` are the two values
+    DATA-02's remaining_action says are "principled, empirically-verified-against-synthetic-
+    data defaults, not a fit against this platform's own real historical return
+    distributions". This is that fit.
+
+    IT ASKS A DIFFERENT QUESTION FROM THE DEFAULT MODE OF THIS SCRIPT, and the difference is
+    the point. That mode measures whole-window rejection, because that was the policy when it
+    was written, and its answer is damning: at the shipped 5.0, 100% of windows of 2,000 bars
+    or more are refused, and no threshold both detects something and admits a 10,000-bar
+    window. DATA-03 then replaced that policy -- per-point flagging with a contamination
+    BUDGET is the default now (:data:`OUTLIER_POLICY_DEFAULT`,
+    :data:`MAX_OUTLIER_FRACTION_DEFAULT`).
+
+    So the live question for these two constants is no longer "does any point exceed" but the
+    one DATA-03 asked of the robust threshold: what per-point rate does each candidate
+    produce on real returns, and what is the worst contamination it puts in a floor-sized
+    window? Measured across the same three instruments, for the same reason -- one asset
+    would fit the threshold to one asset's volatility.
+    """
+    series: dict[str, list[float]] = {}
+    for sym in ROBUST_SYMBOLS:
+        closes = _closes_for(sym)
+        if len(closes) < FLOOR_WINDOW:
+            print(f"{sym}: only {len(closes)} bars, need >={FLOOR_WINDOW}; skipping")
+            continue
+        series[sym] = _log_returns(closes)
+        print(f"{sym}: {len(closes)} bars, {len(series[sym])} log-returns")
+
+    if not series:
+        print("no instrument returned enough bars")
+        return 2
+
+    for label, thresholds, flagger in (
+        ("CLASSIC Z-SCORE  (Z_SCORE_THRESHOLD_DEFAULT)", THRESHOLDS,
+         lambda rets, t: _z_flags(rets, t)),
+        ("IQR FENCE        (IQR_MULTIPLIER_DEFAULT)", [1.5, 2.0, 3.0, 4.0, 6.0, 8.0],
+         _iqr_flags),
+    ):
+        print("\n" + "=" * 78)
+        print(label)
+        print("=" * 78)
+        print(f"{'param':>8}{'per-point rate (min..max)':>30}"
+              f"{'worst ' + str(FLOOR_WINDOW) + '-bar contamination':>34}")
+        for t in thresholds:
+            rates, worst = [], []
+            for rets in series.values():
+                flags = flagger(rets, t)
+                rates.append(sum(flags) / len(flags))
+                worst.append(_worst_window_fraction(flags, FLOOR_WINDOW))
+            print(f"{t:>8.1f}{min(rates):>14.3e}..{max(rates):<14.3e}"
+                  f"{max(worst) * 100:>33.2f}%")
+
+    print("\nREADING THIS")
+    print("   Compare the right-hand column against MAX_OUTLIER_FRACTION_DEFAULT (1%).")
+    print("   A parameter whose worst-case contamination sits comfortably inside the")
+    print("   budget is admissible; one at 0.00% across the board detects nothing and is")
+    print("   not a safety control, which is the trap the classic rule fell into at 12.0.")
+    return 0
+
+
+def _z_flags(rets: list[float], threshold: float) -> list[bool]:
+    """Classic mean/std z-score, the estimator ``OutlierMethod.Z_SCORE`` uses."""
+    n = len(rets)
+    mean = sum(rets) / n
+    sd = math.sqrt(sum((r - mean) ** 2 for r in rets) / n)
+    if sd <= 0:
+        return [False] * n
+    return [abs(r - mean) / sd > threshold for r in rets]
+
+
 def main() -> int:
     if "--robust" in sys.argv:
         return measure_robust()
+    if "--legacy" in sys.argv:
+        return measure_legacy()
 
     print(f"fetching ~{BATCH * BATCHES} real {SYMBOL} {INTERVAL} bars from Binance...")
     closes: list[float] = []
