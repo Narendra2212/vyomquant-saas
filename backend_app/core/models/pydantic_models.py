@@ -47,6 +47,23 @@ class ExchangeKeysRequest(BaseModel):
     uid: Optional[str] = None
     label: Optional[str] = None
 
+    #: EXCH-06. Whether this credential is for the venue's SANDBOX/testnet
+    #: environment rather than production.
+    #:
+    #: THIS FIELD WAS MISSING WHILE THE UI OFFERED IT. `core/
+    #: exchange_connection_schema.py` declares a `field_id="sandbox"` BOOLEAN
+    #: labelled "Testnet / Sandbox Mode" for binance and four other venues, and
+    #: this model -- the body of the `POST /api/exchange/keys` endpoint that
+    #: stores the credential -- had nowhere to receive it. With no
+    #: `extra="forbid"`, pydantic's default `ignore` applied: a client that
+    #: posted `sandbox: true` got HTTP 200 and the answer was discarded, so the
+    #: trader was told their credential was on testnet and it was on production.
+    #:
+    #: `False` is the default because that is exactly the behaviour every
+    #: existing caller already gets, so adding this field changes no request
+    #: that works today.
+    sandbox: bool = False
+
 
 class TestConnectionRequest(BaseModel):
     exchange_id: str
