@@ -18,6 +18,10 @@
         "annotation": "int",
         "has_default": true
       },
+      "order_timeout_seconds": {
+        "annotation": "Optional",
+        "has_default": true
+      },
       "price": {
         "annotation": "Decimal"
       },
@@ -183,7 +187,8 @@
         "result": "computed",
         "status": "str"
       }
-    ]
+    ],
+    "_baseline_note_parameters": "AUTHORISED RE-RECORD (DEPLOY-01): order_timeout_seconds is ADDED to ExecutionEngine.execute_with_idempotency -- an optional keyword, default None, which reproduces the previous behaviour exactly. It carries a deployment's own execution_config['order_timeout_seconds'] to exchange_executor.place_order, which now wraps the ccxt create_order await in asyncio.wait_for. Before this there was NO timeout on that call at all (the ccxt client is built with no timeout key), so a hung venue response blocked the awaiting BotRunner tick for as long as the socket allowed. Nothing is removed, renamed or retyped. A timeout is adjudicated by RT-17 as an AMBIGUOUS outcome (status=\"unknown\"), never as a rejection and never resubmitted, so it composes with the anti-resubmit control rather than weakening it. The engine passes the keyword to place_order only when a deployment actually set one, so an unset field produces the identical call. See tests/test_deploy01_order_timeout_is_enforced.py."
   },
   "execution_statuses_available": [
     "completed",
