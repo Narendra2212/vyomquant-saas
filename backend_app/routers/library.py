@@ -3569,6 +3569,129 @@ def _owner_version_label(svc, version_id: str) -> Optional[str]:
     return str(label) if label is not None else None
 
 
+async def _start_marketplace_deployment(
+    svc,
+    *,
+    deployment_row: dict,
+    user_id: str,
+    is_live: bool,
+) -> tuple:
+    """RT-24. Start the bot for a marketplace deployment and record the outcome.
+
+    Mirrors the tail of ``StrategyService.deploy_version`` (the success/failure branches
+    around its own ``fleet.start_bot``) rather than inventing a second lifecycle:
+
+    * success -> ``status='running'``, ``started_at=now``
+    * failure -> the quota reservation is RELEASED, then ``status='failed'`` with
+      ``error_message``. The row is KEPT and marked, never deleted: a deployment that was
+      accepted and then failed to start is a thing the subscriber needs to be able to see.
+
+    The blueprint is built by ``deployment_runtime.start_recorded_deployment`` from the ROW,
+    through the RUNTIME's own service client -- never through this route's. That is what
+    keeps the owner's ``blueprint`` out of a path a subscriber drives (Requirement 7.1) and
+    is how the resume path has always loaded it.
+
+    A DEVIATION FROM ``deploy_version``, STATED RATHER THAN HIDDEN. There, the blueprint is
+    validated BEFORE the insert, so an unstartable strategy leaves no row and spends no
+    quota. Here it cannot be: the runtime derives every input from the row, so the row has
+    to exist first. The consequence is that an unstartable marketplace strategy leaves a row
+    marked ``failed`` with the reason, instead of no row -- and the quota is released, so
+    nothing is spent either way. For a subscriber deploying someone else's strategy that is
+    the better of the two: a recorded refusal they can read beats a 422 about an artifact
+    they are not allowed to see.
+
+    No fleet on ``app_state`` leaves the row ``deploying`` and is reported as such, which is
+    ``deploy_version``'s own behaviour and is what lets the API run in a process that hosts
+    no bots. The boot-time resume sweep starts it where one does.
+
+    Returns:
+        ``(started, message, recorded_status)``. The third member is the status this
+        function actually wrote, so the caller REPORTS it rather than inferring it from
+        ``started`` -- the no-fleet case is not started and is not failed either, and
+        collapsing the two would tell a subscriber their deployment failed when it is
+        waiting for a process that hosts bots.
+    """
+    from backend_app.backend import deployment_runtime as _dep_runtime
+
+    deployment_id = str(deployment_row.get("id"))
+
+    # `allow_live` is this request's own live decision, not `RESUME_LIVE_DEPLOYMENTS`. That
+    # flag gates restarting real-money trading unattended after a crash, which is a
+    # different question from a trader deploying live now having just passed the live gate.
+    started, message = await _dep_runtime.start_recorded_deployment(
+        deployment_row, allow_live=is_live
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # `None` is the no-fleet case, which is neither started nor failed: the row stays
+    # 'deploying' and the boot-time resume sweep will pick it up in a process that hosts
+    # bots. Calling it failed would tell a subscriber their deployment broke when it is
+    # waiting, and releasing the quota would hand back a slot the row still occupies.
+    if started is None:
+        return (False, str(message), "deploying")
+
+    if started:
+        _patch_deployment_status(
+            svc, deployment_id, {"status": "running", "started_at": now_iso,
+                                 "updated_at": now_iso}
+        )
+        return (True, message, "running")
+
+    await _release_deployment_quota(user_id)
+    _patch_deployment_status(
+        svc, deployment_id,
+        {"status": "failed", "error_message": str(message)[:500], "updated_at": now_iso},
+    )
+    return (False, message, "failed")
+
+
+async def _release_deployment_quota(user_id: str) -> None:
+    """Give back a bot-slot reservation whose work never started (RT-24).
+
+    That is the one case ``SubscriptionEngine.decrement_quota_usage``'s own docstring
+    sanctions, and the three sites that need it are the two insert failures and a refused
+    bot start. Without it every failed attempt would burn a slot the subscriber never used.
+
+    Never raises: a failed release must not turn a refusal the caller already has an answer
+    for into a 500, and it must not turn a STARTED bot's bookkeeping into an error. Logged
+    at warning, because a reservation that leaked is real and someone has to be able to find
+    it.
+    """
+    try:
+        from backend_app.core.subscription_engine import Resource, SubscriptionEngine
+
+        await SubscriptionEngine.decrement_quota_usage(user_id, Resource.BOTS.value)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[RT-24] bot-slot quota release for {user_id} skipped: {exc}")
+
+
+def _patch_deployment_status(svc, deployment_id: str, payload: dict) -> None:
+    """One ``strategy_deployments`` UPDATE, tolerating a column a deployment may not have.
+
+    ``error_message`` and ``started_at`` are not guaranteed present in every environment,
+    and a PGRST204 naming one of them must not turn a started bot into a 500 -- the bot is
+    already running by then, so raising would report failure for something that succeeded.
+    Retried once without the optional columns, then logged.
+    """
+    try:
+        svc.table("strategy_deployments").update(payload).eq("id", deployment_id).execute()
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"[RT-24] deployment status update for {deployment_id} failed ({exc}); "
+            f"retrying with the base columns only"
+        )
+
+    minimal = {k: v for k, v in payload.items() if k in ("status", "updated_at")}
+    try:
+        svc.table("strategy_deployments").update(minimal).eq("id", deployment_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            f"[RT-24] deployment {deployment_id} could not be moved out of 'deploying': {exc}"
+        )
+
+
 @router.post("/{library_id}/deploy")
 @limiter.limit("10/60second", key_func=caller_or_address)
 async def deploy_marketplace_strategy(
@@ -3748,6 +3871,39 @@ async def deploy_marketplace_strategy(
     # validated for them. Wiring the subscriber's optional `symbol` through those checks is
     # the remaining work on this finding and is recorded as such.
     if deploy_request.mode == "live":
+        # ── RT-24: the live-trading ENTITLEMENT, which this path did not check at all ──
+        #
+        # The first-party path refuses a live deployment without it
+        # (`strategy_service.py:1897-1902`). A marketplace subscription entitles the
+        # STRATEGY; it does not entitle real-money execution, and nothing here had ever
+        # distinguished the two.
+        #
+        # Checked FIRST, before the exchange account and risk-config lookups below, because
+        # it is the cheapest refusal and the one that does not depend on which resources the
+        # caller named. Refusing on the plan before touching a resource also means a caller
+        # with no live entitlement cannot use this endpoint to probe which account ids exist.
+        from backend_app.core.subscription_dependencies import (
+            get_user_plan as _get_user_plan,
+        )
+        from backend_app.core.subscription_engine import (
+            Feature as _Feature,
+            SubscriptionEngine as _SubscriptionEngine,
+        )
+
+        if not await _SubscriptionEngine.check_feature_entitlement(
+            user_id, await _get_user_plan(user_id, svc), _Feature.LIVE_TRADING.value
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "LIVE_TRADING_NOT_ENTITLED",
+                    "message": (
+                        "Live trading requires a paid subscription plan. Your marketplace "
+                        "subscription entitles this strategy, not real-money execution."
+                    ),
+                },
+            )
+
         # The entitlement resolver has already refused a null or past `period_expiry`
         # before this point, so an entitling result always carries a future instant. This
         # re-reads it rather than assuming, because a live deployment with no end instant
@@ -3905,6 +4061,70 @@ async def deploy_marketplace_strategy(
             },
         )
 
+    # ══════════════════════════════════════════════════════════════════════════════
+    #  RT-24: everything the RUNTIME needs, resolved BEFORE anything is written.
+    #
+    #  This route used to end at the insert and return. It performed none of what the
+    #  first-party path does: no quota reservation, no runtime blueprint, no
+    #  `fleet.start_bot`. So every marketplace deployment -- paper since that path was
+    #  built, and live since MKT-05 inherited it -- was recorded `status='deploying'` and
+    #  nothing ever evaluated the strategy. A feature that silently did nothing.
+    #
+    #  THE ORDER IS `deploy_version`'s, AND THE ORDER IS THE SAFETY PROPERTY. Every gate
+    #  below is a READ, so a refusal here leaves NO row and NO quota spent. The blueprint is
+    #  built once with the id `"pending"` purely to validate the inputs, exactly as
+    #  `deploy_version` does at its own line 1887, and rebuilt after the insert with the
+    #  real deployment id -- the runtime keys its own state on that id, so it cannot be
+    #  minted before the row exists.
+    # ══════════════════════════════════════════════════════════════════════════════
+    is_live_deploy = deploy_request.mode == "live"
+
+    # THE ROW MUST NAME ITS MARKET, because the runtime derives the market FROM THE ROW.
+    # `exchange_symbol` was written only when the subscriber supplied one, so a deployment
+    # that took the owner's market had no symbol recorded at all -- and
+    # `deployment_runtime.rebuild_for_resume` reads `row["exchange_symbol"]` first. Left
+    # absent, the row could not be resumed and could not be reconciled against a venue.
+    #
+    # It is still only set when the subscriber named one; where they did not, the runtime
+    # falls back to the plan's own resolved market, which is the owner's and is the correct
+    # default. The row then records what the subscriber chose and nothing they did not.
+    #
+    # Validating a subscriber-supplied symbol against venue availability and timeframe
+    # support remains open and remains MKT-05's note, not closed here.
+    #
+    # THE OWNER'S LOGIC IS DELIBERATELY NOT READ ON THIS PATH. A `strategy_versions` row
+    # carries `blueprint` and `execution_graph`, and a subscriber may EXECUTE an owner's
+    # strategy without being able to READ it (Requirement 7.1) -- asserted by
+    # `test_the_owner_version_read_selects_no_protected_logic_column`, which inspects every
+    # `strategy_versions` select this route's client makes. So the blueprint is built by
+    # `deployment_runtime.start_recorded_deployment`, through the RUNTIME's own service
+    # client, from the row written below. That is how the resume path has always done it.
+
+    from backend_app.core.subscription_dependencies import get_user_plan
+    from backend_app.core.subscription_engine import Resource, SubscriptionEngine
+
+    plan_key = await get_user_plan(user_id, svc)
+
+    # QUOTA IS THE SUBSCRIBER'S. They own the row, they named the exchange account, the
+    # capital is theirs and the bot occupies a runtime slot on their account; the creator
+    # earns revenue from the listing and consumes none of it. Reserved AFTER every refusal
+    # above, so none of them can spend it, and released by
+    # `_start_marketplace_deployment` if the start does not take.
+    allowed, current_usage, limit = await SubscriptionEngine.reserve_quota(
+        user_id, plan_key, Resource.BOTS.value
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "DEPLOYMENT_QUOTA_EXCEEDED",
+                "message": (
+                    f"Quota exceeded for bots: {current_usage}/{limit}. "
+                    f"Upgrade your plan to continue."
+                ),
+            },
+        )
+
     try:
         deploy_resp = (
             svc.table("strategy_deployments").insert(deployment_payload).execute()
@@ -3919,12 +4139,17 @@ async def deploy_marketplace_strategy(
             f"marketplace_listing_id, apply "
             f"backend_app/migrations/011_marketplace_deployment_source.sql): {exc}"
         )
+        # RT-24: the reservation's work never started, so it is released before the
+        # refusal. Without this a failing insert would burn a bot slot per attempt --
+        # `deploy_version` releases at its own equivalent site for the same reason.
+        await _release_deployment_quota(user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create marketplace deployment.",
         )
 
     if not getattr(deploy_resp, "data", None):
+        await _release_deployment_quota(user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Deploy operation returned no data.",
@@ -3932,15 +4157,36 @@ async def deploy_marketplace_strategy(
 
     deployment_id = deploy_resp.data[0]["id"]
 
+    # ── RT-24: START THE BOT. The row exists, so the runtime has an id to key on. ──
+    #
+    # The blueprint is rebuilt here with the real deployment id -- the "pending" build
+    # above proved the inputs are startable, this one is the artifact the runtime gets.
+    started, start_message, recorded_status = await _start_marketplace_deployment(
+        svc,
+        deployment_row={**deployment_payload, "id": deployment_id},
+        user_id=user_id,
+        is_live=is_live_deploy,
+    )
+
     # The response carries the deployment handle, the Listing it came from and how access was
     # granted. It carries no `strategy_id`, no `version_id` and no part of the owner's
     # definition: those are server-side identifiers for an artifact the subscriber executes and
     # may not read (Requirement 7.1).
+    # RT-24: `status` is reported rather than assumed. A deployment that was accepted and
+    # then refused a bot slot is a different outcome from one that is running, and a caller
+    # that cannot tell them apart has to poll to find out whether its strategy trades.
+    # `started_at` is deliberately absent: the row carries it, and restating it here would
+    # be a second place for it to be wrong.
     return {
         "deployment_id": deployment_id,
         "library_id": lib_id,
         "granted_via": entitlement.reason.value,
-        "message": "Marketplace deployment created against the owner's version.",
+        "status": recorded_status,
+        "message": (
+            "Marketplace deployment created and started against the owner's version."
+            if started
+            else f"Marketplace deployment created but not started: {start_message}"
+        ),
     }
 
 @router.post("/subscriptions/{sub_id}/cancel")

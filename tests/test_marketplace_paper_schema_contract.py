@@ -76,15 +76,37 @@ BACKEND_MIGRATIONS_DIR = REPO_ROOT / "backend_app" / "migrations"
 # ══════════════════════════════════════════════════════════════════════════
 
 
-def _strip_sql_comments_and_strings(sql: str) -> str:
-    """Return ``sql`` with ``--`` line comments, ``/* */`` block comments and single-quoted
-    string literals removed.
+#: Matches a dollar-quoted body opener and captures its tag: ``$$``, ``$fn$``, ``$body$``.
+_DOLLAR_QUOTE_OPEN = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
 
-    The destructive-statement scan runs on this so that a header explaining "no ``DROP TABLE``",
-    a verification query embedded in a comment, or a ``DELETE`` mentioned inside an
-    ``EXECUTE format('…')`` payload is not counted as a destructive statement in the DDL itself.
-    String literals are blanked (replaced by ``''``) rather than deleted so that statement
-    boundaries and the surrounding structure are preserved.
+
+def _strip_sql_comments_and_strings(sql: str) -> str:
+    """Return ``sql`` with comments, string literals and dollar-quoted bodies blanked.
+
+    Removes ``--`` line comments, ``/* */`` block comments, single-quoted string literals
+    (honouring the doubled ``''`` escape) and ``$tag$ … $tag$`` dollar-quoted bodies.
+
+    The destructive-statement scan runs on this so that a header explaining "no ``DROP
+    TABLE``", a verification query embedded in a comment, or a ``DELETE`` mentioned inside
+    an ``EXECUTE format('…')`` payload is not counted as a destructive statement in the DDL
+    itself. Contents are BLANKED rather than deleted so that statement boundaries and the
+    surrounding structure are preserved.
+
+    DOLLAR-QUOTED BODIES ARE DELIBERATELY *NOT* TOUCHED HERE, and the reason is worth
+    recording because the opposite was tried first and the suite refused it. This function
+    feeds BOTH the destructive-statement scan and :func:`_build_schema_model`, and many
+    files in the set declare constraints inside an idempotency wrapper:
+
+        DO $$ BEGIN ALTER TABLE … ADD CONSTRAINT chk_ls_split_conserved … END $$;
+
+    Blanking bodies here hid six such constraints from the model and failed
+    ``test_named_constraints_present`` for ``chk_ls_active_has_period``,
+    ``chk_ls_featured_requires_published``, ``chk_ls_price_minor``,
+    ``chk_ls_split_conserved``, ``chk_signals_environment`` and
+    ``fk_signals_paper_session``. The body is where the DDL *is*, not noise around it.
+
+    The destructive scan's own narrowing lives in :func:`_blank_dollar_quoted_bodies`,
+    applied only there.
     """
     out: List[str] = []
     i = 0
@@ -899,6 +921,60 @@ _DESTRUCTIVE = {
     # flagged -- see test_truncate_statement_forms_are_still_flagged.
     "TRUNCATE": re.compile(r"\btruncate\b(?!\s+on\s)", re.IGNORECASE),
 }
+
+
+def _dollar_quoted_bodies(sql: str) -> List[str]:
+    """Every ``$tag$ … $tag$`` body in ``sql``, innermost text only.
+
+    Closed by the IDENTICAL opening tag, which is what lets a body contain a bare ``$`` or
+    a differently-tagged quote without ending early.
+    """
+    bodies: List[str] = []
+    pos = 0
+    while True:
+        opener = _DOLLAR_QUOTE_OPEN.search(sql, pos)
+        if not opener:
+            return bodies
+        tag = opener.group(0)
+        end = sql.find(tag, opener.end())
+        if end == -1:
+            return bodies
+        bodies.append(sql[opener.end() : end])
+        pos = end + len(tag)
+
+
+def _blank_dollar_quoted_bodies(sql: str) -> str:
+    """``sql`` with every dollar-quoted body replaced by a space.
+
+    USED ONLY BY THE DESTRUCTIVE-STATEMENT SCAN, never by the schema-model parser -- see
+    :func:`_strip_sql_comments_and_strings` for what happens when the two share it.
+
+    Requirement 24.7's rule is that APPLYING the migration set must not destroy schema or
+    data. A ``DELETE`` inside a ``CREATE FUNCTION`` body is not executed when the file is
+    applied; it runs if and when something calls the function, which is ordinary runtime
+    behaviour and not the migration's doing. Same reason a ``DELETE`` inside an
+    ``EXECUTE format('…')`` payload is already exempt, stated from the other side.
+
+    ``059_mkt06_creator_payout_atomic.sql`` is the first file in the set to contain one:
+    ``settle_creator_payout`` ends a REJECTION with
+
+        DELETE FROM public.marketplace_creator_payout_claims WHERE payout_id = p_payout_id;
+
+    the inverse of the claim -- it frees the settlements that payout had claimed so the next
+    ``create_creator_payout`` for that owner sums them back in. Removing the statement would
+    leave a rejected payout holding its settlements forever, so the statement is correct and
+    the scan's reading of it was not.
+
+    THIS NARROWS THE SCAN, SO IT IS PAIRED WITH A WIDENING:
+    :func:`test_function_bodies_do_not_drop_or_truncate` scans the bodies this blanks for
+    the statements that have no legitimate runtime use. Net effect: ``DELETE`` is permitted
+    inside a function body and nowhere else, ``DROP``/``TRUNCATE`` in neither.
+    """
+    out = sql
+    for body in _dollar_quoted_bodies(sql):
+        if body:
+            out = out.replace(body, " ", 1)
+    return out
 
 
 def test_truncate_statement_forms_are_still_flagged() -> None:

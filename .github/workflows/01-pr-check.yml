@@ -794,6 +794,7 @@ jobs:
                  tests/test_paper05_apply_fill_atomic_postgres.py \
                  tests/test_paper05_lane_preserves_the_paper_schema_postgres.py \
                  tests/test_ref01_payout_atomic_postgres.py \
+                 tests/test_mkt06_creator_payout_atomic_postgres.py \
                  tests/test_referral_payout_schema_contract_postgres.py \
                  tests/test_sec07_profiles_platform_columns_postgres.py \
                  tests/test_sec09_marketplace_evidence_service_role_only_postgres.py \

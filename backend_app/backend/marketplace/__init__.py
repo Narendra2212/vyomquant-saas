@@ -642,6 +642,16 @@ _DEPLOYMENT_HANDLER = {
                 "initial_capital",
                 "created_at",
                 "updated_at",
+                # RT-24. The handler no longer stops at the insert: it starts the bot and
+                # then records the outcome, so it writes the two columns that say what
+                # happened. `deploy_version` has always written both at its own equivalent
+                # sites; this path simply never reached them, which is the defect RT-24 is.
+                #
+                # `started_at` on a successful start, `error_message` on a refused one. Both
+                # are base columns of the deployment shape, not new schema -- which is why
+                # this entry grows rather than a migration being added.
+                "started_at",
+                "error_message",
             }
         ),
         "strategy_versions": frozenset({"id", "version"}),

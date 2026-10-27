@@ -241,6 +241,117 @@ async def rebuild_for_resume(
     return blueprint, mode != "live"
 
 
+def service_version_loader(client_factory=None):
+    """A ``load_version`` callable backed by the SERVICE-ROLE client.
+
+    Factored out of ``_resume_after_boot``, which had it inline, so that
+    :func:`start_recorded_deployment` uses the identical loader rather than a second copy.
+
+    WHY THIS EXISTS AS ITS OWN SEAM (RT-24). A ``strategy_versions`` row carries
+    ``blueprint`` and ``execution_graph`` -- the two Protected_Logic columns -- and the
+    marketplace deploy route must not read them: a subscriber may EXECUTE an owner's
+    strategy and may not READ it (Requirement 7.1), and
+    ``tests/test_marketplace_deployment_subscriber_safe.py::
+    test_the_owner_version_read_selects_no_protected_logic_column`` asserts that by
+    inspecting every ``strategy_versions`` select the route's own client makes.
+
+    So the logic is loaded HERE, by the runtime, through the runtime's own client -- which
+    is exactly how the resume path has always done it. The route hands over a row; the
+    blueprint never passes through it.
+    """
+    import inspect as _inspect
+
+    if client_factory is None:
+        from backend_app.core.dependencies import get_service_supabase as client_factory
+
+    async def _load_version(version_id):
+        sb = client_factory()
+        q = (
+            sb.table("strategy_versions")
+            .select("*")
+            .eq("id", str(version_id))
+            .limit(1)
+            .execute()
+        )
+        res = await q if _inspect.isawaitable(q) else q
+        rows = getattr(res, "data", None) or []
+        return rows[0] if rows else None
+
+    return _load_version
+
+
+async def start_recorded_deployment(
+    row: Mapping[str, Any], *, allow_live: bool, client_factory=None
+):
+    """RT-24. Start the bot for a deployment row that has already been written.
+
+    ``(started, message)``. Never raises for an expected refusal: an unbuildable blueprint
+    and a refused bot slot both come back as ``(False, reason)`` so the caller can record a
+    terminal status instead of leaving the row at ``deploying`` forever.
+
+    THE GAP THIS CLOSES. ``routers/library.deploy_marketplace_strategy`` ended at its
+    ``strategy_deployments`` insert and returned. It did none of what
+    ``StrategyService.deploy_version`` does afterwards -- no runtime blueprint, no
+    ``fleet.start_bot`` -- so every marketplace deployment, paper since that path was built
+    and live since MKT-05 inherited it, sat at ``status='deploying'`` while nothing
+    evaluated the strategy.
+
+    BUILT ON ``rebuild_for_resume`` RATHER THAN BESIDE IT, deliberately. That function
+    already derives every runtime input from the ROW -- ``version_id``, ``exchange_symbol``
+    (falling back to the plan's resolved market), ``exchange_id``, ``mode``,
+    ``execution_config`` and MKT-05's ``authorized_until`` -- which is precisely the set a
+    marketplace row carries. A second builder would be a second place for the row and the
+    running bot to disagree about which market, which limits and which authorization window
+    apply, and the two would drift the first time either changed.
+
+    ``allow_live`` is passed EXPLICITLY and is not the resume default. ``RESUME_LIVE_DEPLOYMENTS``
+    gates restarting real-money trading *unattended after a crash*, which is a different
+    question from a trader deploying live right now and having just passed the live gate.
+    Conflating them would make a deliberate live deploy depend on an operator flag about
+    crash recovery.
+    """
+    try:
+        blueprint, paper_trading = await rebuild_for_resume(
+            row,
+            load_version=service_version_loader(client_factory),
+            allow_live=allow_live,
+        )
+    except RuntimeBlueprintError as exc:
+        return (False, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[RT-24] blueprint build failed for %s: %s", row.get("id"), exc)
+        return (False, f"Runtime blueprint could not be built: {exc}")
+
+    from backend_app.core.state import app_state
+
+    fleet = getattr(app_state, "fleet", None)
+    if fleet is None:
+        # The same no-op `deploy_version` takes (`hasattr(app_state, 'fleet')`), and what
+        # lets the API run in a process that hosts no bots. Reported rather than swallowed,
+        # so the caller can leave the row at `deploying` instead of calling it failed.
+        logger.warning(
+            "[RT-24] no fleet in this process, so deployment %s was not started",
+            row.get("id"),
+        )
+        return (None, "no fleet in this process")
+
+    try:
+        started, message = await fleet.start_bot(
+            user_id=str(row.get("user_id")),
+            symbol=str(blueprint.get("symbol")),
+            blueprint=blueprint,
+            # Explicit, as the keyword-only parameter requires and as the repo-wide scan in
+            # tests/test_live_deployment_mode_propagation.py enforces. The defect it closes
+            # was BotRunner defaulting to paper so every live deployment ran as paper.
+            paper_trading=paper_trading,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[RT-24] start_bot raised for %s: %s", row.get("id"), exc)
+        return (False, f"Bot start failed: {exc}")
+
+    return (bool(started), str(message))
+
+
 async def resume_running_deployments(fleet, *, client_factory=None) -> Dict[str, int]:
     """Start whatever the database says should be running. Called once per runtime process.
 
