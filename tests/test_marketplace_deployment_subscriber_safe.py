@@ -196,7 +196,7 @@ class FakeAuditLogger:
 
 
 @pytest.fixture(autouse=True)
-def _rate_limiter_off(monkeypatch):
+def _rate_limiter_off(stand_down_rate_limiting):
     """Stand the rate-limit decorator down for the duration of each direct handler call.
 
     ``deploy_marketplace_strategy`` carries ``@limiter.limit("10/60second",
@@ -218,10 +218,19 @@ def _rate_limiter_off(monkeypatch):
 
     ``monkeypatch`` restores the previous value after every test, so this leaks nothing into the
     rest of the suite.
-    """
-    from backend_app.core.rate_limit import limiter
 
-    monkeypatch.setattr(limiter, "enabled", False, raising=False)
+    IT MUST BE THE HANDLER'S OWN LIMITER, NOT THE MODULE'S. This read
+    ``from backend_app.core.rate_limit import limiter`` and disabled that, which is the
+    same object only until some other test file re-imports or reloads
+    ``core.rate_limit`` -- three of them do, and that REBINDS the module attribute to a new
+    ``Limiter`` while this route keeps closing over the original. The stand-down then
+    disabled an object nothing enforces on, and every direct call in
+    ``tests/test_rt24_marketplace_deployment_starts.py`` (which reuses this fixture) died on
+    ``parameter `request` must be an instance of starlette.requests.Request`` -- seven CI
+    failures that could not be reproduced by running the file alone. The seam and the
+    measurement are in ``tests/conftest.py`` beside the matching count-leak guard.
+    """
+    stand_down_rate_limiting(lib.deploy_marketplace_strategy)
 
 
 @pytest.fixture(autouse=True)

@@ -520,17 +520,64 @@ class _FakeAuditLogger:
 
 
 @pytest.fixture(autouse=True)
-def _rate_limiter_off(monkeypatch: pytest.MonkeyPatch) -> None:
+def _rate_limiter_off(stand_down_rate_limiting) -> None:
     """Stand ``slowapi``'s decorator down for a direct handler call - the same reason and the
     same seam ``tests/test_marketplace_deployment_subscriber_safe.py`` uses: the wrapper demands
     a genuine ``starlette.requests.Request`` and would otherwise refuse every call in this
     module, and a shared limiter key would make later cells depend on how many earlier cells ran.
     Coverage of the decorator's presence and limit stays in
     ``tests/test_task_33_2_rate_limit_keys.py``.
-    """
-    from backend_app.core.rate_limit import limiter
 
-    monkeypatch.setattr(limiter, "enabled", False, raising=False)
+    Goes through the shared seam rather than disabling ``core.rate_limit.limiter``, because a
+    re-import elsewhere in the session rebinds that attribute while these handlers keep
+    closing over the original -- see the measurement in ``tests/conftest.py``. Both handlers
+    this module calls are named, so a stand-down that stopped reaching either one fails loudly
+    instead of turning into a wrong answer about entitlement.
+    """
+    stand_down_rate_limiting(lib.deploy_marketplace_strategy, lib.clone_strategy)
+
+
+@pytest.fixture(autouse=True)
+def _quota_and_entitlement_seams(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RT-24 gave ``deploy_marketplace_strategy`` a bot-slot reservation and a live-trading
+    entitlement check, and this module predates both.
+
+    Unstubbed, ``SubscriptionEngine.reserve_quota`` reaches a Redis that is not there and
+    answers ``(False, 0, 0)``, so the one cell that expects an ENTITLING row to be admitted
+    got ``402 DEPLOYMENT_QUOTA_EXCEEDED`` instead -- a refusal about billing dressed as a
+    refusal about entitlement, which is precisely the confusion this matrix exists to rule
+    out. The refused cells stayed green only because they are refused earlier, so the matrix
+    was half-blind rather than obviously broken.
+
+    The same four seams, named the same way, as
+    ``tests/test_marketplace_deployment_subscriber_safe.py::_quota_and_entitlement_seams``
+    and ``tests/test_task_8_2_deployment_binding.py::_no_quota_limits``. Quota and
+    entitlement are asserted on their own by
+    ``tests/test_rt24_marketplace_deployment_starts.py``, so nothing is lost here.
+    """
+    from backend_app.core import subscription_dependencies
+    from backend_app.core.subscription_engine import SubscriptionEngine
+
+    async def _plan(*_a: Any, **_k: Any) -> str:
+        return "pro"
+
+    async def _reserve(*_a: Any, **_k: Any) -> Any:
+        return (True, 1, 10)
+
+    async def _entitled(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    async def _release(*_a: Any, **_k: Any) -> int:
+        return 0
+
+    monkeypatch.setattr(subscription_dependencies, "get_user_plan", _plan, raising=False)
+    monkeypatch.setattr(SubscriptionEngine, "reserve_quota", _reserve, raising=False)
+    monkeypatch.setattr(
+        SubscriptionEngine, "check_feature_entitlement", _entitled, raising=False
+    )
+    monkeypatch.setattr(
+        SubscriptionEngine, "decrement_quota_usage", _release, raising=False
+    )
 
 
 @pytest.fixture(autouse=True)

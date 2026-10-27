@@ -549,6 +549,139 @@ def _rate_limit_counts_are_per_test():
         _reset_bound_rate_limiters()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  STANDING THE RATE LIMITER DOWN FOR A DIRECT HANDLER CALL
+#
+#  THE SAME OBJECT-IDENTITY DEFECT AS THE BANNER ABOVE, in its second form. That
+#  banner fixed the leak of rate-limit COUNTS by resetting every limiter the app
+#  is really enforcing on. The `enabled` flag had the identical problem and was
+#  not fixed, which is a different and louder failure:
+#
+#      Exception: parameter `request` must be an instance of starlette.requests.Request
+#
+#  Several modules call a route's handler as a plain function with a fake request,
+#  which is what makes an injected Supabase double and recorded writes possible.
+#  `slowapi`'s wrapper refuses a non-`Request` before the handler body runs
+#  whenever its limiter is enabled, so each of those modules stands the limiter
+#  down with
+#
+#      from backend_app.core.rate_limit import limiter
+#      monkeypatch.setattr(limiter, "enabled", False)
+#
+#  That disables WHATEVER `core.rate_limit` currently exports. Three test files
+#  (`test_api03_rate_limit_storage_is_fail_closed.py`,
+#  `test_rate_limiter_fails_closed_in_production.py`, `test_rate_limit_backend.py`)
+#  `sys.modules.pop` + re-import or `importlib.reload` that module, which REBINDS
+#  `rate_limit.limiter` to a brand-new `Limiter` while every already-decorated
+#  route keeps closing over the original. From then on the stand-down disables an
+#  object nothing enforces on, and the handler's own limiter is still armed.
+#
+#  MEASURED, not inferred. Before the reload, `deploy_marketplace_strategy`'s
+#  closure holds exactly the module's limiter (same id). After it, the module's id
+#  changes and the closure's does not, so `any(c is rate_limit.limiter for c in
+#  closure)` is False. Running those three files ahead of
+#  `tests/test_rt24_marketplace_deployment_starts.py` reproduces its seven CI
+#  failures locally, with the exact slowapi message above; run alone the file
+#  passes. That is why the failures looked like a CI-only mystery.
+#
+#  So the stand-down must target the limiter the HANDLER captured. Nothing here
+#  weakens rate-limit coverage: the decorators' presence and their exact limits are
+#  asserted from the limiter's own registry by
+#  `tests/test_task_33_2_rate_limit_keys.py`, and enforcement is exercised there
+#  against the real application.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _limiters_in_closure(func, depth=6):
+    """Every ``Limiter`` the decorator chain on ``func`` actually captured.
+
+    ``@limiter.limit(...)`` keeps its limiter in the closure of the wrapper it
+    installs, so this is where the object that can refuse a request lives --
+    reachable from neither the module attribute nor ``app.state`` once a re-import
+    has swapped those. Walks ``__wrapped__`` as well, because the handler may carry
+    other decorators above the rate limiter.
+    """
+    try:
+        from slowapi import Limiter
+    except Exception:  # pragma: no cover - slowapi absent means nothing to stand down
+        return []
+
+    found = []
+    for _ in range(depth):
+        if func is None:
+            break
+        for cell in getattr(func, "__closure__", None) or ():
+            try:
+                value = cell.cell_contents
+            except ValueError:  # an empty cell
+                continue
+            if isinstance(value, Limiter) and not any(value is seen for seen in found):
+                found.append(value)
+        func = getattr(func, "__wrapped__", None)
+    return found
+
+
+@pytest.fixture
+def stand_down_rate_limiting(monkeypatch):
+    """Disable every limiter that could refuse a direct call to ``handlers``.
+
+    Usage, from a module that calls handlers as functions::
+
+        @pytest.fixture(autouse=True)
+        def _rate_limiter_off(stand_down_rate_limiting):
+            stand_down_rate_limiting(lib.deploy_marketplace_strategy)
+
+    Covers three objects deliberately: the limiters in each handler's own closure
+    (the ones that actually enforce), the module's current export, and
+    ``app.state.limiter`` if the app is already imported. The last two are belt and
+    braces for a handler whose closure cannot be walked; the first is the one that
+    fixes the defect described above.
+
+    REFUSES SILENT NO-OPS. If a handler is passed and no limiter is found in its
+    closure, this raises. A stand-down that quietly found nothing is how the
+    original defect survived: the fixture ran, reported nothing, and the test
+    failed somewhere else entirely.
+
+    ``monkeypatch`` restores every flag afterwards, so nothing leaks into the rest
+    of the session.
+    """
+
+    def _apply(*handlers):
+        import sys
+
+        targets = []
+        for handler in handlers:
+            captured = _limiters_in_closure(handler)
+            if not captured:
+                raise AssertionError(
+                    f"no slowapi Limiter found in the closure of "
+                    f"{getattr(handler, '__name__', handler)!r}. Either it no longer "
+                    f"carries @limiter.limit(...) -- in which case this stand-down is "
+                    f"dead code and should go -- or the decorator chain is deeper than "
+                    f"this walk. Do not ignore it: a stand-down that finds nothing "
+                    f"leaves the handler refusing every fake request."
+                )
+            for limiter in captured:
+                if not any(limiter is seen for seen in targets):
+                    targets.append(limiter)
+
+        rate_limit_module = sys.modules.get("backend_app.core.rate_limit")
+        main_module = sys.modules.get("backend_app.main")
+        app = getattr(main_module, "app", None) if main_module is not None else None
+        for candidate in (
+            getattr(rate_limit_module, "limiter", None),
+            getattr(getattr(app, "state", None), "limiter", None),
+        ):
+            if candidate is not None and not any(candidate is seen for seen in targets):
+                targets.append(candidate)
+
+        for limiter in targets:
+            monkeypatch.setattr(limiter, "enabled", False, raising=False)
+        return targets
+
+    return _apply
+
+
 
 # ── RT-15 helper ──────────────────────────────────────────────────────────────────────
 # The live-execution gate now also requires the PLATFORM to be in live mode (mode=live,
