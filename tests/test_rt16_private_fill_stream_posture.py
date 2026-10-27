@@ -9,19 +9,41 @@ prose only. Nothing asserted it, so any one of the three links could be wired --
 them quietly broken further -- without a test noticing, and a reader could reasonably
 conclude from `EventRouter`'s existence that fills are streamed.
 
-THE CHAIN, AND ALL THREE LINKS ARE OPEN
----------------------------------------
+THE CHAIN, AND WHERE IT IS NOW STARTED
+--------------------------------------
     1. ExchangeWebSocketListener._listen_for_orders   watch_orders() -> _handle_order_update
-       `start()` / `start_listening()` have no caller.
     2. EventListener._on_exchange_event               enqueue -> _event_processing_loop
-       `start(event_router)` -- the only thing that sets `_event_router` AND drains the
-       queue -- has no caller.
+       `start(event_router)` is the only thing that sets `_event_router` AND drains the
+       queue.
     3. EventRouter.route_event                        -> _handle_filled -> the DB
-       `EventRouter` / `get_event_router` have no caller; main.py never imports either.
 
-So even starting link 1 today would deliver nothing: events would be built, handed to a
-listener with no router, and -- before this change -- queued into a PriorityQueue nothing
-drains.
+**ALL THREE NOW HAVE EXACTLY ONE CALLER: `backend_app/workers/exchange_fill_worker.py`.**
+When this file was written they had none, and the assertions below were about an absence.
+They are now about a LOCATION, which is the property that actually has to hold: the links
+must be started in the single-leader worker and **nowhere else**.
+
+WHY THE WEB-PROCESS ASSERTIONS SURVIVED THE WIRING UNCHANGED
+------------------------------------------------------------
+`gunicorn` runs `--workers ${WORKERS:-2}` and every worker process runs the FastAPI
+lifespan hook independently. A stream started there would be opened once per worker: two
+authenticated private sockets per (tenant, venue), two copies of every fill, and two
+writers racing on one execution row. So "not in the web process" was never a statement
+about the chain being unfinished -- it is a statement about where the chain belongs, and it
+is still true and still worth pinning.
+
+The worker side is tested separately, in `test_rt16_fill_worker_hosts_the_chain.py`:
+start order, the leader lease, which deployments get a socket, and teardown on demotion.
+
+WHAT STARTING THE CHAIN REQUIRED FIRST, and it was not in RT-16's entry
+-----------------------------------------------------------------------
+`EventRouter._handle_filled` -- the far end -- read
+`data.get('filled_size', data.get('z', 0))`, while the feeder publishes the
+**ccxt-normalised** order dict whose cumulative-fill key is `filled`. So every ccxt-sourced
+fill resolved to `0`, and the handler wrote that zero over a real recorded fill, zeroed the
+price, and set `status = COMPLETED` -- which is terminal, dropping the row out of every
+watchdog and reconciliation population. Wiring the feeder before fixing that would have
+turned a known absence into silent data loss. Fixed and pinned in
+`test_rt16_fill_evidence_is_recorded_not_adjudicated.py`.
 
 TWO REAL DEFECTS FOUND WHILE ESTABLISHING THAT, AND FIXED HERE
 --------------------------------------------------------------
@@ -42,9 +64,9 @@ TWO REAL DEFECTS FOUND WHILE ESTABLISHING THAT, AND FIXED HERE
 WHAT THIS FILE DOES NOT CLAIM
 -----------------------------
 Nothing here certifies venue reconciliation. No exchange is contacted; every test uses
-fakes or reads source. RT-16 stays open: certification needs a live venue, credentials
-(VAULT-01 records every stored ciphertext as currently undecryptable) and a host for a
-per-(tenant, exchange) consumer fleet (INF-03). Live trading stays OFF.
+fakes or reads source. A started chain is not a proven one: that needs a venue round trip
+with a real credential. Live trading stays OFF -- this stream observes fills, and
+`OrderWatchdog` remains the only owner of adjudication.
 """
 from __future__ import annotations
 
@@ -95,28 +117,36 @@ def _main_code_only() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  1. The chain is open, link by link
+#  1. The chain is started in exactly one place, link by link
 # ══════════════════════════════════════════════════════════════════════════════
+
+FILL_WORKER_SRC = REPO / "backend_app" / "workers" / "exchange_fill_worker.py"
+
+
+def _fill_worker_code_only() -> str:
+    return _code_only(FILL_WORKER_SRC.read_text(encoding="utf-8"))
 
 
 def test_link_1_the_websocket_listener_is_not_started_in_the_web_process():
     code = _main_code_only()
     for marker in ("ExchangeWebSocketListener", "start_listening"):
         assert marker not in code, (
-            f"{marker} now appears in backend_app/main.py. Starting the venue order "
-            f"stream needs credentials per (tenant, exchange) (VAULT-01), a host that "
-            f"is not the web process (INF-03, PAPER-04), and leader election -- "
-            f"gunicorn runs --workers ${{WORKERS:-2}}, so two workers would each open a "
-            f"private stream for every pair. If that decision has been taken, update "
-            f"this test and record the reasoning in RT-16."
+            f"{marker} now appears in backend_app/main.py. The venue order stream must "
+            f"run in the single-leader worker "
+            f"(backend_app/workers/exchange_fill_worker.py) and NOT here: gunicorn runs "
+            f"--workers ${{WORKERS:-2}} and every worker runs the lifespan hook, so this "
+            f"would open two authenticated private sockets per (tenant, venue) and give "
+            f"every fill two writers racing on one execution row."
         )
 
 
 def test_link_2_the_event_listener_is_not_started_in_the_web_process():
     code = _main_code_only()
     assert "EventListener" not in code, (
-        "EventListener now appears in backend_app/main.py. It is only useful with a "
-        "router: start(event_router) is what sets _event_router and drains the queue."
+        "EventListener now appears in backend_app/main.py. It belongs to the fill "
+        "worker, which starts it WITH a router -- start(event_router) is what sets "
+        "_event_router and drains the queue, and a per-web-worker copy would double "
+        "every event."
     )
 
 
@@ -125,11 +155,11 @@ def test_link_3_the_event_router_is_not_constructed_in_the_web_process():
     for marker in ("EventRouter", "get_event_router", "route_event"):
         assert marker not in code, (
             f"{marker} now appears in backend_app/main.py. EventRouter is the link that "
-            f"actually writes a fill to the ledger, and "
+            f"writes a fill to the ledger, and "
             f"backend_app/core/models/execution_record.py records that 'OrderWatchdog is "
             f"the only owner of adjudication, and introducing a second one would be "
-            f"worse than the defect' -- so wiring this is an architecture decision, not "
-            f"a wiring fix."
+            f"worse than the defect'. It runs in the fill worker, once, behind a leader "
+            f"lease."
         )
 
 
@@ -146,6 +176,84 @@ def test_the_three_links_are_pinned_separately_and_not_as_one():
         if name.startswith("test_link_") and callable(obj)
     }
     assert len(names) == 3, f"expected one test per link, found {sorted(names)}"
+
+
+# ── and the positive half: the links DO have a home, and it is that one ──────────
+
+
+def test_all_three_links_are_started_by_the_fill_worker():
+    """The assertion that replaced "nothing starts them".
+
+    Without this, the three tests above would still pass with the chain deleted
+    outright -- "not in main.py" is satisfied by "nowhere at all", which is the state
+    RT-16 recorded and which this is meant to have moved past.
+    """
+    code = _fill_worker_code_only()
+
+    assert "get_exchange_websocket_listener" in code, "link 1 has no caller again"
+    assert "start_listening" in code, "link 1 is resolved but no pair is ever streamed"
+    assert "get_event_listener" in code, "link 2 has no caller again"
+    assert "get_event_router" in code, "link 3 has no caller again"
+
+
+def test_the_worker_starts_the_drain_before_the_feeder():
+    """Order, read off the source.
+
+    Reversed, every fill published between the feeder starting and the router arriving is
+    refused by EventListener's guard and logged as an error -- safe, because the guard
+    exists, but it loses the first fills of every deployment for no reason.
+
+    The behavioural version of this is
+    test_rt16_fill_worker_hosts_the_chain.py::test_the_chain_starts_router_then_drain_then_feeder;
+    this one is the cheap structural guard that survives refactors of the test doubles.
+    """
+    from backend_app.workers.exchange_fill_worker import ExchangeFillWorker
+
+    source = _code_only(inspect.getsource(ExchangeFillWorker._ensure_chain_started))
+    bus_start = source.index("_event_bus.start")
+    feeder_start = source.index("_listener.start()")
+    assert bus_start < feeder_start, (
+        "the fill worker starts the feeder before the event drain"
+    )
+
+
+def test_the_chain_is_not_started_anywhere_else():
+    """Exactly ONE home. Two would each stream every pair.
+
+    Scoped to the modules that could plausibly host a background loop. The fill worker
+    itself and this test file are excluded for obvious reasons; `event_listener` and
+    `exchange_websocket_listener` are excluded because they DEFINE the things being
+    looked for.
+    """
+    searched = {
+        "backend_app/main.py",
+        "backend_app/workers/command_worker.py",
+        "backend_app/workers/marketplace_expiry_worker.py",
+        "backend_app/backend/dag_worker.py",
+        "backend_app/worker.py",
+        "backend_app/mds/main.py",
+        "backend_app/backend/master_executor.py",
+        "backend_app/backend/fleet_manager.py",
+    }
+    offenders = {}
+    for rel in sorted(searched):
+        path = REPO / rel
+        if not path.exists():
+            continue
+        code = _code_only(path.read_text(encoding="utf-8"))
+        hits = [
+            marker for marker in
+            ("get_exchange_websocket_listener", "get_event_listener", "get_event_router")
+            if marker in code
+        ]
+        if hits:
+            offenders[rel] = hits
+
+    assert not offenders, (
+        f"the fill chain is started outside backend_app/workers/exchange_fill_worker.py: "
+        f"{offenders}. Two hosts means two authenticated sockets per (tenant, venue) and "
+        f"two writers for every fill."
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
