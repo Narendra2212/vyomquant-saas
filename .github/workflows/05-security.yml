@@ -365,3 +365,109 @@ jobs:
         run: |
           cd algo22-terminal
           npm audit --audit-level=high --omit=dev
+
+  # ─────────────────────────────────────────────────────────────────────────────────────
+  #  DEP-03: the Tauri desktop app's Rust dependency tree, held by a BLOCKING gate.
+  #
+  #  THE FINDING'S PREMISE WAS WRONG, AND THE REAL GAP IS NARROWER. DEP-03 says "there is
+  #  no cargo-audit step anywhere in CI". There is one -- `04-nightly-audit.yml` has run
+  #  `cargo audit` since that workflow was written. The finding's own evidence explains the
+  #  miss: it read "every job in 05-security.yml and 01-pr-check.yml" and never opened
+  #  `04-nightly-audit.yml`.
+  #
+  #  Its SUBSTANCE still held, for two reasons it did not name:
+  #
+  #    1. That workflow triggers on `schedule` (02:00 UTC) and `workflow_dispatch` ONLY.
+  #       No `push`, no `pull_request`. So it cannot fail a pull request, which is the only
+  #       moment a gate changes an outcome.
+  #    2. The step carries `continue-on-error: true`, so it cannot fail the nightly run
+  #       either. Its output goes to `reports/cargo_audit.json` and is uploaded as an
+  #       artifact -- advisory, and read only if someone goes looking.
+  #
+  #  Which made it exactly what the finding said Dependabot was: reporting, not gating. An
+  #  entire language ecosystem in this repository had no blocking vulnerability gate, so a
+  #  future CRITICAL there would also have been reported by nothing that fails a build.
+  #
+  #  THE NIGHTLY STEP IS LEFT ALONE, deliberately. It produces the JSON
+  #  `scripts/generate_reports.py` consumes, and a reporting run that tolerates a scanner
+  #  outage is the right shape for a report. This job is the gate; that one is the record.
+  #
+  #  NO SUPPRESSIONS, same policy the pip-audit gate above arrived at: "an empty ignore
+  #  list is the point: a new advisory now fails this job outright instead of landing in a
+  #  list that nobody re-reads." DEP-03 expected an ignore list for the four advisories
+  #  Dependabot reports against this lockfile (tauri 2.10.3, glib 0.18.5, serde_with
+  #  3.18.0, rand 0.8.5) and asked that whoever adds the step "confirm the step actually
+  #  reports the four known advisories before adding the ignore list, so the list is proven
+  #  to be doing something". That is the right instruction and it is why this lands with
+  #  none: the list is added from THIS JOB'S OWN OUTPUT or not at all. A guessed RUSTSEC id
+  #  is a suppression that silences nothing and hides the next real advisory.
+  #
+  #  `Cargo.lock` IS NOT TOUCHED BY THIS CHANGE. Resolving these advisories means moving
+  #  the lockfile, and nothing available to the author could compile the result -- a
+  #  developer machine without the MSVC toolchain fails with `error: linker 'link.exe' not
+  #  found`, which `07-desktop-build.yml`'s own header documents. Shipping an unverifiable
+  #  lockfile bump to a desktop application to quiet a MODERATE advisory is the trade this
+  #  job exists to make visible, not to make silently.
+  # ─────────────────────────────────────────────────────────────────────────────────────
+  rust-dependency-audit:
+    name: Blocking Rust Dependency Vulnerability Audit (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # `dtolnay/rust-toolchain@stable` rather than a new third-party action:
+      # `07-desktop-build.yml` already uses exactly this, so this job introduces no
+      # supply-chain surface that the repository has not already accepted.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Keyed on the `cargo-audit` binary rather than on `Cargo.lock`: what is cached is
+      # the compiled scanner, which depends on the toolchain and nothing in this repo.
+      # Without it every run rebuilds cargo-audit from source, which is minutes of a job
+      # whose actual work is reading one lockfile.
+      - name: Cache the cargo-audit binary
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-audit-bin-v1
+
+      - name: Install cargo-audit
+        run: |
+          if command -v cargo-audit >/dev/null 2>&1; then
+            echo "cargo-audit already present (cache hit): $(cargo audit --version)"
+          else
+            cargo install cargo-audit --locked
+          fi
+
+      # BLOCKING. No `continue-on-error`, which is the entire difference between this job
+      # and the nightly one. `cargo audit` exits non-zero when it finds an advisory
+      # affecting the lockfile, so the job's exit status IS the gate.
+      #
+      # `--deny warnings` additionally fails on an unmaintained or yanked crate, not only
+      # on a vulnerability. That is the same posture `npm audit --audit-level=high` takes
+      # above for the frontend: an unmaintained crate in a desktop binary is a dependency
+      # that will never be patched, which is a security property and not a style one.
+      - name: Run cargo audit (blocking, no suppressions)
+        working-directory: algo22-terminal/src-tauri
+        run: cargo audit --deny warnings
+
+      # Runs even when the gate above fails, because the failure is the interesting case:
+      # the advisory ids and the dependency paths are what a reviewer needs to decide
+      # between a lockfile bump and a reasoned ignore, and they must not require re-running
+      # the job to read.
+      - name: Attach the advisory report
+        if: always()
+        working-directory: algo22-terminal/src-tauri
+        run: cargo audit --json > cargo_audit_report.json || true
+
+      - name: Upload the advisory report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cargo-audit-report
+          path: algo22-terminal/src-tauri/cargo_audit_report.json
+          if-no-files-found: warn
