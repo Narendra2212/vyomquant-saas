@@ -168,6 +168,40 @@ CHECK_OVERRIDES = {
         "documents": ["terms_of_service"],
         "declared_country": "IN",
     },
+    # MKT-06 migration 059. The third time this exact gap has appeared -- see the
+    # `referral_obligations` and `legal_acceptances` comments above -- and the reason the
+    # NOT-PROVEN assertion is worth keeping: the table landed with the migration and
+    # without its seed override, so the sweep could not insert a row and cross-tenant
+    # isolation went unmeasured for the table that records MONEY OWED TO CREATORS.
+    #
+    # Its four CHECKs, read from the migration rather than guessed:
+    #   chk_creator_payout_amount_positive  amount_minor > 0
+    #   chk_creator_payout_currency         currency IN ('USD', 'INR')
+    #   chk_creator_payout_status           status IN ('pending','completed','rejected')
+    #   chk_creator_payout_period           period_end >= period_start
+    #
+    # `amount_minor` needs no entry: the synthesised numeric 1 already satisfies `> 0`.
+    # `status` has a DEFAULT of 'pending' and still needs one, for the same reason
+    # `legal_acceptances.context` does -- the sweep synthesises a value for every column
+    # rather than omitting it and letting the default apply.
+    #
+    # The two period columns are pinned to the SAME instant rather than to a range. The
+    # CHECK is `>=`, so equality satisfies it, and pinning both removes any dependence on
+    # what order the synthesiser happens to produce two timestamps in -- a range that
+    # passed only because `period_start` was generated first would be a test that works by
+    # luck.
+    "marketplace_creator_payouts": {
+        "currency": "USD",
+        "status": "pending",
+        "period_start": "2026-01-01T00:00:00+00:00",
+        "period_end": "2026-01-01T00:00:00+00:00",
+    },
+    # `marketplace_creator_payout_claims` needs no entry of its own. Its only non-trivial
+    # constraint is the UNIQUE `uq_creator_payout_claim_settlement`, which one synthesised
+    # row cannot violate. It appeared in the same failure only because the foreign-key walk
+    # seeds its `marketplace_creator_payouts` parent, and that insert was the one being
+    # refused -- both tables reported the parent's `chk_creator_payout_currency` by name.
+    # `marketplace_creator_payout_sweeps` has no CHECK at all and already seeded.
 }
 
 #: Tables whose rows are created for a profile by a trigger, so an explicit insert hits
