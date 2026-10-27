@@ -34,8 +34,12 @@ while settlement is absent:
      values the API response model advertises).
   2. A terminal, money-sent state cannot be asserted with no evidence.
 
-(2) has one open gap, carried here as a strict xfail against migration 032 rather than
-silently omitted. See that test's own docstring.
+(2) was originally carried as a strict xfail against migration 032, on the premise that the
+file was "prepared but not applied". It is now asserted outright: the premise was false --
+`backend_app/migrations/` is applied WHOLESALE by `scripts/provision_database.py`, so the
+constraint has always been present in any database provisioned from repository source, and
+production was measured to carry it too. The xfail was removed when the XPASS failed a
+strict-mode run (de87b620); the file's contradictory header was corrected under DB-05.
 
 No payment provider is contacted and no transfer is initiated by any test in this file.
 Gated on AERORA_TEST_DATABASE_URL.
@@ -341,14 +345,17 @@ def test_a_payout_cannot_be_completed_without_a_processed_at(payout):
     and no provider reference -- on a table with no audit trail -- SHOULD red this suite
     rather than quietly record the defect as expected.
 
-    Note the migration file still declares itself NOT APPLIED in its own header. That
-    declaration concerns the shared-table approval process for the PRODUCTION database,
-    which this test cannot observe and does not assert anything about; it is tracked
-    separately in the remediation ledger. Correcting that header is not done here because
-    editing the file changes its checksum, which
-    staging/provisioning_snapshot.json records and scripts/verify_schema_drift.py
-    enforces -- and that baseline can only be regenerated against a real PostgreSQL
-    server.
+    THE HEADER HAS SINCE BEEN CORRECTED (DB-05). This docstring used to end by noting that
+    032 still declared itself NOT APPLIED, and that fixing it was blocked because the edit
+    changes a checksum that staging/provisioning_snapshot.json records and
+    scripts/verify_schema_drift.py enforces, with a baseline only regenerable against a
+    real PostgreSQL server. Both halves of that turned out to be wrong when checked:
+    `recorded_migrations` is in the drift gate's own ADVISORY_DIMENSIONS, so a changed
+    checksum is a WARNING and does not fail the run; and production has no
+    `public.schema_migrations` table at all, so the provisioner's exit-4 "applied
+    previously with a different checksum" refusal could not fire there either. The header
+    now says what production says, and the baseline entry was recomputed rather than
+    re-measured, because `sha256(file text)` is a pure function of the bytes.
     """
     cur = payout["cur"]
     with pytest.raises(psycopg2.errors.CheckViolation):
@@ -358,19 +365,74 @@ def test_a_payout_cannot_be_completed_without_a_processed_at(payout):
         )
 
 
-def test_the_proposed_migration_exists_and_is_not_silently_applied():
-    """The prepared-but-unapplied migration must be on disk and must say so.
+def test_migration_032_is_present_in_the_live_schema(conn):
+    """DB-05. The constraint is IN THE DATABASE, which is the only thing worth asserting.
 
-    Stops the gap above from being carried by a comment alone.
+    THIS TEST USED TO ASSERT THE OPPOSITE, FROM FILE TEXT.
+    It read 032's header and required the string ``"NOT APPLIED"`` to still be in it, on
+    the premise that the file was prepared but unexecuted. Meanwhile
+    ``test_a_payout_cannot_be_completed_without_a_processed_at``, in this same file,
+    required the constraint to EXIST. Both passed, because they measured different things:
+    one read bytes on disk, the other read the live catalogue. The repository therefore
+    carried two tests that contradicted each other, and neither could fail to reveal it.
+
+    The premise was false. ``backend_app/migrations/`` is applied WHOLESALE by
+    ``scripts/provision_database.py`` -- the directory is the unit, not the file -- so
+    every database provisioned from repository source has always had this constraint, and
+    production was measured (``pg_constraint``, 2026-10-24) to have it too.
+
+    So the assertion now looks where the answer is. The file's own self-description is
+    checked too, but second, and only for the one property text CAN establish: that it no
+    longer claims to be unapplied.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "select pg_get_constraintdef(con.oid) "
+        "from pg_constraint con "
+        "join pg_class rel on rel.oid = con.conrelid "
+        "join pg_namespace ns on ns.oid = rel.relnamespace "
+        "where ns.nspname = 'public' "
+        "  and rel.relname = 'referral_payouts' "
+        "  and con.conname = 'chk_referral_payouts_terminal_evidence'"
+    )
+    row = cur.fetchone()
+    assert row is not None, (
+        "chk_referral_payouts_terminal_evidence is absent, so a payout can be marked "
+        "'completed' with no processed_at -- a false paid status with nothing to show for "
+        "it, on a table with no audit trail. Migration 032 adds it and "
+        "backend_app/migrations/ is applied as a directory, so its absence means "
+        "provisioning did not run or 032 was removed."
+    )
+    definition = row[0]
+    assert "processed_at" in definition and "completed" in definition, (
+        f"the constraint exists but no longer relates 'completed' to processed_at: "
+        f"{definition}"
+    )
+
+
+def test_migration_032_no_longer_declares_itself_unapplied():
+    """The file must not contradict the database it has already changed.
+
+    Deliberately NOT asserted as ``"NOT APPLIED" not in text``. The corrected header
+    QUOTES the superseded banner verbatim -- that is what makes the correction legible to
+    someone who finds this file after reading the old one -- so a bare substring check
+    would fail on the quotation and teach the next person to delete the history instead of
+    recording it. Matching raw strings is how the contradiction above survived in the first
+    place; this asserts the two markers that only a corrected file carries.
     """
     sql = (REPO / "backend_app" / "migrations"
            / "032_referral_payouts_terminal_evidence.sql")
-    assert sql.exists(), "the proposed migration 032 is missing"
+    assert sql.exists(), "migration 032 is missing"
     text = sql.read_text(encoding="utf-8")
+
     assert "chk_referral_payouts_terminal_evidence" in text
-    assert "NOT APPLIED" in text, (
-        "032 no longer declares that it is unapplied; if it has been approved and run, "
-        "remove the xfail marker above as well"
+    assert "CORRECTION, measured against real production" in text, (
+        "032's correction block is gone. If the header was reverted to "
+        "'NOT APPLIED. PREPARED FOR THE MIGRATION OWNER'S APPROVAL', note that the claim "
+        "is false for every database provisioned from this repository -- see DB-05."
+    )
+    assert "APPLIED. Present in production" in text, (
+        "032 no longer states that it is applied"
     )
 
 
