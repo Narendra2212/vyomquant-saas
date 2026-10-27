@@ -24,7 +24,7 @@ THE SECOND FIX (real enforcement for two of the five)
     called from ``BotRunner._inner_loop`` with the execution_config threaded through
     ``deployment_runtime.build_runtime_blueprint``. They are therefore REMOVED from the
     refusal and move to :data:`db.ENFORCED_EXECUTION_CONFIG_FIELDS`.
-    ``slippage_tolerance_bps``, ``order_timeout_seconds`` and ``retry_policy`` still name no
+    ``slippage_tolerance_bps`` and ``retry_policy`` still name no
     reader on this platform's order path and stay refused
     (:data:`db.UNENFORCED_EXECUTION_CONFIG_FIELDS`). An absent or ``None`` field, or an empty
     ``execution_config`` document, is unaffected by either fix.
@@ -53,7 +53,6 @@ class TestNormaliseExecutionConfigRefusesEveryStillUnenforcedFieldWithARealValue
         "field,value",
         [
             ("slippage_tolerance_bps", 25),
-            ("order_timeout_seconds", 30),
             ("retry_policy", {"attempts": 3}),
         ],
     )
@@ -67,10 +66,9 @@ class TestNormaliseExecutionConfigRefusesEveryStillUnenforcedFieldWithARealValue
         assert exc.value.details["not_enforced_fields"] == [field]
         assert exc.value.http_status == 422
 
-    def test_all_three_together_are_named_in_one_refusal(self) -> None:
+    def test_both_remaining_together_are_named_in_one_refusal(self) -> None:
         payload = {
             "slippage_tolerance_bps": 25,
-            "order_timeout_seconds": 30,
             "retry_policy": {"attempts": 3},
         }
         assert set(payload) == set(db.UNENFORCED_EXECUTION_CONFIG_FIELDS)
@@ -106,10 +104,22 @@ class TestMaxOrderNotionalAndMaxOpenPositionsAreNowAccepted:
             "max_open_positions": 3
         }
 
-    def test_both_enforced_fields_are_in_the_published_enforced_set(self) -> None:
+    def test_order_timeout_seconds_with_a_real_value_is_accepted_not_refused(self) -> None:
+        """The third field to move from refused to enforced.
+
+        ``exchange_executor.place_order`` now takes a ``timeout_seconds`` and wraps the
+        ccxt ``create_order`` await in ``asyncio.wait_for``; the deployment's value reaches
+        it through ``ExecutionEngine.execute_with_idempotency``.
+        """
+        assert db.normalise_execution_config({"order_timeout_seconds": 30}) == {
+            "order_timeout_seconds": 30
+        }
+
+    def test_the_enforced_fields_are_in_the_published_enforced_set(self) -> None:
         assert set(db.ENFORCED_EXECUTION_CONFIG_FIELDS) == {
             "max_order_notional",
             "max_open_positions",
+            "order_timeout_seconds",
         }
         assert (
             set(db.ENFORCED_EXECUTION_CONFIG_FIELDS)

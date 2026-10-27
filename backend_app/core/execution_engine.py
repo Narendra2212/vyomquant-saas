@@ -378,6 +378,13 @@ class ExecutionEngine:
         self._live_tenant_id: Optional[str] = None
         self._live_strategy_id: Optional[str] = None
 
+        # DEPLOY-01. The deployment's own `order_timeout_seconds`, carried the same way
+        # and for the same reason as the four above: it is a PER-ORDER fact, and
+        # `_execute_trade_internal` takes no parameter for it. `None` means "no timeout",
+        # which is what every caller got before this existed, so a deployment that sets
+        # nothing is unaffected.
+        self._order_timeout_seconds: Optional[float] = None
+
     # ----------------------------------
     # ACCOUNTING  (BUG-016)
     # ----------------------------------
@@ -669,6 +676,7 @@ class ExecutionEngine:
         execution_environment: Any = ExecutionEnvironment.LIVE,
         risk_approved: Optional[bool] = None,
         risk_reason: str = "",
+        order_timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Execute trade with idempotency check - PREVENTS DUPLICATE EXECUTIONS.
@@ -1117,6 +1125,7 @@ class ExecutionEngine:
             self._live_risk_reason = risk_reason
             self._live_tenant_id = str(tenant_id)
             self._live_strategy_id = str(strategy_id)
+            self._order_timeout_seconds = order_timeout_seconds
             try:
                 success, trade_result = await self._execute_trade_internal(
                     symbol=symbol,
@@ -1743,12 +1752,33 @@ class ExecutionEngine:
                 c_order_type = CoreOrderType.market if price <= Decimal("0") else CoreOrderType.limit
                 c_side = OrderSide.buy if side.lower() == "buy" else OrderSide.sell
                 # Call exchange_executor.place_order (which is async)
+                # DEPLOY-01: the deployment's own order_timeout_seconds, passed ONLY when
+                # the deployment actually set one.
+                #
+                # NOT `timeout_seconds=self._order_timeout_seconds` unconditionally, and
+                # the difference is not cosmetic. `exchange_executor` is not the only
+                # implementation of this interface -- the suite drives this path through
+                # several executor doubles, and an unconditional new keyword makes every
+                # one of them raise TypeError. Worse, it raises it AFTER
+                # `mark_submitted`, so RT-17 classifies it as an ambiguous outcome and the
+                # order is recorded "submission unknown": a config field nobody set would
+                # have turned working executions into unknown ones. Measured, not
+                # imagined -- 7 tests failed exactly that way with the unconditional form,
+                # logging "executor raised TypeError after the venue call became possible".
+                #
+                # This keeps the promise the rest of this change makes: a deployment that
+                # never set the field produces the identical call it always did.
+                _order_kwargs = {}
+                if self._order_timeout_seconds is not None:
+                    _order_kwargs["timeout_seconds"] = self._order_timeout_seconds
+
                 result = await self.exchange_executor.place_order(
                     symbol=symbol.replace('-', '/'), # Standardize symbol for CCXT
                     side=c_side,
                     order_type=c_order_type,
                     size=size,
-                    price=price if price > 0 else None
+                    price=price if price > 0 else None,
+                    **_order_kwargs,
                 )
                 # Extract actual exchange fee from CCXT response if available.
                 # BUG-FIX MC-08: also capture fee_currency denomination so callers

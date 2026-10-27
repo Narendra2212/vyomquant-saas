@@ -1168,6 +1168,13 @@ class BotRunner:
                         # the non-approved branch `continue`s above -- so passing the
                         # comparison rather than a literal `True` keeps the evidence tied
                         # to the actual evaluation.
+                        # DEPLOY-01: the deployment's own order_timeout_seconds, from the
+                        # same `execution_config` the notional and position caps are read
+                        # from a few lines above. `None` for a deployment that never set
+                        # it, which is the no-timeout behaviour this call always had.
+                        order_timeout_seconds=self.execution_config.get(
+                            "order_timeout_seconds"
+                        ),
                         risk_approved=(verdict == RiskVerdict.APPROVED),
                         risk_reason=str(reason or "risk approved"),
                     )
@@ -1528,6 +1535,11 @@ class BotRunner:
                 execution_environment=(
                     ExecutionEnvironment.PAPER if self.paper_trading else ExecutionEnvironment.LIVE
                 ),
+                # DEPLOY-01: applied to the RT-21 close path too. A close is the order
+                # that most needs a bounded wait -- it is how a deployment stops being
+                # exposed -- so leaving it unbounded while bounding the open would be
+                # backwards.
+                order_timeout_seconds=self.execution_config.get("order_timeout_seconds"),
                 risk_approved=True,
                 risk_reason=(
                     "RT-21 close: selling exactly the recorded long exposure; "

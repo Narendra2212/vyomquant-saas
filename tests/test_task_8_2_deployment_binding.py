@@ -707,14 +707,22 @@ class TestExecutionConfig:
         strategy_deployments row. Two of them (max_order_notional, max_open_positions) are
         now genuinely consulted at order-construction time
         (master_executor.evaluate_deployment_execution_limits, threaded in via
-        deployment_runtime.build_runtime_blueprint) and so are no longer refused here. The
-        remaining three name no reader on this platform's order path and are refused rather
-        than silently stored, the same choice strategy_service.assert_deploy_params_applicable
-        already makes for capital/trade_size_pct/stop_loss_pct/max_drawdown_pct.
+        deployment_runtime.build_runtime_blueprint) and so are no longer refused here.
+        ``order_timeout_seconds`` joined them: ``place_order`` wraps its ccxt call in
+        ``asyncio.wait_for`` and ``execute_with_idempotency`` carries the deployment's value
+        down to it.
+
+        The remaining TWO are refused rather than silently stored, and
+        ``deployment_binding``'s own constant carries the measured reason for each --
+        ``retry_policy`` would contradict RT-17's implemented anti-resubmit control (and the
+        idempotency hash folds in PRICE, so a re-quoted retry is not recognised as the same
+        order), and ``slippage_tolerance_bps`` has nothing to compare synchronously because
+        the live result substitutes the REQUESTED price when nothing filled. Same choice
+        strategy_service.assert_deploy_params_applicable already makes for
+        capital/trade_size_pct/stop_loss_pct/max_drawdown_pct.
         """
         payload = {
             "slippage_tolerance_bps": 15,
-            "order_timeout_seconds": 30,
             "retry_policy": {"attempts": 3},
         }
         assert set(payload) == set(db.UNENFORCED_EXECUTION_CONFIG_FIELDS)
