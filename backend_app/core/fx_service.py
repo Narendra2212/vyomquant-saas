@@ -71,16 +71,29 @@ CURRENCY_NAMES: Dict[str, str] = {
     "IDR": "Indonesian Rupiah", "PKR": "Pakistani Rupee", "EGP": "Egyptian Pound",
 }
 
-# Supported Direct Checkout Gateways per Currency
-STRIPE_SUPPORTED_CHECKOUT_CURRENCIES = {
-    "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "SGD", "CHF", "NZD",
-    "BRL", "MXN", "ZAR", "HKD", "SEK", "NOK", "DKK", "PLN", "CZK",
-    "TRY", "AED", "MYR", "THB", "PHP", "ILS", "KRW",
-}
-
+# Supported Direct Checkout Currencies, per gateway. Razorpay is the only gateway.
+#
+# STRIPE_SUPPORTED_CHECKOUT_CURRENCIES (25 currencies) was removed with the provider. The
+# practical consequence is stated plainly because it is a product fact, not a detail: INR is
+# now the ONLY currency this platform can CHARGE in. Every other currency is a DISPLAY
+# currency -- `localize_plan_price` still converts for presentation, and
+# `resolve_checkout_provider_and_currency` then charges the base currency.
+#
+# That is the same shape the Stripe-era code already had for an unsupported currency (it
+# fell back to charging USD while displaying local), so this is the analogous fallback
+# rather than a new behaviour: the fallback target moved from USD to INR because the gateway
+# that could take USD is gone.
 RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES = {
     "INR",
 }
+
+#: The currency an unchargeable request falls back to. Asserted to be a currency the gateway
+#: actually accepts, so this constant cannot drift out of the set above and silently start
+#: naming a currency no provider can take.
+_BASE_CHECKOUT_CURRENCY = "INR"
+assert _BASE_CHECKOUT_CURRENCY in RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES, (
+    "_BASE_CHECKOUT_CURRENCY must be chargeable by the configured gateway"
+)
 
 # Authoritative Baseline FX Rates (1 USD = X Target Currency)
 # Used strictly as an emergency offline fallback when external live feeds and caches are unavailable
@@ -208,8 +221,14 @@ class FXService:
 
     @classmethod
     def get_supported_checkout_currencies(cls) -> List[str]:
-        """Return list of all currencies directly supported for checkout across all gateways."""
-        return sorted(list(STRIPE_SUPPORTED_CHECKOUT_CURRENCIES | RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES))
+        """Currencies this platform can actually CHARGE in. One gateway, so one currency.
+
+        Not the same question as "which currencies can we show a price in" -- that is
+        :meth:`get_supported_display_currencies`, which is still the full
+        :data:`BASELINE_FX_RATES` set. Conflating the two is what would let a UI offer a
+        currency at checkout that the gateway cannot take.
+        """
+        return sorted(RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES)
 
     @classmethod
     def get_supported_display_currencies(cls) -> List[Dict[str, Any]]:
@@ -221,7 +240,7 @@ class FXService:
                 "name": cls.get_currency_name(code),
                 "symbol": cls.get_currency_symbol(code),
                 "decimals": cls.get_currency_decimals(code),
-                "checkout_supported": code in (STRIPE_SUPPORTED_CHECKOUT_CURRENCIES | RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES)
+                "checkout_supported": code in RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES
             })
         return result
 
@@ -234,13 +253,15 @@ class FXService:
             (provider, checkout_currency)
         """
         curr = requested_currency.upper()
-        if curr == "INR":
-            return ("razorpay", "INR")
-        elif curr in STRIPE_SUPPORTED_CHECKOUT_CURRENCIES:
-            return ("stripe", curr)
-        else:
-            # If not supported by Stripe or Razorpay directly, charge in USD
-            return ("stripe", "USD")
+        if curr in RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES:
+            return ("razorpay", curr)
+        # Not directly chargeable. Charge the base currency and let the caller localize the
+        # DISPLAYED price -- the same two-part answer the Stripe-era fallback gave, with INR
+        # in place of USD because Razorpay is the only gateway now. Returning a provider the
+        # platform does not have, or refusing the checkout outright, would both be worse:
+        # the first fails after the buyer commits, the second blocks every non-Indian
+        # customer from paying at all.
+        return ("razorpay", _BASE_CHECKOUT_CURRENCY)
 
     @classmethod
     async def fetch_live_fx_rates(cls) -> Optional[Dict[str, float]]:

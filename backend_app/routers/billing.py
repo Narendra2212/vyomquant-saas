@@ -245,18 +245,9 @@ def _plan_display_name(item_key: str) -> str:
 _MARKETPLACE_ITEM_PREFIX = "marketplace_"
 
 
-# BE-CRITICAL-006 FIX: Payment provider IP allowlists
-# These are the official IP ranges for Stripe and Razorpay webhooks
-STRIPE_WEBHOOK_IPS = [
-    # Stripe webhook IPs (can be updated from https://stripe.com/docs/ips)
-    "54.187.174.169",
-    "54.187.205.235",
-    "54.187.216.72",
-    "54.241.31.127",
-    "54.241.31.135",
-    "54.241.34.82",
-]
-
+# BE-CRITICAL-006 FIX: Payment provider IP allowlist.
+# Razorpay is the only gateway, so there is one list. The Stripe list was removed with the
+# provider.
 RAZORPAY_WEBHOOK_IPS = [
     # Razorpay webhook IPs (can be updated from Razorpay documentation)
     "13.232.22.250",
@@ -445,9 +436,7 @@ def _validate_webhook_ip(request: Request, provider: str) -> None:
     # `_configured_webhook_ips` so an operator can supply the provider's CURRENT egress list
     # (addresses and/or CIDR blocks) without a code change and a redeploy — see that function
     # for why a stale list here is the most expensive failure in this module.
-    if provider == "stripe":
-        allowed_ips = _configured_webhook_ips("stripe", STRIPE_WEBHOOK_IPS)
-    elif provider == "razorpay":
+    if provider == "razorpay":
         allowed_ips = _configured_webhook_ips("razorpay", RAZORPAY_WEBHOOK_IPS)
     else:
         raise HTTPException(500, f"Unknown payment provider: {provider}")
@@ -497,92 +486,124 @@ def _validate_webhook_signature(request: Request, provider: str, body: bytes) ->
     
     Args:
         request: FastAPI request object
-        provider: Payment provider ("stripe" or "razorpay")
+        provider: Payment provider (only ``"razorpay"``)
         body: Raw request body bytes
-    
-    Raises HTTPException if signature is invalid.
-    """
-    if provider == "stripe":
-        # Stripe signature validation
-        signature = request.headers.get("stripe-signature")
-        if not signature:
-            raise HTTPException(403, "Missing Stripe signature")
-        
-        stripe_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
-        if not stripe_secret:
-            raise HTTPException(500, "Stripe webhook secret not configured")
-        
-        try:
-            import stripe
-            event = stripe.Webhook.construct_event(
-                body.decode('utf-8'),
-                signature,
-                stripe_secret
-            )
-            logger.info("Stripe webhook signature validated successfully")
-        except Exception as e:
-            logger.error(f"Stripe signature validation failed: {e}")
-            raise HTTPException(403, "Invalid Stripe signature")
-    
-    elif provider == "razorpay":
-        # Razorpay signature validation
-        signature = request.headers.get("x-razorpay-signature")
-        if not signature:
-            raise HTTPException(403, "Missing Razorpay signature")
-        
-        razorpay_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
-        if not razorpay_secret:
-            raise HTTPException(500, "Razorpay webhook secret not configured")
-        
-        try:
-            # Razorpay uses HMAC SHA256 signature
-            expected_signature = hmac.new(
-                razorpay_secret.encode(),
-                body,
-                hashlib.sha256
-            ).hexdigest()
-            
-            if not hmac.compare_digest(expected_signature, signature):
-                logger.error("Razorpay signature validation failed")
-                raise HTTPException(403, "Invalid Razorpay signature")
-            
-            logger.info("Razorpay webhook signature validated successfully")
-        except Exception as e:
-            logger.error(f"Razorpay signature validation failed: {e}")
-            raise HTTPException(403, "Invalid Razorpay signature")
 
+    Raises HTTPException if the signature is missing, unverifiable or invalid.
 
-def _validate_webhook_timestamp(request: Request, provider: str) -> None:
+    AN HTTPException RAISED IN HERE IS NO LONGER SWALLOWED AND RE-DESCRIBED. The mismatch
+    refusal used to sit inside the ``try``, whose ``except Exception`` caught it and raised
+    its own 403 -- same status, so the behaviour was right by accident, but it also meant a
+    genuine internal fault (a non-ASCII secret, a malformed header) was reported to the
+    operator as "Invalid Razorpay signature", which points at the sender rather than at the
+    deployment. The comparison is now outside the ``try`` and ``HTTPException`` is re-raised
+    untouched.
     """
-    WEBHOOK SECURITY: Validate webhook timestamp to prevent replay attacks.
-    
-    Rejects webhooks older than 5 minutes to prevent replay attacks.
-    """
-    timestamp_header = None
-    if provider == "stripe":
-        timestamp_header = request.headers.get("stripe-signature")  # Stripe includes timestamp in signature
-    elif provider == "razorpay":
-        timestamp_header = request.headers.get("x-razorpay-timestamp")
-    
-    if not timestamp_header:
-        logger.warning(f"Missing timestamp header for {provider} webhook")
-        return  # Allow but log warning
-    
+    if provider != "razorpay":
+        raise HTTPException(500, f"Unknown payment provider: {provider}")
+
+    signature = request.headers.get("x-razorpay-signature")
+    if not signature:
+        raise HTTPException(403, "Missing Razorpay signature")
+
+    razorpay_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
+    if not razorpay_secret:
+        raise HTTPException(500, "Razorpay webhook secret not configured")
+
     try:
-        # Parse timestamp (implementation depends on provider format)
-        from datetime import datetime, timezone
-        webhook_time = datetime.fromtimestamp(int(timestamp_header), tz=timezone.utc)
-        current_time = datetime.now(timezone.utc)
-        
-        # Reject webhooks older than 5 minutes
-        if (current_time - webhook_time).total_seconds() > 300:
-            logger.warning(f"Webhook timestamp too old: {webhook_time}")
-            raise HTTPException(403, "Webhook timestamp too old - possible replay attack")
-        
-        logger.info(f"Webhook timestamp validated for {provider}")
-    except Exception as e:
-        logger.warning(f"Timestamp validation failed for {provider}: {e}")
-        # Don't fail on timestamp issues but log for monitoring
+        expected_signature = hmac.new(
+            razorpay_secret.encode(),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+    except Exception as e:  # noqa: BLE001 - a computation fault, not a bad signature
+        logger.error(f"Razorpay signature could not be computed: {e}")
+        raise HTTPException(500, "Razorpay signature could not be computed")
+
+    if not hmac.compare_digest(expected_signature, signature):
+        logger.error("Razorpay signature validation failed")
+        raise HTTPException(403, "Invalid Razorpay signature")
+
+    logger.info("Razorpay webhook signature validated successfully")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  THERE IS NO TIMESTAMP REPLAY WINDOW, AND PRETENDING OTHERWISE WAS WORSE THAN SAYING SO
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# `_validate_webhook_timestamp` was deleted rather than fixed. Its docstring claimed it
+# "rejects webhooks older than 5 minutes to prevent replay attacks" and it could not reject
+# anything, for three independent reasons at once:
+#
+#   1. For Razorpay it read `x-razorpay-timestamp` -- a header Razorpay does not send. A
+#      missing header took the `return  # Allow but log warning` path, so every webhook
+#      passed.
+#   2. For Stripe it read the `stripe-signature` header, a string shaped like
+#      `t=1700000000,v1=abc...`, and called `int()` on the whole thing. That raises
+#      `ValueError` on every single request.
+#   3. Its own `raise HTTPException(403, ...)` sat INSIDE the `try`, so even on a
+#      hypothetical successful parse the blanket `except Exception` caught the refusal and
+#      downgraded it to `logger.warning`.
+#
+# A guard that cannot refuse is not a weak guard, it is a false claim in the code that the
+# next reader will rely on. Razorpay publishes no timestamp on its webhooks, so a
+# timestamp-based window is not available for this gateway at all.
+#
+# WHAT ACTUALLY PROTECTS AGAINST REPLAY HERE, so the removal does not read as a regression:
+# the two-layer idempotency in `razorpay_webhook` -- the Redis `webhook:{provider}:{id}`
+# claim and the durable `public.webhook_events` row with its `UNIQUE (provider, event_id)`
+# -- which rejects a redelivered event by IDENTITY rather than by age, and keeps doing so
+# for days rather than for five minutes. That is the stronger control of the two, and it is
+# the one that was always doing the work. The event-id derivation it depends on is fixed
+# by `_razorpay_event_id` below, because a refund event used to derive `None` and so
+# bypassed both layers.
+
+
+#: Razorpay entity containers an event id can be recovered from, most specific first.
+#:
+#: The old derivation was ``payload.get("event_id") or payload["payload"]["payment"]
+#: ["entity"]["id"]`` -- it knew about exactly one container. A ``refund.processed`` event
+#: carries no ``payment`` entity, so for the one event class whose handler REVERSES money
+#: the lookup produced ``None`` and both idempotency layers were skipped.
+_RAZORPAY_ENTITY_CONTAINERS = ("payment", "refund", "order", "subscription", "invoice")
+
+
+def _razorpay_event_id(request: Request, payload: dict) -> Optional[str]:
+    """The identity a Razorpay delivery is deduplicated on, or ``None`` if there is none.
+
+    Three sources, in order of authority:
+
+    1. ``x-razorpay-event-id``. Razorpay's own per-DELIVERY identifier, sent as a header on
+       every webhook. This is the correct key and the previous implementation never looked
+       at it -- it is stable across the redeliveries of one event, which is exactly the
+       property deduplication needs.
+    2. ``event_id`` in the body, for completeness.
+    3. The id of whichever known entity the payload carries. This is a fallback on the
+       ENTITY rather than the event, so it is weaker: two different events about the same
+       payment (``payment.captured`` then ``refund.processed``) would collide on it. The
+       event name is therefore folded in, so the key distinguishes them.
+
+    Returns ``None`` only when none of the three yields anything, which the caller treats
+    as a refusal rather than as permission to run unguarded.
+    """
+    header_id = request.headers.get("x-razorpay-event-id")
+    if header_id and str(header_id).strip():
+        return str(header_id).strip()
+
+    body_id = payload.get("event_id")
+    if body_id and str(body_id).strip():
+        return str(body_id).strip()
+
+    container = payload.get("payload") or {}
+    event_name = str(payload.get("event") or "unknown").strip()
+    for name in _RAZORPAY_ENTITY_CONTAINERS:
+        entity = (container.get(name) or {}).get("entity") or {}
+        entity_id = entity.get("id")
+        if entity_id and str(entity_id).strip():
+            # Qualified by the event name, because the same entity id legitimately appears
+            # on several different events and they must not deduplicate against each other.
+            return f"{event_name}:{str(entity_id).strip()}"
+    return None
 
 
 def _validate_uuid(value: str, field_name: str) -> str:
@@ -2426,42 +2447,69 @@ async def razorpay_webhook(
     # WEBHOOK SECURITY: Validate webhook signature
     _validate_webhook_signature(request, "razorpay", raw_body)
     
-    # WEBHOOK SECURITY: Validate webhook timestamp
-    _validate_webhook_timestamp(request, "razorpay")
+    # There is no timestamp window for Razorpay; see the block above _razorpay_event_id for
+    # why the function that claimed to provide one was deleted rather than repaired.
 
-    event_id = None
     try:
         payload = json.loads(raw_body)
-        event_id = payload.get("event_id") or payload.get("payload", {}).get("payment", {}).get("entity", {}).get("id")
     except Exception as e:
-        logger.warning(f"Failed to extract Razorpay event id for idempotency: {e}")
+        logger.error(f"Razorpay webhook body is not JSON: {e}")
+        raise HTTPException(400, "Malformed webhook body")
+
+    event_id = _razorpay_event_id(request, payload)
+    if not event_id:
+        # REFUSE RATHER THAN PROCEED UNGUARDED. This used to fall through with
+        # `idempotency_key = None`, which skipped BOTH idempotency layers and ran the
+        # handler with no deduplication at all. On a refund that means the referral
+        # commission reversal, the obligation reversal, the marketplace settlement reversal
+        # and the plan revocation ALL re-execute on every redelivery -- and Razorpay
+        # redelivers for days. Money damage, invisible.
+        #
+        # A 400 is the safe direction: Razorpay retries, nothing is granted or reversed
+        # twice, and the log line below is what an operator needs to see. An event this
+        # platform cannot identify is an event it cannot safely process exactly once.
+        logger.error(
+            "Razorpay webhook REFUSED: no event id could be derived from the "
+            "x-razorpay-event-id header, the body's event_id, or any known entity "
+            "container (payment/refund/order/subscription). Processing without an id would "
+            "run this handler with no deduplication on either layer. event=%r keys=%r",
+            payload.get("event"), sorted(payload.get("payload", {}).keys()),
+        )
+        raise HTTPException(400, "Webhook carries no identifiable event id")
 
     # BUG-FIX IB-01 / BUG-IB-04: Crash-safe two-phase idempotency.
-    idempotency_key = f"webhook:razorpay:{event_id}" if event_id else None
-    if idempotency_key:
-        cached_val = await redis_manager.get(idempotency_key)
-        if cached_val in ("completed", "1", "processing"):
-            logger.info(f"Razorpay webhook {event_id} already processed or in-flight, skipping")
-            return {"status": "duplicate"}
-        acquired = await redis_manager.set(idempotency_key, "processing", nx=True, ex=60)
-        if not acquired:
-            logger.info(f"Razorpay webhook {event_id} lock collision, skipping")
-            return {"status": "duplicate"}
+    #
+    # No longer conditional. `event_id` is guaranteed non-empty by the refusal above, so the
+    # `if idempotency_key:` that used to wrap this block could only ever be False on the
+    # path that skipped deduplication entirely -- which is the defect that was fixed. Keeping
+    # the branch would preserve the shape of the hole.
+    idempotency_key = f"webhook:razorpay:{event_id}"
+    cached_val = await redis_manager.get(idempotency_key)
+    if cached_val in ("completed", "1", "processing"):
+        logger.info(f"Razorpay webhook {event_id} already processed or in-flight, skipping")
+        return {"status": "duplicate"}
+    acquired = await redis_manager.set(idempotency_key, "processing", nx=True, ex=60)
+    if not acquired:
+        logger.info(f"Razorpay webhook {event_id} lock collision, skipping")
+        return {"status": "duplicate"}
 
-        # SEC-03: a DURABLE claim underneath the Redis fast path above -- see the
-        # identical comment on the Stripe handler above and core/webhook_idempotency.
-        # py's module docstring.
-        if not await acquire_webhook_processing("razorpay", event_id):
-            logger.info(
-                f"Razorpay webhook {event_id} already durably processed "
-                f"(webhook_events), skipping"
-            )
-            await redis_manager.delete(idempotency_key)
-            return {"status": "duplicate"}
+    # SEC-03: a DURABLE claim underneath the Redis fast path above. Redis alone was not
+    # enough -- its client fails soft and its keys expire in 24h, while Razorpay redelivers
+    # for days. See core/webhook_idempotency.py's module docstring.
+    if not await acquire_webhook_processing("razorpay", event_id):
+        logger.info(
+            f"Razorpay webhook {event_id} already durably processed "
+            f"(webhook_events), skipping"
+        )
+        await redis_manager.delete(idempotency_key)
+        return {"status": "duplicate"}
 
-    secret = webhook_secret or "dummy_webhook_secret"
+    # `webhook_secret` is already proven present and not the placeholder by the guard above,
+    # so there is nothing to fall back to. The previous `or "dummy_webhook_secret"` was dead
+    # for that reason, but it was one relaxed guard away from making every forged webhook
+    # verify against a constant that is published in this repository.
     expected_sig = hmac.new(
-        secret.encode(),
+        webhook_secret.encode(),
         raw_body,
         hashlib.sha256,
     ).hexdigest()
