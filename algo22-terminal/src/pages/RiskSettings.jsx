@@ -497,7 +497,25 @@ export default function RiskSettings() {
         setMaxPos(res.data.max_positions ?? payload.max_positions);
         setLeverage(res.data.max_leverage ?? payload.max_leverage);
       }
-      setNotice({ severity: 'info', message: 'Risk parameters updated successfully.' });
+      // RISK-03. The three setters above already adopt the SERVER's values rather than the
+      // payload, so a limit the server held to the platform ceiling is what the sliders
+      // snap to — that part was already right. What was missing is the sentence: a slider
+      // jumping from 100 back to 5 under *updated successfully* reads as a bug.
+      //
+      // `limit_adjustments` is empty on every ordinary save, so this is the server saying
+      // it lowered something, and `message` is the server's own explanation naming the
+      // ceiling. Reported at `warning` — one of `ds/Alert`'s five, not a new one — because
+      // it is polite rather than assertive: the save succeeded, and a trader who asked for
+      // a limit they did not get should be told once, not interrupted.
+      const adjustments = Array.isArray(res?.limit_adjustments) ? res.limit_adjustments : [];
+      setNotice(
+        adjustments.length > 0
+          ? {
+            severity: 'warning',
+            message: res?.message || 'A risk limit was lowered to the platform ceiling.',
+          }
+          : { severity: 'info', message: 'Risk parameters updated successfully.' },
+      );
       setHasUnsavedChanges(false);
     } catch (err) {
       setNotice({

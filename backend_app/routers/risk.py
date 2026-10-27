@@ -178,6 +178,103 @@ async def get_risk_settings(user: dict = Depends(get_current_user)):
     return settings
 
 
+def platform_risk_ceilings() -> dict:
+    """RISK-03: the server-side ceilings a user's own risk settings cannot exceed.
+
+    Read from ``RiskThresholds`` rather than restated here, so the API boundary and the
+    order path cannot drift apart: if a threshold moves, both move with it.
+
+    WHY THESE AND NOT THE PLAN QUOTA
+    ---------------------------------
+    The finding's suggested action was to clamp against the account's plan tier, the way
+    ``max_leverage`` is already clamped against the drawdown tier. ``TenantQuota.for_plan``
+    does carry per-plan figures -- FREE 5 positions / 1.0x leverage, BASIC 20 / 1.0x,
+    PROFESSIONAL 100 / 3.0x, ENTERPRISE 500 / 10.0x -- but they are the wrong ceiling:
+
+    * They are a FAIR-USE resource table, not a risk policy, and the only thing that ever
+      enforced them (``core/hard_quota_enforcer``) is deprecated and unwired -- it raises
+      a ``DeprecationWarning`` on construction and is carried by no route.
+    * FREE caps leverage at 1.0x, i.e. no margin at all, while this very endpoint offers
+      3x as its DEFAULT. Every account on the platform is on the free tier today, so
+      clamping to the plan quota would have silently withdrawn margin trading from the
+      entire user base and called it a safety fix.
+
+    ``RiskThresholds`` is the ceiling that is ALREADY IN FORCE: it is exactly what the
+    order path applies to any account with no ``risk_settings`` row. Enforcing it here
+    means configuring your settings can tighten what the platform gives you by default
+    but never loosen it -- which is the whole of this finding.
+
+    ``max_daily_loss`` is absent on purpose. It is stored in account currency and compared
+    as a fraction of capital, and capital is not known at this boundary, so the conversion
+    and its clamp belong in the order path. See ``validate_trade_request``.
+    """
+    from backend_app.core.risk_manager import RiskThresholds
+
+    limits = RiskThresholds()
+    return {
+        # Truncated rather than rounded: a fractional ceiling must land BELOW itself, and
+        # both columns are integers in `risk_settings`.
+        "max_positions": int(limits.max_open_trades),
+        "max_leverage": int(limits.base_max_leverage),
+    }
+
+
+def _safe_platform_ceilings() -> dict:
+    """``platform_risk_ceilings()`` for use in a response body, which must not 500.
+
+    An unreadable threshold is reported as an empty mapping rather than an exception: the
+    settings were already saved by the time this is called, so raising here would tell the
+    client the save failed when it did not.
+    """
+    try:
+        return platform_risk_ceilings()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[RISK-03] could not report the platform ceilings: %s", exc)
+        return {}
+
+
+def clamp_to_platform_ceilings(record: dict) -> list:
+    """Hold a settings record to the platform ceilings, reporting what it changed.
+
+    CLAMPED, NOT REFUSED, and the distinction is the point. The defect this closes is that
+    a stored limit was not the limit being enforced: a trader could save
+    ``max_positions = 100``, read it back unchanged, and believe their account permitted a
+    hundred concurrent positions while the order path held them to far fewer. Either half
+    of that gap would do as a fix -- refuse the value, or store the value that is actually
+    in force -- but refusing would reject this endpoint's own default of 10 positions, so
+    the only option that does not break the product is to store the truth.
+
+    The adjustment is RETURNED rather than swallowed, so the response can say a limit was
+    lowered and to what. A clamp the caller cannot see is the same lie in the other
+    direction.
+    """
+    adjustments = []
+    for field, ceiling in platform_risk_ceilings().items():
+        requested = record.get(field)
+        if requested is None:
+            continue
+        try:
+            requested_num = float(requested)
+        except (TypeError, ValueError):
+            continue
+        if requested_num <= ceiling:
+            continue
+        record[field] = ceiling
+        adjustments.append(
+            {
+                "field": field,
+                "requested": requested,
+                "applied": ceiling,
+                "reason": (
+                    f"{field} was lowered to the platform limit of {ceiling}. The order "
+                    f"path enforces that ceiling, so a higher value would have been "
+                    f"stored but never honoured."
+                ),
+            }
+        )
+    return adjustments
+
+
 @router.put("/settings")
 async def update_risk_settings(
     body: RiskSettingsUpdateRequest,
@@ -217,6 +314,42 @@ async def update_risk_settings(
         "kill_switches": ks_dict,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+    # ── RISK-03: store the limit that is actually in force, not the one asked for ──
+    #
+    # Applied HERE, to the assembled record, rather than to `body` -- because this record
+    # is the single thing that then goes to the in-memory store, the `risk_settings`
+    # upsert, the WebSocket broadcast, the notification and the response body. Clamping it
+    # at the point it is built is what makes all six agree; clamping `body` would leave the
+    # `current_settings` fall-through unclamped, and a value already stored above the
+    # ceiling would survive a save that did not mention it.
+    #
+    # The order path clamps independently (`validate_trade_request`) and that is the
+    # enforcement guarantee -- this is not a second safety layer, it is the honesty half:
+    # what a trader reads back is what their account will do.
+    try:
+        limit_adjustments = clamp_to_platform_ceilings(updated_record)
+        if limit_adjustments:
+            logger.info(
+                "[RISK-03] held submitted limits to the platform ceilings for %s: %s",
+                uid,
+                ", ".join(
+                    f"{a['field']} {a['requested']}->{a['applied']}"
+                    for a in limit_adjustments
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Fails OPEN deliberately: the order path's own clamp is in force either way, so a
+        # ceiling that cannot be read costs no safety here -- it only costs the trader an
+        # accurate read-back. Logged rather than swallowed, because it means this stopped
+        # checking.
+        limit_adjustments = []
+        logger.warning(
+            "[RISK-03] could not read the platform ceilings, so the submitted limits "
+            "were stored unclamped for %s (the order path still enforces them): %s",
+            uid,
+            exc,
+        )
 
     _user_risk_settings[uid] = updated_record
 
@@ -281,7 +414,16 @@ async def update_risk_settings(
 
     return {
         "status": "ok",
-        "message": "Risk settings saved successfully",
+        "message": (
+            "Risk settings saved successfully"
+            if not limit_adjustments
+            else "Risk settings saved. "
+            + " ".join(a["reason"] for a in limit_adjustments)
+        ),
+        # RISK-03: empty on the ordinary path, so a client can treat a non-empty list as
+        # "tell the user their limit was lowered, and to what".
+        "limit_adjustments": limit_adjustments,
+        "platform_ceilings": _safe_platform_ceilings(),
         "data": updated_record,
         **updated_record
     }
@@ -303,9 +445,15 @@ async def validate_risk_configuration(
     if body.max_leverage is not None and (body.max_leverage < 1 or body.max_leverage > 50):
         errors.append("max_leverage must be between 1 and 50")
 
+    # RISK-03: additive, and the reason this endpoint is worth asking. The bounds checked
+    # above are the API's declared range (1..100 positions, 1..50x); the platform ceilings
+    # are what the order path will actually hold the account to, and they are lower. A
+    # value can therefore be `valid` here and still be clamped on save -- which is not a
+    # contradiction, but a caller that cannot see the ceiling has no way to show it.
     return {
         "valid": len(errors) == 0,
         "errors": errors,
+        "platform_ceilings": _safe_platform_ceilings(),
     }
 
 

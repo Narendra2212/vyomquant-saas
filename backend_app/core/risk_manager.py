@@ -561,10 +561,56 @@ class InstitutionalRiskManager:
         # Load user-specific risk settings
         user_settings = await _load_user_risk_settings(request.user_id)
         if user_settings:
-            # Override thresholds with user-specific settings
-            effective_max_daily_loss = user_settings["max_daily_loss"] / self.total_capital if self.total_capital > 0 else self.thresholds.max_daily_loss_pct
-            effective_max_positions = user_settings["max_positions"]
-            effective_max_leverage = user_settings["max_leverage"]
+            # RISK-03: A USER SETTING MAY ONLY TIGHTEN A LIMIT, NEVER LOOSEN ONE.
+            #
+            # These three values come from `risk_settings`, a table the account holder
+            # controls. Taken verbatim -- as `max_daily_loss` and `max_positions` were --
+            # a user could set them arbitrarily high and make REJECT_DAILY_LOSS and
+            # REJECT_MAX_OPEN_TRADES UNREACHABLE: the two circuit breakers that exist to
+            # stop an account bleeding out over one day and to cap concurrent exposure.
+            # Setting `max_positions = 10_000` removed the second entirely, and
+            # `max_daily_loss` large relative to `total_capital` removed the first.
+            #
+            # `max_leverage` was already safe, and it is the pattern the other two now
+            # follow: section 5 below computes
+            # `min(self.thresholds.drawdown_tier_N_max_leverage, effective_max_leverage)`,
+            # so a user value can only ever pull the ceiling DOWN. The same `min` is
+            # applied to all three here, at the point the effective value is derived,
+            # rather than at each use site -- there is one place to read and one place to
+            # get wrong, and a future check that reads `effective_max_positions` inherits
+            # the clamp instead of having to remember it.
+            #
+            # The ceiling is `self.thresholds`, NOT `TenantQuota.for_plan(request.user_tier)`.
+            # The per-plan figures look like the right answer and are not: they are a
+            # fair-use resource table whose only enforcer is deprecated and unwired, and
+            # the free tier caps leverage at 1.0x while the risk-settings endpoint offers
+            # 3x as its default -- so clamping to them would have withdrawn margin from
+            # every account on the platform and called it a safety fix. `self.thresholds`
+            # is the ceiling ALREADY IN FORCE: it is exactly what the `else` branch below
+            # applies to an account with no settings row. Full argument, with the figures,
+            # in `routers/risk.platform_risk_ceilings`.
+            #
+            # `max_daily_loss` is stored in ACCOUNT CURRENCY and compared as a FRACTION of
+            # capital, so it is converted before being clamped. A non-positive
+            # `total_capital` leaves no denominator to convert with, so the platform
+            # threshold stands alone -- the pre-existing behaviour, unchanged.
+            platform_max_daily_loss = self.thresholds.max_daily_loss_pct
+            if self.total_capital > 0:
+                requested_daily_loss = (
+                    float(user_settings["max_daily_loss"]) / self.total_capital
+                )
+                effective_max_daily_loss = min(
+                    platform_max_daily_loss, requested_daily_loss
+                )
+            else:
+                effective_max_daily_loss = platform_max_daily_loss
+
+            effective_max_positions = min(
+                self.thresholds.max_open_trades, int(user_settings["max_positions"])
+            )
+            effective_max_leverage = min(
+                self.thresholds.base_max_leverage, float(user_settings["max_leverage"])
+            )
         else:
             # Use default thresholds
             effective_max_daily_loss = self.thresholds.max_daily_loss_pct
