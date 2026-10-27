@@ -9995,11 +9995,44 @@
     ],
     [
       "signal_audit_log",
+      "prev_hash",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "signal_audit_log",
       "recorded_at",
       "timestamp with time zone",
       "",
       "NO",
       "now()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "signal_audit_log",
+      "row_hash",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "signal_audit_log",
+      "seq",
+      "bigint",
+      "",
+      "NO",
+      "",
       "NO",
       "",
       "NEVER"
@@ -15354,8 +15387,23 @@
       true
     ],
     [
+      "signal_audit_chain_head",
+      "",
+      false
+    ],
+    [
       "signal_audit_log_append_only",
       "",
+      false
+    ],
+    [
+      "signal_audit_log_chain",
+      "",
+      false
+    ],
+    [
+      "signal_audit_row_digest",
+      "p_prev_hash text, p_seq bigint, p_audit_id uuid, p_signal_id uuid, p_event_type text, p_user_id uuid, p_strategy_id text, p_recorded_at timestamp with time zone, p_payload jsonb",
       false
     ],
     [
@@ -15420,6 +15468,11 @@
     ],
     [
       "update_updated_at_column",
+      "",
+      false
+    ],
+    [
+      "verify_signal_audit_chain",
       "",
       false
     ],
@@ -17034,6 +17087,21 @@
       "signal_audit_log",
       "signal_audit_log_pkey",
       "CREATE UNIQUE INDEX signal_audit_log_pkey ON public.signal_audit_log USING btree (audit_id)"
+    ],
+    [
+      "signal_audit_log",
+      "uq_signal_audit_log_prev_hash",
+      "CREATE UNIQUE INDEX uq_signal_audit_log_prev_hash ON public.signal_audit_log USING btree (prev_hash) NULLS NOT DISTINCT"
+    ],
+    [
+      "signal_audit_log",
+      "uq_signal_audit_log_row_hash",
+      "CREATE UNIQUE INDEX uq_signal_audit_log_row_hash ON public.signal_audit_log USING btree (row_hash)"
+    ],
+    [
+      "signal_audit_log",
+      "uq_signal_audit_log_seq",
+      "CREATE UNIQUE INDEX uq_signal_audit_log_seq ON public.signal_audit_log USING btree (seq)"
     ],
     [
       "signal_events",
@@ -25757,6 +25825,11 @@
       "step1"
     ],
     [
+      "migrations/061_aud01_signal_audit_hash_chain.sql",
+      "95f83cc2969eaed77f4c47b77099de1331f47b01ae044632ec8ac2376d687937",
+      "step1"
+    ],
+    [
       "migrations/add_billing_currency_and_dag_hash.sql",
       "4b2ac2899820d0a43407671ab4b4648af994d98210a66347c6c05a022740719f",
       "step1"
@@ -27017,6 +27090,11 @@
       "guard_profiles_platform_columns"
     ],
     [
+      "signal_audit_log",
+      "trg_signal_audit_log_chain",
+      "signal_audit_log_chain"
+    ],
+    [
       "referral_profiles",
       "trg_referral_profiles_updated_at",
       "update_referral_profiles_updated_at"
@@ -27828,6 +27906,24 @@
       "signal_audit_log_event_type_check",
       "c",
       "CHECK ((event_type = ANY (ARRAY['created'::text, 'risk_decision'::text, 'order'::text, 'execution'::text])))"
+    ],
+    [
+      "signal_audit_log",
+      "uq_signal_audit_log_prev_hash",
+      "u",
+      "UNIQUE NULLS NOT DISTINCT (prev_hash)"
+    ],
+    [
+      "signal_audit_log",
+      "uq_signal_audit_log_row_hash",
+      "u",
+      "UNIQUE (row_hash)"
+    ],
+    [
+      "signal_audit_log",
+      "uq_signal_audit_log_seq",
+      "u",
+      "UNIQUE (seq)"
     ],
     [
       "signals",
