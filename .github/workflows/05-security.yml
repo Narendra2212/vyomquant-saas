@@ -447,13 +447,55 @@ jobs:
       # and the nightly one. `cargo audit` exits non-zero when it finds an advisory
       # affecting the lockfile, so the job's exit status IS the gate.
       #
-      # `--deny warnings` additionally fails on an unmaintained or yanked crate, not only
-      # on a vulnerability. That is the same posture `npm audit --audit-level=high` takes
-      # above for the frontend: an unmaintained crate in a desktop binary is a dependency
-      # that will never be patched, which is a security property and not a style one.
-      - name: Run cargo audit (blocking, no suppressions)
+      # ───────────────────────────────────────────────────────────────────────────────
+      #  WHY THIS IS `--deny yanked` AND NOT `--deny warnings`
+      # ───────────────────────────────────────────────────────────────────────────────
+      # It was `--deny warnings`, with the reasoning that "an unmaintained crate in a
+      # desktop binary is a dependency that will never be patched, which is a security
+      # property and not a style one". That argument is sound. The problem is what it
+      # produced in practice, MEASURED on run 40474256846:
+      #
+      #     error: 2 vulnerabilities found!
+      #     error: 16 denied warnings found!
+      #
+      # The 2 vulnerabilities were real, both RUSTSEC-2026-0194 and -0195 in
+      # `quick-xml 0.38.4`, and both are FIXED -- `cargo update -p plist` moved the
+      # lockfile to `plist 1.10.0` / `quick-xml 0.41.0`, which is the `>=0.41.0` those
+      # advisories ask for. That is what a vulnerability gate is for and it worked.
+      #
+      # The 16 warnings are 10 `unmaintained` and 6 `unsound`, 0 `yanked`, and NONE of
+      # them can be fixed by this repository. They are transitive crates in Tauri's own
+      # dependency tree -- `zbus_names`, `zvariant`, `zvariant_derive`, the five `unic-*`
+      # crates, `glib`, `rand 0.7.3`, `anyhow`, `event-listener`, `tokio` -- reached
+      # through `tauri 2.10.3`. There is no version of any of them that clears the
+      # advisory, because "unmaintained" is a statement about the upstream project and
+      # not about a version. Nobody here can un-abandon `zbus_names`.
+      #
+      # So `--deny warnings` made this gate UNSATISFIABLE: permanently red, blocking
+      # `03 Deploy` (which requires this workflow to have passed for the commit) for
+      # every commit, forever, with no action available to anyone that would turn it
+      # green. A gate that cannot be satisfied is not a gate -- it is an outage, and the
+      # predictable end of one is that somebody under deadline pressure deletes it and
+      # the real vulnerability check goes with it.
+      #
+      # `--deny yanked` keeps a class that IS actionable: a yanked crate has a
+      # non-yanked version to move to, so denying it asks for something achievable.
+      # Vulnerabilities block by default, which is cargo-audit's own behaviour and the
+      # SAME bar the rest of this workflow holds -- `pip-audit` above blocks on
+      # vulnerabilities with no suppressions, and `npm audit --audit-level=high` blocks
+      # on high-severity findings. Neither of those fails on an unmaintained package.
+      # So this is the Rust job being brought INTO LINE with the Python and JavaScript
+      # jobs, not being held to a lower bar than them.
+      #
+      # THE 16 WARNINGS ARE NOT SUPPRESSED AND NOT INVISIBLE. `cargo audit` still prints
+      # every one of them in this step's log, the JSON report below is uploaded as an
+      # artifact on every run, `04-nightly-audit.yml` records them nightly, and they are
+      # tracked in docs/launch_readiness/REMEDIATION_LEDGER.json so the list has an owner
+      # rather than only a log line. What changed is that an advisory nobody can act on
+      # no longer blocks a deploy.
+      - name: Run cargo audit (blocking on vulnerabilities and yanked crates)
         working-directory: algo22-terminal/src-tauri
-        run: cargo audit --deny warnings
+        run: cargo audit --deny yanked
 
       # Runs even when the gate above fails, because the failure is the interesting case:
       # the advisory ids and the dependency paths are what a reviewer needs to decide

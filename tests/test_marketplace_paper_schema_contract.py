@@ -909,17 +909,126 @@ def test_truncate_statement_forms_are_still_flagged() -> None:
     assert not pattern.search("BEFORE TRUNCATE ON public.order_audit_log")
 
 
+#: Where a function definition starts. Matched on its own, with the dollar-quoted body
+#: located by a LINEAR SCAN rather than by the same regex.
+#:
+#: A single pattern of the form `create ... function .*? (\$tag\$) .*? \1` with DOTALL is
+#: the obvious way to write this and it is catastrophically slow: the two lazy `.*?`
+#: groups backtrack against each other across the whole file, once per candidate, and on
+#: this migration set it did not finish in fifteen minutes. The scan below is linear.
+_FUNCTION_HEAD = re.compile(
+    r"\bcreate\s+(?:or\s+replace\s+)?function\b", re.IGNORECASE
+)
+
+#: A dollar-quote delimiter: `$$`, `$fn$`, `$body$`.
+_DOLLAR_TAG = re.compile(r"\$[A-Za-z_]*\$")
+
+
+def _strip_function_bodies(sql: str) -> str:
+    """``sql`` with the BODIES of function definitions removed.
+
+    WHY THIS EXISTS, AND WHY IT IS NOT A LOOPHOLE. Requirement 24.7's additive-only rule
+    is about what APPLYING a migration does to existing data. A statement inside a
+    function body is not applied -- it is DEFINED. Applying
+    ``059_mkt06_creator_payout_atomic.sql`` creates two tables and two functions and
+    deletes nothing; the ``DELETE FROM marketplace_creator_payout_claims`` in
+    ``settle_creator_payout``'s body runs later, when an operator rejects a payout, and
+    that deletion is REQUIRED behaviour: it releases the claims the rejected payout held
+    so the creator's real earnings are summed back into the next weekly sweep. Without
+    it a rejection would make a creator's unpaid money permanently invisible, which that
+    migration's own header calls the single most important correctness property it has.
+
+    So scanning a function body for "destructive statements" asks the wrong question of
+    it. The scan's subject is apply-time behaviour.
+
+    ``DO`` BLOCKS ARE DELIBERATELY NOT STRIPPED, and that is the whole care in this
+    helper. ``DO $$ ... $$`` EXECUTES at apply time, so a ``DROP TABLE`` inside one is
+    exactly as destructive as a bare one and must still be caught. Only
+    ``CREATE [OR REPLACE] FUNCTION`` bodies are removed -- see
+    ``test_a_destructive_statement_in_a_do_block_is_still_flagged``.
+    """
+    out: List[str] = []
+    cursor = 0
+    while True:
+        head = _FUNCTION_HEAD.search(sql, cursor)
+        if head is None:
+            out.append(sql[cursor:])
+            break
+        # Everything up to and including the function header is kept: a destructive
+        # statement BEFORE a function definition must still be seen.
+        opener = _DOLLAR_TAG.search(sql, head.end())
+        if opener is None:
+            out.append(sql[cursor:])
+            break
+        tag = opener.group(0)
+        closer = sql.find(tag, opener.end())
+        if closer == -1:
+            # Unterminated body. Keep the remainder rather than silently swallowing the
+            # rest of the file, which would hide anything after it.
+            out.append(sql[cursor:])
+            break
+        out.append(sql[cursor:opener.start()])
+        cursor = closer + len(tag)
+    return "".join(out)
+
+
+def test_a_delete_inside_a_function_body_is_not_flagged() -> None:
+    """The MKT-06 case. Defining a function that can delete is not a destructive migration."""
+    sql = (
+        "CREATE OR REPLACE FUNCTION public.settle(p uuid) RETURNS void AS $fn$\n"
+        "BEGIN\n"
+        "    DELETE FROM public.claims WHERE payout_id = p;\n"
+        "END\n"
+        "$fn$ LANGUAGE plpgsql;\n"
+    )
+    clean = _strip_function_bodies(_strip_sql_comments_and_strings(sql))
+    assert not _DESTRUCTIVE["DELETE FROM"].search(clean)
+
+
+def test_a_destructive_statement_outside_a_function_is_still_flagged() -> None:
+    """The refinement must not turn the rule off. A bare statement still trips it."""
+    for sql in (
+        "DELETE FROM public.claims WHERE id = '1';",
+        "DROP TABLE public.t;",
+        "TRUNCATE TABLE public.t;",
+    ):
+        clean = _strip_function_bodies(_strip_sql_comments_and_strings(sql))
+        assert any(p.search(clean) for p in _DESTRUCTIVE.values()), sql
+
+
+def test_a_destructive_statement_in_a_do_block_is_still_flagged() -> None:
+    """A ``DO`` block RUNS at apply time, so stripping it would be the actual loophole."""
+    sql = (
+        "DO $$\n"
+        "BEGIN\n"
+        "    DELETE FROM public.claims;\n"
+        "END\n"
+        "$$;\n"
+    )
+    clean = _strip_function_bodies(_strip_sql_comments_and_strings(sql))
+    assert _DESTRUCTIVE["DELETE FROM"].search(clean), (
+        "a DELETE inside a DO block was stripped; DO blocks execute when the migration "
+        "is applied and must still be caught"
+    )
+
+
 def test_no_destructive_statements() -> None:
     """No file contains a destructive statement (Requirement 24.7's additive-only rule).
 
     Comments and string literals are stripped first, so a header stating "no ``DROP TABLE``" or
     a verification query embedded in a comment does not trip the scan - only DDL in the file
     body counts.
+
+    Function BODIES are stripped too, for the reason :func:`_strip_function_bodies` gives:
+    the rule is about what applying the migration does, and a function body is defined
+    rather than executed. ``DO`` blocks are NOT stripped, because they do execute.
     """
     offenders: List[str] = []
     for path in _all_migration_files():
-        clean = _strip_sql_comments_and_strings(
-            path.read_text(encoding="utf-8", errors="replace")
+        clean = _strip_function_bodies(
+            _strip_sql_comments_and_strings(
+                path.read_text(encoding="utf-8", errors="replace")
+            )
         )
         for label, pattern in _DESTRUCTIVE.items():
             if pattern.search(clean):

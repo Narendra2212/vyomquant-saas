@@ -781,6 +781,7 @@ jobs:
                  tests/test_kill03_authoritative_global_halt.py \
                  tests/test_lib01_clone_strategy_postgres.py \
                  tests/test_mkt01_entitlement_tables_postgres.py \
+                 tests/test_mkt06_creator_payout_atomic_postgres.py \
                  tests/test_money01_referral_commission_idempotence_postgres.py \
                  tests/test_money04_referral_ledger_is_single_currency_postgres.py \
                  tests/test_money06_referral_obligations_postgres.py \
