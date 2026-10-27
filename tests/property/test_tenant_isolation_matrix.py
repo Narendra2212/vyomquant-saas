@@ -867,6 +867,12 @@ def _identifiers(prefix: str) -> Dict[str, str]:
         "public_library_id": uid(11),  # the PUBLISHED Listing - public by design
         "deployment_id": uid(12),
         "job_id": uid(13),
+        # MKT-06's `marketplace_creator_payouts` row. Allocated so the parameter has an
+        # identifier of each kind -- the caller's own, the other tenant's, and an absent
+        # one -- which is what lets the settle route be ATTEMPTED at all. No payout row
+        # is seeded under any of these ids: the route is admin-gated and refused before
+        # it reads, so the attempt measures the role gate, not the row.
+        "payout_id": uid(14),
         "creator_id": prefix and (U1 if prefix.startswith("1") else U2),
     }
 
@@ -890,6 +896,23 @@ PARAM_COLUMN: Dict[str, str] = {
     "creator_id": USER,
     "session_id": PAPER_SESSION,
     "order_id": PAPER_ORDER,
+    # MKT-06. `PUT /api/library/creator-payouts/{payout_id}/settle` is the only route
+    # that names one.
+    #
+    # MAPPED TO `SETTLEMENT`, AND NOT TO A NEW KIND, because the ten kinds above are
+    # transcribed from Requirement 21.8 and asserted to BE ten by
+    # `test_the_matrix_columns_are_requirement_21_8s_ten_resource_kinds` -- inventing an
+    # eleventh here would break that assertion and quietly edit the requirement. A
+    # creator payout is not a new kind of resource anyway: it is an aggregation OF
+    # Settlement_Records, and `marketplace_creator_payout_claims.settlement_id`
+    # references `marketplace_settlements.id` directly, so the resource whose isolation
+    # is at stake when this parameter is tampered with is the settlement record.
+    #
+    # The route is gated on `get_admin_user`, which `_matrix_app` deliberately does not
+    # grant, so neither tenant reaches the handler and no payout row is read through it.
+    # This entry CLASSIFIES the parameter rather than measuring it; see the two `_D` rows
+    # for where the measurement actually lives.
+    "payout_id": SETTLEMENT,
 }
 
 #: The canary text this file writes into ``u2``'s rows. None of these strings occurs anywhere else
@@ -981,6 +1004,10 @@ _DRAWN_ID_SLOTS: Tuple[str, ...] = (
     "public_library_id",
     "deployment_id",
     "job_id",
+    # MKT-06. Kept in step with `_identifiers()` by this tuple's own assertion, which is
+    # exactly what caught its absence: a slot added there and not here leaves a drawn
+    # tenancy without it, which surfaces as a KeyError mid-example rather than a gap.
+    "payout_id",
 )
 
 
@@ -1659,6 +1686,44 @@ MATRIX_DECLARATIONS: Tuple[_RowDeclaration, ...] = (
     _D(
         "GET /api/library/creator/analytics",
         exposes=(LISTING_PRIVATE, SUBSCRIPTION, SETTLEMENT),
+    ),
+    # MKT-06's two new routes. Both are declared with NO exposure, and the reason is a
+    # property of the seed rather than of the endpoints:
+    #
+    # THIS MATRIX SEEDS NO PAYOUT ROWS. `marketplace_creator_payouts` and
+    # `marketplace_creator_payout_claims` are new in 059 and nothing in this file's seed
+    # creates one, so both routes answer an EMPTY list for either tenant. An empty answer
+    # exposes no row, which is why there is no exposure cell to declare -- and it is also
+    # why "every row is owned by the caller" would be VACUOUSLY true here. Saying that
+    # plainly is the point: a reader must not take these two rows as evidence that payout
+    # isolation has been measured.
+    #
+    # WHERE THE REAL COVERAGE IS. `GET /creator/payouts` reads with
+    # `.eq("owner_id", user_id)` from the authenticated session (never a path or query
+    # parameter) AND is covered at the database by 051's `creator_payouts_owner_read` RLS
+    # policy; `tests/test_cross_tenant_read_sweep_postgres.py` exercises that policy
+    # against both roles with real rows, which is the measurement this matrix cannot make
+    # without seeding payouts of its own.
+    _D("GET /api/library/creator/payouts"),
+    # Operator-only (`get_admin_user`), which `_matrix_app` deliberately does not grant,
+    # so neither tenant reaches the handler: the 403 is the role gate's and is
+    # byte-identical whoever asks. Same shape as the admin review routes below, and it
+    # returns a single payout object rather than a list.
+    _D(
+        "PUT /api/library/creator-payouts/{payout_id}/settle",
+        owner_control_note=(
+            "settle is OPERATOR-ONLY (get_admin_user), a role neither tenant holds and "
+            "_matrix_app deliberately does not grant, so the 403 is the role gate's and "
+            "is byte-identical whether the payout named exists, belongs to the caller, "
+            "belongs to the other tenant, or names nothing. There is therefore no owner "
+            "answer to draw a positive control from, and the equality this cell asserts "
+            "is an equality between two identical role refusals -- which is the correct "
+            "property for an admin route, and is NOT evidence about payout ownership. "
+            "That is covered at the database instead, by 051's "
+            "creator_payouts_owner_read RLS policy, which "
+            "tests/test_cross_tenant_read_sweep_postgres.py exercises against both roles "
+            "with real rows."
+        ),
     ),
     _D("GET /api/library/subscriber/analytics", exposes=(SUBSCRIPTION,)),
     _D(

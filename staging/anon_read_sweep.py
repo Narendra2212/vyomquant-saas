@@ -138,6 +138,30 @@ CHECK_OVERRIDES = {
         "amount_minor": 100, "owner_share_minor": 70, "platform_fee_minor": 30,
         "currency": "USD", "provider": "stripe",
     },
+    # MKT-06 migration 059. The weekly creator payout. Four CHECKs, of which three need
+    # a value a synthesised one cannot supply:
+    #
+    #   chk_creator_payout_currency  CHECK (currency IN ('USD','INR'))
+    #   chk_creator_payout_status    CHECK (status IN ('pending','completed','rejected'))
+    #   chk_creator_payout_period    CHECK (period_end >= period_start)
+    #
+    # `period_start`/`period_end` are pinned TOGETHER, not individually, because the
+    # constraint is a relation BETWEEN them -- two independently synthesised timestamps
+    # satisfy it only by luck, and a sweep that passes by luck is the thing this map
+    # exists to prevent. `amount_minor` needs no entry: its CHECK is `> 0`, which the
+    # synthesised numeric 1 already satisfies.
+    #
+    # WHY THIS MATTERS RATHER THAN BEING BOOKKEEPING: without it, these two tables were
+    # reported NOT PROVEN, which means cross-tenant isolation was never MEASURED on a
+    # table holding one creator's money owed. `marketplace_creator_payout_claims` needs
+    # no entry of its own -- it carries no CHECK, and its parent payout row is seeded
+    # through the foreign-key walk, which is where it was failing.
+    "marketplace_creator_payouts": {
+        "currency": "USD",
+        "status": "pending",
+        "period_start": "2026-01-01T00:00:00+00:00",
+        "period_end": "2026-01-08T00:00:00+00:00",
+    },
     # Phase 9 migration 029. The MONEY-06 durable owed-commission ledger. Its NOT NULL
     # columns without a default are provider, provider_payment_id, referred_id,
     # payment_amount, currency and reason_code. Only `currency` needs an override: it is
