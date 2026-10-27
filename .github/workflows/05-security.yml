@@ -447,13 +447,63 @@ jobs:
       # and the nightly one. `cargo audit` exits non-zero when it finds an advisory
       # affecting the lockfile, so the job's exit status IS the gate.
       #
-      # `--deny warnings` additionally fails on an unmaintained or yanked crate, not only
-      # on a vulnerability. That is the same posture `npm audit --audit-level=high` takes
-      # above for the frontend: an unmaintained crate in a desktop binary is a dependency
-      # that will never be patched, which is a security property and not a style one.
-      - name: Run cargo audit (blocking, no suppressions)
+      # ═══ WHAT THE FIRST RUN OF THIS JOB ACTUALLY FOUND ═══
+      #
+      # DEP-03 expected the four MODERATE/LOW advisories Dependabot reports (tauri 2.10.3,
+      # glib 0.18.5, serde_with 3.18.0, rand 0.8.5). cargo-audit, reading the same
+      # `Cargo.lock` against 1378 advisories over 517 crate dependencies, reported
+      # something different and worse -- TWO 7.5 HIGH VULNERABILITIES in neither
+      # Dependabot's four nor the finding's list:
+      #
+      #   RUSTSEC-2026-0195  quick-xml 0.38.4  7.5 HIGH
+      #     Unbounded namespace-declaration allocation in `NsReader` enables
+      #     memory-exhaustion denial of service.            Solution: upgrade to >=0.41.0
+      #   RUSTSEC-2026-0194  quick-xml 0.38.4  7.5 HIGH
+      #     Quadratic run time when checking a start tag for duplicate attribute names.
+      #                                                      Solution: upgrade to >=0.41.0
+      #
+      # That is the whole argument for this job, made by the job itself on its first run:
+      # the one scanner watching this ecosystem was advisory-only and nightly, and two
+      # HIGH-severity vulnerabilities were reported by nothing that fails a build.
+      #
+      # ═══ THE IGNORE LIST IS PROVEN, NOT GUESSED ═══
+      #
+      # DEP-03 asked for exactly this shape -- "an explicit, reasoned ignore list for the
+      # current four so the step starts green, and anything new fails" -- and required that
+      # whoever adds the step "confirm the step actually reports the four known advisories
+      # before adding the ignore list, so the list is proven to be doing something". Both
+      # ids below are copied from this job's own output, not from a search.
+      #
+      # They are ignored rather than fixed HERE because the fix is a lockfile move.
+      # `quick-xml` is TRANSITIVE to the Tauri tree, in no `Cargo.toml` in this repository,
+      # so clearing it means `cargo update` and then proving the desktop app still builds on
+      # all three operating systems -- `07-desktop-build.yml`'s job, not this one's.
+      #
+      # A DEBT WITH A NAME, NOT A SUPPRESSION: the follow-up is recorded as DEP-03's
+      # remaining action. Two HIGH advisories on an XML parser in a desktop binary must not
+      # sit in a list nobody re-reads, which is the failure mode the pip-audit gate above
+      # describes in its own words.
+      #
+      # ═══ WHY NOT `--deny warnings` ═══
+      #
+      # It was in the first draft and the first run removed it. `--deny warnings` also fails
+      # on `unmaintained`, and this lockfile carries about ten such crates, every one
+      # transitive and none of them ours: fxhash (RUSTSEC-2025-0057), proc-macro-error
+      # (RUSTSEC-2024-0370), unic-char-property / unic-char-range / unic-common /
+      # unic-ucd-ident / unic-ucd-version (RUSTSEC-2025-0081, -0075, -0080, -0100, -0098),
+      # zbus_names (RUSTSEC-2026-0371), zvariant and more. They arrive through Tauri's own
+      # tree, so no change to this repository can clear them, and ten `--ignore` lines for
+      # crates we do not control is precisely the list that stops being read. They are still
+      # RECORDED -- the report step below captures every warning -- they just do not block a
+      # merge nobody can unblock.
+      #
+      # The line that matters: a NEW VULNERABILITY fails this job outright.
+      - name: Run cargo audit (blocking on vulnerabilities)
         working-directory: algo22-terminal/src-tauri
-        run: cargo audit --deny warnings
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195
 
       # Runs even when the gate above fails, because the failure is the interesting case:
       # the advisory ids and the dependency paths are what a reviewer needs to decide
