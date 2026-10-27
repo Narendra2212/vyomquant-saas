@@ -125,27 +125,39 @@ class DAGWorker(WorkerBase):
         # Task heartbeat tracking
         self._task_heartbeat_task: Optional[asyncio.Task] = None
         self._heartbeat_stop_event = asyncio.Event()
-        
-        # Register worker
-        self._register_worker()
-    
-    def _register_worker(self):
-        """Register worker in Redis."""
-        redis_manager.sadd(TaskQueueKeyBuilder.worker_registry(), self.worker_id)
+
+        # DELIBERATELY NOT REGISTERED HERE. `_register_worker` used to be called from this
+        # constructor, and `redis_manager.sadd` is a coroutine function, so the call created
+        # a coroutine and dropped it -- `RuntimeWarning: coroutine
+        # 'SharedRedisManager.sadd' was never awaited`, observed verbatim in the dag
+        # worker's own startup log in production. The registry was therefore NEVER WRITTEN
+        # while the log line said "Worker registered", so anything reading the worker
+        # registry saw an empty set however many workers were running. A constructor cannot
+        # await, which is the whole reason the bug was possible here; registration moved to
+        # `start()`, which can.
+
+    async def _register_worker(self) -> None:
+        """Register this worker in Redis. AWAITED, unlike the version this replaced."""
+        await redis_manager.sadd(TaskQueueKeyBuilder.worker_registry(), self.worker_id)
         logger.info(f"Worker registered: {self.worker_id}")
-    
+
     async def start(self):
         """Start worker loop."""
+        # Before `super().start()`, which runs the worker's main loop: a worker that is
+        # processing tasks while absent from the registry is the state this ordering avoids.
+        await self._register_worker()
         await super().start()
-    
+
     async def cleanup(self):
         """Cleanup worker gracefully."""
         if self._current_task:
             # Signal current task to cancel
             logger.info(f"Cancelling current task: {self._current_task.task_id}")
-        
-        # Cleanup registration
-        redis_manager.srem(TaskQueueKeyBuilder.worker_registry(), self.worker_id)
+
+        # Cleanup registration. Also previously un-awaited, so a stopped worker stayed in
+        # the registry -- except that it had never been added, so the two bugs concealed
+        # each other and the set looked correct by being empty.
+        await redis_manager.srem(TaskQueueKeyBuilder.worker_registry(), self.worker_id)
     
     async def process_iteration(self):
         """Main worker loop iteration with atomic task claiming."""
