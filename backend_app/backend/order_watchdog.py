@@ -26,6 +26,7 @@ Watchdog Logic:
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -147,6 +148,35 @@ def _position_lock_sql(dialect: str) -> str:
     )
 
 
+#: WATCH-01. The lease key for THIS subsystem, and its own rather than shared.
+#:
+#: `startup.sh:102` runs `gunicorn --workers ${WORKERS:-2}` and `main.py` constructs this
+#: watchdog and awaits `.start()` in the lifespan unconditionally, so before this every
+#: worker process ran both loops: each one querying the venue for the same open orders and
+#: each one able to adjudicate the same row.
+#:
+#: Distinct from `RECONCILIATION_LEADER_LOCK_KEY` and from `ReconciliationScheduler`'s for
+#: the reason `core.leader_lease` spells out: two different subsystems sharing one key
+#: would make whichever process won suppress the other entirely, which presents as "the
+#: loop is running" while half the work silently never happens. This watchdog talks to the
+#: venue about open orders; those two do different work.
+#:
+#: Both of THIS module's loops share this one key deliberately, which is the opposite
+#: case: they are one subsystem reading one population, they run in one process off one
+#: object, and they pass the same `instance_id` -- so the leader runs both and a
+#: non-leader runs neither. Giving them separate keys would let two different workers each
+#: run half the watchdog, which is the outcome the election exists to prevent.
+ORDER_WATCHDOG_LEADER_LOCK_KEY = "vyomquant:leader:order_watchdog"
+
+#: Lease duration. Must exceed the LONGER of the two loops' intervals, or the holder keeps
+#: losing a lease it is still actively using -- `core.leader_lease` says so in as many
+#: words. The monitoring loop's interval is `WatchdogConfig.check_interval_seconds` (30s by
+#: default) and the reconciliation loop's is 5-10s, so the figure is derived from the
+#: former with headroom for a cycle that runs long rather than hardcoded beside it.
+ORDER_WATCHDOG_LEADER_LOCK_TTL_FACTOR = 3
+ORDER_WATCHDOG_LEADER_LOCK_TTL_FLOOR_SECONDS = 90
+
+
 def _watchdog_session_dialect(db: Any) -> str:
     """The bound dialect's name, or ``"sqlite"`` when it cannot be determined.
 
@@ -179,11 +209,65 @@ class OrderWatchdog:
         self.config = config or WatchdogConfig()
         self._running = False
         self._watchdog_task: Optional[asyncio.Task] = None
-        
+
+        #: WATCH-01. One id per process, stable for its whole lifetime and distinct from
+        #: every other worker's -- the identity a renewable lease needs to tell "still me,
+        #: renew" apart from "someone else, back off". Same source and same reasoning as
+        #: `ExchangeReconciliationService._instance_id`.
+        self._instance_id = str(uuid.uuid4())
+
+        #: Derived, not hardcoded beside the interval it has to exceed. See the module
+        #: constants.
+        self._leader_lease_ttl_seconds = max(
+            ORDER_WATCHDOG_LEADER_LOCK_TTL_FLOOR_SECONDS,
+            self.config.check_interval_seconds * ORDER_WATCHDOG_LEADER_LOCK_TTL_FACTOR,
+        )
+
         # Metrics
         self.checks_run = 0
         self.orders_fixed = 0
         self.alerts_triggered = 0
+        #: Cycles skipped because another worker holds the lease. Counted separately from
+        #: `checks_run` so "this worker is idle because it is not the leader" is
+        #: distinguishable from "the loop is not running", which is the failure mode an
+        #: election introduces if it ever goes wrong.
+        self.cycles_skipped_not_leader = 0
+
+    # ── Leader election (WATCH-01) ──────────────────────────────────────────────
+
+    async def _try_become_leader(self) -> bool:
+        """``True`` iff THIS process may run a watchdog cycle right now.
+
+        `gunicorn` runs N workers and every one of them started this watchdog, so N
+        processes queried the venue for the same open orders each interval and each could
+        adjudicate the same row. `ExchangeReconciliationService` and
+        `ReconciliationScheduler` both already elect a leader through
+        `core.leader_lease.try_acquire_or_renew`; this loop had no election at all.
+
+        Delegates to that shared primitive rather than copying it, so the three cannot
+        drift. Fails CLOSED -- an unreachable Redis means no leadership and no cycle,
+        because assuming leadership on a failed check is exactly the N-workers behaviour
+        being removed.
+
+        WHY THIS IS NOT REDUNDANT WITH THE POSITION ROW LOCK. The thing standing between
+        two concurrent adjudications and a double-applied delta was the
+        `SELECT ... FOR UPDATE` in `_apply_status_update`. That statement is correct now
+        (see `_position_lock_sql` -- it used to name a `symbol` column `positions` does not
+        have, so PostgreSQL rejected it and the lock was never taken), and on the happy
+        path it does serialise and is held through `_update_position` to the commit. But
+        BOTH of its call sites still answer a failed lock by rolling the transaction back
+        and applying the delta ANYWAY -- "Continue with update even if lock fails
+        (non-blocking fallback)". So the lock is not an unconditional guarantee, and an
+        election that removes the concurrency is not a second belt on a working one.
+        """
+        from backend_app.core.leader_lease import try_acquire_or_renew
+
+        return await try_acquire_or_renew(
+            lock_key=ORDER_WATCHDOG_LEADER_LOCK_KEY,
+            instance_id=self._instance_id,
+            ttl_seconds=self._leader_lease_ttl_seconds,
+            subsystem="OrderWatchdog",
+        )
     
     async def start(self):
         """Start watchdog monitoring loop."""
@@ -221,6 +305,22 @@ class OrderWatchdog:
         
         while self._running:
             try:
+                # WATCH-01. Everything below adjudicates orders and queries the venue, so
+                # exactly one process may do it. Checked per cycle rather than once at
+                # start: a lease is renewable and transferable, so a worker that loses it
+                # must stop and a worker that gains it must start, without a restart.
+                #
+                # The guard is in the LOOP and not inside `_check_stale_orders` /
+                # `recover_unsubmitted_executions` / `recheck_unresolved_submissions`,
+                # deliberately. Those three stay directly callable -- their own tests drive
+                # them without a Redis, and a one-shot operator invocation should not have
+                # to win an election to do a single pass. Same placement
+                # `ExchangeReconciliationService` uses.
+                if not await self._try_become_leader():
+                    self.cycles_skipped_not_leader += 1
+                    await asyncio.sleep(self.config.check_interval_seconds)
+                    continue
+
                 await self._check_stale_orders()
 
                 # TRADE-07. The OTHER stale population: EXECUTING rows with NO venue
@@ -282,6 +382,16 @@ class OrderWatchdog:
         
         while self._running:
             try:
+                # WATCH-01. Its own check rather than inheriting the monitoring loop's:
+                # this runs as a SEPARATE task created at `_monitoring_loop`'s top, so a
+                # `continue` there does not pause this one. Same key and same
+                # `instance_id`, so the leader renews one lease from whichever loop ticks
+                # first and a non-leader skips both.
+                if not await self._try_become_leader():
+                    self.cycles_skipped_not_leader += 1
+                    await asyncio.sleep(self.config.check_interval_seconds)
+                    continue
+
                 await self._reconcile_open_orders()
                 
                 # Wait 5-10 seconds before next reconciliation
