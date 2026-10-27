@@ -112,49 +112,53 @@ def _validate_keys(provider: str) -> str:
 
     No credential VALUE is interpolated into any message here. The condition is named, and the
     required prefix is named; the value itself never enters a response body or a log line.
+
+    RAZORPAY IS THE ONLY GATEWAY, and an unrecognised provider now RAISES. This used to be
+    ``if provider == "stripe" / elif provider == "razorpay"`` with no ``else``, so any other
+    name fell off the end and returned ``None`` -- a silent pass in the one function the
+    whole system treats as the credential authority. It was unreachable because both callers
+    iterate :data:`_SUPPORTED_PROVIDERS`, but "unreachable" was a property of those callers,
+    not of this function.
     """
-    if provider == "stripe":
-        key = os.environ.get("STRIPE_SECRET_KEY")
-        if not key:
-            raise HTTPException(500, "Stripe is not configured: STRIPE_SECRET_KEY is not set.")
-        if key == "sk_test_dummy":
-            raise HTTPException(500, "Stripe is configured with the placeholder key 'sk_test_dummy'.")
-        if key.startswith("sk_test_"):
-            raise HTTPException(500, "Stripe is configured with a TEST secret key. Live credentials are required: a test key collects no money.")
-        if not key.startswith("sk_live_"):
-            raise HTTPException(500, "Stripe secret key is invalid: it must begin with 'sk_live_'.")
-        return key
-    elif provider == "razorpay":
-        key = os.environ.get("RAZORPAY_KEY_ID")
-        secret = os.environ.get("RAZORPAY_KEY_SECRET")
-        if not key:
-            raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_ID is not set.")
-        if key == "rzp_test_dummy":
-            raise HTTPException(500, "Razorpay is configured with the placeholder key 'rzp_test_dummy'.")
-        if key.startswith("rzp_test_"):
-            raise HTTPException(500, "Razorpay is configured with a TEST key id. Live credentials are required: a test key collects no money.")
-        if not key.startswith("rzp_live_"):
-            raise HTTPException(500, "Razorpay key ID is invalid: it must begin with 'rzp_live_'.")
-        if not secret:
-            raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_SECRET is not set.")
-        if secret == "dummy_secret":
-            raise HTTPException(500, "Razorpay is configured with the placeholder key secret 'dummy_secret'.")
-        return key
+    if provider != "razorpay":
+        raise HTTPException(
+            500,
+            f"Unsupported payment provider {provider!r}. Razorpay is the only gateway this "
+            f"platform is wired for, so there is no credential to validate.",
+        )
+    key = os.environ.get("RAZORPAY_KEY_ID")
+    secret = os.environ.get("RAZORPAY_KEY_SECRET")
+    if not key:
+        raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_ID is not set.")
+    if key == "rzp_test_dummy":
+        raise HTTPException(500, "Razorpay is configured with the placeholder key 'rzp_test_dummy'.")
+    if key.startswith("rzp_test_"):
+        raise HTTPException(500, "Razorpay is configured with a TEST key id. Live credentials are required: a test key collects no money.")
+    if not key.startswith("rzp_live_"):
+        raise HTTPException(500, "Razorpay key ID is invalid: it must begin with 'rzp_live_'.")
+    if not secret:
+        raise HTTPException(500, "Razorpay is not configured: RAZORPAY_KEY_SECRET is not set.")
+    if secret == "dummy_secret":
+        raise HTTPException(500, "Razorpay is configured with the placeholder key secret 'dummy_secret'.")
+    return key
 
 
-#: The providers this module can route money through, in the order
-#: :func:`_providers_with_live_credentials` probes them. Same two names ``_validate_keys`` and
-#: ``FXService.resolve_checkout_provider_and_currency`` use, spelt once.
-_SUPPORTED_PROVIDERS = ("stripe", "razorpay")
-
-#: The providers that publish a HOSTED, self-serve billing portal a subscriber can be sent to.
+#: The providers this module can route money through. ONE: Razorpay.
 #:
-#: Stripe has one (``stripe.billing_portal.Session``). **Razorpay does not** - it publishes no
-#: equivalent customer-facing portal at all, so for a Razorpay-billed account there is no URL
-#: to hand out and no session to create. That absence is a product fact about the provider, not
-#: a gap in this deployment's configuration, and the two are answered separately below because
-#: they need opposite fixes: one cannot be fixed at all, the other is an environment variable.
-_PROVIDERS_WITH_HOSTED_PORTAL = frozenset({"stripe"})
+#: Stripe was removed in full rather than left configured-but-unused. A dormant second
+#: gateway is worse than no second gateway: it keeps a webhook route, a credential branch,
+#: a cancel path and a lifecycle layer alive that nobody exercises, and at the time of
+#: removal every one of those carried a money defect -- a renewal that silently lost a
+#: calendar-edge period, an upgrade that left the old subscription charging, a refund that
+#: never downgraded the tier, and a cancellation that reported success while the card kept
+#: being charged for an account with no email on record.
+#:
+#: Kept as a tuple rather than collapsed to a bare string so
+#: :func:`_providers_with_live_credentials` keeps something to iterate, and so re-adding a
+#: provider later is an edit here rather than a rewrite. If the one re-added RECURS, the
+#: provider-first cancellation ordering removed from `cancel_subscription` has to come back
+#: with it.
+_SUPPORTED_PROVIDERS = ("razorpay",)
 
 
 def _providers_with_live_credentials() -> List[str]:
@@ -941,34 +945,6 @@ def _epoch_instant(value: Any) -> Optional[datetime]:
         return None
 
 
-def _stripe_settlement_metadata(metadata: Optional[dict], session: Any) -> dict:
-    """The Stripe session metadata plus the provider facts a Settlement_Record needs.
-
-    MARKETPLACE SETTLEMENT (task 19.2). ``checkout_service`` puts ``item_key``,
-    ``subscription_id``, ``library_id`` and ``currency`` in the session metadata; what it cannot
-    put there is what the provider actually confirmed - the transaction reference, the charged
-    amount and the settlement currency - and those are exactly the three values Requirement 9.14
-    makes the mismatch guard out of. They are read off the event here, beside the branch that owns
-    the event, and travel through the ONE entitlement funnel
-    (``_apply_billing_entitlement`` -> ``_apply_marketplace_entitlement``) rather than through a
-    second webhook path.
-
-    ``payment_intent`` is preferred over the session id because the refund events carry the payment
-    intent, so a payment and its later reversal deduplicate against the same
-    ``uq_settlement_reference_reversal`` reference. Nothing is added for a plan purchase: the
-    metadata is returned unchanged unless the item is a marketplace item.
-    """
-    enriched = dict(metadata or {})
-    if not str(enriched.get("item_key") or "").startswith(_MARKETPLACE_ITEM_PREFIX):
-        return enriched
-    enriched["provider"] = "stripe"
-    enriched["provider_reference"] = session.get("payment_intent") or session.get("id")
-    enriched["amount_minor"] = session.get("amount_total")
-    enriched["currency"] = session.get("currency") or enriched.get("currency")
-    enriched["confirmed_at_epoch"] = session.get("created")
-    return enriched
-
-
 def _razorpay_settlement_metadata(notes: Optional[dict], payment: Any) -> dict:
     """The Razorpay ``notes`` plus the provider facts a Settlement_Record needs.
 
@@ -1554,11 +1530,6 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
         )
     except Exception as notif_err:
         logger.debug(f"[BILLING] Notification dispatch error: {notif_err}")
-
-
-async def _process_stripe_entitlement(user_id: str, item_key: str, discount_applied: bool = False, metadata: dict = None) -> None:
-    await _apply_billing_entitlement(user_id, item_key, discount_applied, metadata or {}, provider="stripe")
-    logger.info(f"Stripe: Processed '{item_key}' for user {user_id} (Discount: {discount_applied})")
 
 
 class RazorpayOrderMismatch(Exception):
@@ -2226,77 +2197,7 @@ async def create_checkout_session(
         raise HTTPException(400, "Calculated checkout amount must be greater than zero.")
 
     try:
-        if provider == "stripe":
-            stripe_key = _validate_keys("stripe")
-            import stripe
-            stripe.api_key = stripe_key
-
-            session_params = {
-                "payment_method_types": ["card"],
-                "line_items": [
-                    {
-                        "price_data": {
-                            "currency": checkout_currency.lower(),
-                            "product_data": {
-                                "name": f"VyomQuant — {_plan_display_name(item_key)}"
-                            },
-                            "unit_amount": amount,
-                            # The recurring interval is the one the request asked for. It used to
-                            # be hardcoded `"month"`, which is why there was no annual plan: an
-                            # annual AMOUNT with a monthly interval would have billed the yearly
-                            # price every month.
-                            **({
-                                "recurring": {"interval": interval}
-                            } if not body.is_addon else {}),
-                        },
-                        "quantity": 1,
-                    }
-                ],
-                "mode": "payment" if body.is_addon else "subscription",
-                "success_url": (
-                    f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}"
-                    "/app/billing?payment=success"
-                ),
-                "cancel_url": (
-                    f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing"
-                ),
-                "client_reference_id": user["id"],
-                "metadata": {
-                    "user_id": user["id"],
-                    "item_key": item_key,
-                    "currency": checkout_currency,
-                    "fx_rate": str(localized.fx_rate),
-                    "price_source": localized.price_source,
-                    "interval": interval,
-                    "discount_applied": "true" if discount_applied else "false",
-                },
-            }
-            # For subscription mode: attach metadata to the Stripe Subscription object
-            # so that customer.subscription.* webhooks can resolve item_key and currency
-            if not body.is_addon:
-                session_params["subscription_data"] = {
-                    "metadata": {
-                        "user_id": user["id"],
-                        "item_key": item_key,
-                        "currency": checkout_currency,
-                        "fx_rate": str(localized.fx_rate),
-                        "price_source": localized.price_source,
-                        "interval": interval,
-                        "discount_applied": "true" if discount_applied else "false",
-                    }
-                }
-            session = stripe.checkout.Session.create(**session_params)
-            return {
-                "checkoutUrl": session.url,
-                "checkout_url": session.url,
-                "provider": "stripe",
-                "currency": checkout_currency,
-                "amount": amount,
-                "interval": interval,
-                "price_source": localized.price_source,
-            }
-
-        elif provider == "razorpay":
+        if provider == "razorpay":
             if amount < RAZORPAY_MIN_AMOUNT_MINOR:
                 # Raised before the client is constructed so the gateway is never asked for an
                 # order it is guaranteed to refuse. Outside the try/except below it would be
@@ -2503,541 +2404,6 @@ async def verify_razorpay_payment(
 
 
 # ── POST /api/billing/webhook/stripe ────────────────────────────────────
-@router.post("/webhook/stripe")
-async def stripe_webhook(
-    background_tasks: BackgroundTasks,
-    request: Request,
-    stripe_signature: str = Header(None, alias="stripe-signature"),
-):
-    # WEBHOOK SECURITY: Validate webhook IP before processing
-    _validate_webhook_ip(request, "stripe")
-    
-    stripe_key = _validate_keys("stripe")
-    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
-    if not webhook_secret or webhook_secret == "whsec_dummy" or not webhook_secret.startswith("whsec_"):
-        raise HTTPException(500, "Stripe production webhook secret is missing, invalid, or test credentials are used in production path.")
-
-    import stripe
-    stripe.api_key = stripe_key
-
-    payload = await request.body()
-    
-    # WEBHOOK SECURITY: Validate webhook signature
-    _validate_webhook_signature(request, "stripe", payload)
-    
-    # WEBHOOK SECURITY: Validate webhook timestamp
-    _validate_webhook_timestamp(request, "stripe")
-    
-    try:
-        secret = webhook_secret or "whsec_dummy"
-        event = stripe.Webhook.construct_event(
-            payload, stripe_signature, secret
-        )
-    except Exception as e:
-        logger.warning(f"Stripe webhook signature failure: {e}")
-        raise HTTPException(400, f"Webhook Error: {e}")
-    
-    # BUG-FIX BILL-01 / BUG-IB-04: Crash-safe two-phase idempotency.
-    # 1. Acquire short-lived processing lock (60s TTL). If crash occurs, key expires in 60s instead of blocking retries for 24h.
-    # 2. On DB commit / successful handling, transition key to "completed" with 86400s TTL.
-    # 3. On failure / exception before DB commit, release key immediately so retries can execute.
-    event_id = event.get("id") or request.headers.get("stripe-event-id")
-    idempotency_key = f"webhook:stripe:{event_id}" if event_id else None
-    if idempotency_key:
-        cached_val = await redis_manager.get(idempotency_key)
-        if cached_val in ("completed", "1", "processing"):
-            logger.info(f"Stripe webhook {event_id} already processed or in-flight, skipping")
-            return {"status": "duplicate"}
-        acquired = await redis_manager.set(idempotency_key, "processing", nx=True, ex=60)
-        if not acquired:
-            logger.info(f"Stripe webhook {event_id} lock collision, skipping")
-            return {"status": "duplicate"}
-
-        # SEC-03: a DURABLE claim underneath the Redis fast path above, closing the gap
-        # Redis cannot cover on its own -- a Redis flush/restart/TTL expiry (the above
-        # check would then read as "not a duplicate") or a transient Redis outage
-        # (redis_manager is deliberately fail-soft: an error there already read as "no
-        # record" and fell through to here). public.webhook_events (migration 045)
-        # never expires and is unaffected by either. See core/webhook_idempotency.py's
-        # module docstring.
-        if not await acquire_webhook_processing("stripe", event_id):
-            logger.info(
-                f"Stripe webhook {event_id} already durably processed (webhook_events), "
-                f"skipping"
-            )
-            await redis_manager.delete(idempotency_key)
-            return {"status": "duplicate"}
-
-    try:
-        # Log webhook event for audit trail
-        logger.info(f"Stripe webhook event: {event['type']}")
-
-        if event["type"] == "checkout.session.completed":
-            session = event["data"]["object"]
-            user_id = session.get("client_reference_id")
-            metadata = session.get("metadata", {})
-
-            # F-19 FIX: Missing item_key returns HTTP 400 — never default to a paid tier.
-            item_key = metadata.get("item_key")
-            if not item_key:
-                logger.error(
-                    f"Stripe webhook: missing item_key in session metadata "
-                    f"for client_reference_id={user_id}. Metadata received: {metadata}"
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="Missing item_key in Stripe session metadata. Cannot process entitlement.",
-                )
-
-            if not user_id:
-                logger.error("Stripe webhook: missing client_reference_id")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Missing client_reference_id in Stripe session"
-                )
-
-            discount_applied = metadata.get("discount_applied") == "true"
-            try:
-                await _process_stripe_entitlement(user_id, item_key, discount_applied, _stripe_settlement_metadata(metadata, session))
-                
-                # Process referral commission on successful payment
-                payment_id = session.get("payment_intent") or session.get("id")
-
-                # MONEY-07: check the denomination Stripe declared against the one this
-                # handler records. Stripe sends lowercase ISO codes, which
-                # `_require_provider_currency` normalises -- normalising CASE is not
-                # substituting a currency; a genuine EUR session still refuses below.
-                #
-                # This path matters more than the Razorpay one, because `payment_amount`
-                # here becomes the base the database computes a 20% referral commission
-                # from. A non-USD amount passed as `p_payment_amount_usd` is precisely
-                # the mislabelling MONEY-04 was reported for, in the other direction.
-                _stripe_currency_ok = True
-                try:
-                    _require_provider_currency(
-                        session.get("currency"),
-                        "USD",
-                        provider="stripe",
-                        payment_id=payment_id,
-                    )
-                except ProviderCurrencyMismatch as mismatch:
-                    _stripe_currency_ok = False
-                    # Capture the code into a plain local: Python unbinds the `except`
-                    # name (`mismatch`) the instant the block exits, so referring to it
-                    # after the block is an F821 undefined name -- which flake8's
-                    # E9/F63/F7/F82 gate (01-pr-check.yml) refuses and which
-                    # tests/test_no_undefined_names.py enforces.
-                    _stripe_mismatch_code = mismatch.code
-                    logger.critical(
-                        "[BILLING] MONEY-07: Stripe checkout session %s is not "
-                        "denominated in USD (%s), so no invoice is filed and NO REFERRAL "
-                        "COMMISSION IS CREDITED. The entitlement was already granted and "
-                        "STANDS. %s",
-                        payment_id, mismatch.code, mismatch.detail,
-                    )
-
-                # MONEY-02: exact Minor_Units -> Decimal, never float division.
-                # `None` means the provider amount was inexact or unreadable; the
-                # branches below then decline to record or credit rather than guessing.
-                payment_amount = _provider_major_amount(session.get("amount_total"), "USD")
-
-                if not _stripe_currency_ok:
-                    # The commission is still owed. State it in the unit actually charged,
-                    # when that unit's scale is known -- same reasoning and same limit as
-                    # the Razorpay path.
-                    if _stripe_mismatch_code == "CURRENCY_MISMATCH":
-                        _declared = str(session.get("currency") or "").strip().upper()
-                        _declared_amount = _amount_in_declared_currency(
-                            session.get("amount_total"), _declared
-                        )
-                        if _declared_amount is not None and _declared_amount > 0:
-                            await _record_referral_obligation(
-                                provider="stripe",
-                                payment_id=payment_id,
-                                user_id=user_id,
-                                amount=_declared_amount,
-                                currency=_declared,
-                                subscription_tier=item_key,
-                                reason_code="PROVIDER_CURRENCY_MISMATCH",
-                                detail={
-                                    "handler_currency": "USD",
-                                    "declared_currency": _declared,
-                                    "mismatch_code": _stripe_mismatch_code,
-                                },
-                            )
-                    # Suppress the amount so neither the invoice insert nor the
-                    # commission branch below records a figure under the wrong unit. They
-                    # already treat `None` as "do not record", so this reuses the
-                    # existing refusal rather than adding a second one.
-                    payment_amount = None
-
-                # ── Insert billing_invoices record ──
-                try:
-                    sb_inv = _background_sb()
-                    sb_inv.table("billing_invoices").insert({
-                        "user_id": user_id,
-                        "provider": "stripe",
-                        "provider_payment_id": payment_id or "",
-                        # Sent as a decimal STRING so the exact value reaches the numeric
-                        # column. Serialising a Decimal through float would reintroduce
-                        # the defect at the transport boundary.
-                        "amount_usd": str(payment_amount) if payment_amount is not None else None,
-                        "amount_inr": 0,
-                        "currency": "USD",
-                        "status": "paid",
-                        "plan": item_key,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }).execute()
-                except Exception as inv_err:
-                    logger.warning(f"[BILLING] Could not insert billing_invoices (Stripe): {inv_err}")
-
-                # ── Dispatch payment_succeeded notification ──
-                try:
-                    from backend_app.core.notification_dispatcher import dispatch_user_notification
-                    await dispatch_user_notification(
-                        user_id=user_id,
-                        event_type="payment_succeeded",
-                        category="billing",
-                        severity="info",
-                        title="Payment Successful",
-                        message=(
-                            f"Your payment of ${payment_amount:.2f} USD was successful. "
-                            f"Plan: {item_key.upper()}."
-                            if payment_amount is not None
-                            else f"Your payment was successful. Plan: {item_key.upper()}."
-                        ),
-                        metadata={"item_key": item_key, "payment_id": payment_id, "provider": "stripe"},
-                    )
-                except Exception as notif_err:
-                    logger.debug(f"[BILLING] payment_succeeded notification error: {notif_err}")
-
-                if payment_amount is not None and payment_amount > 0:
-                    # ══════════════════════════════════════════════════════════
-                    # MONEY-05: AN UNKNOWN TIER MUST NOT COST THE REFERRER THEIR
-                    #           COMMISSION
-                    # ══════════════════════════════════════════════════════════
-                    # `referral_commissions.subscription_tier` is `varchar NOT NULL`, so
-                    # an empty `item_key` made the INSERT inside
-                    # `process_referral_commission` fail with a not-null violation. The
-                    # RPC call is wrapped in `except Exception` below, so the failure was
-                    # logged and the commission silently never existed.
-                    #
-                    # THE POLICY, STATED EXPLICITLY: record the commission with a
-                    # documented sentinel tier. This is the OPPOSITE choice to MONEY-04,
-                    # and the difference is whether the missing fact changes the amount
-                    # owed:
-                    #
-                    #   MONEY-04 (currency unknown) -> REFUSE. The currency determines
-                    #     the amount, so crediting anyway would overstate it ~83x. There
-                    #     is no safe value to substitute.
-                    #
-                    #   MONEY-05 (tier unknown) -> CREDIT, with the tier marked. The
-                    #     function computes a FLAT 20% of the payment amount; the tier is
-                    #     descriptive only and does not enter the arithmetic. So the
-                    #     referrer is owed exactly the same money either way, and
-                    #     refusing would take money from them to avoid an imprecise
-                    #     label. Dropping it was the defect, not the conservative option.
-                    #
-                    # The sentinel is a visible, queryable value rather than a guess at
-                    # which plan was bought: `SELECT ... WHERE subscription_tier =
-                    # 'unknown'` finds every row needing a label, and the amount is
-                    # already correct, so the follow-up is bookkeeping and not a payment.
-                    _tier = str(item_key or "").strip() or "unknown"
-                    if _tier == "unknown":
-                        logger.error(
-                            "[BILLING] MONEY-05: Stripe payment %s carries no plan "
-                            "identifier, so its referral commission is recorded with "
-                            "subscription_tier='unknown'. The AMOUNT IS CORRECT (the "
-                            "rate is a flat percentage of the payment and does not "
-                            "depend on tier); only the label needs reconciling. "
-                            "user=%s amount=%s",
-                            payment_id, user_id, payment_amount,
-                        )
-                    try:
-                        sb = _background_sb()
-                        sb.rpc("process_referral_commission", {
-                            # BILL-07: the installed function names this param
-                            # p_referred_user_id, not p_referred_id -- see that
-                            # ledger entry for why (PostgREST matches by name).
-                            "p_referred_user_id": user_id,
-                            "p_payment_id": payment_id,
-                            "p_subscription_tier": _tier,
-                            # MONEY-02: a decimal string, so the commission base the
-                            # database computes 20% of is the exact charged amount.
-                            "p_payment_amount_usd": str(payment_amount),
-                        }).execute()
-                        logger.info(f"Referral commission processed for Stripe payment {payment_id}")
-                    except Exception as ref_err:
-                        logger.error(f"Failed to process referral commission for payment {payment_id}: {ref_err}")
-                        # Don't fail the webhook if commission processing fails
-                        #
-                        # MONEY-06, THE SCOPE THE FINDING DID NOT NAME. This `except` is
-                        # the Stripe half of the same defect: a transient PostgREST
-                        # failure, a connection reset or a database hiccup lost a REAL
-                        # USD commission, logged once and gone. The three writes in this
-                        # branch -- tier, invoice, commission -- are three independent
-                        # transactions (PostgREST commits each before responding), so
-                        # this one failing while the others succeeded is not an edge case,
-                        # it is the ordinary consequence of the access pattern.
-                        #
-                        # The obligation is recorded as `payable` rather than
-                        # `unresolved`: the amount IS computable, because the payment is
-                        # already in the ledger's own currency. Nothing needs deciding,
-                        # only retrying.
-                        await _record_referral_obligation(
-                            provider="stripe",
-                            payment_id=payment_id,
-                            user_id=user_id,
-                            amount=payment_amount,
-                            currency="USD",
-                            subscription_tier=_tier,
-                            reason_code="COMMISSION_RPC_FAILED",
-                            detail={
-                                "handler": "stripe_webhook",
-                                "event": "checkout.session.completed",
-                                "error_type": ref_err.__class__.__name__,
-                                "error": str(ref_err)[:500],
-                            },
-                        )
-                elif payment_amount is None:
-                    logger.error(
-                        "[BILLING] MONEY-02: no referral commission issued for Stripe "
-                        "payment %s because the charged amount could not be read "
-                        "exactly. The entitlement was still granted; the commission is "
-                        "reconcilable from the provider record.",
-                        payment_id,
-                    )
-                    # MONEY-06. The amount could not be read, so no obligation ROW can
-                    # state it -- `referral_obligations.payment_amount` is NOT NULL and
-                    # `> 0`, deliberately, because an obligation with no amount is not an
-                    # obligation. Recording a zero or a guess would be worse than the log
-                    # line. This remains the one commission-loss path with no durable
-                    # row, and it is bounded: `_provider_major_amount` returns None only
-                    # for a float, a bool, an unparseable value or an out-of-range
-                    # magnitude, all of which mean the provider sent something this
-                    # platform cannot treat as money at all. Stated here rather than
-                    # left as an implicit gap.
-            except Exception as e:
-                logger.error(f"Stripe entitlement processing failed: {e}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Entitlement update failed: {e}"
-                )
-
-        elif event["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):
-            sub_obj = event["data"]["object"]
-            user_id = sub_obj.get("metadata", {}).get("user_id")
-
-            if not user_id:
-                cust_id = sub_obj.get("customer")
-                cust = stripe.Customer.retrieve(cust_id)
-                user_id = cust.get("metadata", {}).get("user_id")
-
-            if not user_id:
-                logger.error(f"Stripe subscription event {event['type']} missing user_id reference.")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Missing user_id in Stripe subscription event metadata"
-                )
-
-            if event["type"] == "customer.subscription.deleted":
-                try:
-                    await _process_stripe_entitlement(user_id, "free")
-                    logger.info(f"Stripe: Processed cancellation (free) for user {user_id}")
-                except Exception as e:
-                    logger.error(f"Stripe subscription deletion handler failed: {e}")
-                    raise HTTPException(500, f"Subscription deletion failed: {e}")
-            else:
-                # updated: check updated item_key
-                item_key = sub_obj.get("metadata", {}).get("item_key")
-                if not item_key:
-                    items = sub_obj.get("items", {}).get("data", [])
-                    if items:
-                        price_id = items[0].get("price", {}).get("id")
-                        logger.warning(f"No item_key in subscription update metadata. Resolving by price_id: {price_id}")
-                if item_key:
-                    try:
-                        await _process_stripe_entitlement(user_id, item_key)
-                        logger.info(f"Stripe: Processed update ({item_key}) for user {user_id}")
-                    except Exception as e:
-                        logger.error(f"Stripe subscription update handler failed: {e}")
-                        raise HTTPException(500, f"Subscription update failed: {e}")
-
-        elif event["type"] == "invoice.payment_succeeded":
-            # ── Subscription renewal: mark active and extend billing period ──
-            invoice_obj = event["data"]["object"]
-            sub_id = invoice_obj.get("subscription")
-            if sub_id:
-                renewal_user_id = None
-                try:
-                    sub = stripe.Subscription.retrieve(sub_id)
-                    renewal_user_id = sub.get("metadata", {}).get("user_id")
-                    if not renewal_user_id:
-                        cust_id = invoice_obj.get("customer")
-                        cust = stripe.Customer.retrieve(cust_id)
-                        renewal_user_id = cust.get("metadata", {}).get("user_id")
-                    if renewal_user_id:
-                        renewal_item_key = sub.get("metadata", {}).get("item_key", "")
-                        from backend_app.core.billing_lifecycle import BillingLifecycle
-                        sb_renew = _background_sb()
-                        await BillingLifecycle.renew_subscription(renewal_user_id, sb_renew)
-                        await invalidate_profile_cache(renewal_user_id)
-                        # Insert billing_invoices record for renewal
-                        # MONEY-02: exact Minor_Units -> Decimal, never float division.
-                        renewal_amount = _provider_major_amount(
-                            invoice_obj.get("amount_paid"), "USD"
-                        )
-                        renewal_payment_id = invoice_obj.get("payment_intent") or invoice_obj.get("id", "")
-                        try:
-                            sb_inv = _background_sb()
-                            sb_inv.table("billing_invoices").insert({
-                                "user_id": renewal_user_id,
-                                "provider": "stripe",
-                                "provider_payment_id": renewal_payment_id,
-                                "amount_usd": (
-                                    str(renewal_amount) if renewal_amount is not None else None
-                                ),
-                                "amount_inr": 0,
-                                "currency": "USD",
-                                "status": "paid",
-                                "plan": renewal_item_key or "unknown",
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            }).execute()
-                        except Exception as inv_err:
-                            logger.warning(f"[BILLING] Could not insert billing_invoices (Stripe renewal): {inv_err}")
-                        # Dispatch renewal notification
-                        try:
-                            from backend_app.core.notification_dispatcher import dispatch_user_notification
-                            await dispatch_user_notification(
-                                user_id=renewal_user_id,
-                                event_type="subscription_renewed",
-                                category="billing",
-                                severity="info",
-                                title="Subscription Renewed",
-                                message=(
-                                    "Your subscription has been renewed successfully. "
-                                    f"Amount: ${renewal_amount:.2f} USD."
-                                    if renewal_amount is not None
-                                    else "Your subscription has been renewed successfully."
-                                ),
-                                metadata={"item_key": renewal_item_key, "payment_id": renewal_payment_id, "provider": "stripe"},
-                            )
-                        except Exception as notif_err:
-                            logger.debug(f"[BILLING] subscription_renewed notification error: {notif_err}")
-                        logger.info(f"Stripe: Renewal processed for user {renewal_user_id}")
-                except Exception as renew_err:
-                    logger.error(f"Stripe renewal processing error for sub {sub_id}: {renew_err}")
-
-        elif event["type"] == "invoice.payment_failed":
-            invoice_obj = event["data"]["object"]
-            sub_id = invoice_obj.get("subscription")
-            user_id = None
-            if sub_id:
-                sub = stripe.Subscription.retrieve(sub_id)
-                user_id = sub.get("metadata", {}).get("user_id")
-            if not user_id:
-                cust_id = invoice_obj.get("customer")
-                cust = stripe.Customer.retrieve(cust_id)
-                user_id = cust.get("metadata", {}).get("user_id")
-
-            if user_id:
-                try:
-                    sb = _background_sb()
-                    sb.table("profiles").update({
-                        "is_frozen": True,
-                        "subscription_status": "past_due",
-                    }).eq("id", user_id).execute()
-                    await invalidate_profile_cache(user_id)
-                    logger.info(f"User {user_id} account frozen due to invoice payment failure.")
-                    # Dispatch payment_failed notification
-                    try:
-                        from backend_app.core.notification_dispatcher import dispatch_user_notification
-                        await dispatch_user_notification(
-                            user_id=user_id,
-                            event_type="payment_failed",
-                            category="billing",
-                            severity="critical",
-                            title="Payment Failed — Action Required",
-                            message="Your subscription payment failed. Please update your payment method to restore access.",
-                            metadata={"provider": "stripe", "action_url": "/app/billing"},
-                        )
-                    except Exception as notif_err:
-                        logger.debug(f"[BILLING] payment_failed notification error: {notif_err}")
-                    # Broadcast via WebSocket for immediate UI refresh
-                    await RealtimeSync.sync_subscription_change(
-                        user_id, "payment_failed",
-                        {"subscription_status": "past_due", "action": "update_payment_method"}
-                    )
-                except Exception as e:
-                    logger.error(f"Stripe payment failure handler failed to freeze account: {e}")
-                    raise HTTPException(500, f"Payment failure handler failed: {e}")
-
-        elif event["type"] in ("charge.refunded", "charge.refund.updated"):
-            # Handle refunds and chargebacks - reverse referral commission
-            charge_obj = event["data"]["object"]
-            payment_id = charge_obj.get("id")
-            
-            if payment_id:
-                try:
-                    sb = _background_sb()
-                    sb.rpc("reverse_referral_commission", {
-                        "p_payment_id": payment_id,
-                        "p_reversal_reason": event["type"]
-                    }).execute()
-                    logger.info(f"Referral commission reversed for Stripe payment {payment_id} due to {event['type']}")
-                except Exception as ref_err:
-                    logger.error(f"Failed to reverse referral commission for payment {payment_id}: {ref_err}")
-                    # Don't fail the webhook if commission reversal fails
-
-                # MONEY-06: a recorded OBLIGATION must be reversed too, or a refunded
-                # payment would leave a payable standing forever.
-                #
-                # Guarded to `charge.refunded` for the same reason the marketplace
-                # reversal below is: `charge.refund.updated` also fires when a refund
-                # FAILS, and reversing an obligation for money that never went back would
-                # cancel a payable the referrer is still owed. The commission-reversal RPC
-                # above is NOT so guarded -- an existing inconsistency, recorded in
-                # staging/MONEY_FLOW_AUDIT.md rather than changed here, because altering
-                # when a COMMISSION reverses is a money decision outside this finding.
-                if event["type"] == "charge.refunded":
-                    await _reverse_referral_obligation(
-                        provider="stripe",
-                        payment_id=payment_id,
-                        reason=event["type"],
-                    )
-
-                # MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8: the ledger half of a
-                # refund. Only ``charge.refunded`` means money actually went back — ``charge.
-                # refund.updated`` also fires when a refund FAILS, and recording a reversal for a
-                # refund that never completed would subtract an owner's earning for money that
-                # never left and cancel a live entitlement. The reference is the payment intent, so
-                # the reversal deduplicates against the same reference the payment settled under.
-                if event["type"] == "charge.refunded":
-                    await _settle_marketplace_reversal(
-                        provider="stripe",
-                        payment_reference=charge_obj.get("payment_intent") or payment_id,
-                        event_metadata=charge_obj.get("metadata") or {},
-                        amount_minor=charge_obj.get("amount_refunded"),
-                        currency=charge_obj.get("currency"),
-                        event_name=event["type"],
-                    )
-
-        # Successfully completed — store completed status with 24h TTL
-        if idempotency_key:
-            await redis_manager.set(idempotency_key, "completed", ex=86400)
-        if event_id:
-            # SEC-03: durable completion, never expires.
-            await mark_webhook_completed("stripe", event_id)
-
-        return {"status": "success"}
-
-    except Exception:
-        # On failure or rollback, release processing lock so retry can proceed
-        if idempotency_key:
-            await redis_manager.delete(idempotency_key)
-        if event_id:
-            await release_webhook_processing("stripe", event_id)
-        raise
 
 
 # ── POST /api/billing/webhook/razorpay ──────────────────────────────────
@@ -3420,9 +2786,6 @@ async def razorpay_webhook(
         raise
 
 
-
-
-
 @router.post("/payment-methods")
 @limiter.limit("10/minute")
 async def add_payment_method(
@@ -3531,166 +2894,6 @@ async def delete_payment_method(
     return {"status": "ok", "deleted": method_id}
 
 
-@router.post("/portal")
-@limiter.limit("5/minute")
-async def create_portal_session(
-    request: Request,
-    user: dict = Depends(get_current_user)
-):
-    """A hosted provider portal session, or a refusal naming why this provider has none.
-
-    WHAT THIS USED TO DO
-    --------------------
-    It opened with ``_validate_keys("stripe")`` unconditionally. On a Razorpay deployment that
-    raises ``HTTPException(500, "Stripe is not configured: STRIPE_SECRET_KEY is not set.")``, so
-    the ONE action the billing page's payment-methods panel offered answered 500 every single
-    time it was pressed - naming a provider this platform does not bill through, from a button
-    labelled "Manage via provider portal".
-
-    WHY THE ANSWER FOR RAZORPAY IS A REFUSAL AND NOT A REDIRECT
-    -----------------------------------------------------------
-    Razorpay publishes no hosted self-serve billing portal. There is no Razorpay equivalent of
-    ``stripe.billing_portal.Session`` to call and no customer-facing URL to send a subscriber
-    to, so any URL returned here would be one this handler made up. A fabricated URL is worse
-    than the 500 it replaces: the 500 at least failed visibly. The refusal instead names the
-    provider, says there is no portal, and says where the payment instrument is actually
-    changed - at the next Razorpay Checkout, which is the only place it is ever collected.
-
-    THE STRIPE BRANCH IS UNTOUCHED AND STILL REACHED
-    ------------------------------------------------
-    This is additive: if ``STRIPE_SECRET_KEY`` genuinely holds a live Stripe secret then Stripe
-    IS a provider this deployment can bill through, its portal exists, and the original
-    customer-lookup-then-``billing_portal.Session.create`` path below runs exactly as it did.
-    The gate is only that Stripe has to be real before a Stripe API call is made in its name.
-
-    THE TWO REFUSALS ARE SEPARATE, FOR THE REASON ``_validate_keys`` SEPARATES ITS THREE
-    -----------------------------------------------------------------------------------
-    "Razorpay has no portal" is a permanent fact about the provider that no configuration can
-    change. "This deployment has no live credentials for any provider" is an operator fault
-    that an environment variable fixes. One sentence covering both would tell whoever reads it
-    which of those they have - which is to say, neither.
-    """
-    live_providers = _providers_with_live_credentials()
-    portal_providers = [p for p in live_providers if p in _PROVIDERS_WITH_HOSTED_PORTAL]
-
-    if not portal_providers:
-        if live_providers:
-            # A real provider, which genuinely has no portal. Permanent, and not a fault.
-            raise HTTPException(
-                status_code=501,
-                detail={
-                    "error": "PROVIDER_HAS_NO_BILLING_PORTAL",
-                    "message": (
-                        f"{', '.join(p.capitalize() for p in live_providers)} is the payment "
-                        "provider configured for this platform, and it publishes no hosted "
-                        "self-serve billing portal, so there is no portal session to open. The "
-                        "payment instrument is supplied directly to the provider's checkout "
-                        "each time a subscription is bought or renewed, and is not stored by "
-                        "VyomQuant — so a different instrument is used by choosing it at the "
-                        "next checkout."
-                    ),
-                },
-            )
-        # No provider at all: a deployment fault, and a different sentence for it.
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "PAYMENT_PROVIDER_NOT_CONFIGURED",
-                "message": (
-                    "No payment provider on this deployment holds live credentials, so no "
-                    "billing portal can be opened and none is invented here. This is a server "
-                    "configuration fault, not a problem with your subscription."
-                ),
-            },
-        )
-
-    stripe_key = _validate_keys("stripe")
-    import stripe
-    stripe.api_key = stripe_key
-
-    try:
-        # Search Stripe customer by email
-        customers = stripe.Customer.list(email=user["email"])
-        if customers.data:
-            customer = customers.data[0]
-            if not customer.metadata.get("user_id"):
-                stripe.Customer.modify(customer.id, metadata={"user_id": user["id"]})
-            customer_id = customer.id
-        else:
-            customer = stripe.Customer.create(
-                email=user["email"],
-                metadata={"user_id": user["id"]},
-                name=user.get("username", user["email"])
-            )
-            customer_id = customer.id
-
-        session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-            return_url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/app/billing"
-        )
-        return {"url": session.url}
-    except Exception as e:
-        logger.error(f"Failed to create Stripe portal session for {user['id']}: {e}")
-        raise HTTPException(500, f"Billing portal error: {str(e)}")
-
-
-# ── BILL-05: cancel/resume must act on the PROVIDER, not just the local row ──
-class StripeSubscriptionUpdateFailed(Exception):
-    """Stripe refused or could not be reached; local state must NOT be changed."""
-
-
-_STRIPE_LIVE_SUB_STATES = ("active", "trialing", "past_due", "unpaid")
-
-
-def _set_stripe_cancel_at_period_end(user_id: str, email: Optional[str], value: bool) -> int:
-    """Flip ``cancel_at_period_end`` on every live Stripe subscription owned by *user_id*.
-
-    Before this existed ``/cancel`` only wrote ``profiles.cancel_at_period_end``; Stripe was
-    never told, so the card kept being charged every period while the UI said "cancelled".
-    A subscription is only touched when its own metadata (or its customer's) names this
-    user, so a shared e-mail address cannot cancel somebody else's plan.
-
-    Returns the number of subscriptions updated (0 = nothing live at Stripe, i.e. nothing is
-    being charged). Raises :class:`StripeSubscriptionUpdateFailed` on any provider error -
-    the caller must then leave local state untouched and surface the failure.
-    """
-    import stripe
-
-    stripe.api_key = _validate_keys("stripe")
-    updated = 0
-    try:
-        customers = stripe.Customer.list(email=email, limit=10) if email else None
-        for customer in (getattr(customers, "data", None) or []):
-            cust_owner = (getattr(customer, "metadata", None) or {}).get("user_id")
-            subs = stripe.Subscription.list(customer=customer.id, status="all", limit=20)
-            for sub in (getattr(subs, "data", None) or []):
-                if sub.get("status") not in _STRIPE_LIVE_SUB_STATES:
-                    continue
-                owner = (sub.get("metadata") or {}).get("user_id") or cust_owner
-                if owner != user_id:
-                    continue
-                stripe.Subscription.modify(sub["id"], cancel_at_period_end=value)
-                updated += 1
-    except Exception as exc:  # noqa: BLE001 - any provider failure must fail the request
-        logger.error("[BILLING] Stripe cancel_at_period_end=%s failed for user %s: %s",
-                     value, user_id, type(exc).__name__)
-        raise StripeSubscriptionUpdateFailed(type(exc).__name__) from exc
-    return updated
-
-
-def _should_cancel_at_stripe(provider: Optional[str]) -> bool:
-    """True unless the account is known to pay through Razorpay (one-time orders, nothing recurs).
-
-    ``profiles.payment_provider`` was never written by the checkout paths, so an unknown
-    provider is the NORMAL state of a real Stripe customer; treating "unknown" as "not Stripe"
-    would skip the very call BILL-05 exists to make. If this deployment has no Stripe key there
-    cannot be a Stripe subscription to cancel.
-    """
-    if provider == "razorpay":
-        return False
-    return bool(os.environ.get("STRIPE_SECRET_KEY", "").strip())
-
-
 def _profile_payment_provider(sb: Any, user_id: str) -> Optional[str]:
     try:
         rows = sb.table("profiles").select("payment_provider").eq("id", user_id).execute().data or []
@@ -3748,17 +2951,24 @@ async def cancel_subscription(
     try:
         from backend_app.core.billing_lifecycle import BillingLifecycle
         sb = _background_sb()
-        # BILL-05: tell the provider FIRST. If Stripe cannot be updated, local state stays
-        # as it was - never show "cancelled" while the card is still being charged.
-        if _should_cancel_at_stripe(_profile_payment_provider(sb, user_id)):
-            try:
-                await asyncio.to_thread(_set_stripe_cancel_at_period_end, user_id, user.get("email"), True)
-            except StripeSubscriptionUpdateFailed:
-                raise HTTPException(502, {
-                    "error": "PROVIDER_CANCEL_FAILED",
-                    "message": "We could not cancel your subscription with the payment provider, "
-                               "so nothing was changed. Please retry; you have not been cancelled.",
-                })
+        # BILL-05 USED TO CALL THE PROVIDER HERE, AND NO LONGER NEEDS TO.
+        #
+        # The provider-first ordering existed because Stripe subscriptions RECUR: writing
+        # `cancel_at_period_end` locally without telling Stripe meant the card kept being
+        # charged while the UI said "cancelled", so the remote call had to succeed before
+        # local state moved, and a failure had to surface as 502 PROVIDER_CANCEL_FAILED.
+        #
+        # Razorpay orders do not recur. This platform creates a one-time order per period
+        # (`create_checkout_session`'s razorpay branch) and `core.plan_expiry` lapses the
+        # plan when `next_billing_date` passes. There is no standing instruction at the
+        # gateway to withdraw, so there is nothing to tell Razorpay and no remote failure
+        # mode to guard against -- which is why `_should_cancel_at_stripe` already returned
+        # False for this provider before Stripe was removed. Cancellation is therefore a
+        # local state change by nature here, not by omission.
+        #
+        # If a recurring gateway is ever added back, the provider-first ordering has to come
+        # back WITH it. Do not treat this as licence to cancel locally on a provider that
+        # recurs.
         result = await BillingLifecycle.cancel_subscription(
             user_id=user_id,
             cancel_at_period_end=True,
@@ -3826,15 +3036,9 @@ async def resume_subscription(
     user_id = user["id"]
     try:
         sb = _background_sb()
-        if _should_cancel_at_stripe(_profile_payment_provider(sb, user_id)):
-            try:
-                await asyncio.to_thread(_set_stripe_cancel_at_period_end, user_id, user.get("email"), False)
-            except StripeSubscriptionUpdateFailed:
-                raise HTTPException(502, {
-                    "error": "PROVIDER_RESUME_FAILED",
-                    "message": "We could not resume your subscription with the payment provider, "
-                               "so nothing was changed. Please retry.",
-                })
+        # No provider call on resume, for the reason given in `cancel_subscription`: a
+        # Razorpay order carries no standing instruction to reinstate. Clearing
+        # `cancel_at_period_end` locally is the whole operation.
         sb.table("profiles").update({
             "cancel_at_period_end": False,
             "subscription_status": "active",
