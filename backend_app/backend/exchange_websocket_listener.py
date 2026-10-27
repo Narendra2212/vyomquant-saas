@@ -284,12 +284,31 @@ class ExchangeWebSocketListener:
                 )
                 return
 
+            # RT-16/EXCH-06: THE ENVIRONMENT TRAVELS WITH THE CREDENTIAL.
+            #
+            # `testnet` was absent here, so this stream always dialled PRODUCTION
+            # regardless of which environment the stored credential belongs to. For a
+            # sandbox credential that is `-2008 Invalid Api-Key ID` -- the venue rejecting
+            # a testnet key presented to its live API -- which the outer handler logs as a
+            # fatal websocket error, so the stream looked broken rather than misrouted.
+            #
+            # FOUND BY CERTIFYING, NOT BY READING. The defect was unreachable until
+            # EXCH-06 gave `exchange_keys` a `sandbox` column: before that
+            # `load_decrypted_keys` returned three keys and no credential could be marked
+            # as sandbox, so every credential this stream ever saw was a production one
+            # and the missing argument was invisible. The first attempt to certify the
+            # stream with a real testnet key hit it immediately.
+            #
+            # `_load_keys` returns the vault's dict verbatim, so the flag arrives here
+            # the moment the vault records one. `bool(...)` because absent must mean
+            # production -- the behaviour that existed before the column.
             exchange = await get_or_create_exchange(
                 tenant_id,
                 exchange_id,
                 keys["api_key"],
                 keys["secret_key"],
                 keys.get("password"),
+                testnet=bool(keys.get("sandbox") or keys.get("testnet")),
             )
 
             logger.info(f"STEP 3: WebSocket connected for {listener_key}")
