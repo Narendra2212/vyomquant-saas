@@ -125,6 +125,12 @@ EXCHANGE_NO_STORED_CREDENTIALS = "EXCHANGE_NO_STORED_CREDENTIALS"
 #: not be established). Refused before anything is stored.
 EXCHANGE_KEY_WITHDRAW_ENABLED = "EXCHANGE_KEY_WITHDRAW_ENABLED"
 EXCHANGE_KEY_PERMISSIONS_UNVERIFIABLE = "EXCHANGE_KEY_PERMISSIONS_UNVERIFIABLE"
+#: EXCH-06: the caller ticked "Testnet / Sandbox Mode" for a venue whose sandbox this
+#: platform cannot PROVE it would reach -- either the venue publishes no sandbox endpoint
+#: at all (coinbase, kraken and kucoin, measured) or the routing could not be verified.
+#: Refused before anything is stored, and it is the caller's request that is wrong rather
+#: than their key, so it is a 400 and not the 502 an unclassified error would answer.
+EXCHANGE_SANDBOX_UNAVAILABLE = "EXCHANGE_SANDBOX_UNAVAILABLE"
 
 #: The sentence a failed storage write answers with. The write is to Supabase, so the
 #: exception is a PostgREST error carrying table and column names; those name this
@@ -156,8 +162,27 @@ def _verification_refusal(exc: BaseException, exchange_id: str) -> HTTPException
 
     venue = str(exchange_id).upper()
 
+    from backend_app.backend.exchange_executor import SandboxVerificationFailed
+
     # Narrowest first. Each entry is (exception types, HTTP status, code, message).
     table = (
+        (
+            # EXCH-06/EXCH-01. FIRST, and it has to be: `SandboxVerificationFailed`
+            # subclasses this platform's own `ExchangeError`, which subclasses plain
+            # `Exception` -- it matches no ccxt type and is not a `ValueError`, so
+            # without this entry it fell through to the unclassified 502 below. That
+            # would have told the caller the failure was on the venue's side or ours,
+            # when in fact their request asked for a sandbox that cannot be reached.
+            (SandboxVerificationFailed,),
+            400,
+            EXCHANGE_SANDBOX_UNAVAILABLE,
+            f"Testnet / Sandbox Mode was requested for {venue}, but this platform could "
+            f"not confirm that the connection would reach {venue}'s sandbox rather than "
+            f"its live environment, so it refused to make it. Some venues publish no "
+            f"sandbox at all. Submit the key without Testnet / Sandbox Mode to connect "
+            f"to live, or use a venue whose sandbox we can verify. Nothing has been "
+            f"stored.",
+        ),
         (
             (ccxt_base.PermissionDenied,),
             403,
@@ -416,6 +441,29 @@ async def store_keys(
             secret_key=body.secret_key,
             password=body.password,
             uid=body.uid,
+            # EXCH-06. VERIFY THE CREDENTIAL AGAINST THE ENVIRONMENT IT IS FOR.
+            #
+            # This argument was absent, so a testnet credential was handshaked against
+            # the PRODUCTION endpoint. It would have failed authentication there and
+            # been rejected as invalid, which means the sandbox toggle could not have
+            # worked even once the column existed -- the credential would never have
+            # reached the vault to be stored with the flag.
+            #
+            # It also makes the pre-store check mean what it says: this endpoint's job
+            # is to prove the credential works before keeping it, and "works" is a
+            # question about a specific environment. And because EXCH-05 taught
+            # `ConnectionEngine` to PROVE sandbox routing rather than announce it, a
+            # `true` here on a venue with no sandbox (coinbase, kraken, kucoin) raises
+            # `SandboxVerificationFailed` BEFORE a client is built -- so such a request
+            # is refused at the door with nothing stored, which is the correct answer
+            # and is classified by `_verification_refusal` below.
+            # `getattr` with a False default, matching how `label` and `uid` are read at
+            # the vault call below. The declared body model always carries this field, but
+            # this handler is also driven by body-LIKE objects in tests, and an object
+            # without the attribute must mean PRODUCTION -- the pre-existing behaviour and
+            # the safe direction. An AttributeError here would turn a missing optional
+            # field into a 502.
+            testnet=getattr(body, "sandbox", False),
         )
         exchange = await bridge.connect()
         await DataEngine(exchange).fetch_wallet_balance_snapshot()
@@ -488,6 +536,13 @@ async def store_keys(
                 raw_secret_key=body.secret_key,
                 label=getattr(body, "label", None),
                 uid=getattr(body, "uid", None),
+                # EXCH-06: the trader's answer to "Testnet / Sandbox Mode", persisted.
+                # Read back by `load_decrypted_keys` and consumed by
+                # `order_control._executor_for`, whose `bool(keys.get("sandbox"))` was
+                # unconditionally False for as long as this argument was missing.
+                # Verified against the sandbox endpoint above BEFORE reaching here, so
+                # a stored `true` is a flag whose routing was already proven once.
+                sandbox=getattr(body, "sandbox", False),
             )
     except HTTPException:
         # The guard's own refusals (409 in flight, 503 lock unavailable) and the pre-check's

@@ -149,7 +149,21 @@ class APIKeyVault:
         raw_secret_key: Optional[str] = None,
         label:          Optional[str] = None,
         uid:            Optional[str] = None,
+        sandbox:        bool = False,
     ) -> bool:
+        """Encrypt and store one credential.
+
+        EXCH-06: ``sandbox`` records whether this credential addresses the venue's
+        testnet rather than production. It is NOT encrypted -- it is not a secret, it is
+        a routing choice, and encrypting it would make it unreadable by the SQL that has
+        to filter on it.
+
+        NOTE WHAT ``label`` AND ``uid`` DO HERE, because it is the trap this parameter
+        had to avoid: both are accepted and then silently dropped -- neither reaches the
+        dict below, and no column exists for them. Adding ``sandbox`` to the signature
+        alone would have reproduced exactly the defect EXCH-06 describes, one layer
+        deeper: a caller that passed it would get no error and no effect.
+        """
         user_id     = _validate_id(user_id,     "user_id")
         exchange_id = _validate_id(exchange_id, "exchange_id")
 
@@ -163,6 +177,10 @@ class APIKeyVault:
             "encrypted_api_key":    self._encrypt(raw_api_key),
             "encrypted_secret_key": self._encrypt(secret),
             "encrypted_password":   self._encrypt(raw_password) if raw_password else None,
+            # Coerced rather than passed through: this value reaches a NOT NULL BOOLEAN
+            # column (migration 060) and a caller handing over `None` or a truthy string
+            # must not turn into a NULL or a type error on the write.
+            "sandbox":              bool(sandbox),
         }
 
         # FIX VA-5: Use upsert to handle existing keys cleanly.
@@ -195,6 +213,17 @@ class APIKeyVault:
                 "api_key":    self._decrypt(row.get("encrypted_api_key")),
                 "secret_key": self._decrypt(row.get("encrypted_secret_key")),
                 "password":   self._decrypt(row.get("encrypted_password")),
+                # EXCH-06. The SELECT above is `*`, so this column has been arriving in
+                # `row` ever since migration 060 added it -- and it was this hand-built
+                # projection that dropped it. `order_control._executor_for` already
+                # reads `keys.get("sandbox")`, so this one line is what turns that
+                # expression from unconditionally False into the trader's actual choice.
+                #
+                # Not decrypted: it is a routing flag, not ciphertext. `bool(...)` over
+                # a plain read because a database that has not yet had 060 applied
+                # returns no such key, and "absent" must mean production -- the same
+                # answer this function gave before the column existed.
+                "sandbox":    bool(row.get("sandbox")),
             }
         except Exception as e:
             logger.error(f"Failed to load keys for {user_id}: {e}")
@@ -303,6 +332,14 @@ class APIKeyVault:
                 raw_api_key = keys["api_key"],
                 raw_secret  = keys["secret_key"],
                 raw_password= keys["password"],
+                # EXCH-06: CARRIED FORWARD EXPLICITLY. A re-encryption must not change
+                # WHERE the credential points. Whether a PostgREST upsert that omits a
+                # column leaves it alone or rewrites it to the column default is a
+                # question this code deliberately does not depend on -- passing the
+                # loaded value makes the rotation correct under either answer, which is
+                # worth more than being right about the semantics. Without it, a key
+                # rotation would silently move a testnet credential to production.
+                sandbox     = bool(keys.get("sandbox")),
             )
             logger.info(f"Keys rotated for user={user_id} exchange={exchange_id}.")
             return True

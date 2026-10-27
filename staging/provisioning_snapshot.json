@@ -1019,6 +1019,17 @@
     ],
     [
       "exchange_keys",
+      "sandbox",
+      "boolean",
+      "",
+      "NO",
+      "false",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "exchange_keys",
       "updated_at",
       "timestamp with time zone",
       "",

@@ -400,6 +400,14 @@ def _engine(connect_error: Optional[BaseException] = None):
             secret_key: Any = None,
             password: Any = None,
             uid: Any = None,
+            # EXCH-06: the real `ConnectionEngine.__init__` takes this, and `store_keys`
+            # now passes it so a testnet credential is verified against the TESTNET
+            # endpoint rather than production. Declared explicitly rather than swallowed
+            # by `**kwargs`: a double that accepted anything would keep passing after the
+            # real signature changed again, which is the opposite of what it is for. It
+            # is RECORDED for the same reason the credentials are -- so a test can prove
+            # the flag reached the venue-dialling code.
+            testnet: Any = False,
         ) -> None:
             seen.append(
                 {
@@ -408,6 +416,7 @@ def _engine(connect_error: Optional[BaseException] = None):
                     "secret_key": secret_key,
                     "password": password,
                     "uid": uid,
+                    "testnet": testnet,
                 }
             )
 
