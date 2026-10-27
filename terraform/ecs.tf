@@ -368,6 +368,22 @@ locals {
     # MB leaves roughly 2x headroom over that 4 GB per-job cap for everything else resident
     # in the process.
     training = { cpu = 2048, memory = 8192, command = ["python", "-m", "backend_app.backend.training_worker"] }
+    # RT-16: the host for the private venue fill stream. The three links it starts
+    # (ExchangeWebSocketListener -> EventListener -> EventRouter) each existed and none had
+    # a caller, so a fill was only ever discovered by the watchdog's poll.
+    #
+    # IT MUST NOT LIVE IN THE WEB PROCESS, which is why it is a worker at all: gunicorn
+    # runs --workers ${WORKERS:-2} and every worker runs the lifespan hook, so a stream
+    # started there opens two authenticated private sockets per (tenant, venue) and gives
+    # every fill two writers. The worker takes a Redis leader lease
+    # (core/leader_lease.try_acquire_or_renew) so even multiple TASKS of this service
+    # elect one streamer, and it closes its sockets the moment it loses the lease.
+    #
+    # Sized above the 256/512 light workers and below mds's 1024/3072. It holds one
+    # authenticated websocket per live (tenant, venue) pair plus an unbounded
+    # asyncio.PriorityQueue of in-flight events -- more resident state than a queue-polling
+    # worker, far less than mds, which holds candle state for every subscribed symbol.
+    exchange_fills = { cpu = 512, memory = 1024, command = ["python", "-m", "backend_app.workers.exchange_fill_worker"] }
   }
 }
 
