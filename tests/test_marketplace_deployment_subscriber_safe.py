@@ -224,6 +224,51 @@ def _rate_limiter_off(monkeypatch):
     monkeypatch.setattr(limiter, "enabled", False, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _quota_and_entitlement_seams(monkeypatch):
+    """RT-24 gave this route a quota reservation and a live-trading entitlement check.
+
+    Before RT-24 the handler ended at its insert, so it consulted neither and this module
+    needed no stub. It now reserves a bot slot the way ``StrategyService.deploy_version``
+    does -- against the SUBSCRIBER, who owns the row and whose runtime slot the bot
+    occupies -- and refuses a live deployment without the live-trading feature.
+
+    Unstubbed, ``SubscriptionEngine.reserve_quota`` reaches a Redis that is not there and
+    answers ``(False, 0, 0)``, so every test in this module became a 402 about quota rather
+    than an assertion about the deployment. These four seams are exactly the ones
+    ``tests/test_task_8_2_deployment_binding.py::_no_quota_limits`` patches for the
+    first-party path, named the same way so the two cannot drift.
+
+    Both are asserted ON THEIR OWN in
+    ``tests/test_rt24_marketplace_deployment_starts.py`` -- a quota refusal writes no row,
+    and a live deploy without the entitlement is a 403 -- so stubbing them here loses no
+    coverage. This module's subject is the subscriber-safety of the row and the response.
+    """
+    from backend_app.core import subscription_dependencies
+    from backend_app.core.subscription_engine import SubscriptionEngine
+
+    async def _plan(*_a, **_k):
+        return "pro"
+
+    async def _reserve(*_a, **_k):
+        return (True, 1, 10)
+
+    async def _entitled(*_a, **_k):
+        return True
+
+    async def _release(*_a, **_k):
+        return 0
+
+    monkeypatch.setattr(subscription_dependencies, "get_user_plan", _plan, raising=False)
+    monkeypatch.setattr(SubscriptionEngine, "reserve_quota", _reserve, raising=False)
+    monkeypatch.setattr(
+        SubscriptionEngine, "check_feature_entitlement", _entitled, raising=False
+    )
+    monkeypatch.setattr(
+        SubscriptionEngine, "decrement_quota_usage", _release, raising=False
+    )
+
+
 def _listing_row(*, subscription=None, submission_state="PUBLISHED", author_id=OWNER_ID):
     return {
         "id": LISTING_ID,
@@ -299,9 +344,23 @@ def test_entitled_subscriber_gets_a_deployment_bound_to_the_owners_version(
 ):
     result = _deploy({"symbol": "BTC/USDT", "timeframe": "1h", "capital": 500})
 
-    inserts = entitled_client.writes_to("strategy_deployments")
+    writes = entitled_client.writes_to("strategy_deployments")
+
+    # RT-24: the handler no longer stops at the insert -- it starts the bot and then
+    # records the outcome, so there is now an UPDATE to the row it just created. The
+    # property this asserts is unchanged and is about ROWS: exactly one is CREATED. It is
+    # stated as "one insert, and any other write is an update to that same id" rather than
+    # "one write", because the second form would have been satisfied by a handler that
+    # quietly inserted a second deployment.
+    inserts = [w for w in writes if w.op == "insert"]
     assert len(inserts) == 1, "exactly one strategy_deployments row is written"
     row = inserts[0].payload
+
+    for other in (w for w in writes if w.op != "insert"):
+        assert other.op == "update", (
+            f"the only non-insert write to strategy_deployments may be the status update; "
+            f"saw {other.op}"
+        )
 
     # user_id is the SUBSCRIBER; strategy_id / version_id are the OWNER's.
     assert row["user_id"] == SUBSCRIBER_ID
