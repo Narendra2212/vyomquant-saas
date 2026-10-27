@@ -51,8 +51,18 @@ FAKE = {"api_key": "not-a-real-key", "api_secret": "not-a-real-secret"}
 class FakeClient:
     """A ccxt-shaped client: just the two attributes the verifier reads.
 
-    Deliberately minimal. The verifier must work from `urls` and `headers` alone, and a
-    fake that offered more would let a dependency on something else go unnoticed.
+    Deliberately minimal. `verify_sandbox_endpoint` must decide from `urls` and
+    `headers` plus whatever the caller hands it, and a fake that offered more would let
+    a dependency on something else go unnoticed.
+
+    ONE THING CHANGED WITH ccxt 4.5.90, AND IT MATTERS HERE. Proving a client left
+    production requires knowing what production was, and 4.5.90 no longer leaves that on
+    the armed client (see `verify_sandbox_endpoint`). The verifier therefore takes an
+    optional `production_endpoint`, and these tests pass it explicitly wherever the
+    URL_SWAP comparison is the thing under test. That is what keeps the refusal cases
+    below reachable with a fake: the fallback asks a pristine ccxt client, and a fake's
+    `https://api.example.com` is not comparable to a real venue's host, so relying on the
+    fallback would make "lands back on production" quietly impossible to trigger.
     """
 
     def __init__(self, urls: dict | None = None, headers: dict | None = None):
@@ -69,8 +79,51 @@ SBOX = "https://testnet.example.com"
 
 
 def url_swapped_client() -> FakeClient:
-    """A client as ccxt leaves it after a genuine URL swap."""
-    return FakeClient(urls={"api": SBOX, "test": SBOX, "apiBackup": PROD})
+    """A client as the INSTALLED ccxt leaves it after a genuine URL swap.
+
+    `apiBackup` is the SANDBOX url, not production. That is not a typo and not laziness:
+    measured on ccxt 4.5.90, `urls['apiBackup'] == urls['test'] == urls['api']` after
+    arming, all three identical, for binance, bybit and okx. Pinning the real shape is
+    deliberate -- a fixture carrying the old 4.3.92 shape (`apiBackup == production`)
+    would let a verifier that went back to trusting `apiBackup` as production look
+    correct in tests while refusing every real sandbox connection, which is exactly the
+    defect WS-03's ccxt upgrade exposed.
+    """
+    return FakeClient(urls={"api": SBOX, "test": SBOX, "apiBackup": SBOX})
+
+
+class SwappingVenue(FakeClient):
+    """A ccxt-shaped exchange CLASS, which swaps its own urls when sandbox is armed.
+
+    WHY THE CONNECT-PATH FAKES MODEL THE SWAP INSTEAD OF HARDCODING THE RESULT.
+
+    `connect()` does not inject a production endpoint -- it has no independent knowledge
+    of one -- so it leaves `verify_sandbox_endpoint` to read it from a pristine instance
+    of the same class, which is how the real thing works. A fake that returns the sandbox
+    urls no matter how it is constructed therefore answers "what is production?" with
+    "the sandbox", and every connection is refused for a reason that exists only in the
+    fake. Modelling ccxt's actual behaviour -- production urls by default, the swap when
+    `options['sandbox']` is set -- makes the connect path testable and keeps the fake
+    honest about where the two endpoints come from.
+
+    Mirrors `ccxt.Exchange.__init__`, which ends by calling
+    `set_sandbox_mode(True)` when `safe_bool_2(self.options, 'sandbox', 'testnet')`.
+    """
+
+    PRODUCTION = PROD
+    TEST = SBOX
+
+    def __init__(self, config: dict | None = None):
+        config = dict(config or {})
+        armed = bool(
+            (config.get("options") or {}).get("sandbox") or config.get("sandbox")
+        )
+        urls = {"api": self.PRODUCTION, "test": self.TEST}
+        if armed:
+            # The measured 4.5.90 post-swap shape: api, test and apiBackup all equal.
+            urls["api"] = urls["test"]
+            urls["apiBackup"] = urls["test"]
+        super().__init__(urls=urls)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
@@ -78,12 +131,17 @@ def url_swapped_client() -> FakeClient:
 # ══════════════════════════════════════════════════════════════════════════════════════
 
 def test_url_swap_to_the_declared_sandbox_endpoint_is_verified():
-    v = verify_sandbox_endpoint(url_swapped_client(), "binance")
+    v = verify_sandbox_endpoint(url_swapped_client(), "binance",
+                                production_endpoint=PROD)
 
     assert v.verified is True
     assert v.mechanism == SandboxMechanism.URL_SWAP.value
     assert v.endpoint != v.production_endpoint
     assert "apiBackup" in v.detail
+    # The evidence must say WHICH production endpoint it compared against. An injected
+    # one is only as trustworthy as its injector, and a record that did not distinguish
+    # the two sources would hide that.
+    assert "supplied by the caller" in v.detail
 
 
 def test_header_mechanism_is_verified_even_though_the_url_is_unchanged():
@@ -124,12 +182,45 @@ def test_an_ineffective_switch_that_leaves_production_configured_is_refused():
 
 
 def test_a_swap_that_lands_back_on_production_is_refused():
-    """`apiBackup` present but the active endpoint equals production."""
+    """`apiBackup` present, `api == test`, and yet the active endpoint IS production.
+
+    The case that justifies the third condition existing at all: the first two checks
+    both pass, so nothing but a production comparison can catch it. A venue that
+    repointed its `test` url at its live host would look exactly like this.
+
+    `production_endpoint` is passed explicitly BECAUSE THIS TEST IS THE REFUSAL. Left to
+    its fallback the verifier asks a pristine `ccxt.binance` what production is, gets
+    binance's real hosts, finds they differ from `https://api.example.com`, and VERIFIES
+    -- so the branch below would never run and this test would pass by not testing.
+    """
     client = FakeClient(urls={"api": PROD, "test": PROD, "apiBackup": PROD})
 
     with pytest.raises(SandboxVerificationFailed) as caught:
+        verify_sandbox_endpoint(client, "binance", production_endpoint=PROD)
+    assert "identical to the venue's production endpoint" in str(caught.value)
+    assert caught.value.error_code == "SANDBOX_UNVERIFIED"
+    assert caught.value.retryable is False
+
+
+def test_an_unanswerable_production_endpoint_is_refused_not_assumed(monkeypatch):
+    """When production cannot be determined at all, the connection is REFUSED.
+
+    `_pristine_production_endpoint` returns `None` instead of raising, so the decision
+    about what an unanswerable question means belongs to the verifier. It must mean
+    refusal: a sandbox that cannot be proven is not a sandbox. Without this test that
+    branch is the one a future edit could turn into a shrug.
+
+    Driven by a ccxt module with no `binance` attribute -- the same route a venue
+    removed from ccxt, or renamed by an upgrade, would take.
+    """
+    from backend_app.backend import exchange_executor as mod
+
+    monkeypatch.setattr(mod, "ccxt", type("M", (), {}))
+    client = FakeClient(urls={"api": SBOX, "test": SBOX, "apiBackup": SBOX})
+
+    with pytest.raises(SandboxVerificationFailed) as caught:
         verify_sandbox_endpoint(client, "binance")
-    assert "identical to the production endpoint" in str(caught.value)
+    assert "could not be determined" in str(caught.value)
 
 
 def test_a_missing_header_is_refused_for_a_header_venue():
@@ -195,9 +286,13 @@ def test_nested_dict_endpoints_compare_order_independently():
     """
     a = {"public": SBOX, "private": SBOX + "/p"}
     reordered = {"private": SBOX + "/p", "public": SBOX}
-    client = FakeClient(urls={"api": reordered, "test": a, "apiBackup": {"public": PROD}})
+    client = FakeClient(urls={"api": reordered, "test": a, "apiBackup": a})
 
-    v = verify_sandbox_endpoint(client, "binance")
+    # Production injected, and injected as a dict, so BOTH comparisons in the URL_SWAP
+    # branch are exercised against nested values -- `api == test` and `api != production`.
+    v = verify_sandbox_endpoint(
+        client, "binance", production_endpoint={"public": PROD, "private": PROD + "/p"},
+    )
     assert v.verified is True
 
 
@@ -310,10 +405,7 @@ def test_a_verified_sandbox_connection_reports_its_evidence(monkeypatch):
     """
     from backend_app.backend import exchange_executor as mod
 
-    class Verified(FakeClient):
-        def __init__(self, _config):
-            super().__init__(urls={"api": SBOX, "test": SBOX, "apiBackup": PROD})
-
+    class Verified(SwappingVenue):
         async def load_markets(self, *_a, **_k):
             return {"BTC/USDT": {"symbol": "BTC/USDT"}}
 
@@ -329,6 +421,10 @@ def test_a_verified_sandbox_connection_reports_its_evidence(monkeypatch):
     assert ex.sandbox_verified is True
     assert ex.sandbox_evidence.mechanism == SandboxMechanism.URL_SWAP.value
     assert ex._connected is True
+    # Production came from a pristine client here, not from `connect()`: the connect path
+    # has no independent knowledge of a production endpoint and must not pretend to.
+    assert "pristine client" in ex.sandbox_evidence.detail
+    assert ex.sandbox_evidence.endpoint != ex.sandbox_evidence.production_endpoint
 
 
 def test_live_mode_is_never_reported_as_sandbox_verified(monkeypatch):
@@ -370,10 +466,7 @@ def test_place_order_still_requires_a_live_authorization(monkeypatch):
 
     from backend_app.backend import exchange_executor as mod
 
-    class Verified(FakeClient):
-        def __init__(self, _config):
-            super().__init__(urls={"api": SBOX, "test": SBOX, "apiBackup": PROD})
-
+    class Verified(SwappingVenue):
         async def load_markets(self, *_a, **_k):
             return {}
 

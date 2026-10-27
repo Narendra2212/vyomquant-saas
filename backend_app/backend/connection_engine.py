@@ -45,6 +45,23 @@ _pool_lock = asyncio.Lock()
 #: :func:`_credential_identity` for what is stored and why it is not the credential itself.
 _pool_credential_id: dict[str, Optional[str]] = {}
 
+#: Whether each pooled client is a SANDBOX client, by pool key (EXCH-01).
+#:
+#: WHY THIS IS TRACKED SEPARATELY FROM THE CREDENTIAL. The pool key is
+#: ``sha256([user_id, exchange_id])`` and a sandbox client and a live client for the same
+#: pair used to be INTERCHANGEABLE under it: nothing recorded which environment the pooled
+#: client addressed, so a caller asking for testnet could be handed the live client that
+#: happened to be pooled first, and vice versa. `exchange_executor`'s own cache got this
+#: right -- `_executor_cache_key` folds in ``"sandbox" if sandbox else "live"`` -- and this
+#: pool did not.
+#:
+#: Recorded alongside the entry rather than folded into `_pool_key` on purpose. Changing the
+#: key would require every caller of :func:`release_exchange` to know the environment too,
+#: and those callers (``routers/exchange.py``'s store/delete paths) do not -- a one-sided
+#: edit there would make eviction silently miss, which is CONN-01 again. This mirrors how
+#: `_pool_credential_id` already solves the same shape of problem.
+_pool_sandbox: dict[str, bool] = {}
+
 
 def _pool_key(user_id: str, exchange_id: str) -> str:
     """The pool key for one (user, venue) pair.
@@ -142,22 +159,36 @@ async def get_or_create_exchange(
     """
     pool_key = _pool_key(user_id, exchange_id)
     wanted = _credential_identity(api_key, secret_key, password)
+    wanted_sandbox = bool(testnet)
 
     async with _pool_lock:
         pooled = _exchange_pool.get(pool_key)
         if pooled is not None:
             held = _pool_credential_id.get(pool_key)
-            if wanted is None or wanted == held:
+            held_sandbox = _pool_sandbox.get(pool_key, False)
+
+            # SANDBOX EQUALITY IS REQUIRED UNCONDITIONALLY, which is the one place this rule
+            # is stricter than credential currency above. "No credential supplied → reuse
+            # whatever is pooled" is right for authentication, because such a caller is
+            # asking for "a client for this venue" and must not downgrade an authenticated
+            # one. It is WRONG for the environment: a sandbox client and a live client are
+            # not two states of one connection, they address different hosts with different
+            # balances, and a credential-less caller asking for testnet being handed the
+            # pooled LIVE client is the EXCH-01 defect arriving through the pool instead of
+            # through set_sandbox_mode.
+            if held_sandbox == wanted_sandbox and (wanted is None or wanted == held):
                 return pooled
 
-            # A different credential. Drop the stale client before building its replacement, so
-            # the pool never holds two clients for one pair and the superseded socket is closed
-            # rather than leaked. Closed while holding `_pool_lock`, which is deliberate: the
-            # lock is already held across `connect()`'s venue handshake below, and a local
-            # socket close is strictly cheaper than that. Releasing it here instead would open a
-            # window for a concurrent caller to pool a third client.
+            # A different credential, a different environment, or both. Drop the stale client
+            # before building its replacement, so the pool never holds two clients for one
+            # pair and the superseded socket is closed rather than leaked. Closed while
+            # holding `_pool_lock`, which is deliberate: the lock is already held across
+            # `connect()`'s venue handshake below, and a local socket close is strictly
+            # cheaper than that. Releasing it here instead would open a window for a
+            # concurrent caller to pool a third client.
             _exchange_pool.pop(pool_key, None)
             _pool_credential_id.pop(pool_key, None)
+            _pool_sandbox.pop(pool_key, None)
             try:
                 await pooled.close()
             except Exception as e:
@@ -165,9 +196,15 @@ async def get_or_create_exchange(
                     f"Exchange pool: close error on the superseded client for user {user_id} "
                     f"on {exchange_id}: {e}"
                 )
+            reason = (
+                "the environment requested (sandbox="
+                f"{wanted_sandbox}) is not the one the pooled client addresses "
+                f"(sandbox={held_sandbox})"
+                if held_sandbox != wanted_sandbox
+                else "the credential supplied is not the one the pooled client was built with"
+            )
             logger.info(
-                f"Exchange pool: rebuilding for user {user_id} on {exchange_id} — the "
-                f"credential supplied is not the one the pooled client was built with."
+                f"Exchange pool: rebuilding for user {user_id} on {exchange_id} — {reason}."
             )
 
         engine = ConnectionEngine(
@@ -179,9 +216,17 @@ async def get_or_create_exchange(
         exchange = await engine.connect()
         _exchange_pool[pool_key] = exchange
         _pool_credential_id[pool_key] = wanted
+        # Written in the same critical section as the client, for the same reason the
+        # credential identity is: an entry whose environment is unrecorded defaults to
+        # "live" on the next comparison, which would make a sandbox client reusable as a
+        # live one exactly once.
+        _pool_sandbox[pool_key] = wanted_sandbox
         # Log user/exchange for debugging (not the hashed key, and never the credential
         # fingerprint).
-        logger.info(f"Exchange pool: created for user {user_id} on {exchange_id}")
+        logger.info(
+            f"Exchange pool: created for user {user_id} on {exchange_id} "
+            f"(sandbox={wanted_sandbox})"
+        )
         return exchange
 
 
@@ -194,9 +239,11 @@ async def release_exchange(user_id: str, exchange_id: str):
     pool_key = _pool_key(user_id, exchange_id)
     async with _pool_lock:
         exchange = _exchange_pool.pop(pool_key, None)
-        # Dropped in the same critical section as the client itself: a credential identity left
-        # behind for an evicted entry would make the next caller's comparison meaningless.
+        # Dropped in the same critical section as the client itself: a credential identity or
+        # an environment flag left behind for an evicted entry would make the next caller's
+        # comparison meaningless.
         _pool_credential_id.pop(pool_key, None)
+        _pool_sandbox.pop(pool_key, None)
     if exchange:
         try:
             await exchange.close()
@@ -240,6 +287,7 @@ async def close_all_exchanges() -> int:
         draining = list(_exchange_pool.items())
         _exchange_pool.clear()
         _pool_credential_id.clear()
+        _pool_sandbox.clear()
 
     closed = 0
     for pool_key, exchange in draining:
@@ -327,17 +375,120 @@ class ConnectionEngine:
         if self.proxies:
             config["proxies"] = self.proxies
 
+        if self.testnet:
+            # EXCH-01: refuse a sandbox the venue cannot provide BEFORE a client exists,
+            # so nothing is allocated for a connection that cannot be made. Reached only
+            # when testnet is REQUESTED, so the 100+ venues this factory serves for market
+            # data are untouched; a sandbox request for a venue nobody has measured is
+            # refused rather than attempted, which is the same fail-closed rule
+            # `CCXTExchangeExecutor.connect` applies.
+            from backend_app.backend.exchange_executor import \
+                assert_sandbox_supported
+            assert_sandbox_supported(self.exchange_id)
+
         self.exchange = exchange_class(config)
 
-        # Testnet mode
+        # ═══════════════════════════════════════════════════════════════════════════════
+        # EXCH-01, SECOND FACTORY: PROVE THE SANDBOX, DO NOT ANNOUNCE IT
+        # ═══════════════════════════════════════════════════════════════════════════════
+        # WHAT THIS REPLACED, verbatim:
+        #
+        #     if self.testnet:
+        #         try:
+        #             self.exchange.set_sandbox_mode(True)
+        #             logger.info(f"[{...}] Testnet/Sandbox ENABLED.")
+        #         except Exception:
+        #             logger.warning(f"[{...}] Testnet requested but not supported ...")
+        #
+        # That is the EXCH-01 defect, which was closed on `CCXTExchangeExecutor.connect`
+        # and left open here -- the same mistake in the OTHER venue-client factory, and
+        # this is the one paper trading and live market data actually use. Two ways it
+        # lied. On bitget `set_sandbox_mode` does not raise and does not move the
+        # endpoint, so "Testnet/Sandbox ENABLED" was logged for a client addressing
+        # PRODUCTION. On a venue with no sandbox it raised, the bare `except` swallowed
+        # it, and execution continued with `self.testnet` still True and the client still
+        # on production -- a warning, not a refusal. ABSENCE OF AN EXCEPTION IS NOT
+        # EVIDENCE OF ROUTING, and neither is a log line.
+        #
+        # It now uses the control that already exists. `verify_sandbox_endpoint` RAISES
+        # rather than returning a verdict, precisely so a caller cannot drop it, and this
+        # one does not.
         if self.testnet:
+            # Local import: `exchange_executor` is a large module and this file sits
+            # BELOW it in the layering (it is the connection layer), so importing it at
+            # module scope would invert that and risk a cycle. `connect()` runs once per
+            # pooled client, not per request, so the import cost is not on a hot path.
+            from backend_app.backend.exchange_executor import (
+                SandboxVerificationFailed, verify_sandbox_endpoint)
+
+            # THE PRODUCTION ENDPOINT MUST COME FROM A PRISTINE **ccxt.pro** CLIENT, and
+            # it is passed explicitly rather than left to the verifier's default for a
+            # measured reason. That default resolves the class from
+            # `ccxt.async_support`, and MEASURED on ccxt 4.5.90 a pro client's
+            # `urls['api']` carries an extra 'ws' key that the REST client's does not --
+            # for binance, bybit and okx alike. So a pro client's endpoint can never
+            # equal a REST client's, and the "did it leave production" comparison would
+            # come out TRUE for a reason that has nothing to do with sandbox routing. It
+            # would pass vacuously, which is worse than failing, because it would look
+            # like proof.
+            #
+            # Constructing the pristine client costs nothing and leaks nothing, measured
+            # not assumed: after `exchange_class({})` on ccxt.pro 4.5.90, `session` and
+            # `tcp_connector` are both None and `clients` is empty, no network call is
+            # made, and the config is empty so no credential is involved.
+            try:
+                pristine_production = (
+                    getattr(exchange_class({}), "urls", None) or {}
+                ).get("api")
+            except Exception:  # noqa: BLE001 - an unanswerable question is a refusal
+                pristine_production = None
+            if pristine_production is None:
+                await self.disconnect()
+                raise SandboxVerificationFailed(
+                    self.exchange_id,
+                    "the venue's production endpoint could not be read from a pristine "
+                    "ccxt.pro client, so it is impossible to prove this one was swapped "
+                    "away from it.",
+                )
+
             try:
                 self.exchange.set_sandbox_mode(True)
-                logger.info(f"[{self.exchange_id.upper()}] Testnet/Sandbox ENABLED.")
-            except Exception:
-                logger.warning(
-                    f"[{self.exchange_id.upper()}] Testnet requested but not supported by this exchange."
+            except Exception as exc:  # noqa: BLE001
+                # Classified and RAISED, where it used to be swallowed into a warning.
+                # On ccxt 4.5.90 a venue with no sandbox raises
+                # TypeError("'NoneType' object is not iterable") here rather than ccxt's
+                # NotSupported, which is exactly why this catches broadly and converts
+                # instead of matching on a type.
+                await self.disconnect()
+                raise SandboxVerificationFailed(
+                    self.exchange_id,
+                    f"arming sandbox mode on this venue failed "
+                    f"({type(exc).__name__}: {exc}), so the client is still addressing "
+                    f"the production API.",
+                ) from exc
+
+            try:
+                verification = verify_sandbox_endpoint(
+                    self.exchange,
+                    self.exchange_id,
+                    production_endpoint=pristine_production,
                 )
+            except SandboxVerificationFailed:
+                # Closed BEFORE the raise, via the same `disconnect()` the
+                # AuthenticationError branch below uses. A client that is built and then
+                # abandoned leaks its aiohttp session and keeps a decrypted credential
+                # reachable -- this file's own CE-3 note documents that leak, and
+                # `disconnect()` is what closes the socket and nulls the reference.
+                await self.disconnect()
+                logger.critical(
+                    "[%s] EXCH-01: refused a sandbox connection that could not be proven "
+                    "to have left production.", self.exchange_id.upper(),
+                )
+                raise
+            logger.info(
+                "[%s] VERIFIED SANDBOX via %s — %s",
+                self.exchange_id.upper(), verification.mechanism, verification.detail,
+            )
 
         # FIX CE-1: load_markets with exponential backoff retry
         for attempt in range(max_retries):

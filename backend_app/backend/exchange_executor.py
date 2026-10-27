@@ -875,12 +875,82 @@ def _endpoint_fingerprint(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
-def verify_sandbox_endpoint(client: Any, exchange_id: str) -> SandboxVerification:
+def _pristine_production_endpoint(exchange_id: str) -> Optional[str]:
+    """The venue's PRODUCTION endpoint fingerprint, from a client with no sandbox armed.
+
+    WHY THIS EXISTS. `verify_sandbox_endpoint` needs to prove an armed client is not
+    addressing production, and until ccxt 4.5.90 it did that by comparing against
+    `urls['apiBackup']`, which 4.3.92's `set_sandbox_mode` filled with the production
+    endpoint before swapping. 4.5.90 leaves `apiBackup` equal to the TEST urls, so that
+    comparison stopped meaning anything and started failing every legitimate sandbox
+    connection. Asking a pristine client what production is does not depend on how ccxt
+    chooses to use `apiBackup`, and it is what the check always meant.
+
+    COSTS NOTHING AND LEAKS NOTHING. Measured on ccxt 4.5.90 + aiohttp 3.14.4: after
+    `cls({})` both `session` and `tcp_connector` are still `None` and no
+    `Unclosed client session` warning is emitted at shutdown, so there is no transport to
+    close and no credential involved -- the config is empty. ccxt fills `urls` from class
+    data in the constructor, so no network call is made either.
+
+    Returns ``None`` rather than raising if the class cannot be built, so the caller
+    decides what an unanswerable question means (it treats it as a refusal, because a
+    sandbox that cannot be proven is not a sandbox).
+    """
+    try:
+        cls = getattr(ccxt, exchange_id, None)
+        if cls is None:
+            return None
+        pristine = cls({})
+        api = (getattr(pristine, "urls", None) or {}).get("api")
+        if api is None:
+            return None
+        return _endpoint_fingerprint(api)
+    except Exception:  # noqa: BLE001 - an unanswerable question is a refusal upstream
+        logger.warning(
+            "could not determine the production endpoint for %r from a pristine client; "
+            "sandbox verification will refuse rather than guess", exchange_id,
+        )
+        return None
+
+
+def verify_sandbox_endpoint(
+    client: Any,
+    exchange_id: str,
+    *,
+    production_endpoint: Any = None,
+) -> SandboxVerification:
     """Prove that *client* addresses a sandbox endpoint, or raise. Offline.
 
     Reads only locally available client metadata — `urls` and `headers`. Makes no
     network call, so it cannot be defeated by a venue being temporarily reachable, and
     it costs nothing on the connect path.
+
+    Args:
+        production_endpoint: the venue's PRODUCTION endpoint, used by the URL_SWAP
+            check to prove the armed client has actually left it. Defaults to
+            reading it from a pristine client of the same id.
+
+            THIS PARAMETER EXISTS BECAUSE ccxt 4.5.90 STOPPED RETAINING PRODUCTION
+            ON THE ARMED CLIENT. Until then this function worked from `client`
+            alone: 4.3.92's set_sandbox_mode saved production into
+            `urls['apiBackup']` before swapping, so `api != apiBackup` proved the
+            move. 4.5.90 leaves `apiBackup` EQUAL TO THE TEST urls -- measured,
+            identical for binance, bybit and okx -- so production is no longer on
+            the armed client and the question 'did it leave production' cannot be
+            answered from it at all. The old check therefore refused every
+            legitimate sandbox connection; it failed closed, which is the one thing
+            that went right, but it broke testnet trading and DUP-01's harness.
+
+            The default reaches for a pristine client. That alone would have broken
+            this function's own design rule, which its test fake states plainly:
+            'the verifier must work from `urls` and `headers` alone, and a fake that
+            offered more would let a dependency on something else go unnoticed'.
+            Reaching for global ccxt state makes a FakeClient's endpoints
+            uncomparable against a real venue's, which silently stops 'a swap that
+            lands back on production is refused' from being testable AT ALL -- the
+            refusal branch would still exist and nothing would exercise it.
+            Injecting it keeps that case exercisable with a fake, which is the only
+            way the refusal stays honest.
 
     Raises:
         SandboxVerificationFailed: when the mechanism is unknown, unsupported, or the
@@ -915,6 +985,8 @@ def verify_sandbox_endpoint(client: Any, exchange_id: str) -> SandboxVerificatio
     urls = getattr(client, "urls", None) or {}
     api_fp = _endpoint_fingerprint(urls.get("api"))
     test_fp = _endpoint_fingerprint(urls.get("test")) if urls.get("test") is not None else None
+    # Retained as evidence that set_sandbox_mode ran its swap branch at all. Its VALUE is
+    # no longer trusted to be the production endpoint -- see the URL_SWAP block below.
     backup_fp = (
         _endpoint_fingerprint(urls.get("apiBackup")) if "apiBackup" in urls else None
     )
@@ -922,8 +994,35 @@ def verify_sandbox_endpoint(client: Any, exchange_id: str) -> SandboxVerificatio
     if mechanism is SandboxMechanism.URL_SWAP:
         # Three conditions, all required. `apiBackup` present proves set_sandbox_mode ran
         # the swap branch; `api == test` proves it landed on the DECLARED sandbox
-        # endpoint rather than merely somewhere else; `api != apiBackup` proves it
-        # actually moved.
+        # endpoint rather than merely somewhere else; and the third proves it is not on
+        # production.
+        #
+        # THE THIRD CONDITION CHANGED ON ccxt 4.5.90 AND HAD TO, because the fact it used
+        # to rest on stopped being true. It was `api != apiBackup`, which worked because
+        # 4.3.92's set_sandbox_mode did:
+        #
+        #     self.urls['apiBackup'] = self.urls['api']   # save PRODUCTION
+        #     self.urls['api']       = self.urls['test']  # swap in TEST
+        #
+        # so `apiBackup` WAS the production endpoint and differing from it meant "we
+        # moved". On 4.5.90 `apiBackup` comes out equal to the TEST urls, so
+        # `api == apiBackup` for binance and bybit and this check raised
+        # SandboxVerificationFailed on a client that had correctly swapped. MEASURED:
+        # apiBackup == test_url == armed api, all three identical, for binance, bybit and
+        # okx.
+        #
+        # It failed CLOSED, which is the one thing that went right -- it refused to
+        # connect rather than quietly addressing production -- but it refused every
+        # legitimate sandbox connection, which broke testnet trading and DUP-01's
+        # certification harness outright.
+        #
+        # So the condition now compares against the venue's REAL production endpoint,
+        # taken from a pristine instance of the same class. That is what the check always
+        # meant, it does not depend on how ccxt chooses to use `apiBackup`, and it is
+        # strictly stronger: the old form only proved "different from whatever apiBackup
+        # holds", while this proves "the declared sandbox endpoint is genuinely not the
+        # production one". Constructing a pristine client is local and makes no network
+        # call, the same way `probe_exch01_sandbox_endpoints` does it.
         if backup_fp is None:
             raise SandboxVerificationFailed(
                 normalized,
@@ -942,22 +1041,43 @@ def verify_sandbox_endpoint(client: Any, exchange_id: str) -> SandboxVerificatio
                 "the active endpoint does not match the venue's declared sandbox "
                 "endpoint, so where this client would send is ambiguous.",
             )
-        if api_fp == backup_fp:
+        production_fp = (
+            _endpoint_fingerprint(production_endpoint)
+            if production_endpoint is not None
+            else _pristine_production_endpoint(normalized)
+        )
+        if production_fp is None:
             raise SandboxVerificationFailed(
                 normalized,
-                "the active endpoint is identical to the production endpoint it was "
-                "supposed to be swapped away from.",
+                "the venue's production endpoint could not be determined from a pristine "
+                "client, so it is impossible to prove this one was swapped away from it.",
             )
+        if api_fp == production_fp:
+            raise SandboxVerificationFailed(
+                normalized,
+                "the active endpoint is identical to the venue's production endpoint, so "
+                "this client is addressing production despite sandbox mode.",
+            )
+        # The evidence NAMES ITS SOURCE. Two different facts can satisfy the third
+        # condition -- a production endpoint handed in by the caller, or one read from a
+        # pristine client -- and a reader of this record has to be able to tell which,
+        # because an injected value is only as good as whoever injected it.
+        production_source = (
+            "a production endpoint supplied by the caller"
+            if production_endpoint is not None
+            else "the production endpoint of a pristine client of the same venue"
+        )
         return SandboxVerification(
             exchange_id=normalized,
             verified=True,
             mechanism=mechanism.value,
             detail=(
-                "base URL replaced by the venue's declared urls['test']; production "
-                "endpoint retained in urls['apiBackup']"
+                f"base URL replaced by the venue's declared urls['test'] (urls['apiBackup'] "
+                f"is present, so ccxt ran its swap branch), and that endpoint differs from "
+                f"{production_source}"
             ),
             endpoint=api_fp,
-            production_endpoint=backup_fp,
+            production_endpoint=production_fp,
         )
 
     if mechanism is SandboxMechanism.HEADER:

@@ -100,6 +100,7 @@ import pathlib
 import re
 import subprocess
 import sys
+from typing import Optional
 
 REGION = "ap-southeast-1"
 CLUSTER = "vyomquant-cluster"
@@ -283,8 +284,23 @@ def service_exists(name: str) -> bool:
     return any(s.get("status") in ("ACTIVE", "DRAINING") for s in services)
 
 
+def retag(image: str, tag: str) -> str:
+    """Same repository, different tag. Refuses anything that is not a qualified tag.
+
+    Deliberately narrow: it replaces ONLY the text after the final colon, so the registry
+    host and repository are carried over from the template and cannot be redirected to a
+    different repository by a malformed argument.
+    """
+    if "/" not in image or ":" not in image:
+        raise SystemExit(
+            f"refusing to retag {image!r}: it is not a registry-qualified tag, so the "
+            f"repository cannot be preserved with confidence"
+        )
+    return image.rsplit(":", 1)[0] + ":" + tag
+
+
 def build_task_definition(template: dict, command: list, family: str,
-                          cpu: str, memory: str) -> dict:
+                          cpu: str, memory: str, image: Optional[str] = None) -> dict:
     """The template's container, with the worker's command and no sidecar."""
     container = next(
         (dict(c) for c in template["containerDefinitions"]
@@ -296,6 +312,8 @@ def build_task_definition(template: dict, command: list, family: str,
         )
     container["name"] = family
     container["command"] = command
+    if image:
+        container["image"] = image
     # A worker serves no traffic. Port mappings on a worker invite someone to point a
     # load balancer at it.
     container.pop("portMappings", None)
@@ -358,8 +376,35 @@ def main() -> int:
     g.add_argument("--plan", action="store_true", help="report only (default)")
     g.add_argument("--apply", action="store_true", help="register and create")
     p.add_argument("--desired-count", type=int, default=1)
+    p.add_argument(
+        "--image-tag",
+        help=(
+            "Override the image tag taken from the template revision. The template is "
+            "whatever the api service currently runs, which is the right default -- but "
+            "when a NEWER image has been built and the api service has not rolled onto "
+            "it yet, a worker built from the template would inherit the OLD code. That is "
+            "not hypothetical: WS-03's ccxt upgrade was built as image "
+            "77b71dbc... while the api service was still pinned to vyomquant-api:237 "
+            "(built from the previous ccxt), because 03-deploy's pre-deployment gate "
+            "correctly refuses to ship a commit whose 01 PR Check failed. Without this "
+            "flag the only way to put new code in a worker is to wait for the api "
+            "rollout, which couples every worker deployment to the api's gate."
+        ),
+    )
     p.add_argument("--i-understand-fan-out", action="store_true",
                    help="required for --desired-count > 1; see the module docstring")
+    p.add_argument(
+        "--update-existing", action="store_true",
+        help=(
+            "Roll an EXISTING service onto the newly registered revision instead of "
+            "refusing. Opt-in because the default refusal is what stops this script "
+            "from quietly changing something already serving. It does not touch the "
+            "service's network configuration -- only its task definition and desired "
+            "count. This is the operation ecs_deploy_and_diagnose.redeploy_workers "
+            "performs for services matching 'vyomquant-worker-', and which nothing "
+            "performs for the ones that do not match it, mds being the live example."
+        ),
+    )
     args = p.parse_args()
     apply = bool(args.apply)
 
@@ -382,7 +427,15 @@ def main() -> int:
                       if c["name"] == TEMPLATE_CONTAINER), {})
     image = container.get("image", "")
     print(f"template       : {TEMPLATE_FAMILY}:{template['revision']}")
-    print(f"image          : {image}")
+    if args.image_tag:
+        overridden = retag(image, args.image_tag)
+        print(f"image          : {overridden}")
+        print(f"                 OVERRIDDEN from the template's "
+              f"{image.rsplit(':', 1)[-1][:16]}... -- the ECR check below applies to the "
+              f"override, so a tag that is not really there still refuses")
+        image = overridden
+    else:
+        print(f"image          : {image}")
     ok, detail = ecr_tag_exists(image)
     print(f"image in ECR   : {ok}  ({detail})")
     if not ok:
@@ -463,16 +516,21 @@ def main() -> int:
 
         family = spec["family"]
         definition = build_task_definition(template, command, family,
-                                           spec["cpu"], spec["memory"])
+                                           spec["cpu"], spec["memory"],
+                                           image=image if args.image_tag else None)
         print(f"   would register : {family} cpu={definition['cpu']} "
               f"memory={definition['memory']}")
         print(f"   would create   : {service_name} desiredCount={args.desired_count}")
 
-        if service_exists(service_name):
+        exists = service_exists(service_name)
+        if exists and not args.update_existing:
             print(f"   REFUSED: service {service_name} already exists. This script does "
-                  f"not modify a running service.")
+                  f"not modify a running service without --update-existing.")
             failures += 1
             continue
+        if exists:
+            print(f"   service exists; --update-existing given, so it will be ROLLED onto "
+                  f"the new revision rather than created")
 
         if not apply:
             continue
@@ -487,6 +545,30 @@ def main() -> int:
         registered = json.loads(out)["taskDefinition"]
         arn = registered["taskDefinitionArn"]
         print(f"   registered {arn.split('/')[-1]}")
+
+        if exists:
+            # ROLL an existing service onto the new revision. Deliberately does NOT touch
+            # the network configuration: whatever that service is already attached to is
+            # live and working, and silently rewriting it from the api service's current
+            # config would be a second, unrequested change riding along with an image
+            # roll. desired-count IS set, because a service parked at 0 (which is how a
+            # blocked worker is left) has to be told to come back up.
+            code, out, err = aws(
+                "ecs", "update-service", "--cluster", CLUSTER,
+                "--service", service_name,
+                "--task-definition", arn,
+                "--desired-count", str(args.desired_count),
+                "--output", "json",
+            )
+            if code != 0:
+                print(f"   update-service FAILED: {(err or '').strip()[:220]}")
+                failures += 1
+                continue
+            print(f"   rolled {service_name} onto {arn.split('/')[-1]} "
+                  f"desiredCount={args.desired_count}")
+            print(f"   CONFIRM FROM THE LOGS, not runningCount: a service can report 1 "
+                  f"running while a task exits and restarts between polls (INF-07).")
+            continue
 
         code, out, err = aws(
             "ecs", "create-service", "--cluster", CLUSTER,
