@@ -34,7 +34,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy import or_
@@ -46,11 +46,88 @@ from backend_app.backend.position_engine import get_position_engine
 from backend_app.core.models.execution_record import (ExecutionRecordModel,
                                                       ExecutionStatus)
 from backend_app.core.order_state_machine import (transition_to_cancelled,
-                                                  transition_to_failed,
-                                                  transition_to_filled,
-                                                  transition_to_partial_fill)
+                                                  transition_to_failed)
+
+# RT-16: `transition_to_filled` and `transition_to_partial_fill` are DELIBERATELY NOT
+# IMPORTED HERE, and this comment exists so the next reader does not helpfully add them
+# back. This module records what a venue reported; it does not adjudicate an execution.
+# `core/models/execution_record.py` states the rule it is obeying: "OrderWatchdog is the
+# only owner of adjudication, and introducing a second one would be worse than the
+# defect." See `OrderEventHandler._handle_filled` for the full reasoning, including the
+# payload-shape defect that made the old adjudicating version destructive.
+#
+# `transition_to_cancelled` and `transition_to_failed` ARE still imported, because
+# `_handle_cancelled` and `_handle_rejected` are unchanged -- they carry neither defect,
+# and retiring them is a separate decision with its own evidence.
 
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+#  RT-16: READING A VENUE'S FILL FIGURES OUT OF THREE DIFFERENT PAYLOAD SHAPES
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Three producers reach `OrderEventHandler`, and they do NOT agree on key names. The
+# handlers used to read one shape and silently resolve to `0` for the others, which is the
+# defect recorded on `_handle_filled`.
+#
+#   ccxt-normalised order  `filled`, `average`, `price`   <- exchange_websocket_listener,
+#                                                            which is RT-16's feeder and
+#                                                            the one that was NOT handled
+#   this platform's own    `filled_size`, `price`         <- internal producers
+#   raw Binance user data  `z` (cumulative filled),
+#                          `L` (last price)               <- BinanceWebSocketClient
+#
+# Every lookup DISTINGUISHES ABSENT FROM ZERO by returning `None` for "the venue said
+# nothing". That distinction is the whole point: a missing figure must leave the recorded
+# one alone, while a reported zero is a real statement that nothing has filled. Collapsing
+# the two is how a recorded fill gets overwritten with nothing.
+
+#: Cumulative-filled keys, most-specific first. `filled` leads because the ccxt feeder is
+#: the producer RT-16 wires and the one whose absence caused the defect.
+_CUMULATIVE_FILL_KEYS = ("filled", "filled_size", "z")
+
+#: Price keys. `average` leads because for a cumulative fill the average IS the price the
+#: position should be booked at; `price` is the order's limit price for an unfilled order
+#: and only coincides with the fill price by accident. `L` is Binance's last-filled price.
+_FILL_PRICE_KEYS = ("average", "avg_price", "price", "L")
+
+
+def _as_decimal(value: Any) -> Optional[Decimal]:
+    """``Decimal`` or ``None``. Never raises, and never turns junk into a number.
+
+    A venue field that cannot be parsed is treated exactly like an absent one, because
+    "unreadable" and "zero" are not the same claim and only one of them is safe to write.
+    """
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _first_reported(data: Dict[str, Any], keys: tuple) -> Optional[Decimal]:
+    """The first key actually PRESENT in ``data``, parsed. ``None`` if none are.
+
+    Presence is tested with ``in``, not truthiness: a reported ``0`` is a fact and must be
+    returned as ``Decimal("0")`` rather than skipped in favour of a later key.
+    """
+    for key in keys:
+        if key in data:
+            parsed = _as_decimal(data.get(key))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _venue_cumulative_fill(data: Dict[str, Any]) -> Optional[Decimal]:
+    """The venue's CUMULATIVE filled quantity for this order, or ``None`` if unreported."""
+    return _first_reported(data, _CUMULATIVE_FILL_KEYS)
+
+
+def _venue_fill_price(data: Dict[str, Any]) -> Optional[Decimal]:
+    """The price the fill should be booked at, or ``None`` if unreported."""
+    return _first_reported(data, _FILL_PRICE_KEYS)
 
 
 class EventHandler(ABC):
@@ -158,81 +235,132 @@ class OrderEventHandler(EventHandler):
         ).first()
     
     async def _handle_filled(self, event: ExchangeEvent, execution: ExecutionRecordModel):
-        """STEP 5.4: Handle ORDER_FILLED - ONLY mark FILLED after exchange confirms."""
-        data = event.data
-        
-        prev_filled = Decimal(str(execution.filled_size or "0"))
-        # Extract fill data
-        filled_size = Decimal(str(data.get('filled_size', data.get('z', 0))))  # Binance: 'z' = filled
-        fill_price = Decimal(str(data.get('price', data.get('L', 0))))      # Binance: 'L' = last price
-        fill_delta = max(Decimal("0"), filled_size - prev_filled)
-        
-        # Update execution record
-        execution.filled_size = str(filled_size)
-        execution.avg_price = str(fill_price)
-        execution.status = ExecutionStatus.COMPLETED
-        execution.filled_at = datetime.utcnow()
-        execution.last_exchange_sync = datetime.utcnow()
-        
-        self.db.commit()
-        
-        # Update state machine
-        transition_to_filled(
-            execution_id=execution.execution_id,
-            filled_size=float(filled_size),
-            avg_price=float(fill_price),
-            exchange_order_id=event.order_id or "unknown",
-            reason="Exchange confirmed: ORDER_FILLED event"
-        )
-        
-        logger.info(
-            f"ORDER FILLED (exchange confirmed): {execution.execution_id} | "
-            f"order={event.order_id} | "
-            f"size={filled_size} @ {fill_price} | delta={fill_delta}"
-        )
-        
-        # STEP 5.6: Trigger position update only with newly filled delta
-        if fill_delta > 0:
-            await self._update_position(execution, fill_delta=fill_delta)
-    
+        """RT-16. RECORD what the venue reported. Do NOT adjudicate the execution.
+
+        THIS USED TO BE AN ADJUDICATOR AND IT COULD NOT SAFELY BE ONE. The previous body
+        set ``status = ExecutionStatus.COMPLETED``, stamped ``filled_at``, and called
+        ``transition_to_filled``. Two separate reasons that was wrong, and the first is
+        the one that would have destroyed data the moment RT-16's chain was closed.
+
+        1. IT READ KEYS THE PAYLOAD DOES NOT HAVE. It took
+           ``data.get('filled_size', data.get('z', 0))``. The feeder --
+           ``exchange_websocket_listener._publish_order_event`` -- sets
+           ``data=event.raw_data``, which is the **ccxt-normalised order dict**, whose
+           cumulative-fill key is ``filled`` (see that module's line 355, which reads
+           exactly ``order_data.get("filled")``). ``filled_size`` and Binance's raw ``z``
+           are both absent from it, so the expression resolved to ``0`` on every
+           ccxt-sourced fill. The handler then wrote ``filled_size = "0"`` and
+           ``avg_price = "0"`` over a real recorded fill AND set the row COMPLETED --
+           which is terminal, because ``OrderWatchdog._find_open_orders``,
+           ``_find_stale_orders`` and ``ExchangeReconciliation._get_active_orders`` all
+           select only PENDING/EXECUTING. The row would have left every reconciliation
+           population at the exact moment it most needed watching, recorded as fully
+           complete with nothing filled. That is strictly worse than the honest gap RT-16
+           described, which is why the chain could not be wired before this was fixed.
+
+        2. IT WOULD HAVE BEEN A SECOND OWNER OF ADJUDICATION.
+           ``core/models/execution_record.py`` records the decision plainly:
+           "OrderWatchdog is the only owner of adjudication, and introducing a second one
+           would be worse than the defect." And the feeder's own
+           ``_update_order_in_db`` ALREADY records the venue's figures, with the FILL-01
+           guards -- absent is not zero, and a cumulative fill never moves backwards.
+           This handler ran on the same event with none of those guards, so the second
+           write undid the first. On real money two adjudicators can double-resolve one
+           fill.
+
+        SO THE DIVISION IS: THE STREAM OBSERVES, THE WATCHDOG DECIDES. This records the
+        venue's evidence -- cumulative fill, price, status text, sync time -- under the
+        same monotonicity rule the feeder uses, and leaves the terminal transition and the
+        position credit to ``OrderWatchdog``. The latency win is still real: the watchdog
+        now adjudicates from evidence already in the row instead of having to ask the
+        venue.
+
+        NOT CHANGED HERE, deliberately: ``_handle_cancelled`` and ``_handle_rejected``
+        still set ``FAILED``. They carry neither defect -- no cumulative figure to
+        misread, and a venue-confirmed rejection is not the ambiguous case the
+        single-adjudicator rule was written for. Changing them is a separate decision
+        with its own evidence, and bundling it here would smuggle it in.
+        """
+        self._record_venue_fill_evidence(event, execution, label="ORDER_FILLED")
+
     async def _handle_partial(self, event: ExchangeEvent, execution: ExecutionRecordModel):
-        """STEP 5.4: Handle ORDER_PARTIAL - Update incremental fill."""
-        data = event.data
-        prev_filled = Decimal(str(execution.filled_size or "0"))
-        
-        # Extract fill data
-        filled_size = Decimal(str(data.get('filled_size', data.get('z', 0))))
-        total_size = Decimal(str(execution.size))
-        remaining_size = total_size - filled_size
-        fill_price = Decimal(str(data.get('price', data.get('L', 0))))
-        fill_delta = max(Decimal("0"), filled_size - prev_filled)
-        
-        # Update execution record
-        execution.filled_size = str(filled_size)
-        execution.remaining_size = str(remaining_size)
-        execution.avg_price = str(fill_price)
+        """RT-16. RECORD a partial fill. Same rule as :meth:`_handle_filled`.
+
+        This carried the identical payload-shape defect and one more of its own: with
+        ``filled_size`` resolving to ``0`` it computed
+        ``remaining_size = total_size - 0`` and wrote the FULL order size back as
+        remaining, alongside an ``avg_price`` of ``0`` -- so a partially filled order was
+        recorded as entirely unfilled at a price of zero.
+
+        ``remaining_size`` is now derived only when a cumulative fill was actually
+        reported, for the reason FILL-01 gives in the feeder: ``remaining`` describes the
+        same snapshot as ``filled``, so writing one without the other makes the row
+        internally inconsistent.
+        """
+        self._record_venue_fill_evidence(event, execution, label="PARTIAL_FILL")
+
+    def _record_venue_fill_evidence(
+        self,
+        event: ExchangeEvent,
+        execution: ExecutionRecordModel,
+        *,
+        label: str,
+    ) -> None:
+        """Write the venue's reported figures onto the row. Never changes ``status``.
+
+        Shared by both fill handlers because the rule is identical and two copies of a
+        monotonicity guard is how one of them ends up without it.
+        """
+        data = event.data or {}
+
+        reported_fill = _venue_cumulative_fill(data)
+        reported_price = _venue_fill_price(data)
+        recorded_fill = _as_decimal(execution.filled_size) or Decimal("0")
+
+        if reported_fill is None:
+            # ABSENT IS NOT ZERO. The venue said nothing about the cumulative fill, so
+            # there is nothing to record and the existing figure stands. Writing a zero
+            # here is precisely the bug this method replaced.
+            logger.info(
+                "RT-16: %s for execution %s reported no cumulative fill, so no fill "
+                "figure was recorded (order=%s). The row is unchanged apart from its "
+                "sync time.",
+                label, execution.execution_id, event.order_id,
+            )
+        elif reported_fill < recorded_fill:
+            # Cumulative fills cannot shrink, so this event is stale or out of order.
+            logger.warning(
+                "RT-16: ignoring a stale %s for execution %s -- it reports a cumulative "
+                "fill of %s, below the %s already recorded.",
+                label, execution.execution_id, reported_fill, recorded_fill,
+            )
+        else:
+            execution.filled_size = str(reported_fill)
+            # `remaining` and `average` describe the same snapshot as `filled`, so they
+            # move with it or not at all.
+            if reported_price is not None:
+                execution.avg_price = str(reported_price)
+            total_size = _as_decimal(execution.size)
+            if total_size is not None:
+                execution.remaining_size = str(max(Decimal("0"), total_size - reported_fill))
+            logger.info(
+                "RT-16: recorded venue evidence for %s on execution %s -- cumulative "
+                "fill %s, price %s, order=%s. Status is UNCHANGED (%s); OrderWatchdog "
+                "owns adjudication.",
+                label, execution.execution_id, reported_fill,
+                reported_price if reported_price is not None else "not reported",
+                event.order_id, execution.status,
+            )
+
+        # Recorded even when nothing else was: "the venue answered, at this time" is
+        # itself the evidence the watchdog's staleness checks read.
         execution.last_exchange_sync = datetime.utcnow()
-        
+        venue_status = data.get("status")
+        if venue_status and hasattr(execution, "exchange_status"):
+            execution.exchange_status = str(venue_status)
+
         self.db.commit()
-        
-        # Update state machine
-        transition_to_partial_fill(
-            execution_id=execution.execution_id,
-            filled_size=float(filled_size),
-            remaining_size=float(remaining_size),
-            avg_price=float(fill_price),
-            exchange_order_id=event.order_id or "unknown",
-            reason="Exchange confirmed: PARTIAL_FILL"
-        )
-        
-        logger.info(
-            f"ORDER PARTIAL (exchange confirmed): {execution.execution_id} | "
-            f"filled={filled_size}/{total_size} @ {fill_price} | delta={fill_delta}"
-        )
-        
-        # STEP 5.6: Trigger position update only with newly filled delta
-        if fill_delta > 0:
-            await self._update_position(execution, fill_delta=fill_delta)
+
     
     async def _handle_cancelled(self, event: ExchangeEvent, execution: ExecutionRecordModel):
         """Handle ORDER_CANCELLED."""
