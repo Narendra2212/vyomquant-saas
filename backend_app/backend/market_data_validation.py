@@ -287,25 +287,78 @@ class DataQualityReport:
         }
 
 
-#: DATA-02: the z-score outlier gate rejects a whole window if ANY single bar exceeds this
-#: many standard deviations -- so for a window of N bars, the probability of at least one
-#: false-positive rises with N even under perfectly well-behaved data (at N=500, a per-point
-#: threshold calibrated for a single comparison at z=3 rejects roughly 3 windows in 4 purely by
-#: chance). Raised from 3.0 to a value that keeps the window-level false-positive rate low
-#: across the window sizes this platform actually requests (per-point P(|Z|>5) ~ 5.7e-7 under a
-#: normal model, so even a 10,000-bar window's overall false-positive probability stays under
-#: 1%). Still env-overridable for a future recalibration against real historical return
-#: distributions (the audit's own remaining ask -- this value is a principled default, not a
-#: result of fitting real market data, which this sandbox has none of).
+#: DATA-02: the classic z-score threshold, for the selectable (non-default)
+#: :attr:`OutlierMethod.Z_SCORE`.
+#:
+#: THE VALUE IS UNCHANGED AT 5.0. ITS JUSTIFICATION IS REPLACED, because the old one was
+#: wrong by three and a half orders of magnitude and happened to produce a safe answer.
+#:
+#: That comment read: "per-point P(|Z|>5) ~ 5.7e-7 under a normal model, so even a
+#: 10,000-bar window's overall false-positive probability stays under 1%", and conceded the
+#: figure was "a principled default, not a result of fitting real market data, which this
+#: sandbox has none of". DATA-02's remaining ask was that fit. It has now been done.
+#:
+#: MEASURED, 12,000 live 1m bars each of BTC/USDT, ETH/USDT and DOGE/USDT
+#: (``scripts/measure_market_data_outlier_reality.py``, default mode and ``--legacy``).
+#: Crypto log-returns are fat-tailed, and the normal model understates the tail enormously:
+#:
+#:     z     real per-point rate    normal model      understated by
+#:    3.0    1.36e-02 .. 1.63e-02     2.700e-03                  6x
+#:    4.0    5.33e-03 .. 6.50e-03     6.334e-05                100x
+#:    5.0    2.75e-03 .. 3.33e-03     5.733e-07              5,815x
+#:    8.0    5.00e-04 .. 9.17e-04     1.244e-15    401,900,690,552x
+#:
+#: So the old reasoning was not merely unfitted, it was off by 5,815x at the very threshold
+#: it was defending. What rescued it is that the POLICY changed underneath it: DATA-03
+#: replaced whole-window rejection with per-point flagging plus a contamination BUDGET
+#: (:data:`MAX_OUTLIER_FRACTION_DEFAULT`), and the question became what share of a window a
+#: threshold flags rather than whether any single point exceeds it. Measured that way:
+#:
+#:     z      worst contamination of any 10,000-bar window
+#:    3.0                  1.76%   <- EXCEEDS the 1% budget
+#:    4.0                  0.72%
+#:    5.0                  0.37%   <- this default, 2.7x inside the budget
+#:    6.0                  0.20%
+#:
+#: 5.0 stands: it flags ~1 bar in 350 (a real extreme move, so the rule still detects
+#: something) and its worst-case contamination sits 2.7x inside the budget. 3.0 -- the value
+#: this constant was raised FROM -- is now measurably inadmissible, which is worth recording
+#: because it was the original default.
+#:
+#: Under the OLD whole-window policy no value worked at all: the default mode of that script
+#: measures 100% of windows of 2,000 bars or more refused at 5.0, and only 12.0 admits a
+#: 10,000-bar window -- at which point it flags nothing. That is the defect DATA-03 fixed,
+#: and the reason this threshold is now judged against a budget instead of a probability.
 Z_SCORE_THRESHOLD_DEFAULT = float(os.environ.get("MARKET_DATA_Z_SCORE_THRESHOLD", "5.0"))
 
-#: DATA-02: the same whole-window-rejects-on-any-point problem applies to the (non-default)
-#: IQR method -- 1.5xIQR is the textbook "mild outlier" boxplot fence, which flags roughly 0.7%
-#: of normally-distributed points, i.e. ~6 points in a 900-bar window on pure chance alone. 3.0 is
-#: the textbook "extreme outlier" fence instead (empirically confirmed, while fixing this
-#: finding, to clear realistic log-return windows across many random draws where 1.5-2.5 did
-#: not). Also env-overridable for the same future-recalibration reason as the z-score threshold.
-IQR_MULTIPLIER_DEFAULT = float(os.environ.get("MARKET_DATA_IQR_MULTIPLIER", "3.0"))
+#: DATA-02: the IQR fence multiplier, for the selectable (non-default)
+#: :attr:`OutlierMethod.IQR`.
+#:
+#: RAISED 3.0 -> 6.0, AND THIS ONE WAS A REAL DEFECT RATHER THAN A STALE JUSTIFICATION.
+#:
+#: 3.0 is the textbook "extreme outlier" boxplot fence, and the comment it replaces said it
+#: had been "empirically confirmed ... to clear realistic log-return windows across many
+#: random draws where 1.5-2.5 did not". Those draws were synthetic. Against real returns,
+#: measured the same way and on the same 36,000 bars:
+#:
+#:     k      real per-point rate      worst contamination of any 10,000-bar window
+#:    1.5    3.84e-02 .. 6.00e-02                 6.14%
+#:    2.0    2.12e-02 .. 3.34e-02                 3.43%
+#:    3.0    7.25e-03 .. 1.31e-02                 1.43%   <- EXCEEDS the 1% budget
+#:    4.0    3.33e-03 .. 5.83e-03                 0.66%
+#:    6.0    1.17e-03 .. 1.83e-03                 0.20%   <- this default
+#:    8.0    4.17e-04 .. 5.00e-04                 0.06%
+#:
+#: At 3.0 an operator selecting the IQR method would have ordinary, healthy windows refused
+#: by :data:`MAX_OUTLIER_FRACTION_DEFAULT`: 1.43% measured against a 1% budget. Not a
+#: hypothetical -- that is the worst case over a real 36,000-bar sample, so it is reachable on
+#: a quiet day.
+#:
+#: 6.0 is chosen for the headroom the robust default was chosen for (~5x inside the budget at
+#: 0.20%, against the robust threshold's ~6x at 0.16%), while still flagging ~1 bar in 550 to
+#: 850 so the rule detects something real. 4.0 would also fit the budget but at only 1.5x
+#: headroom, which is the margin that disappears the first time volatility rises.
+IQR_MULTIPLIER_DEFAULT = float(os.environ.get("MARKET_DATA_IQR_MULTIPLIER", "6.0"))
 
 #: DATA-03 (C). Scales the median absolute deviation to be a consistent estimator of sigma
 #: for normally-distributed data, so a robust z-score is on the same footing as a classic one
