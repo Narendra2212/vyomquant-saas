@@ -163,14 +163,28 @@ def test_venue_translates_our_client_order_id_to_its_native_field(venue):
 
 @pytest.mark.parametrize("venue", sorted(DOES_NOT_FORWARD))
 def test_venue_does_not_forward_our_client_order_id(venue):
-    """DUP-01. Characterisation of the two venues where our id never arrives.
+    """DUP-01. Characterisation of the venue where our id never arrives.
 
     This test asserts the **measured reality**, not the desired behaviour, and is
     deliberately shaped that way: if a future ccxt starts honouring our id on these
     venues, this test fails and the gap can be closed with evidence rather than hope.
 
-    The consequence while it holds: a retry on coinbase or kraken is a **brand-new order**
-    as far as the venue is concerned. Nothing at the venue will refuse it.
+    THE CONSEQUENCE WHILE IT HOLDS, restated after kraken left this set. Only coinbase
+    remains, and the title of this docstring said "two venues" until ccxt 4.5.90. On
+    coinbase a resubmission would be a **brand-new order** as far as the venue is
+    concerned, and nothing there would refuse it -- but the platform never resubmits
+    (`tests/test_d5_watchdog_adjudication_repair.py::
+    test_adjudication_never_resubmits_on_any_lookup_outcome`), so that is not the live
+    consequence.
+
+    THE LIVE CONSEQUENCE WAS THE LOOKUP, and it was worse: `find_order_by_client_order_id`
+    matches on our id, so on coinbase every strategy missed while the venue had plainly
+    ANSWERED, and the method returned a DEFINITE `not_found` for an order that might be
+    resting or filled. `OrderWatchdog` turned that into a plain `FAILED`, which does not
+    carry `RECOVERY_CONFIRMATION_LOST` and therefore does not hold RT-17's symbol freeze --
+    so the next signal could place a second real order. The lookup now refuses on this
+    venue instead of denying; see `exchange_executor.VENUES_THAT_STRIP_OUR_CLIENT_ORDER_ID`
+    and `tests/test_dup01_coinbase_lookup_refuses_rather_than_denying.py`.
     """
     src = _uncommented(_create_source(venue))
     reads_ours = bool(re.search(r"safe_string\w*\([^)]*['\"]clientOrderId['\"]", src))

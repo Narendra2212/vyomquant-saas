@@ -715,6 +715,68 @@ SAFETY_BLOCKED_EXCHANGES: Dict[str, str] = {
 }
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# DUP-01 — VENUES THAT NEVER RECEIVE OUR CLIENT ORDER ID
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# `place_order` forwards the deterministic `execution_id` as `clientOrderId`, and
+# `find_order_by_client_order_id` adjudicates an ambiguous submission by asking the venue
+# about that id. On MOST venues ccxt translates it into the venue's native field, measured
+# per venue by `tests/test_dup01_client_order_id_mapping.py`:
+#
+#     binance   newClientOrderId   forwarded
+#     bybit     orderLinkId        forwarded
+#     okx       clOrdId            forwarded
+#     kucoin    clientOid          forwarded
+#     kraken    cl_ord_id          forwarded (since ccxt 4.5.90)
+#     coinbase  client_order_id    *** STRIPPED — ours never arrives ***
+#
+# COINBASE IS NOT MERELY "UNVERIFIED", IT IS ACTIVELY INCOMPATIBLE. Measured on ccxt
+# 4.5.90, `ccxt.coinbase.create_order` does both of these:
+#
+#     'client_order_id': id + '-' + self.uuid()           # mints its own
+#     self.omit(paramsBase, [..., 'clientOrderId', ...])  # and DISCARDS ours
+#
+# So the venue's order carries an id this platform has never seen, and `_matches` inside
+# `find_order_by_client_order_id` -- which compares our id against `clientOrderId`,
+# `info.clientOrderId` and `info.client_order_id` -- can never match on this venue.
+#
+# WHY THAT WAS WORSE THAN HAVING NO PROTECTION AT ALL, which is why this is a constant
+# with a guard rather than a note. Without it the lookup ran its three strategies, matched
+# nothing, observed that the venue had ANSWERED, and returned
+# `success=True, status="not_found"`. `OrderWatchdog` treats that as a definite negative --
+# "the venue was queried by clientOrderId and has no such order, so the submission did not
+# take effect" -- and resolves the row to plain `FAILED`.
+#
+# That is a FALSE negative, and it fails in the one direction that costs money:
+#
+#   1. the order may be resting or filled at coinbase under the venue's own id;
+#   2. plain `FAILED` does NOT carry `RECOVERY_CONFIRMATION_LOST`, and
+#      `ExecutionRecordRepository.has_unresolved_submission` (RT-17's symbol freeze) only
+#      matches `UNKNOWN` or a `FAILED` row bearing that marker -- so the freeze LIFTS;
+#   3. the next signal for that symbol is then free to place a SECOND real order.
+#
+# Answering "I cannot ask" instead restores this platform's own stated rule: only an
+# inability to ASK is an error, and the caller must then keep the row unresolved rather
+# than assume anything. The row stays UNKNOWN, the symbol stays frozen, and
+# `give_up_on_unresolved_submission` eventually records the confirmation-lost terminal
+# state WITH its marker and its alert -- which is the honest description of an order whose
+# fate this platform genuinely cannot determine.
+#
+# NOT a routing block. Coinbase stays tradable; what changes is that an ambiguous coinbase
+# submission is now reported as unresolvable instead of being wrongly declared dead.
+#
+# Regression: tests/test_dup01_coinbase_lookup_refuses_rather_than_denying.py
+VENUES_THAT_STRIP_OUR_CLIENT_ORDER_ID: Dict[str, str] = {
+    "coinbase": (
+        "DUP-01: ccxt's coinbase implementation mints its own client_order_id as "
+        "`id + '-' + uuid()` and omits `clientOrderId` from the request params, so the "
+        "platform's execution_id never reaches the venue and no order there can be "
+        "matched by it. Measured on ccxt 4.5.90."
+    ),
+}
+
+
 class ExchangeRoutingBlocked(ValueError):
     """An order was routed to a venue withheld by an explicit safety decision.
 
@@ -2102,7 +2164,35 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         id and so never needed to return one, whereas this method's entire purpose is to
         discover it. The caller needs it because recovery is forbidden from recording a
         fill without the venue's own identifier for it.
+
+        A VENUE THAT NEVER RECEIVED THE ID IS REFUSED BEFORE ANY LOOKUP. See
+        ``VENUES_THAT_STRIP_OUR_CLIENT_ORDER_ID``: on coinbase the three strategies below
+        would all miss, the venue would have ANSWERED, and this method would return a
+        definite ``not_found`` for an order that may be live -- which the watchdog
+        converts into a plain ``FAILED`` that does not freeze the symbol. "I cannot ask"
+        is the only true answer when the question was never delivered.
         """
+        stripped = VENUES_THAT_STRIP_OUR_CLIENT_ORDER_ID.get(
+            str(self.exchange_id or "").strip().lower()
+        )
+        if stripped is not None:
+            logger.error(
+                "DUP-01: refusing to adjudicate %s on %s by clientOrderId -- this venue "
+                "never received it. The execution must stay unresolved. %s",
+                client_order_id, self.exchange_id, stripped,
+            )
+            return OrderStatusResult(
+                success=False, status="error", filled_size="0", remaining_size="0",
+                avg_price=None,
+                error_message=(
+                    f"this venue cannot be queried by clientOrderId "
+                    f"{client_order_id}: {stripped} The order's existence is therefore "
+                    f"unknown and must be reconciled manually; a 'not found' here would "
+                    f"be a false negative, because the venue holds its own id for the "
+                    f"order and not ours."
+                ),
+            )
+
         try:
             await self.rate_limiter.acquire("get_order")
             ccxt_symbol = self.normalizer.format_symbol_for_ccxt(symbol)
