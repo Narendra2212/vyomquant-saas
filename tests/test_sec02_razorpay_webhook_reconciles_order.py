@@ -79,7 +79,7 @@ def _run_webhook(payment, order, monkeypatch):
     import hmac, hashlib
     sig = hmac.new(b"whsec_test_secret_value", body, hashlib.sha256).hexdigest()
     with patch.object(b, "_validate_webhook_ip"), patch.object(b, "_validate_keys"), \
-         patch.object(b, "_validate_webhook_signature"), patch.object(b, "_validate_webhook_timestamp"), \
+         patch.object(b, "_validate_webhook_signature"), \
          patch("backend_app.core.cache.redis_manager.redis_manager", redis), \
          patch.object(b, "redis_manager", redis, create=True), \
          patch.object(b, "_fetch_razorpay_order", fake_order), \

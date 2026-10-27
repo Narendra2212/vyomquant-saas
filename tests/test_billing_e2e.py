@@ -1947,12 +1947,23 @@ class TestMarketplaceSettlementWiring:
         for control in (
             "_validate_webhook_signature",
             "_validate_webhook_ip",
-            "STRIPE_WEBHOOK_IPS",
-            "_validate_webhook_timestamp",
+            "RAZORPAY_WEBHOOK_IPS",
+            # `_validate_webhook_timestamp` is NOT listed, and its absence is asserted
+            # below rather than merely untested. It was deleted because it could not
+            # refuse anything -- see the block above `_razorpay_event_id` in billing.py.
+            "_razorpay_event_id",
         ):
             assert control in source, f"{control} was removed"
 
-        assert source.count('@router.post("/webhook/stripe")') == 1
+        assert "_validate_webhook_timestamp" not in source, (
+            "the timestamp validator is back. It claimed to reject webhooks older than 5 "
+            "minutes and could not: Razorpay sends no timestamp header, and its own 403 "
+            "sat inside a try whose blanket except downgraded it to a warning. Replay "
+            "protection here is the two idempotency layers, which reject by identity."
+        )
+        assert source.count('@router.post("/webhook/stripe")') == 0, (
+            "the Stripe webhook is back; Razorpay is the only gateway"
+        )
         assert source.count('@router.post("/webhook/razorpay")') == 1
         # One entitlement funnel: the marketplace dispatch statement appears exactly once.
         assert source.count('if item_key.startswith("marketplace_"):') == 1
@@ -2565,11 +2576,12 @@ class TestMarketplaceSettlementWiring:
         # The router never writes the ledger itself: settlement_service is the one writer, which is
         # what makes the 90/10 split, the uniqueness constraint and the audit unavoidable.
         assert 'table("marketplace_settlements")' not in source
-        # And it still holds the signature/IP/timestamp controls this task did not touch.
+        # And it still holds the signature/IP controls this task did not touch. The
+        # timestamp control is deliberately absent -- it could not refuse anything, so its
+        # removal is asserted elsewhere in this file rather than its presence here.
         for control in (
             "_validate_webhook_signature",
             "_validate_webhook_ip",
-            "STRIPE_WEBHOOK_IPS",
-            "_validate_webhook_timestamp",
+            "RAZORPAY_WEBHOOK_IPS",
         ):
             assert control in source, f"{control} was removed"

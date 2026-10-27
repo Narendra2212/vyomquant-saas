@@ -65,7 +65,7 @@ class TestARejectionNamesTheProxyDiagnostic:
         with patch.dict(os.environ, {"ENV": "production"}, clear=False):
             with caplog.at_level(logging.ERROR, logger="BillingRouter"):
                 with pytest.raises(Exception):
-                    billing._validate_webhook_ip(request, "stripe")
+                    billing._validate_webhook_ip(request, "razorpay")
 
         joined = "\n".join(r.getMessage() for r in caplog.records)
         assert forwarded_for in joined, (
@@ -80,7 +80,7 @@ class TestARejectionNamesTheProxyDiagnostic:
         with patch.dict(os.environ, {"ENV": "production"}, clear=False):
             with caplog.at_level(logging.ERROR, logger="BillingRouter"):
                 with pytest.raises(Exception):
-                    billing._validate_webhook_ip(request, "stripe")
+                    billing._validate_webhook_ip(request, "razorpay")
 
         joined = "\n".join(r.getMessage() for r in caplog.records)
         assert "2" in joined and "trusted_proxy_hops" in joined
@@ -89,10 +89,10 @@ class TestARejectionNamesTheProxyDiagnostic:
         """NEGATIVE CONTROL: the enriched logging only runs on the rejection path - an
         allowed request is not slowed down or altered.
         """
-        allowed = billing.STRIPE_WEBHOOK_IPS[0]
+        allowed = billing.RAZORPAY_WEBHOOK_IPS[0]
         # Single-hop: the rightmost (and only) entry is what the ALB appended, which
         # with the default TRUSTED_PROXY_HOPS=1 is exactly what gets resolved.
         request = _request(allowed)
 
         with patch.dict(os.environ, {"ENV": "production"}, clear=False):
-            billing._validate_webhook_ip(request, "stripe")  # must not raise
+            billing._validate_webhook_ip(request, "razorpay")  # must not raise

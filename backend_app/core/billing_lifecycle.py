@@ -1,28 +1,62 @@
 """
-core/billing_lifecycle.py — Billing Lifecycle Management
+core/billing_lifecycle.py — the two billing-lifecycle operations that are real.
 
-Handles the complete billing lifecycle:
-- Trial management
-- Subscription activation
-- Upgrade/downgrade
-- Cancellation
-- Expiration
-- Renewal
-- Grace period
+THIS MODULE USED TO ADVERTISE A LIFECYCLE IT DID NOT HAVE. The docstring listed trial
+management, activation, upgrade/downgrade, expiration, renewal and grace period, and nine
+of its functions had **no production caller at all** -- they were reachable only from tests
+and one attack script. Read together, the file described a subscription system far more
+complete than the one that ran, which is the most expensive kind of wrong comment: it
+invites a reader to assume a trial exists, or that a scheduled downgrade will execute.
+
+What was removed, and what it would have done if anything had called it:
+
+  * ``start_trial`` / ``calculate_trial_end_date`` / ``check_trial_expiry`` and
+    ``TRIAL_DAYS = 14`` -- there is no trial in this product. Nothing ever wrote
+    ``SubscriptionStatus.TRIAL``.
+  * ``calculate_grace_period_end_date`` / ``check_subscription_expiry`` and
+    ``GRACE_PERIOD_DAYS = 7`` -- there is no grace period. Nothing ever wrote
+    ``SubscriptionStatus.GRACE_PERIOD``.
+  * ``activate_subscription`` -- the webhook writes ``profiles`` directly instead.
+  * ``upgrade_subscription`` -- an upgrade is a fresh checkout whose webhook overwrites the
+    tier. There was never any proration.
+  * ``downgrade_subscription`` -- wrote ``profiles.pending_downgrade_tier``, a column
+    **nothing anywhere reads**. A scheduled downgrade would never have executed.
+  * ``renew_subscription`` -- its only caller was the Stripe ``invoice.payment_succeeded``
+    handler, removed with the provider. Razorpay orders do not recur, so nothing renews.
+  * ``calculate_next_billing_date`` -- AND THIS ONE CARRIED A MONEY BUG. It did
+    ``current_date.replace(month=current_date.month + 1)``, which raises
+    ``ValueError: day is out of range for month`` on the 29th/30th/31st rolling into a
+    shorter month. It was live on the Stripe renewal path, the exception was swallowed by
+    the handler's ``except``, and the webhook still reported success -- so roughly seven
+    days a year a customer was charged and the renewal was silently not recorded. The
+    calendar-safe ``add_billing_period`` below already existed beside it and is what the
+    Razorpay path always used. Removing Stripe removed the bug's only caller; removing the
+    function removes the bug.
+
+WHAT REMAINS IS WHAT HAS CALLERS: ``add_billing_period`` (``routers/billing.py``) and
+``cancel_subscription`` (``routers/billing.py``). If a recurring gateway is added later,
+build its renewal on ``add_billing_period`` and do not resurrect the function above.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from backend_app.core.cache import redis_manager
-from backend_app.core.subscription_engine import Plan, SubscriptionEngine
+from backend_app.core.subscription_engine import Plan
 
 logger = logging.getLogger("BillingLifecycle")
 
 
 class SubscriptionStatus:
-    """Subscription status constants."""
+    """Subscription status constants.
+
+    ``TRIAL`` and ``GRACE_PERIOD`` are retained as vocabulary but NOTHING WRITES THEM --
+    the code that would have is gone (see the module docstring). They are kept rather than
+    deleted because they are plain strings that other modules may compare against, and a
+    missing attribute is a harder failure than an unused one. Do not read their presence as
+    evidence that either state exists.
+    """
     TRIAL = "trial"
     ACTIVE = "active"
     PAST_DUE = "past_due"
@@ -33,24 +67,7 @@ class SubscriptionStatus:
 
 class BillingLifecycle:
     """Billing lifecycle manager."""
-    
-    TRIAL_DAYS = 14
-    GRACE_PERIOD_DAYS = 7
-    
-    @staticmethod
-    def calculate_next_billing_date(current_date: Optional[datetime] = None) -> datetime:
-        """Calculate next billing date (1 month from now)."""
-        if current_date is None:
-            current_date = datetime.utcnow()
-        
-        # Add 1 month
-        if current_date.month == 12:
-            next_date = current_date.replace(year=current_date.year + 1, month=1)
-        else:
-            next_date = current_date.replace(month=current_date.month + 1)
-        
-        return next_date
-    
+
     @staticmethod
     def add_billing_period(start: datetime, interval: Optional[str]) -> datetime:
         """End of one paid period starting at *start* (BILL-01).
@@ -66,101 +83,9 @@ class BillingLifecycle:
         day = min(start.day, calendar.monthrange(year, month)[1])
         return start.replace(year=year, month=month, day=day)
 
-    @staticmethod
-    def calculate_trial_end_date(start_date: Optional[datetime] = None) -> datetime:
-        """Calculate trial end date."""
-        if start_date is None:
-            start_date = datetime.utcnow()
-        return start_date + timedelta(days=BillingLifecycle.TRIAL_DAYS)
     
-    @staticmethod
-    def calculate_grace_period_end_date(expiry_date: datetime) -> datetime:
-        """Calculate grace period end date."""
-        return expiry_date + timedelta(days=BillingLifecycle.GRACE_PERIOD_DAYS)
     
-    @staticmethod
-    async def start_trial(user_id: str, supabase: Any) -> Dict[str, Any]:
-        """
-        Start a trial subscription for a new user.
-        Trial users get STARTER plan features for TRIAL_DAYS.
-        """
-        trial_end = BillingLifecycle.calculate_trial_end_date()
-        
-        try:
-            # Update user profile with trial status
-            resp = (
-                supabase.table("profiles")
-                .update({
-                    "subscription_tier": Plan.STARTER.value,
-                    "subscription_status": SubscriptionStatus.TRIAL,
-                    "trial_end_date": trial_end.isoformat(),
-                    "next_billing_date": trial_end.isoformat(),
-                })
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            logger.info(f"Trial started for user {user_id}, ends {trial_end}")
-            
-            return {
-                "status": "trial_started",
-                "plan": Plan.STARTER.value,
-                "trial_end_date": trial_end.isoformat(),
-                "trial_days": BillingLifecycle.TRIAL_DAYS,
-            }
-        except Exception as e:
-            logger.error(f"Failed to start trial for user {user_id}: {e}")
-            raise
     
-    @staticmethod
-    async def activate_subscription(
-        user_id: str,
-        plan: str,
-        supabase: Any,
-        payment_provider: str = "stripe",
-        payment_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Activate a paid subscription.
-        """
-        # Migrate old plan key if necessary
-        plan = SubscriptionEngine.migrate_plan_key(plan)
-        
-        next_billing = BillingLifecycle.calculate_next_billing_date()
-        
-        try:
-            # Update user profile
-            update_data = {
-                "subscription_tier": plan,
-                "subscription_status": SubscriptionStatus.ACTIVE,
-                "next_billing_date": next_billing.isoformat(),
-                "trial_end_date": None,  # Clear trial end date
-                "payment_provider": payment_provider,
-            }
-            
-            if payment_id:
-                update_data["payment_id"] = payment_id
-            
-            resp = (
-                supabase.table("profiles")
-                .update(update_data)
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            # Invalidate profile cache
-            await redis_manager.delete(f"profile_limits:{user_id}")
-            
-            logger.info(f"Subscription activated for user {user_id}: plan={plan}, next_billing={next_billing}")
-            
-            return {
-                "status": "active",
-                "plan": plan,
-                "next_billing_date": next_billing.isoformat(),
-            }
-        except Exception as e:
-            logger.error(f"Failed to activate subscription for user {user_id}: {e}")
-            raise
     
     @staticmethod
     async def cancel_subscription(
@@ -212,258 +137,7 @@ class BillingLifecycle:
             logger.error(f"Failed to cancel subscription for user {user_id}: {e}")
             raise
     
-    @staticmethod
-    async def renew_subscription(
-        user_id: str,
-        supabase: Any,
-    ) -> Dict[str, Any]:
-        """
-        Renew subscription (auto-renewal).
-        Called by payment webhook on successful recurring payment.
-        """
-        try:
-            # Get current plan
-            resp = (
-                supabase.table("profiles")
-                .select("subscription_tier")
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            if not resp.data:
-                raise Exception("User profile not found")
-            
-            current_plan = resp.data[0].get("subscription_tier", Plan.FREE.value)
-            
-            # Calculate next billing date
-            next_billing = BillingLifecycle.calculate_next_billing_date()
-            
-            # Update profile
-            update_data = {
-                "subscription_status": SubscriptionStatus.ACTIVE,
-                "next_billing_date": next_billing.isoformat(),
-                "cancel_at_period_end": False,
-            }
-            
-            resp = (
-                supabase.table("profiles")
-                .update(update_data)
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            # Invalidate profile cache
-            await redis_manager.delete(f"profile_limits:{user_id}")
-            
-            logger.info(f"Subscription renewed for user {user_id}: plan={current_plan}, next_billing={next_billing}")
-            
-            return {
-                "status": "renewed",
-                "plan": current_plan,
-                "next_billing_date": next_billing.isoformat(),
-            }
-        except Exception as e:
-            logger.error(f"Failed to renew subscription for user {user_id}: {e}")
-            raise
     
-    @staticmethod
-    async def check_trial_expiry(user_id: str, supabase: Any) -> bool:
-        """
-        Check if trial has expired and downgrade if necessary.
-        Returns True if trial was expired and downgraded.
-        """
-        try:
-            resp = (
-                supabase.table("profiles")
-                .select("subscription_status", "trial_end_date")
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            if not resp.data:
-                return False
-            
-            profile = resp.data[0]
-            
-            if profile.get("subscription_status") != SubscriptionStatus.TRIAL:
-                return False
-            
-            trial_end = profile.get("trial_end_date")
-            if not trial_end:
-                return False
-            
-            trial_end_date = datetime.fromisoformat(trial_end)
-            
-            if datetime.utcnow() > trial_end_date:
-                # Trial expired, downgrade to free
-                await BillingLifecycle.cancel_subscription(
-                    user_id,
-                    cancel_at_period_end=False,
-                    supabase=supabase,
-                )
-                logger.info(f"Trial expired for user {user_id}, downgraded to free")
-                return True
-            
-            return False
-        except Exception as e:
-            logger.error(f"Failed to check trial expiry for user {user_id}: {e}")
-            return False
     
-    @staticmethod
-    async def check_subscription_expiry(user_id: str, supabase: Any) -> bool:
-        """
-        Check if subscription has expired and handle grace period.
-        Returns True if subscription was expired.
-        """
-        try:
-            resp = (
-                supabase.table("profiles")
-                .select("subscription_status", "next_billing_date", "cancel_at_period_end")
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            if not resp.data:
-                return False
-            
-            profile = resp.data[0]
-            
-            if profile.get("subscription_status") != SubscriptionStatus.ACTIVE:
-                return False
-            
-            if not profile.get("cancel_at_period_end"):
-                return False
-            
-            next_billing = profile.get("next_billing_date")
-            if not next_billing:
-                return False
-            
-            next_billing_date = datetime.fromisoformat(next_billing)
-            grace_end = BillingLifecycle.calculate_grace_period_end_date(next_billing_date)
-            
-            if datetime.utcnow() > next_billing_date:
-                if datetime.utcnow() <= grace_end:
-                    # In grace period
-                    await supabase.table("profiles").update({
-                        "subscription_status": SubscriptionStatus.GRACE_PERIOD,
-                    }).eq("id", user_id).execute()
-                    logger.info(f"User {user_id} in grace period until {grace_end}")
-                else:
-                    # Grace period expired, downgrade to free
-                    await BillingLifecycle.cancel_subscription(
-                        user_id,
-                        cancel_at_period_end=False,
-                        supabase=supabase,
-                    )
-                    logger.info(f"Subscription expired for user {user_id}, downgraded to free")
-                return True
-            
-            return False
-        except Exception as e:
-            logger.error(f"Failed to check subscription expiry for user {user_id}: {e}")
-            return False
     
-    @staticmethod
-    async def upgrade_subscription(
-        user_id: str,
-        new_plan: str,
-        supabase: Any,
-    ) -> Dict[str, Any]:
-        """
-        Upgrade subscription to a higher tier.
-        Prorated billing should be handled by payment provider.
-        """
-        # Migrate old plan key if necessary
-        new_plan = SubscriptionEngine.migrate_plan_key(new_plan)
-        
-        try:
-            # Get current plan
-            resp = (
-                supabase.table("profiles")
-                .select("subscription_tier")
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            if not resp.data:
-                raise Exception("User profile not found")
-            
-            current_plan = resp.data[0].get("subscription_tier", Plan.FREE.value)
-            
-            # Check if actually upgrading
-            plan_order = [Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value]
-            if plan_order.index(new_plan) <= plan_order.index(current_plan):
-                raise Exception("New plan must be higher than current plan")
-            
-            # Activate new subscription
-            result = await BillingLifecycle.activate_subscription(
-                user_id,
-                new_plan,
-                supabase,
-            )
-            
-            logger.info(f"Subscription upgraded for user {user_id}: {current_plan} -> {new_plan}")
-            
-            return {
-                **result,
-                "status": "upgraded",
-                "previous_plan": current_plan,
-                "new_plan": new_plan,
-            }
-        except Exception as e:
-            logger.error(f"Failed to upgrade subscription for user {user_id}: {e}")
-            raise
     
-    @staticmethod
-    async def downgrade_subscription(
-        user_id: str,
-        new_plan: str,
-        supabase: Any,
-    ) -> Dict[str, Any]:
-        """
-        Downgrade subscription to a lower tier.
-        Takes effect at next billing date.
-        """
-        # Migrate old plan key if necessary
-        new_plan = SubscriptionEngine.migrate_plan_key(new_plan)
-        
-        try:
-            # Get current plan
-            resp = (
-                supabase.table("profiles")
-                .select("subscription_tier")
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            if not resp.data:
-                raise Exception("User profile not found")
-            
-            current_plan = resp.data[0].get("subscription_tier", Plan.FREE.value)
-            
-            # Check if actually downgrading
-            plan_order = [Plan.FREE.value, Plan.STARTER.value, Plan.PRO.value, Plan.ENTERPRISE.value]
-            if plan_order.index(new_plan) >= plan_order.index(current_plan):
-                raise Exception("New plan must be lower than current plan")
-            
-            # Schedule downgrade at next billing date
-            resp = (
-                supabase.table("profiles")
-                .update({
-                    "pending_downgrade_tier": new_plan,
-                })
-                .eq("id", user_id)
-                .execute()
-            )
-            
-            logger.info(f"Downgrade scheduled for user {user_id}: {current_plan} -> {new_plan} at next billing")
-            
-            return {
-                "status": "downgrade_scheduled",
-                "current_plan": current_plan,
-                "pending_plan": new_plan,
-                "effective_at": "next_billing_date",
-            }
-        except Exception as e:
-            logger.error(f"Failed to schedule downgrade for user {user_id}: {e}")
-            raise
