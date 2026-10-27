@@ -1,14 +1,51 @@
 -- 032 — referral_payouts: a terminal payout must carry evidence of when it was processed.
 --
---       PHASE 10 / WORKSTREAM D — observation 3 (settlement lifecycle)
+-- CORRECTION, measured against real production (see ledger DB-05): this file's original
+-- header declared "NOT APPLIED. PREPARED FOR THE MIGRATION OWNER'S APPROVAL." That
+-- declaration was false, and had been for some time. The constraint is present in the
+-- production database:
+--
+--     chk_referral_payouts_terminal_evidence
+--       CHECK (((status)::text <> 'completed'::text) OR (processed_at IS NOT NULL))
+--       on public.referral_payouts
+--
+-- read from `pg_constraint` on 2026-10-24. It is present because this file lives in
+-- `backend_app/migrations/`, which `scripts/provision_database.py` applies WHOLESALE --
+-- the directory is the unit, not the file -- so "prepared but not executed" was never a
+-- state this location could hold. CI's own provisioning log recorded
+-- `migrations/032_referral_payouts_terminal_evidence.sql: applied` and then
+-- `skipped (already applied)` on the idempotency re-run.
+--
+-- The banner is replaced rather than annotated because a migration file that contradicts
+-- itself is worse than one that is merely out of date: a test asserted the "NOT APPLIED"
+-- string while a sibling test in the same suite relied on the constraint existing, and
+-- both passed, because they measured different things (file text vs. live schema).
 --
 --       ╔══════════════════════════════════════════════════════════════════════════╗
---       ║  NOT APPLIED. PREPARED FOR THE MIGRATION OWNER'S APPROVAL.               ║
---       ║  This file alters a SHARED table. Per the Phase 10 workstream rules it   ║
---       ║  is written, reasoned and measured here but deliberately NOT executed    ║
---       ║  against any database by Workstream D. Apply it only after the           ║
---       ║  migration owner has signed off.                                         ║
+--       ║  APPLIED. Present in production and in every database provisioned from   ║
+--       ║  repository source, because `backend_app/migrations/` is applied as a     ║
+--       ║  directory by `scripts/provision_database.py`.                            ║
+--       ║                                                                           ║
+--       ║  Re-running is a no-op: every statement below is guarded                  ║
+--       ║  (IF NOT EXISTS / DO $$ ... END $$ preflight), and the postflight block   ║
+--       ║  at the bottom RAISEs if the constraint is absent.                        ║
 --       ╚══════════════════════════════════════════════════════════════════════════╝
+--
+--       PHASE 10 / WORKSTREAM D — observation 3 (settlement lifecycle)
+--
+--       The rule this file was written under, kept verbatim for the record:
+--
+--         "This file alters a SHARED table. Per the Phase 10 workstream rules it is
+--          written, reasoned and measured here but deliberately NOT executed against any
+--          database by Workstream D. Apply it only after the migration owner has signed
+--          off."
+--
+--       What that rule did not account for is the file's LOCATION. Placing it in
+--       `backend_app/migrations/` executes it on the next provisioning run regardless of
+--       what its header says, so the intent and the mechanism disagreed from the moment
+--       it was committed. A migration that must not run automatically cannot live in the
+--       directory that runs automatically -- `migrations/hardening/` and the explicit
+--       appliers under `scripts/` are where the other deliberately-manual files sit.
 -- ============================================================================
 --
 -- WHAT WAS MEASURED
