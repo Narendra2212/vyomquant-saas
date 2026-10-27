@@ -71,8 +71,8 @@ transcript of every earlier one — noise that looks like a leak.
 
 THE PENDING REGISTRY (read this before "fixing" a failure here)
 ---------------------------------------------------------------
-Zero of the nineteen enumerated read endpoints are pending. :data:`PENDING` is **EMPTY**: every
-one of the nineteen that are already correct is asserted strictly, so a newly added read endpoint,
+Zero of the twenty enumerated read endpoints are pending. :data:`PENDING` is **EMPTY**: every
+one of the twenty that are already correct is asserted strictly, so a newly added read endpoint,
 or a regression in any of them, fails immediately rather than being tolerated.
 
 The registry held known Requirement 1.5 defects, each with the clauses it failed and the task
