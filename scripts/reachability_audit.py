@@ -421,14 +421,14 @@ def _report_path(path: str) -> str:
 
     Internally the walk uses os.path.normpath, so on Windows every path is
     backslash-separated. Emitting those raw made this tool's two outputs --
-    stdout's `[!] <path>` lines and reports/reachability_audit_results.json --
+    stdout's `[!] <path>` lines and reports/reachability_audit_results.json
+    (gitignored, but uploaded as the nightly-audit-reports CI artifact) --
     platform-dependent, which silently broke the audit's OWN guard tests:
     they compare against forward-slash literals, so on Windows
     `KNOWN_STILL_UNREACHABLE - results` always reported a spurious
     over-widening, while `KNOWN_FALSE_POSITIVES & results` could never match
     and passed vacuously. A guard that cannot fail is worse than one that
-    always fails, and a committed report that differs by developer platform
-    cannot be diffed. The graph walk is unchanged; only the rendering is.
+    always fails. The graph walk is unchanged; only the rendering is.
     """
     return path.replace(os.sep, '/')
 
