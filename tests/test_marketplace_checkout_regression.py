@@ -259,7 +259,7 @@ def _seeded_listing_row() -> Dict[str, Any]:
         "price_minor": PRICE_MINOR_1999,
         # …and the legacy mirror the pre-fix handler read through float().
         "price": PRICE_MAJOR_TEXT,
-        "currency": "USD",
+        "currency": "INR",
         "is_active": True,
         "moderation_status": "approved",
         "subscription_tier": "standard",
@@ -440,7 +440,7 @@ async def PRE_FIX_CHECKOUT(
                     "user_id": user_id,
                     "subscription_tier": strat.get("subscription_tier", "standard"),
                     "price_paid": strat.get("price"),
-                    "currency": strat.get("currency", "USD"),
+                    "currency": strat.get("currency", "INR"),
                     "status": "pending",
                     "started_at": now_ts,
                     # DEFECT: present-and-NULL, read as "perpetual subscription" downstream.
@@ -786,7 +786,7 @@ class _nested:
 def run_checkout(
     *,
     provider: str = "ok",
-    currency: str = "USD",
+    currency: str = "INR",
     db: Optional[FakeSupabase] = None,
 ) -> Outcome:
     """POST the checkout through the real route and record what came back.
@@ -889,7 +889,7 @@ def run_pre_fix_checkout(
             PRE_FIX_CHECKOUT(
                 lib_id=LISTING_ID,
                 user_id=CALLER_ID,
-                currency="USD",
+                currency="INR",
                 svc=db,
                 provider_call=provider_call,
             )

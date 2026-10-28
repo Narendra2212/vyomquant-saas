@@ -1,16 +1,19 @@
 """
-routers/billing.py — Subscription management, Stripe + Razorpay webhooks.
+routers/billing.py — Subscription management and the Razorpay webhook.
+
+Razorpay is the ONLY payment gateway. Stripe was removed in full -- its webhook route,
+its customer-portal route, its credential branch, its cancel path and its lifecycle
+layer are all gone, not disabled. Notes below that described Stripe-only behaviour have
+been dropped with the code they described; the ones that remain are history that
+explains why the surviving code is shaped the way it is.
 
 SPRINT 2 SECURITY FIXES:
   F-09: DEV_MODE checkout no longer grants paid tiers. Returns mock URL only.
-  F-19: Stripe webhook returns HTTP 400 if item_key is absent from session
-        metadata instead of silently defaulting to 'elite_1999'.
   F-20: _apply_billing_entitlement writes ONLY to Supabase profiles table.
         SQLite SubscriptionModel / InvoiceModel storage is retired.
         Supabase is the single source of truth for billing state.
 
 PREVIOUS FIXES:
-  N1/N11: Stripe webhook reads the actual tier from session metadata.
   N2:     Razorpay webhook reads raw body FIRST (for signature verification),
           then parses as JSON — body stream cannot be read twice.
   N10:    Payment SDKs initialised lazily inside functions, not at import time.
@@ -178,10 +181,11 @@ def _providers_with_live_credentials() -> List[str]:
     ``_validate_keys`` means "not configured for live money", which is the question being asked.
     No credential value is returned, logged or interpolated anywhere - only the provider names.
 
-    The checkout path picks its provider from the CURRENCY
-    (``FXService.resolve_checkout_provider_and_currency``: INR -> Razorpay, everything else ->
-    Stripe), because a checkout has an amount and a currency to route. A request with no money
-    attached has neither, so it can only ask what this deployment is wired for, which is this.
+    The checkout path picks its charge CURRENCY rather than its provider, because there is
+    only one provider left to pick (``FXService.resolve_checkout_provider_and_currency``: INR
+    charges INR at Razorpay; every other currency is a DISPLAY currency and charges the INR
+    base). A checkout has an amount and a currency to route. A request with no money attached
+    has neither, so it can only ask what this deployment is wired for, which is this.
     """
     live: List[str] = []
     for provider in _SUPPORTED_PROVIDERS:
@@ -283,8 +287,9 @@ def _configured_webhook_ips(provider: str, defaults: List[str]) -> List[str]:
     falls out of date.
 
     So the list becomes operational configuration rather than a source literal:
-    ``RAZORPAY_WEBHOOK_IPS`` / ``STRIPE_WEBHOOK_IPS``, comma-separated, accepting individual
-    addresses and CIDR blocks. Unset, the hardcoded defaults above apply unchanged, so no
+    ``RAZORPAY_WEBHOOK_IPS``, comma-separated, accepting individual addresses and CIDR blocks.
+    The lookup below is still built from ``provider`` rather than hardcoding that one name, so
+    it needs no change if a second gateway is ever added. Unset, the hardcoded defaults above apply unchanged, so no
     deployment's behaviour changes until an operator sets one.
     """
     raw = os.environ.get(f"{provider.upper()}_WEBHOOK_IPS", "")
@@ -723,11 +728,11 @@ class ProviderCurrencyMismatch(Exception):
     available and ignored. The amount is therefore treated as INR *because the code path
     expects INR*, not because the payment was in INR.
 
-    That is benign only while each provider is single-currency in practice. Razorpay
-    accounts can be enabled for international currencies, and a Stripe account can take
-    any currency its dashboard permits; in either case the amount would be recorded
-    against the wrong unit, and for the Stripe path it would also become the base for a
-    20% referral commission.
+    That is benign only while the gateway is single-currency in practice. A Razorpay account
+    CAN be enabled for international currencies, and if this one ever is, the amount would be
+    recorded against the wrong unit and become the base for a 20% referral commission. That
+    is why ``PROVIDER_FOR_CURRENCY`` was narrowed to INR alone rather than repointed at
+    Razorpay for USD: the capability is unmeasured for this account.
 
     WHY THIS VALIDATES RATHER THAN SUBSTITUTING
     -------------------------------------------
@@ -969,7 +974,8 @@ def _epoch_instant(value: Any) -> Optional[datetime]:
 def _razorpay_settlement_metadata(notes: Optional[dict], payment: Any) -> dict:
     """The Razorpay ``notes`` plus the provider facts a Settlement_Record needs.
 
-    The Razorpay half of :func:`_stripe_settlement_metadata`, and the same contract:
+    Once the Razorpay half of a pair (``_stripe_settlement_metadata`` was the other, and went
+    with the provider); now the only one. The contract is unchanged:
     ``notes["item"]`` is this provider's spelling of ``item_key`` (``checkout_service`` writes
     both halves), ``payment["amount"]`` is already in paise - the Minor_Unit - and
     ``payment["id"]`` is the reference the ``refund.processed`` event carries as ``payment_id``.
@@ -1000,12 +1006,12 @@ async def _apply_marketplace_entitlement(
     """
     Record a confirmed marketplace payment and activate the Subscription it paid for.
 
-    Called from billing webhooks when item_key format is 'marketplace_{library_id}' — the ONE
-    branch both providers funnel into via ``_apply_billing_entitlement``'s
+    Called from the Razorpay webhook when item_key format is 'marketplace_{library_id}' — the
+    ONE branch it funnels into via ``_apply_billing_entitlement``'s
     ``item_key.startswith("marketplace_")`` test. There is no second webhook route, no second
     signature path and no second entitlement funnel; ``_validate_webhook_signature``,
-    ``_validate_webhook_ip``, ``STRIPE_WEBHOOK_IPS``, ``_validate_webhook_timestamp`` and the
-    two-phase Redis idempotency lock are untouched (Requirements 9.1, 9.9, 22.5, 22.6, 25.2).
+    ``_validate_webhook_ip``, the durable ``webhook_events`` claim and the two-phase Redis
+    idempotency lock are untouched (Requirements 9.1, 9.9, 22.5, 22.6, 25.2).
 
     WHY THE STATUS UPDATE THAT USED TO BE HERE IS GONE (Requirements 9.5, 10.4, 11.6, 11.14)
     ----------------------------------------------------------------------------------------
@@ -1136,9 +1142,9 @@ async def _settle_marketplace_reversal(
 ) -> None:
     """Record a refund of a marketplace payment as a reversal Settlement_Record.
 
-    MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8. Called from the refund branches
-    the webhooks already have — Stripe's ``charge.refunded`` and Razorpay's ``refund.processed`` —
-    which already reverse the referral commission. This adds the ledger half: one
+    MARKETPLACE SETTLEMENT (task 19.2), Requirements 10.4, 10.8. Called from the refund branch
+    the webhook already has — Razorpay's ``refund.processed`` — which already reverses the
+    referral commission. This adds the ledger half: one
     ``settle(..., is_reversal=True)`` call, taken **only** when the refunded payment's ``item_key``
     began with ``marketplace_``, so a plan refund passes through untouched.
 
@@ -1327,44 +1333,53 @@ def _record_plan_period(sb: Any, user_id: str, item_key: str, previous_plan: Opt
     so a month's payment bought the plan forever. For Razorpay the end of the paid period
     (now + 1 month/year, extended from the current end when the same plan is renewed early) is
     stored in ``next_billing_date``; ``get_plan_context`` stops honouring the tier after it
-    and ``core.plan_expiry`` persists the downgrade. For Stripe only the provider is recorded
-    (renewals and cancellation arrive as Stripe webhooks, which own the period) - recording it
-    is what lets cancel/resume find the right gateway.
+    and ``core.plan_expiry`` persists the downgrade.
+
+    This used to accept ``provider in ("razorpay", "stripe")`` and, for Stripe, took an
+    ``else`` branch that recorded ONLY ``payment_provider`` and no period, because Stripe
+    subscriptions recurred and the gateway owned the period. Both are gone. The sole caller
+    is ``_apply_billing_entitlement``, reached only from ``_process_razorpay_entitlement``,
+    which passes the literal ``"razorpay"``; nothing in the system can produce any other
+    value. Leaving the pair in would keep alive a branch whose only effect is to write a
+    ``payment_provider`` that ``SUPPORTED_PROVIDERS`` and the cancel/resume paths would then
+    refuse to act on.
+
+    (Narrowing this guard is a different question from the ``chk_settlement_provider`` CHECK
+    constraint, which still admits ``'stripe'`` on purpose: that constraint governs what the
+    COLUMN may hold, including rows written before the removal, whereas this guard governs
+    what the handler may produce now.)
 
     Best effort by design: the tier is already granted and the customer already charged, so a
     deploy that has not applied migration 037 must not turn a captured payment into a failed
     webhook. The gap is logged CRITICAL because without the column the plan does not expire.
     """
-    if provider not in ("razorpay", "stripe") or item_key in ("free", "ml_addon"):
+    if provider != "razorpay" or item_key in ("free", "ml_addon"):
         return
     from backend_app.core.billing_lifecycle import BillingLifecycle
 
     # Literal payloads (not a mutated dict) so tests/test_schema_table_reference_drift.py can
     # check every column against the declared schema.
     try:
-        if provider == "razorpay":
-            now = datetime.now(timezone.utc)
-            start = now
-            if previous_plan == item_key:
-                try:
-                    row = sb.table("profiles").select("next_billing_date").eq("id", user_id).execute().data or []
-                    current_end = (row[0].get("next_billing_date") if row else None)
-                    if current_end:
-                        parsed = datetime.fromisoformat(str(current_end).replace("Z", "+00:00"))
-                        if parsed.tzinfo is None:
-                            parsed = parsed.replace(tzinfo=timezone.utc)
-                        start = max(now, parsed)
-                except Exception:  # noqa: BLE001 - extend from now; never grant LESS time than paid for
-                    start = now
-            period_end = BillingLifecycle.add_billing_period(start, billing_interval).isoformat()
-            sb.table("profiles").update({
-                "payment_provider": provider,
-                "next_billing_date": period_end,
-                "subscription_status": "active",
-                "cancel_at_period_end": False,
-            }).eq("id", user_id).execute()
-        else:
-            sb.table("profiles").update({"payment_provider": provider}).eq("id", user_id).execute()
+        now = datetime.now(timezone.utc)
+        start = now
+        if previous_plan == item_key:
+            try:
+                row = sb.table("profiles").select("next_billing_date").eq("id", user_id).execute().data or []
+                current_end = (row[0].get("next_billing_date") if row else None)
+                if current_end:
+                    parsed = datetime.fromisoformat(str(current_end).replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    start = max(now, parsed)
+            except Exception:  # noqa: BLE001 - extend from now; never grant LESS time than paid for
+                start = now
+        period_end = BillingLifecycle.add_billing_period(start, billing_interval).isoformat()
+        sb.table("profiles").update({
+            "payment_provider": provider,
+            "next_billing_date": period_end,
+            "subscription_status": "active",
+            "cancel_at_period_end": False,
+        }).eq("id", user_id).execute()
     except Exception as exc:  # noqa: BLE001
         logger.critical(
             "[BILLING] BILL-01: plan granted to %s but its period/provider could not be recorded "
@@ -1387,10 +1402,9 @@ async def _apply_billing_entitlement(user_id: str, item_key: str, discount_appli
         library_id = item_key.replace("marketplace_", "")
         # Extract subscription_id from metadata if available for additional safety
         subscription_id = None
-        # The settlement context both providers put on the metadata via
-        # _stripe_settlement_metadata / _razorpay_settlement_metadata (task 19.2). This is the ONE
-        # marketplace funnel — the provider facts travel through it rather than through a second
-        # webhook path.
+        # The settlement context the webhook puts on the metadata via
+        # _razorpay_settlement_metadata (task 19.2). This is the ONE marketplace funnel — the
+        # provider facts travel through it rather than through a second webhook path.
         provider = None
         provider_reference = None
         amount_minor = None
@@ -1988,16 +2002,39 @@ async def get_currency(
     except Exception as e:
         logger.warning(f"Failed to determine currency context for user {user.get('id')}: {e}")
         from datetime import datetime, timezone
+
+        # The checkout half of this fallback is DERIVED, not restated. It used to hardcode
+        # checkout_provider="stripe", checkout_currency="USD", is_direct_checkout=True, and
+        # once Razorpay became the only gateway all three contradicted the live resolver:
+        # resolve_checkout_provider_and_currency("USD") answers ("razorpay", "INR"), so a USD
+        # viewer is charged in INR and the checkout is NOT direct.
+        #
+        # is_direct_checkout is the field Billing.jsx branches on to show the "you will be
+        # charged in <currency>" conversion notice (showsCheckoutConversion tests
+        # `is_direct_checkout === false`). Reporting True here suppressed that notice on the
+        # one path where it was most needed: the buyer saw a USD figure and was never told
+        # the charge lands in a different currency. This fallback fires on any failure in the
+        # geo/FX/Redis context lookup, which is ordinary operation rather than a freak case.
+        #
+        # fx_service imports nothing but the standard library, so this import cannot fail for
+        # any reason that could have produced the exception being handled, and both calls are
+        # pure lookups over module constants.
+        from backend_app.core.fx_service import FXService
+
+        fallback_display_currency = "USD"
+        checkout_provider, checkout_currency = FXService.resolve_checkout_provider_and_currency(
+            fallback_display_currency
+        )
         return {
             "country": "US",
             "country_name": "United States",
-            "currency": "USD",
+            "currency": fallback_display_currency,
             "currency_symbol": "$",
             "currency_source": "fallback",
-            "checkout_currency": "USD",
-            "checkout_currency_symbol": "$",
-            "checkout_provider": "stripe",
-            "is_direct_checkout": True,
+            "checkout_currency": checkout_currency,
+            "checkout_currency_symbol": FXService.get_currency_symbol(checkout_currency),
+            "checkout_provider": checkout_provider,
+            "is_direct_checkout": checkout_currency == fallback_display_currency,
             "fx_rate": 1.0,
             "fx_rate_timestamp": datetime.now(timezone.utc).isoformat(),
             "is_fallback": True,
@@ -2130,9 +2167,14 @@ async def create_checkout_session(
   supabase: Any = Depends(get_request_supabase),
 ):
     """
-    Generates a server-authoritative payment link with FX conversion and gateway routing.
+    Generates a server-authoritative payment link with FX conversion.
     Server calculates the exact minor units and validates gateway capability.
-    INR → Razorpay. All other supported currencies (USD, EUR, GBP, JPY, CAD, etc.) → Stripe.
+
+    Razorpay is the only gateway, so there is no routing decision left — only a CHARGE
+    CURRENCY decision. INR is charged directly. Every other supported currency (USD, EUR,
+    GBP, JPY, CAD, …) is a DISPLAY currency: the quote is localised for presentation and the
+    charge is taken in the INR base, which is why the response carries both
+    ``checkout_currency`` and ``is_direct_checkout=False`` for those buyers.
     """
     from backend_app.core.fx_service import FXService
     from backend_app.core.pricing_service import PricingService
@@ -2422,9 +2464,6 @@ async def verify_razorpay_payment(
             "gateway, usually within a few seconds."
         ),
     }
-
-
-# ── POST /api/billing/webhook/stripe ────────────────────────────────────
 
 
 # ── POST /api/billing/webhook/razorpay ──────────────────────────────────
@@ -2948,6 +2987,82 @@ def _profile_payment_provider(sb: Any, user_id: str) -> Optional[str]:
         return (rows[0].get("payment_provider") or None) if rows else None
     except Exception:  # noqa: BLE001
         return None
+
+
+# ── POST /api/billing/portal ─────────────────────────────────────────────────
+@router.post("/portal")
+@limiter.limit("5/minute")
+async def create_portal_session(
+    request: Request,
+    user: dict = Depends(get_current_user)
+):
+    """Always a refusal naming WHY there is no portal, because no provider here has one.
+
+    THIS ROUTE IS NOT STRIPE INFRASTRUCTURE, WHICH IS WHY IT SURVIVED THE REMOVAL
+    ----------------------------------------------------------------------------
+    It was deleted in the first pass of the Stripe removal along with the Stripe portal
+    session it used to be able to open, and that was a mistake: ``Billing.jsx`` still
+    presents two controls that call it -- the ``past_due`` alert's *Update payment method*
+    and the current-plan panel's *Manage billing* -- and that page was deliberately built
+    to RENDER THIS HANDLER'S OWN SENTENCE into ``ds/Alert`` verbatim. With the route gone
+    both buttons got a bare 404, which carries no coded ``detail``, so the page fell back
+    to its generic "Failed to open billing portal." and the user lost the explanation of
+    where their card actually gets changed. A 404 is a worse answer than the honest 501 it
+    replaced, for the same reason the 500 this route originally existed to fix was: it
+    fails without saying anything true.
+
+    WHAT IS GONE IS THE SUCCESS PATH, NOT THE ROUTE
+    ----------------------------------------------
+    Previously ``_PROVIDERS_WITH_HOSTED_PORTAL = frozenset({"stripe"})`` and a live Stripe
+    secret reached a real ``stripe.billing_portal.Session.create``. Stripe is removed, and
+    Razorpay publishes no hosted self-serve billing portal -- no equivalent session to
+    create and no customer-facing URL to hand out. So there is no longer any input for
+    which this route can return a URL, and it does not pretend otherwise. The empty
+    ``_PROVIDERS_WITH_HOSTED_PORTAL`` and the comprehension that filtered against it went
+    with the Stripe branch rather than being kept as an always-empty set gating
+    always-unreachable code.
+
+    A fabricated URL would be worse than any error: the refusal instead names the provider,
+    says there is no portal, and says where the payment instrument is actually changed --
+    at the next Razorpay Checkout, which is the only place it is ever collected.
+
+    THE TWO REFUSALS STAY SEPARATE, FOR THE REASON ``_validate_keys`` SEPARATES ITS THREE
+    ------------------------------------------------------------------------------------
+    "Razorpay has no portal" is a permanent fact about the provider that no configuration
+    can change. "This deployment has no live credentials for any provider" is an operator
+    fault that an environment variable fixes. One sentence covering both would tell whoever
+    reads it which of those they have -- which is to say, neither.
+    """
+    live_providers = _providers_with_live_credentials()
+    if live_providers:
+        # A real provider, which genuinely has no portal. Permanent, and not a fault.
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": "PROVIDER_HAS_NO_BILLING_PORTAL",
+                "message": (
+                    f"{', '.join(p.capitalize() for p in live_providers)} is the payment "
+                    "provider configured for this platform, and it publishes no hosted "
+                    "self-serve billing portal, so there is no portal session to open. The "
+                    "payment instrument is supplied directly to the provider's checkout "
+                    "each time a subscription is bought or renewed, and is not stored by "
+                    "VyomQuant — so a different instrument is used by choosing it at the "
+                    "next checkout."
+                ),
+            },
+        )
+    # No provider at all: a deployment fault, and a different sentence for it.
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "PAYMENT_PROVIDER_NOT_CONFIGURED",
+            "message": (
+                "No payment provider on this deployment holds live credentials, so no "
+                "billing portal can be opened and none is invented here. This is a server "
+                "configuration fault, not a problem with your subscription."
+            ),
+        },
+    )
 
 
 # ── POST /api/billing/cancel ─────────────────────────────────────────────────

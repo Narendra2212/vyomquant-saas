@@ -1064,7 +1064,7 @@ def _renew_subscription_row(*, status: str = "cancelled") -> Dict[str, Any]:
         "owner_id": _RENEW_OWNER_ID,
         "status": status,
         "price_minor": _RENEW_PRICE_MINOR,
-        "currency": "USD",
+        "currency": "INR",
         "owner_share_minor": _RENEW_OWNER_SHARE_MINOR,
         "platform_fee_minor": _RENEW_PLATFORM_FEE_MINOR,
         "provider": "stripe",
@@ -1083,7 +1083,7 @@ def _renew_listing_row() -> Dict[str, Any]:
         "name": "Momentum Breakout",
         "author_id": _RENEW_OWNER_ID,
         "price_minor": _RENEW_PRICE_MINOR,
-        "currency": "USD",
+        "currency": "INR",
         "is_active": True,
         "subscriber_count": 7,
         "marketplace_submissions": [{"submission_state": "PUBLISHED"}],
@@ -1254,28 +1254,38 @@ def _renewal_burst(n: int, *, subscription_status: str = "cancelled"):
     return db, factory, before, results
 
 
-def _stripe_renewal_metadata(reference: str = _RENEWAL_REFERENCE) -> Dict[str, Any]:
-    """The metadata a Stripe ``checkout.session.completed`` carries for this renewal.
+def _razorpay_renewal_metadata(reference: str = _RENEWAL_REFERENCE) -> Dict[str, Any]:
+    """The metadata a Razorpay ``payment.captured`` carries for this renewal.
 
-    Built through the REAL ``billing._stripe_settlement_metadata`` from a real-shaped session, so
-    the provider facts Requirement 9.14's guard is made of (reference, amount, currency, instant)
-    are derived the way production derives them rather than hand-written.
+    Built through the REAL ``billing._razorpay_settlement_metadata`` from a real-shaped payment
+    ENTITY, so the provider facts Requirement 9.14's guard is made of (reference, amount,
+    currency, instant) are derived the way production derives them rather than hand-written.
+
+    This was ``_stripe_renewal_metadata``, built the same way from a Stripe
+    ``checkout.session.completed`` through ``_stripe_settlement_metadata``. Driving the fixture
+    through the real production function is exactly why this file broke loudly when that
+    function was deleted, instead of quietly asserting against a hand-written dict that no
+    longer matched anything. The pattern is kept; only the provider changed.
+
+    The entity shape is different, and the differences are the money fields:
+    ``payment["id"]`` not ``session["payment_intent"]``, ``payment["amount"]`` in PAISE not
+    ``session["amount_total"]`` in cents, ``payment["created_at"]`` not ``session["created"]``,
+    and INR rather than USD because INR is the only currency this platform can charge.
     """
-    session = {
-        "id": "cs_renewal_1",
-        "payment_intent": reference,
-        "amount_total": _RENEW_PRICE_MINOR,
-        "currency": "usd",
-        "created": int(_RENEWAL_CONFIRMED_AT.timestamp()),
-        "metadata": {
-            "user_id": _RENEW_PURCHASER_ID,
-            "subscription_id": _RENEW_SUB_ID,
-            "library_id": _RENEW_LISTING_ID,
-            "item_key": _MARKETPLACE_ITEM_KEY,
-            "currency": "USD",
-        },
+    payment = {
+        "id": reference,
+        "amount": _RENEW_PRICE_MINOR,
+        "currency": "INR",
+        "created_at": int(_RENEWAL_CONFIRMED_AT.timestamp()),
     }
-    return _billing_module._stripe_settlement_metadata(session["metadata"], session)
+    notes = {
+        "user_id": _RENEW_PURCHASER_ID,
+        "subscription_id": _RENEW_SUB_ID,
+        "library_id": _RENEW_LISTING_ID,
+        "item_key": _MARKETPLACE_ITEM_KEY,
+        "currency": "INR",
+    }
+    return _billing_module._razorpay_settlement_metadata(notes, payment)
 
 
 def _deliver_confirmations(
@@ -1295,7 +1305,7 @@ def _deliver_confirmations(
     from backend_app.core import audit_trail
 
     recorder = _MoneyPathAuditRecorder()
-    metadata = _stripe_renewal_metadata(reference)
+    metadata = _razorpay_renewal_metadata(reference)
 
     async def _drive():
         return await _asyncio.gather(
@@ -1338,7 +1348,7 @@ class TestConcurrentRenewal:
             assert isinstance(result, dict), f"a renewal raised {result!r}"
             assert result["status"] == "renewal_pending_payment"
             assert result["amount_minor"] == _RENEW_PRICE_MINOR
-            assert result["currency"] == "USD"
+            assert result["currency"] == "INR"
             assert "active" not in str(result.get("status"))
 
         # (1) Not one write statement, against any table.
@@ -1397,7 +1407,7 @@ class TestConcurrentRenewal:
         assert len(factory.contexts) == len(results)
         assert {c.subscription_id for c in factory.contexts} == {_RENEW_SUB_ID}
         assert {c.amount_minor for c in factory.contexts} == {_RENEW_PRICE_MINOR}
-        assert {c.currency for c in factory.contexts} == {"USD"}
+        assert {c.currency for c in factory.contexts} == {"INR"}
         assert all(isinstance(c.amount_minor, int) for c in factory.contexts)
         # And the settlement metadata each session carries back is one object, so no two of them
         # can disagree about which Subscription a payment or a refund belongs to.
@@ -1431,7 +1441,7 @@ class TestConcurrentRenewal:
             row["platform_fee_minor"],
         ) == (_RENEW_PRICE_MINOR, _RENEW_OWNER_SHARE_MINOR, _RENEW_PLATFORM_FEE_MINOR)
         assert row["owner_share_minor"] + row["platform_fee_minor"] == row["amount_minor"]
-        assert row["currency"] == "USD"
+        assert row["currency"] == "INR"
 
         stored = db.subscription()
         assert stored["status"] == "active"
@@ -1531,7 +1541,7 @@ class TestDuplicateWebhookDeliveryBattery:
             row["platform_fee_minor"],
         ) == (_RENEW_PRICE_MINOR, _RENEW_OWNER_SHARE_MINOR, _RENEW_PLATFORM_FEE_MINOR)
         assert row["owner_share_minor"] + row["platform_fee_minor"] == row["amount_minor"]
-        assert row["currency"] == "USD"
+        assert row["currency"] == "INR"
         assert row["subscription_id"] == _RENEW_SUB_ID
 
         # (2) EXACTLY ONE period extension: one UPDATE, one history row, one entitlement grant,

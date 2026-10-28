@@ -1,5 +1,6 @@
 {
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. POST /api/billing/checkout gained two ADDITIVE response members and lost none: `interval` (\"month\" | \"year\") and `price_source` (\"published\" | \"fx\"). WHY `interval`: annual billing did not exist before this change \u2014 Stripe's recurring interval was the hardcoded literal \"month\" \u2014 so a checkout could not state which cycle it was buying and the response had no cycle to report. WHY `price_source`: the amount is now charged from the catalogue's PUBLISHED price for a currency it publishes (INR, USD) and FX-converted only for one it does not. Those are different kinds of figure \u2014 a commitment versus a rate-dependent estimate \u2014 and a caller rendering a price is entitled to know which it has. Previously every amount was an FX conversion of the USD base, which is why GET /api/billing/plans answered ~Rs865 for the plan published at Rs999. Nothing was removed, renamed or retyped: `checkoutUrl`, `checkout_url`, `provider`, `currency`, `amount`, `order_id`, `key_id` and `razorpay_key` are unchanged in name, type and meaning, so every existing client keeps working.",
+  "_baseline_note_razorpay_only_checkout": "RAZORPAY-ONLY AUTHORISES this re-record: ONE of the two recorded `returns` variants is REMOVED and the surviving one is unchanged. POST /api/billing/checkout had two return statements, one per gateway. Stripe was removed from the product in full -- its webhook route, portal route, credential branch, cancel path and lifecycle layer are deleted, not disabled -- so its checkout branch went with it and the Razorpay variant (order_id, key_id, razorpay_key, amount, currency, interval, price_source, ...) is now the only one. NOTHING WAS REMOVED FROM A SURVIVING VARIANT: the diff reads 'key added' for order_id / key_id / razorpay_key only because the capture compares `returns` POSITIONALLY and the Razorpay entry has moved from index 1 to index 0. `currency` reads as 'computed -> str' for the same positional reason. A dormant second gateway is worse than no second gateway: it keeps a webhook route, a credential branch and an entitlement funnel alive that nobody exercises.",
   "capture": "billing_plan_checkout",
   "frontend_bindings": {
     "createCheckout": [
@@ -115,15 +116,6 @@
           },
           "raises": [],
           "returns": [
-            {
-              "amount": "computed",
-              "checkoutUrl": "computed",
-              "checkout_url": "computed",
-              "currency": "computed",
-              "interval": "computed",
-              "price_source": "computed",
-              "provider": "str"
-            },
             {
               "amount": "computed",
               "checkoutUrl": "computed",

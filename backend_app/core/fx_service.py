@@ -532,7 +532,13 @@ class FXService:
                 checkout_currency=checkout_curr,
                 checkout_amount_minor=0,
                 checkout_provider=provider,
-                is_direct_checkout=True,
+                # `is_direct` from above, NOT a hardcoded True. This branch reports a DERIVED
+                # checkout_currency alongside the literal, so for any currency Razorpay cannot
+                # charge directly it claimed `is_direct_checkout=True` while
+                # `checkout_currency` said INR -- a response that contradicted itself. It read
+                # as True for every currency while USD was directly chargeable, so the
+                # contradiction only appeared when Razorpay became the only gateway.
+                is_direct_checkout=is_direct,
                 price_source="published",
             )
 
@@ -600,7 +606,10 @@ class FXService:
                 checkout_currency=checkout_curr,
                 checkout_amount_minor=0,
                 checkout_provider=provider,
-                is_direct_checkout=True,
+                # Derived, for the same reason as the sibling branch in
+                # `localize_plan_price`: a hardcoded True here contradicted the
+                # checkout_currency reported on the very next line.
+                is_direct_checkout=(checkout_curr == target),
             )
 
         fx_res = await cls.get_fx_rate(target)

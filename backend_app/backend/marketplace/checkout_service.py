@@ -218,13 +218,18 @@ PROVIDER_DEADLINE_SECONDS = 30
 #: The persisted ``marketplace_settlements.provider`` / ``library_subscriptions.provider``
 #: spellings this code will WRITE. Razorpay only, since Stripe was removed.
 #:
-#: Deliberately a SUBSET of what the database admits. ``chk_settlement_provider`` still
-#: allows ``'stripe'`` as well, and that constraint is left alone on purpose: narrowing it
-#: would make any historical Stripe settlement row unrepresentable, and a CHECK that
-#: retroactively invalidates committed history is a worse artefact than a permitted value
-#: nothing writes. (There are zero settlement rows today, so this is about the shape of the
-#: change rather than about data.) This set is what the handler may produce; the constraint
-#: is what the column may hold.
+#: Deliberately a SUBSET of what the database admits. ``chk_settlement_provider`` is still
+#: ``CHECK (provider = ANY (ARRAY['stripe','razorpay']))`` in production (verified against the
+#: live schema, not assumed), and it is left alone on purpose. This set is what the handler may
+#: PRODUCE; the constraint is what the column may HOLD, and the two answer different questions.
+#:
+#: MEASURED, so the reasoning is not hypothetical: a sweep of all 9 provider-ish text columns
+#: in the production database found ZERO rows mentioning stripe, and ``marketplace_settlements``
+#: is empty. So narrowing the CHECK would not in fact invalidate any committed history, and is
+#: available to anyone who wants the refusal enforced at two layers instead of one. It buys
+#: little today -- this frozenset refuses 'stripe' in Python long before Postgres sees it -- so
+#: it is recorded here as an option with its evidence rather than taken as a live schema change
+#: nobody asked for.
 SUPPORTED_PROVIDERS: FrozenSet[str] = frozenset({"razorpay"})
 
 #: Currency → provider. One gateway, one currency.

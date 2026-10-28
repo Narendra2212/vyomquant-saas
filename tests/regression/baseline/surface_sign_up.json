@@ -1,6 +1,7 @@
 {
   "_baseline_note_auth01_signout_revokes_session": "AUTH-01 AUTHORISES the added `signOut` entry in `supabase_auth_calls`. The /signout endpoint (backend_app/routers/auth.py) used to build an anonymous, never-authenticated-as-the-caller Supabase client and call its plain `sign_out()` -- a no-op, since that client never held a session to begin with, so the caller's refresh token stayed valid indefinitely despite a 200 response. The fix calls `service_client.auth.admin.sign_out(jwt=..., scope=\"global\")` instead, which actually revokes the caller's own session server-side by JWT. This is a NEW, real network call where there effectively was none before (the old call never reached Supabase in any observable way) -- not a removal, rename, retype or re-meaning of anything already recorded. Evidence: commit b3701ba, tests/test_auth01_signout_revokes_the_real_session.py (4 passed).",
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. This surface captures the checkout response and the backtest handler, so it carries both of the additive changes recorded on `billing_plan_checkout.json` and `surface_backtester.json`: `interval` and `price_source` on the checkout return, and the `_quota` dependency parameter on the backtest handler. The sign-up and authentication paths themselves are untouched by this change.",
+  "_baseline_note_razorpay_only_checkout": "RAZORPAY-ONLY AUTHORISES this re-record: ONE of the two recorded `returns` variants is REMOVED and the surviving one is unchanged. POST /api/billing/checkout had two return statements, one per gateway. Stripe was removed from the product in full -- its webhook route, portal route, credential branch, cancel path and lifecycle layer are deleted, not disabled -- so its checkout branch went with it and the Razorpay variant (order_id, key_id, razorpay_key, amount, currency, interval, price_source, ...) is now the only one. NOTHING WAS REMOVED FROM A SURVIVING VARIANT: the diff reads 'key added' for order_id / key_id / razorpay_key only because the capture compares `returns` POSITIONALLY and the Razorpay entry has moved from index 1 to index 0. `currency` reads as 'computed -> str' for the same positional reason. A dormant second gateway is worse than no second gateway: it keeps a webhook route, a credential branch and an entitlement funnel alive that nobody exercises.",
   "api_call_count": 5,
   "api_calls": [
     {
@@ -132,15 +133,6 @@
           },
           "raises": [],
           "returns": [
-            {
-              "amount": "computed",
-              "checkoutUrl": "computed",
-              "checkout_url": "computed",
-              "currency": "computed",
-              "interval": "computed",
-              "price_source": "computed",
-              "provider": "str"
-            },
             {
               "amount": "computed",
               "checkoutUrl": "computed",
