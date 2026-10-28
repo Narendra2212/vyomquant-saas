@@ -56,12 +56,31 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 #: Every file that reads a request path to decide or record something.
+#:
+#: ``backend_app/core/rate_limit_middleware.py`` was removed from this list when the file
+#: itself was deleted (HY-02): it was never imported by anything -- no production module,
+#: no test, no script -- so there was no installed middleware for this guard to protect.
+#: A deleted file cannot read a poisonable value, so the coverage this list represents is
+#: unchanged; nothing was relaxed. If that middleware is ever reintroduced it belongs back
+#: here, which is what this note is for.
+#:
+#: Checked rather than assumed, because a stale path in a security guard's parametrize
+#: list fails as "test error" and reads like a broken test rather than a missing check.
 PATH_READERS = [
     "backend_app/main.py",
+    # Not installed on the app today (see the module docstring above), kept in this list
+    # deliberately: the defect is fixed in it so mounting it later cannot reintroduce the
+    # hole.
     "backend_app/core/tenant_middleware.py",
     "backend_app/core/subscription_middleware.py",
-    "backend_app/core/rate_limit_middleware.py",
 ]
+
+for _rel in PATH_READERS:
+    assert os.path.isfile(os.path.join(REPO, _rel)), (
+        f"{_rel} is named in PATH_READERS but does not exist. Either the file moved and "
+        f"this guard is now checking nothing, or it was deleted and this entry should "
+        f"have gone with it."
+    )
 
 REAL_PATH = "/api/strategies"
 
