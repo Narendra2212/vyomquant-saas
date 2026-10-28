@@ -29,8 +29,19 @@ output "s3_frontend_bucket_name" {
 }
 
 output "api_endpoint" {
-  description = "The endpoint for the API"
-  value       = var.enable_custom_domain ? "https://${var.domain_name}/api" : "http://${aws_lb.main.dns_name}/api"
+  description = <<-EOT
+    The endpoint for the API.
+
+    INF-06: the non-custom-domain branch used to advertise the ALB's own DNS name over
+    http, which is NOT a reachable address. The ALB's security group (security_groups.tf)
+    admits tcp/80 only from the CloudFront origin-facing prefix list, so a caller
+    resolving that name is dropped. The reachable entry point is the CloudFront
+    distribution, where client TLS also terminates -- so this output now names it, over
+    https rather than http.
+  EOT
+  value = (var.enable_custom_domain
+    ? "https://${var.domain_name}/api"
+  : "https://${aws_cloudfront_distribution.frontend.domain_name}/api")
 }
 
 output "alerts_topic_arn" {
