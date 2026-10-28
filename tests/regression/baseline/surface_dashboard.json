@@ -1,4 +1,5 @@
 {
+  "_baseline_note_kill_switch_recovery": "KILL-SWITCH RECOVERY CONFIRMATION AUTHORISES this re-record: TWO ADDITIONS on `POST /api/risk/kill-switch/recover`, and nothing removed, renamed or retyped. (1) `raises` gains 503 KILL_SWITCH_RECOVERY_UNCONFIRMED. (2) the return gains `persisted`. The route used to call `await set_halt(uid, False)` and DISCARD the return value, then unconditionally answer {\"kill_switch_active\": false, \"Kill switch recovered. Trading is active.\"}. `set_halt` documents that \"the caller is told via the return value\", and the sibling activate route already bound it and reported it as `persisted`. When the shared write failed the Redis key `tenant_halt:<id>` was still set, so `is_halted()` -- the authoritative execution-path check -- kept refusing every order on every worker. The direction of the failure was SAFE; the REPORT was false, and the user was told trading had resumed while every order they placed was rejected. The 503 is the honest answer and says the account is still protected; `persisted` distinguishes \"cleared in the shared store\" from \"cleared locally because this deployment has no shared store\", which is the normal local-dev shape rather than a failure. Covered by tests/test_kill_switch_recovery_is_confirmed.py (8 tests).",
   "api_call_count": 3,
   "api_calls": [
     {
@@ -55,6 +56,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_returns_persisted": "RT-19 AUTHORISES one ADDED response key on POST /api/risk/kill-switch: `persisted` (bool) reports whether the halt reached the shared store, because the halt is now durable across workers and a failed shared write must be visible to the caller.",
           "decorators": [
             "router.post('/kill-switch')"
           ],
@@ -83,8 +85,7 @@
               "status": "str"
             }
           ],
-          "route_path": "/api/risk/kill-switch",
-          "_baseline_note_returns_persisted": "RT-19 AUTHORISES one ADDED response key on POST /api/risk/kill-switch: `persisted` (bool) reports whether the halt reached the shared store, because the halt is now durable across workers and a failed shared write must be visible to the caller."
+          "route_path": "/api/risk/kill-switch"
         }
       ],
       "method": "POST",
@@ -112,11 +113,21 @@
               "depends_on": "get_ws_manager"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "KILL_SWITCH_RECOVERY_UNCONFIRMED",
+              "status_code": 503
+            }
+          ],
           "returns": [
             {
               "kill_switch_active": "bool",
               "message": "str",
+              "persisted": "bool",
               "status": "str"
             }
           ],
