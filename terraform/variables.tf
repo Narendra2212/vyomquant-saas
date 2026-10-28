@@ -28,6 +28,35 @@ variable "enable_custom_domain" {
   default     = false
 }
 
+# A CloudFront viewer certificate MUST live in us-east-1, whatever region the rest of the
+# stack is in. `aws_acm_certificate.main` in alb.tf is created by the default provider,
+# which is ap-southeast-1, so it CANNOT serve as a CloudFront viewer certificate -- wiring
+# it in would fail at apply with InvalidViewerCertificate.
+#
+# This is a VARIABLE rather than a resource on purpose: the certificate already exists and
+# is not managed here (see the header note in cloudfront.tf -- nothing in this directory is
+# applied). Declaring a second `aws_acm_certificate` in a us-east-1 provider alias would
+# model a certificate that is already issued and validated, and the DNS validation records
+# would conflict with the live ones.
+variable "cloudfront_certificate_arn" {
+  description = "ARN of the us-east-1 ACM certificate CloudFront serves for the custom domain aliases. Must be in us-east-1."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.cloudfront_certificate_arn == "" || can(regex("^arn:aws:acm:us-east-1:", var.cloudfront_certificate_arn))
+    error_message = "A CloudFront viewer certificate must be an ACM certificate in us-east-1."
+  }
+}
+
+# The hostnames the CDN answers on. Empty means "CloudFront default domain only", which is
+# what an unconfigured apply should do rather than silently claiming production's names.
+variable "cloudfront_aliases" {
+  description = "Hostnames served by the CloudFront distribution. Requires cloudfront_certificate_arn when non-empty."
+  type        = list(string)
+  default     = []
+}
+
 variable "ecs_task_execution_role_name" {
   description = "Name of the ECS task execution role"
   type        = string

@@ -49,6 +49,11 @@ const AUTH_METHODS = [
   'verifyOtp',                   // pages/AuthPage.jsx
   'signInWithOAuth',             // pages/AuthPage.jsx
   'signUp',                      // pages/AuthPage.jsx
+  // Added with the *Forgot password?* control. Until then password recovery could not be
+  // STARTED from the product at all: /reset-password and UpdatePasswordPage.jsx existed and
+  // App.jsx intercepted a type=recovery hash, but nothing ever asked Supabase to send the
+  // email, so the only way in was an operator triggering one by hand from the dashboard.
+  'resetPasswordForEmail',       // pages/AuthPage.jsx
   'signOut',                     // apiClient.js, components/shell/AccountMenu.jsx
   'getUser',                     // App.jsx, AccountMenu.jsx, pages/TwoFA.jsx, pages/Wizard.jsx
   'getSession',                  // App.jsx (FE-01: useGuardedAuthToken, PasswordRecoveryHandler)

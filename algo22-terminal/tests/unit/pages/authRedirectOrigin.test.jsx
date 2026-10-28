@@ -215,9 +215,28 @@ const EMAIL_LINK_METHODS = Object.freeze([
   'resend',                 // no call site today
 ]);
 
-/** Enumerated by hand from `src/`, and re-derived from `src/` by the last test below. */
+/** Enumerated by hand from `src/`, and re-derived from `src/` by the last test below.
+ *
+ * `resetPasswordForEmail` was listed in `EMAIL_LINK_METHODS` above with the note "no call
+ * site today", alongside the prediction that a forgot-password screen was one of the two
+ * most likely next additions. It has now been added (`pages/AuthPage.jsx`'s
+ * `handlePasswordReset`, reached from the *Forgot password?* control on the sign-in form),
+ * so it has a call site and appears here.
+ *
+ * That addition closed a real gap rather than extending a feature: `/reset-password` and
+ * `pages/UpdatePasswordPage.jsx` already existed and `App.jsx` already intercepted a
+ * `type=recovery` hash, but NOTHING in the app had ever asked Supabase to send the email,
+ * so the only way to reach the completion form was an operator triggering a recovery mail
+ * by hand from the Supabase dashboard. The explicit `redirectTo` is the other half: the
+ * comments in `supabase.js` and `App.jsx` both recorded that the app could not assert
+ * which path a recovery link landed on, precisely because no call site set it.
+ *
+ * Sorted in CODEPOINT order on `file\0method`, matching the derivation below -- which puts
+ * `resetPasswordForEmail` before `signInWithOAuth`.
+ */
 const EMAIL_LINK_CALL_SITES = Object.freeze([
   { file: 'App.jsx', method: 'updateUser', count: 1 },
+  { file: 'pages/AuthPage.jsx', method: 'resetPasswordForEmail', count: 1 },
   { file: 'pages/AuthPage.jsx', method: 'signInWithOAuth', count: 1 },
   { file: 'pages/AuthPage.jsx', method: 'signInWithOtp', count: 2 },
   { file: 'pages/AuthPage.jsx', method: 'signUp', count: 1 },
