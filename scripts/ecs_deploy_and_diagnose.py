@@ -663,9 +663,34 @@ def get_current_task_definition_arn() -> str:
 #: OPS-TRAIN-01's `training` entry was) is picked up here with no second place to update.
 WORKER_SERVICE_PREFIX = os.getenv("WORKER_SERVICE_PREFIX", "vyomquant-worker-")
 
+#: Long-running services that are also just "the api image with a different command"
+#: but do NOT follow the vyomquant-worker-* naming convention, so the prefix above never
+#: reaches them. Declared because that prefix turned out to be an incomplete description
+#: of what this deploy path has to carry code to, and the gap was SILENT rather than
+#: noisy: measured on the live cluster, `vyomquant-mds-service` was running
+#: vyomquant-api:f39012da while the other six services had already moved to c9d94509.
+#: It fell one further deploy behind on every push to main, because the only thing that
+#: ever rolled it was a hand-run `scripts/deploy_worker_services.py --update-existing`.
+#:
+#: Held as a literal here rather than imported from scripts/deploy_worker_services.py's
+#: SIDECAR_SERVICES, which is the declaration site, because of how this file is RUN:
+#: 03-deploy.yml invokes `python scripts/ecs_deploy_and_diagnose.py`, so sys.path[0] is
+#: scripts/ and the repository root is not importable. `import
+#: scripts.deploy_worker_services` would raise ModuleNotFoundError at deploy time while
+#: passing under pytest, which imports from the root -- a failure that only appears in
+#: production. tests/test_ecs_deploy_rollback.py asserts the two agree instead, so
+#: adding a sidecar to one and not the other fails CI rather than stranding a service.
+SIDECAR_SERVICE_NAMES = ("vyomquant-mds-service",)
+
 
 def list_worker_services() -> List[str]:
-    """Every ECS service in this cluster matching the worker naming convention."""
+    """Every ECS service in this cluster that this deploy path carries code to.
+
+    That is the services matching the worker naming convention, plus the
+    SIDECAR_SERVICE_NAMES ones which run the same image under a name the convention
+    does not cover. Services that match neither -- the api service itself, which has
+    already deployed itself by the time this runs -- are left alone.
+    """
     code, stdout, stderr = run_aws_cmd([
         "ecs", "list-services",
         "--cluster", ECS_CLUSTER,
@@ -680,7 +705,10 @@ def list_worker_services() -> List[str]:
         print(f"[ecs_deploy] Exception parsing list-services output: {e}")
         return []
     names = [arn.rsplit("/", 1)[-1] for arn in arns]
-    return [name for name in names if name.startswith(WORKER_SERVICE_PREFIX)]
+    return [
+        name for name in names
+        if name.startswith(WORKER_SERVICE_PREFIX) or name in SIDECAR_SERVICE_NAMES
+    ]
 
 
 def register_worker_task_definition(image_uri: str, current_task_def_arn: str) -> Tuple[bool, str]:
@@ -727,7 +755,7 @@ def register_worker_task_definition(image_uri: str, current_task_def_arn: str) -
 
 def redeploy_workers(image_uri: str) -> Dict[str, bool]:
     """INF-03: after the API's own forward deploy succeeds, roll every worker ECS
-    service onto the same image.
+    service -- and every SIDECAR_SERVICE_NAMES service -- onto the same image.
 
     terraform/ecs.tf's own comment on local.worker_definitions says "Workers use the
     backend image" -- but nothing besides that image's mutable `:latest` tag ever
