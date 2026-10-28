@@ -147,6 +147,12 @@ def _bot_with_engine(exposure: Decimal, *, last_price=None, paper=True):
     bot.paused = False
     bot.recovered_exposure_coins = exposure
     bot._last_price = last_price
+    # DEPLOY-01 added one more thing `close_position` reads: the deployment's own
+    # `order_timeout_seconds`, taken from `execution_config`. Empty here, which is the
+    # majority case and means "no timeout" -- the same value a deployment that never
+    # configured one carries. `BotRunner.__init__` always sets this attribute, so a real
+    # runner has it; only this deliberately partial stand-in needs it stated.
+    bot.execution_config = {}
     bot.execution_engine = MagicMock()
     bot.execution_engine.execute_with_idempotency = AsyncMock(
         return_value={"status": "completed", "result": {"trade_result": {"size": str(exposure)}}}

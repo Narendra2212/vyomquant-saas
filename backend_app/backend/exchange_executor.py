@@ -1639,12 +1639,23 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         size: Optional[Decimal] = None,
         price: Optional[Decimal] = None,
         stop_price: Optional[Decimal] = None,
+        timeout_seconds: Optional[float] = None,
         **kwargs
     ) -> OrderResult:
         """
         STEP 6.1: Place order on exchange.
         STEP 6.3: ExecutionEngine → ExchangeExecutor → CCXT → Exchange.
         STEP 6.4: Returns 'pending' - wait for event system for FILLED.
+
+        Args:
+            timeout_seconds: DEPLOY-01's per-deployment ``order_timeout_seconds``, applied
+                to the venue call only. ``None`` means "no timeout", which is the
+                behaviour every caller had before this parameter existed, so a deployment
+                that sets nothing is unaffected. A timeout is adjudicated by RT-17 as an
+                AMBIGUOUS outcome (``status="unknown"``), never as a rejection -- see the
+                comment at the ``asyncio.wait_for`` below for why that distinction is the
+                thing that makes a timeout safe to add to an order path that forbids
+                retries.
         """
         if size is None:
             if "amount" in kwargs:
@@ -1881,7 +1892,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             # Execute via CCXT — positional, matching
             # create_order(symbol, type, side, amount, price, params)
             _submit_attempted = True
-            response = await self._exchange.create_order(
+            _venue_call = self._exchange.create_order(
                 params["symbol"],
                 params["type"],
                 params["side"],
@@ -1889,6 +1900,27 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
                 params["price"],
                 params["params"],
             )
+
+            # DEPLOY-01: the per-deployment `order_timeout_seconds`, and the ONLY timeout
+            # on this call. The ccxt client is built with {"apiKey", "secret",
+            # "enableRateLimit"} and no `timeout` key, so without this a hung venue
+            # response blocks the BotRunner tick that is awaiting it for as long as the
+            # underlying socket allows -- which is not a per-deployment policy anyone
+            # chose, it is just whatever the OS and aiohttp defaults happen to be.
+            #
+            # WHY A TIMEOUT IS SAFE HERE WHEN A RETRY WOULD NOT BE. The timeout lands
+            # inside this same `try`, AFTER `_submit_attempted = True`, so RT-17's
+            # adjudication below owns the outcome: `_outcome_is_ambiguous` returns True for
+            # a non-ccxt exception (its own docstring names `asyncio.TimeoutError`
+            # explicitly), which means a timed-out order is reported as `status="unknown"`
+            # and NOT as "rejected". That is the whole point -- the request may have
+            # reached the venue, and the one thing that must not happen is the strategy
+            # concluding the order failed and re-entering. This control bounds how long we
+            # WAIT; it does not claim to know what happened.
+            if timeout_seconds is not None:
+                response = await asyncio.wait_for(_venue_call, timeout=float(timeout_seconds))
+            else:
+                response = await _venue_call
             
             # Build result
             # STEP 6.4: Status is 'pending' - we wait for events for FILLED

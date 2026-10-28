@@ -237,16 +237,51 @@ EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = (
 #: ``deployment_runtime.build_runtime_blueprint`` into the runtime blueprint. They are
 #: therefore REMOVED from :data:`UNENFORCED_EXECUTION_CONFIG_FIELDS` below.
 #:
-#: ``slippage_tolerance_bps``, ``order_timeout_seconds`` and ``retry_policy`` are NOT: the
-#: order path this platform has (``ExecutionEngine.execute_with_idempotency`` /
-#: ``exchange_executor.place_order``, both market-only - see
-#: ``deployment_runtime.EXECUTABLE_ORDER_TYPES``) has no slippage-tolerance check, no
-#: configurable order timeout and no retry policy to hand a value to, so a value for any of
-#: them would still be stored and silently not in force. Left refused rather than wired to
-#: a larger structural change attempted under time pressure.
+#: ``order_timeout_seconds`` joins them: ``exchange_executor.place_order`` now accepts a
+#: ``timeout_seconds`` and wraps the ccxt ``create_order`` await in ``asyncio.wait_for``,
+#: and ``ExecutionEngine.execute_with_idempotency`` carries the deployment's value down to
+#: it as per-order state, the same way TRADE-04/TRADE-05 carry the risk verdict. It was the
+#: ONLY timeout on that call -- the ccxt client is constructed with no ``timeout`` key, so
+#: before this a hung venue response blocked the awaiting ``BotRunner`` tick for however
+#: long the socket allowed.
+#:
+#: WHY A TIMEOUT IS ENFORCEABLE ON A PATH THAT FORBIDS RETRIES. A timeout raises inside
+#: ``place_order``'s own ``try``, after ``_submit_attempted``, so RT-17 adjudicates it:
+#: ``_outcome_is_ambiguous`` is True for a non-ccxt exception (its docstring names
+#: ``asyncio.TimeoutError``), so the order is reported ``status="unknown"`` and is NOT
+#: resubmitted and NOT recorded as rejected. The control bounds how long the loop WAITS; it
+#: makes no claim about what happened at the venue.
+#:
+#: ``slippage_tolerance_bps`` and ``retry_policy`` are STILL refused, and the reason is now
+#: stronger than "no mechanism exists" -- each was measured against this path:
+#:
+#: * ``retry_policy`` would CONTRADICT AN IMPLEMENTED SAFETY CONTROL. RT-17
+#:   (``exchange_executor.py``, the ``except`` block of ``place_order``) exists precisely to
+#:   stop a re-send: "A LOST RESPONSE IS NOT A REJECTION... lets the strategy roll back,
+#:   re-enter on the next tick (new price => new execution id) and double the position",
+#:   and it logs "do NOT resubmit; adjudicate by clientOrderId". That parenthesis is the
+#:   whole problem: ``generate_execution_id`` folds PRICE into the hash
+#:   (``core/models/execution_record.py``, ``canonical_parts.append(f"{float(price):.8f}")``),
+#:   so a retry at a re-quoted price is a DIFFERENT execution id and the idempotency layer
+#:   does not recognise it as the same order. A retry policy here would defeat both the
+#:   control and the idempotency that would otherwise contain it. Enforcing this field
+#:   needs a price-stable retry key first, which is a change to the idempotency contract.
+#:
+#: * ``slippage_tolerance_bps`` has nothing to compare, synchronously, on the live path.
+#:   ``place_order``'s own docstring: "Returns 'pending' - wait for event system for
+#:   FILLED". ``avg_price`` is ``None`` whenever ccxt omits ``average``, and the live result
+#:   dict then substitutes the REQUESTED price ("When nothing filled there is no execution
+#:   price, so the requested price stands in -- ``fill_state`` is what says whether it means
+#:   anything"). A tolerance check written against that field would compute ZERO slippage in
+#:   exactly the case it should flag, which is worse than not checking: it would look
+#:   enforced. A correct version is a post-fill detector gated on ``fill_state``, reading
+#:   ``avg_price`` directly -- and being post-fill it can alert, not prevent, so it is a
+#:   different control from the pre-trade tolerance the field's name promises. Deciding
+#:   which of the two to build is a product call, not a wiring task.
 ENFORCED_EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = (
     "max_order_notional",
     "max_open_positions",
+    "order_timeout_seconds",
 )
 
 #: The fields ``normalise_execution_config`` still refuses outright when supplied with a
