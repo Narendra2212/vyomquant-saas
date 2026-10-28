@@ -221,12 +221,23 @@ SUBSCRIBER_EMAIL = "purchaser@journey-e2e.io"
 #: The marker every Protected_Logic token in this journey carries. See :func:`_canary_logic`.
 LOGIC_CANARY = "jrny-plc"
 
-#: The Listing's price. $19.99, as the integer Minor_Units the column stores - the amount
+#: The Listing's price. ₹19.99, as the integer Minor_Units the column stores - the amount
 #: ``tests/test_marketplace_checkout_regression.py`` pins because the pre-fix handler charged 1998
 #: for it. 1999 does not divide by ten, so the 90/10 split has a rounding remainder and
 #: ``owner_share + platform_fee == amount`` is a real assertion rather than an arithmetic identity.
 PRICE_MINOR = 1999
-CURRENCY = "USD"
+
+#: INR, not USD. ``PROVIDER_FOR_CURRENCY`` is ``{"INR": "razorpay"}`` -- Razorpay is the only
+#: gateway and INR the only currency this platform can CHARGE -- so a USD-priced Listing is
+#: refused with ``MARKETPLACE_LISTING_NOT_PURCHASABLE`` / ``currency_not_offered`` at the
+#: checkout step, before any of the journey past it runs.
+#:
+#: One constant still serves both halves of the journey, which is deliberate: it is the
+#: Listing's currency AND the paper account's denomination, and a journey that charged in one
+#: currency while simulating in another would be testing a product that does not exist. The
+#: minor-unit arithmetic is identical either way (paise and cents are both exponent 2), so
+#: ``PRICE_MINOR``, ``CAPITAL_MINOR`` and the 90/10 split are unaffected.
+CURRENCY = "INR"
 
 def _confirmation_instant() -> datetime:
     """The payment confirmation instant: 31 January, 09:30 UTC, of the NEXT calendar year.
