@@ -279,8 +279,20 @@ def extract_imports_from_file(filepath: str, module_name: str) -> Set[str]:
             if level > 0:
                 # relative import
                 parts = module_name.split('.')
-                # if level=1, drop the last part (the current module's name).
-                base = '.'.join(parts[:-level]) if len(parts) >= level else ''
+                # if level=1, drop the last part (the current module's name) --
+                # EXCEPT in a package's __init__.py, where `module_name` is already
+                # the package itself (run_reachability strips the trailing
+                # `.__init__`), so level=1 means "this package" and nothing comes off.
+                #
+                # Dropping a segment regardless resolved core/models/__init__.py's
+                # `from .billing import PaymentMethodModel` to
+                # backend_app.core.billing -- a module that exists nowhere -- so
+                # core/models/billing.py was reported DEAD while six routers import it
+                # through that very __init__. Found by deleting it and watching 175 test
+                # modules fail to collect, which is the control this kind of edit needs.
+                drop = level - 1 if os.path.basename(filepath) == '__init__.py' else level
+                base = ('.'.join(parts[:len(parts) - drop])
+                        if len(parts) > drop else '')
                 if base:
                     mod = f"{base}.{mod}" if mod else base
                 else:
