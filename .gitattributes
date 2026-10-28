@@ -1,0 +1,29 @@
+# Shell scripts must check out with LF endings, on every platform.
+#
+# OPS-02: found by rehearsing infra/rollback.sh on a Windows checkout. git had no
+# attributes for it at all -- `git check-attr text eol -- infra/rollback.sh` reported
+# "unspecified" for both -- so with core.autocrlf the file arrives with CRLF and bash reads
+# its first functional line, `set -euo pipefail`, as `pipefail\r`:
+#
+#     infra/rollback.sh: line 24: set: pipefail: invalid option name
+#
+# The script then runs on with none of -e, -u or -o pipefail in force, which is the worse
+# half of the problem: an incident tool that keeps going after a failed command instead of
+# stopping. Every `.sh` in this repository had the same exposure.
+#
+# This matters specifically for the INCIDENT scripts (infra/rollback.sh, infra/deploy.sh,
+# infra/alb.sh): whoever is on call may be on Windows, and "the rollback script will not
+# start" is not something to discover during an outage. git already stores LF, so this
+# changes only what lands in a working tree -- Linux and CI are unaffected.
+*.sh text eol=lf
+
+# Same reasoning for the other files executed by an interpreter that treats CR as content.
+*.bash text eol=lf
+*.zsh text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+
+# Windows-native scripts keep CRLF, for the mirror-image reason.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
