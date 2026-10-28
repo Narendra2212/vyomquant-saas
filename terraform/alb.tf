@@ -85,20 +85,48 @@ resource "aws_lb_listener" "http" {
     }
   }
 
-  # SC-7: `enable_custom_domain` defaults to false (variables.tf), and with it false there is
-  # no HTTPS listener at all (count = 0 below), the API and WebSocket rules attach to this
-  # plaintext listener, and outputs.tf advertises http:// and ws:// endpoints. A production
-  # apply in that state carries every request, including Authorization headers and broker
-  # credentials, in clear text. Making the redirect unconditional would instead point :80 at
-  # a :443 listener that does not exist, so the fix is to refuse the combination rather than
-  # to silently rewrite it.
+  # SC-7, CORRECTED (INF-06). The previous precondition here refused
+  # `enable_custom_domain = false` in a production environment, on the grounds that without
+  # an HTTPS listener "every request, including Authorization headers and broker
+  # credentials, is served in clear text over port 80". Its PREMISE is true -- there is no
+  # HTTPS listener. Its CONCLUSION is not, and the refusal made this configuration unable
+  # to plan for the only environment it is written for: with the committed defaults
+  # (enable_custom_domain = false, environment = "production") `terraform plan` failed this
+  # precondition before it could produce a plan at all.
+  #
+  # WHY THE CONCLUSION IS WRONG, measured against the running ALB and against the security
+  # group declared alongside it in security_groups.tf:
+  #
+  #   * aws_security_group.alb has exactly ONE ingress rule -- tcp/80 with
+  #     `prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]`, described
+  #     "HTTP from CloudFront only". It is UNCONDITIONAL: there is no 0.0.0.0/0 path and no
+  #     variable that widens it. So this plaintext listener is not reachable from the
+  #     internet in any configuration this repository can produce.
+  #   * The live ALB matches: vyomquant-alb has a single HTTP:80 listener, and its security
+  #     group sg-067b73e186fc1a635 permits tcp/80 only from prefix list pl-31a34658,
+  #     annotated "SEC-17: CloudFront origin-facing only".
+  #
+  # Client TLS therefore terminates at CloudFront, which is the documented entry point
+  # (probe https://d7d88qs4jmch.cloudfront.net, not the ALB). No client request reaches
+  # port 80 in clear text.
+  #
+  # WHAT IS GENUINELY WEAKER, stated rather than buried by removing the old guard: the
+  # CloudFront-to-origin hop IS plaintext HTTP. It travels inside AWS and is unreachable
+  # from the internet, but it is not end-to-end TLS. Adding origin TLS is tracked as its own
+  # item rather than implied by this comment.
+  #
+  # THE GUARD IS REPLACED, NOT DELETED, because measuring the above turned up a real trap in
+  # the opposite direction. `enable_custom_domain = true` creates an HTTPS:443 listener
+  # (count = 1 below) -- but aws_security_group.alb opens only port 80, so that listener
+  # would accept no connection from anywhere. The old precondition demanded exactly that
+  # state in production. This one refuses it and says what else has to change first.
   lifecycle {
     precondition {
       # NOTE: error_message is a literal on purpose. Interpolation inside precondition
       # error messages is only accepted from Terraform 1.6 onward, and providers.tf
       # declares required_version = ">= 1.5.0".
-      condition     = var.enable_custom_domain || !contains(["prod", "production"], var.environment)
-      error_message = "A prod/production environment requires enable_custom_domain=true. Without it no HTTPS listener is created and every request, including Authorization headers and broker credentials, is served in clear text over port 80."
+      condition     = !var.enable_custom_domain
+      error_message = "enable_custom_domain=true creates an HTTPS:443 listener, but aws_security_group.alb (security_groups.tf) opens only tcp/80, and only to the CloudFront origin-facing prefix list -- so that listener would be unreachable and the :80 redirect would point at a dead port. Enabling a direct-to-ALB TLS design requires three changes together: a 443 ingress rule on that security group, a re-pointed outputs.api_endpoint, and a decision about whether CloudFront stays in front. TLS currently terminates at CloudFront; see the comment above this block."
     }
   }
 }
@@ -154,8 +182,8 @@ resource "aws_lb_listener" "https" {
   # SC-7: TLS 1.2 is the floor. ELBSecurityPolicy-2016-08 (the AWS default, and what stood
   # here) still negotiates TLS 1.0 and 1.1, which fails the constraint and any compliance
   # scan that checks protocol versions. This policy offers TLS 1.3 and 1.2 only.
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate_validation.main[0].certificate_arn
+  ssl_policy      = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn = aws_acm_certificate_validation.main[0].certificate_arn
 
   default_action {
     type             = "forward"
