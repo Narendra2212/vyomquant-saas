@@ -702,27 +702,33 @@ class TestGapPolicyIsDelegated:
 
 
 class TestExecutionConfig:
-    def test_the_designs_fields_are_known_but_three_of_them_are_still_not_enforced(self):
+    def test_the_designs_fields_are_known_but_one_is_still_not_enforced(self):
         """DEPLOY-01: every one of design.md's five fields is validated and stored into the
-        strategy_deployments row. Two of them (max_order_notional, max_open_positions) are
-        now genuinely consulted at order-construction time
-        (master_executor.evaluate_deployment_execution_limits, threaded in via
-        deployment_runtime.build_runtime_blueprint) and so are no longer refused here.
-        ``order_timeout_seconds`` joined them: ``place_order`` wraps its ccxt call in
-        ``asyncio.wait_for`` and ``execute_with_idempotency`` carries the deployment's value
-        down to it.
+        strategy_deployments row, and four of them are now genuinely in force.
+        ``max_order_notional`` and ``max_open_positions`` are consulted at
+        order-construction time (master_executor.evaluate_deployment_execution_limits,
+        threaded in via deployment_runtime.build_runtime_blueprint).
+        ``order_timeout_seconds`` wraps the ccxt call in ``asyncio.wait_for``.
 
-        The remaining TWO are refused rather than silently stored, and
-        ``deployment_binding``'s own constant carries the measured reason for each --
-        ``retry_policy`` would contradict RT-17's implemented anti-resubmit control (and the
-        idempotency hash folds in PRICE, so a re-quoted retry is not recognised as the same
-        order), and ``slippage_tolerance_bps`` has nothing to compare synchronously because
-        the live result substitutes the REQUESTED price when nothing filled. Same choice
-        strategy_service.assert_deploy_params_applicable already makes for
+        ``slippage_tolerance_bps`` has since joined them, and the reason it was refused
+        needs correcting rather than deleting. That reason was "it has nothing to compare
+        synchronously, because the live result substitutes the REQUESTED price when
+        nothing filled". That is a sound objection to a POST-FILL detector and it was
+        measured against the wrong control: ``ExecutionEngine._execute_trade_internal``
+        sends ``CoreOrderType.limit`` whenever the price is positive and
+        ``master_executor._inner_loop`` skips any tick with ``price <= 0``, so the path
+        already bounded every live order at the decision price -- a tolerance of zero.
+        The field widens that existing bound via
+        ``core.execution_engine.bounded_limit_price``; no comparison is needed because the
+        venue enforces the band.
+
+        ONE field is still refused rather than silently stored: ``retry_policy`` would
+        contradict RT-17's implemented anti-resubmit control, and the idempotency hash
+        folds in PRICE, so a re-quoted retry is not recognised as the same order. Same
+        choice strategy_service.assert_deploy_params_applicable already makes for
         capital/trade_size_pct/stop_loss_pct/max_drawdown_pct.
         """
         payload = {
-            "slippage_tolerance_bps": 15,
             "retry_policy": {"attempts": 3},
         }
         assert set(payload) == set(db.UNENFORCED_EXECUTION_CONFIG_FIELDS)
@@ -734,7 +740,7 @@ class TestExecutionConfig:
         assert set(exc.value.details["not_enforced_fields"]) == set(payload)
 
     def test_each_still_unenforced_field_is_refused_on_its_own(self):
-        """Every still-unenforced field individually, not just all three together, so a
+        """Every still-unenforced field individually, not just all of them together, so a
         caller cannot slip one past by setting the others to None."""
         for field in db.UNENFORCED_EXECUTION_CONFIG_FIELDS:
             with pytest.raises(db.DeployRejected) as exc:

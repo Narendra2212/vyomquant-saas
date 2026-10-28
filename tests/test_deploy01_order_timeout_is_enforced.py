@@ -64,11 +64,21 @@ def test_order_timeout_seconds_is_published_as_enforced() -> None:
 
 
 def test_a_deployment_may_now_set_it() -> None:
-    """The deploy-time refusal is gone for this field, and only for this field."""
+    """The deploy-time refusal is gone for this field.
+
+    It used to say "and only for this field". ``slippage_tolerance_bps`` has since become
+    enforceable too, so the still-refused set is read from the published tuple rather
+    than listed here -- a hard-coded list makes this test fail every time a field is
+    correctly enforced, which is the wrong direction for a guard to point.
+    """
     assert db.normalise_execution_config({"order_timeout_seconds": 30}) == {
         "order_timeout_seconds": 30
     }
-    for still_refused in ("slippage_tolerance_bps", "retry_policy"):
+    assert db.UNENFORCED_EXECUTION_CONFIG_FIELDS, (
+        "if nothing is unenforced any more, this loop proves nothing and the refusal "
+        "path needs its own dedicated test instead"
+    )
+    for still_refused in db.UNENFORCED_EXECUTION_CONFIG_FIELDS:
         with pytest.raises(db.DeployRejected) as exc:
             db.normalise_execution_config({still_refused: 5})
         assert exc.value.code == "EXECUTION_CONFIG_NOT_ENFORCED"

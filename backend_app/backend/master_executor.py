@@ -1175,6 +1175,12 @@ class BotRunner:
                         order_timeout_seconds=self.execution_config.get(
                             "order_timeout_seconds"
                         ),
+                        # DEPLOY-01: and this deployment's slippage band, from the same
+                        # execution_config. `None` leaves the limit price at exactly the
+                        # decision price, which is what this call always sent.
+                        slippage_tolerance_bps=self.execution_config.get(
+                            "slippage_tolerance_bps"
+                        ),
                         risk_approved=(verdict == RiskVerdict.APPROVED),
                         risk_reason=str(reason or "risk approved"),
                     )
@@ -1540,6 +1546,13 @@ class BotRunner:
                 # exposed -- so leaving it unbounded while bounding the open would be
                 # backwards.
                 order_timeout_seconds=self.execution_config.get("order_timeout_seconds"),
+                # DEPLOY-01. Applied on the CLOSE path too, deliberately: a band that
+                # bounded entries but not exits would leave the position that is already
+                # exposed unbounded, which is backwards -- the same reasoning the
+                # order_timeout_seconds comment above gives for this call site.
+                slippage_tolerance_bps=self.execution_config.get(
+                    "slippage_tolerance_bps"
+                ),
                 risk_approved=True,
                 risk_reason=(
                     "RT-21 close: selling exactly the recorded long exposure; "

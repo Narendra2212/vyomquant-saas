@@ -49,10 +49,16 @@ from backend_app.backend import deployment_binding as db
 
 
 class TestNormaliseExecutionConfigRefusesEveryStillUnenforcedFieldWithARealValue:
+    # ``slippage_tolerance_bps`` LEFT THIS LIST once it became enforceable. The refusal it
+    # carried rested on "the live path is a market-only submit with nothing to compare
+    # against", and that premise was measured and found false:
+    # ``ExecutionEngine._execute_trade_internal`` sends a LIMIT whenever the price is
+    # positive and ``master_executor`` skips any non-positive tick, so the path already
+    # bounded every order at the decision price. The field widens that bound; see
+    # tests/test_deploy01_slippage_tolerance_band.py.
     @pytest.mark.parametrize(
         "field,value",
         [
-            ("slippage_tolerance_bps", 25),
             ("retry_policy", {"attempts": 3}),
         ],
     )
@@ -66,9 +72,12 @@ class TestNormaliseExecutionConfigRefusesEveryStillUnenforcedFieldWithARealValue
         assert exc.value.details["not_enforced_fields"] == [field]
         assert exc.value.http_status == 422
 
-    def test_both_remaining_together_are_named_in_one_refusal(self) -> None:
+    def test_every_remaining_unenforced_field_is_named_in_one_refusal(self) -> None:
+        # Derived from the published tuple rather than restated, so this test shrinks on
+        # its own as fields become enforceable instead of failing and needing an edit.
+        # Only ``retry_policy`` is left, and it cannot be enforced without a price-stable
+        # idempotency key.
         payload = {
-            "slippage_tolerance_bps": 25,
             "retry_policy": {"attempts": 3},
         }
         assert set(payload) == set(db.UNENFORCED_EXECUTION_CONFIG_FIELDS)
@@ -85,7 +94,7 @@ class TestNormaliseExecutionConfigRefusesEveryStillUnenforcedFieldWithARealValue
         with pytest.raises(db.DeployRejected) as unknown:
             db.normalise_execution_config({"max_notional": 5})
         with pytest.raises(db.DeployRejected) as not_enforced:
-            db.normalise_execution_config({"slippage_tolerance_bps": 5})
+            db.normalise_execution_config({"retry_policy": {"attempts": 3}})
 
         assert unknown.value.code == "EXECUTION_CONFIG_UNKNOWN_FIELD"
         assert not_enforced.value.code == "EXECUTION_CONFIG_NOT_ENFORCED"
@@ -120,6 +129,9 @@ class TestMaxOrderNotionalAndMaxOpenPositionsAreNowAccepted:
             "max_order_notional",
             "max_open_positions",
             "order_timeout_seconds",
+            # core.execution_engine.bounded_limit_price widens the limit price this path
+            # already sends; see tests/test_deploy01_slippage_tolerance_band.py
+            "slippage_tolerance_bps",
         }
         assert (
             set(db.ENFORCED_EXECUTION_CONFIG_FIELDS)

@@ -278,10 +278,32 @@ EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = (
 #:   ``avg_price`` directly -- and being post-fill it can alert, not prevent, so it is a
 #:   different control from the pre-trade tolerance the field's name promises. Deciding
 #:   which of the two to build is a product call, not a wiring task.
+#: ``slippage_tolerance_bps`` NOW JOINS THEM, and the reason the refusal above was
+#: written has to be corrected rather than just deleted. That text says this platform's
+#: order path is "a market-only, synchronous submit with no slippage-tolerance check".
+#: MEASURED, THAT IS WRONG. ``ExecutionEngine._execute_trade_internal`` chooses
+#: ``CoreOrderType.market if price <= 0 else CoreOrderType.limit``, and
+#: ``master_executor._inner_loop`` does ``if price <= 0: continue`` before it ever builds
+#: an order -- so every live bot order is already a LIMIT at the decision price. The venue
+#: may fill there or better, never worse. The path was never market-only, and it already
+#: had a slippage bound: zero.
+#:
+#: That changes what this field is. It is not a new control needing a price to compare
+#: against (the objection that blocked it, and a real objection for a POST-FILL detector,
+#: which ``avg_price``'s absence genuinely does defeat). It is a stated widening of a bound
+#: that exists, applied by ``core.execution_engine.bounded_limit_price`` in the order's own
+#: favour direction -- up for a BUY, down for a SELL. A deployment that sets nothing sends
+#: the identical limit price it always did, so enforcement is additive.
+#:
+#: The idempotency contract is untouched: the execution id is still derived from the
+#: DECISION price, not the widened submit price, so one decision keeps one identity
+#: whatever this field says. That is the property ``retry_policy`` cannot satisfy, which is
+#: why it alone remains refused below.
 ENFORCED_EXECUTION_CONFIG_FIELDS: Tuple[str, ...] = (
     "max_order_notional",
     "max_open_positions",
     "order_timeout_seconds",
+    "slippage_tolerance_bps",
 )
 
 #: The fields ``normalise_execution_config`` still refuses outright when supplied with a
@@ -563,10 +585,13 @@ def normalise_execution_config(raw: Any) -> Dict[str, Any]:
     # (``master_executor.evaluate_deployment_execution_limits``, called from
     # ``BotRunner._inner_loop`` with the execution_config threaded through
     # ``deployment_runtime.build_runtime_blueprint``) and are therefore REMOVED from the
-    # refusal below. ``slippage_tolerance_bps``, ``order_timeout_seconds`` and
-    # ``retry_policy`` still name no reader -- see
-    # :data:`UNENFORCED_EXECUTION_CONFIG_FIELDS` for exactly why each of those three is
-    # still refused -- and stay refused here, not silently stored, the same choice
+    # refusal below. ``order_timeout_seconds`` and ``slippage_tolerance_bps`` have since
+    # joined them and are likewise removed -- this comment named all three as unenforced
+    # for one commit longer than it was true, which is why the refusal is DERIVED from
+    # :data:`UNENFORCED_EXECUTION_CONFIG_FIELDS` rather than restated here. Only
+    # ``retry_policy`` still names no reader -- see that tuple's own note for why it
+    # cannot have one without changing the idempotency contract -- and it stays refused
+    # here, not silently stored, the same choice
     # strategy_service.assert_deploy_params_applicable already makes for
     # capital/trade_size_pct/stop_loss_pct/max_drawdown_pct (DEPLOY_PARAMS_NOT_APPLIED).
     supplied_but_not_enforced = sorted(
@@ -599,6 +624,31 @@ def normalise_execution_config(raw: Any) -> Dict[str, Any]:
         _assert_positive_number(raw["max_order_notional"], "max_order_notional")
     if "max_open_positions" in raw and raw["max_open_positions"] is not None:
         _assert_positive_int(raw["max_open_positions"], "max_open_positions")
+
+    # ``slippage_tolerance_bps`` is now a real limit too, so the same "refuse here rather
+    # than discover a no-op at the first tick" rule applies.
+    #
+    # The ceiling is 10000 bps and that figure is derived, not picked: the band is applied
+    # as ``price * (1 +/- bps/10000)``, so at exactly 10000 a SELL's limit price becomes
+    # ZERO -- "sell at any price", which is the absence of a bound and the precise
+    # opposite of what this field is for. Anything at or beyond that is therefore refused
+    # rather than stored as a tolerance that silently disables itself on one side.
+    if "slippage_tolerance_bps" in raw and raw["slippage_tolerance_bps"] is not None:
+        _assert_positive_number(
+            raw["slippage_tolerance_bps"], "slippage_tolerance_bps"
+        )
+        if Decimal(str(raw["slippage_tolerance_bps"])) >= Decimal("10000"):
+            raise DeployRejected(
+                "EXECUTION_CONFIG_INVALID_FIELD",
+                "execution_config.slippage_tolerance_bps must be below 10000 bps "
+                "(100%). The band is applied as price * (1 +/- bps/10000), so at 10000 a "
+                "sell order's limit price is zero -- that is no bound at all, which is "
+                "the opposite of a slippage tolerance.",
+                {
+                    "slippage_tolerance_bps": raw["slippage_tolerance_bps"],
+                    "max_exclusive": 10000,
+                },
+            )
 
     return {str(key): raw[key] for key in EXECUTION_CONFIG_FIELDS if key in raw}
 

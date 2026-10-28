@@ -63,6 +63,50 @@ With Global Risk Guardrails integration and Idempotent Execution
 
 
 
+def bounded_limit_price(
+    price: Decimal, side: str, tolerance_bps: Optional[float]
+) -> Decimal:
+    """DEPLOY-01's ``slippage_tolerance_bps``, as a limit price.
+
+    The live order path already sends a LIMIT at ``price`` whenever ``price`` is positive,
+    so the bound this widens already exists and is zero: the venue may fill at the
+    decision price or better, never worse. This returns the worst price the deployment has
+    said it will accept.
+
+    ``tolerance_bps`` of ``None`` or ``0`` returns ``price`` unchanged, which is the
+    behaviour every caller had before the field was enforced.
+
+    The direction is the part worth stating. A BUY's worst acceptable price is ABOVE the
+    decision price and a SELL's is BELOW, so the sign follows the side. Inverting it would
+    NARROW the band rather than widen it and would quietly stop orders filling -- a
+    failure that looks like a market problem, not a config bug, which is why
+    ``tests/test_deploy01_slippage_tolerance_band.py`` pins both directions and asserts
+    the buy and sell bands straddle the decision price.
+
+    Anything that cannot be read as a positive tolerance returns ``price`` unchanged
+    rather than raising. This runs AFTER ``mark_submitted``, so an exception here would be
+    adjudicated by RT-17 as an ambiguous outcome and the order recorded "submission
+    unknown" -- a bad config value must not be able to turn a working execution into an
+    unknown one. ``normalise_execution_config`` is the gate that refuses such values, at
+    deploy time, where refusing is free.
+
+    A non-positive ``price`` is returned untouched: that is the market-order case
+    (``c_order_type`` falls back to ``market``), where a limit price is meaningless.
+    """
+    if tolerance_bps is None:
+        return price
+    try:
+        bps = Decimal(str(tolerance_bps))
+    except (ArithmeticError, ValueError, TypeError):
+        return price
+    if not bps.is_finite() or bps <= 0 or price <= Decimal("0"):
+        return price
+    factor = bps / Decimal("10000")
+    if str(side).strip().lower() == "buy":
+        return price * (Decimal("1") + factor)
+    return price * (Decimal("1") - factor)
+
+
 @dataclass
 class ExecutionResult:
     """Standardized execution result."""
@@ -385,6 +429,20 @@ class ExecutionEngine:
         # nothing is unaffected.
         self._order_timeout_seconds: Optional[float] = None
 
+        # DEPLOY-01. The deployment's own `slippage_tolerance_bps`, carried exactly like
+        # `_order_timeout_seconds` above and for the same reason: it is a PER-ORDER fact
+        # and `_execute_trade_internal` takes no parameter for it.
+        #
+        # `None` means "no tolerance", which is NOT the same as "no bound". This path
+        # already submits a LIMIT order at the requested price whenever that price is
+        # positive (see `c_order_type` in `_execute_trade_internal`), and
+        # `master_executor` skips any tick with `price <= 0`, so a live bot order is
+        # already bounded at EXACTLY the decision price -- an implicit tolerance of zero.
+        # This field widens that bound by a stated amount in the order's own favour
+        # direction; it does not introduce one. A deployment that sets nothing keeps
+        # today's zero-tolerance behaviour unchanged.
+        self._slippage_tolerance_bps: Optional[float] = None
+
     # ----------------------------------
     # ACCOUNTING  (BUG-016)
     # ----------------------------------
@@ -677,6 +735,7 @@ class ExecutionEngine:
         risk_approved: Optional[bool] = None,
         risk_reason: str = "",
         order_timeout_seconds: Optional[float] = None,
+        slippage_tolerance_bps: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Execute trade with idempotency check - PREVENTS DUPLICATE EXECUTIONS.
@@ -1126,6 +1185,7 @@ class ExecutionEngine:
             self._live_tenant_id = str(tenant_id)
             self._live_strategy_id = str(strategy_id)
             self._order_timeout_seconds = order_timeout_seconds
+            self._slippage_tolerance_bps = slippage_tolerance_bps
             try:
                 success, trade_result = await self._execute_trade_internal(
                     symbol=symbol,
@@ -1751,6 +1811,28 @@ class ExecutionEngine:
                 # Map inputs to CCXT requirements
                 c_order_type = CoreOrderType.market if price <= Decimal("0") else CoreOrderType.limit
                 c_side = OrderSide.buy if side.lower() == "buy" else OrderSide.sell
+
+                # DEPLOY-01: the deployment's own `slippage_tolerance_bps`, applied as a
+                # PRE-TRADE PRICE BAND on the limit price this call already sends.
+                #
+                # The band is not a new control bolted onto a market order -- the line
+                # above shows this path submits a LIMIT whenever the price is positive,
+                # and `master_executor._inner_loop` skips any tick with `price <= 0`, so
+                # every live bot order already carries a limit at exactly the decision
+                # price. That is a tolerance of zero: the venue may fill at that price or
+                # better, never worse. Widening it by `slippage_tolerance_bps` in the
+                # order's own favour direction is therefore a RELAXATION with a stated
+                # ceiling, which is what the field name promises.
+                #
+                # The idempotency key is deliberately NOT recomputed from the widened
+                # price. `generate_execution_id` folds price into its hash, and this
+                # trade's id was already derived and claimed from the DECISION price
+                # above. Re-deriving it here would give one decision two different
+                # identities depending on a config value -- exactly the property RT-17's
+                # "adjudicate by clientOrderId" rule depends on not changing.
+                submit_price = bounded_limit_price(
+                    price, side, self._slippage_tolerance_bps
+                )
                 # Call exchange_executor.place_order (which is async)
                 # DEPLOY-01: the deployment's own order_timeout_seconds, passed ONLY when
                 # the deployment actually set one.
@@ -1777,7 +1859,7 @@ class ExecutionEngine:
                     side=c_side,
                     order_type=c_order_type,
                     size=size,
-                    price=price if price > 0 else None,
+                    price=submit_price if submit_price > 0 else None,
                     **_order_kwargs,
                 )
                 # Extract actual exchange fee from CCXT response if available.
