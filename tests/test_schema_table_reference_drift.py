@@ -2456,10 +2456,26 @@ KNOWN_UNDECLARED_COLUMN_DEFECTS = {
     "billing_invoices.provider_payment_id": (
         "routers/billing.py", "parallel workstream",
     ),
-    "profiles.pending_downgrade_tier": (
-        "core/billing_lifecycle.py", "parallel workstream",
-    ),
 }
+
+# RAZORPAY-ONLY: profiles.pending_downgrade_tier is removed from the register above because
+# the defect is GONE, not because it became inconvenient. This register may only shrink, and
+# this is a shrink.
+#
+# The column was written by BillingLifecycle.downgrade_subscription and, as that method's own
+# removal note records, read by NOTHING anywhere -- so a "scheduled downgrade" would never
+# have executed. The method had no production caller at all and was deleted with the nine
+# other uncalled lifecycle methods during the Stripe removal, which removed the last
+# reference to the column and so removed the undeclared-column defect with it.
+#
+# This test is what noticed: it refused with "KNOWN_UNDECLARED_COLUMN_DEFECTS has gone stale:
+# profiles.pending_downgrade_tier is no longer referenced at all". That refusal is the
+# register working as designed, and it is also how the orphaned call sites in
+# scripts/attack_internal_billing_full.py were found -- not by the scripts sweep I had
+# already run, which only looked for deleted names from routers/billing.py.
+#
+# The product has no scheduled downgrade. A plan change takes effect when the new plan is
+# paid for; see tests/test_billing_lifecycle_surface.py.
 
 #: The column reference `routers/library.py` used to carry and no longer does:
 #: `_enrich_cards_with_user_context` read `library_strategies` filtered on
