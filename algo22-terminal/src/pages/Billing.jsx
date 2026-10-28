@@ -1040,7 +1040,10 @@ export default function Billing() {
       }
 
       if (data && data.checkoutUrl) {
-        // Stripe, and any Razorpay checkout that did produce a hosted link.
+        // A Razorpay checkout that produced a hosted link rather than only the modal.
+        // (This read "Stripe, and any Razorpay checkout that did produce a hosted link";
+        // Stripe has been removed from the product in full, so Razorpay is the only
+        // source a checkoutUrl can now come from.)
         window.location.href = data.checkoutUrl;
         return;
       }

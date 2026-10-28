@@ -48,7 +48,7 @@ import { get, post, del, publicGet } from '../../apiClient';
 /**
  * @typedef {Object} CheckoutResponse
  * @property {string|null} checkoutUrl - Razorpay hosted link, or null when only the modal is available
- * @property {string} provider - "stripe" or "razorpay"
+ * @property {"razorpay"} provider - always "razorpay"; it is the only gateway
  * @property {string} [order_id] - Razorpay order id, for Standard Checkout
  * @property {string} [key_id] - Razorpay PUBLISHABLE key id. Never the key secret.
  * @property {string} [razorpay_key] - Same value as key_id, the spelling the marketplace endpoint uses
@@ -124,8 +124,17 @@ export const billingApi = {
   setCurrency: (currency) => post('/api/billing/currency', { currency }),
 
   /**
-   * Create a checkout session (Stripe for USD, Razorpay for INR)
+   * Create a checkout session. Razorpay is the only gateway.
+   *
    * Backend generates the session server-side — no price data trusted from frontend.
+   *
+   * This used to read "Stripe for USD, Razorpay for INR". There is no second gateway: the
+   * only decision left is the CHARGE CURRENCY, and INR is the only currency the platform can
+   * charge. A request in any other supported currency is quoted in that currency for display
+   * and charged in INR, which is why the response carries `checkout_currency` alongside
+   * `currency` and reports `is_direct_checkout: false` for those buyers. Render the charge,
+   * do not imply the displayed figure is what the card is debited.
+   *
    * @param {CheckoutRequest} request
    * @returns {Promise<CheckoutResponse>}
    */
@@ -164,20 +173,30 @@ export const billingApi = {
   /**
    * Ask the server for a hosted provider billing-portal session.
    *
-   * PROVIDER-DEPENDENT, AND ON RAZORPAY THERE IS NO PORTAL AT ALL. This used to be documented
-   * as "Open Stripe Billing Portal… Returns a redirect URL to Stripe's hosted portal", which
-   * described a provider this platform does not bill through: Razorpay is the configured one
-   * and it publishes no hosted self-serve portal. The server answers accordingly —
+   * THIS ALWAYS REJECTS. THERE IS NO PORTAL, AND THERE IS NO LONGER A CASE WHERE THERE IS.
+   *
+   * Razorpay is the only gateway and it publishes no hosted self-serve billing portal, so
+   * there is no session to create and no customer-facing URL to hand out. The server answers
    * `501 PROVIDER_HAS_NO_BILLING_PORTAL` when the live provider has no portal, and
    * `503 PAYMENT_PROVIDER_NOT_CONFIGURED` when no provider holds live credentials. Neither
-   * returns a URL, because there is none to return. A `{ url }` comes back only from a
-   * genuinely Stripe-configured deployment.
+   * carries a URL, because there is none to carry.
    *
-   * So a caller must treat a rejection as the NORMAL answer and render the server's own
-   * `detail.message`, not assume a URL and not present this as a working control. No caller
-   * may synthesise a portal URL of its own.
+   * It previously said a `{ url }` "comes back only from a genuinely Stripe-configured
+   * deployment". That is no longer a reachable case: Stripe has been removed from the
+   * product in full, so the branch that created a `stripe.billing_portal.Session` is gone
+   * and the handler has no success path left at all.
    *
-   * @returns {Promise<{url: string}>} on a Stripe deployment only; rejects otherwise
+   * The ROUTE still exists, deliberately. It was deleted during the Stripe removal and put
+   * back, because `Billing.jsx` renders this handler's own `detail.message` into `ds/Alert`
+   * verbatim, and with the route gone both callers got a bare 404 — which carries no coded
+   * `detail`, so the page fell back to a generic "Failed to open billing portal." and the
+   * user lost the sentence explaining where their card is actually changed (at the next
+   * Razorpay Checkout; the instrument is never stored here).
+   *
+   * So a caller must treat the rejection as the ONLY answer and render the server's own
+   * `detail.message`. No caller may synthesise a portal URL of its own.
+   *
+   * @returns {Promise<never>} always rejects; read `detail.error` and `detail.message`
    */
   openPortal: () => post('/api/billing/portal', {}),
 

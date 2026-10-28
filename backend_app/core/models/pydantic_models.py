@@ -494,14 +494,43 @@ class PaymentMethod(BaseModel):
 
 
 class AddPaymentMethodRequest(BaseModel):
-    payment_method_id: str  # Stripe payment method ID (e.g., pm_xxx)
+    """The declared body of ``POST /api/billing/payment-methods``, WHICH ALWAYS REFUSES.
+
+    The route answers a coded 501: VyomQuant does not store payment instruments. Razorpay
+    collects the card inside Razorpay Checkout each time a subscription is bought, and there
+    is no Razorpay equivalent of a PaymentMethod object to copy card attributes out of.
+
+    THE MODEL IS KEPT ON PURPOSE even though the handler refuses. FastAPI validates the
+    shape before the handler runs, so a malformed request is answered by the platform's own
+    422 rather than by a hand-rolled check inside a route that was going to refuse anyway.
+    See ``tests/regression/baseline/billing_payment_methods.json``'s
+    ``_baseline_note_parameters`` for why the ``db`` dependency was dropped and this body
+    was not.
+
+    THE FIELD DESCRIPTIONS NAMED STRIPE, AND THEY ARE API DOCUMENTATION. Each read "... from
+    Stripe", and these strings are the ``description`` values that land in the OpenAPI schema
+    and in any generated client, so they told an integrator to source four values from a
+    provider this platform does not have. (Production serves no ``openapi.json`` -- it 404s
+    by design -- so they were not publicly exposed, but they were still the declared
+    contract.) They are now provider-neutral and say what the route actually does.
+    """
+
+    payment_method_id: str = Field(
+        ...,
+        description=(
+            "A provider payment-instrument identifier. Not used: this endpoint refuses and "
+            "stores nothing."
+        ),
+    )
     set_as_default: bool = False
-    # Real card metadata — must be sourced from Stripe PaymentMethod response,
-    # NOT hardcoded. Required to prevent fake/test card data persisting in prod.
-    brand: str = Field(..., description="Card network brand from Stripe (e.g., 'visa', 'mastercard')")
-    last4: str = Field(..., min_length=4, max_length=4, description="Last 4 digits of card from Stripe")
-    expiry_month: int = Field(..., ge=1, le=12, description="Expiry month (1-12) from Stripe")
-    expiry_year: int = Field(..., ge=2024, description="Expiry year (4-digit) from Stripe")
+    # Card metadata. Still REQUIRED by the schema so the refusal cannot be mistaken for a
+    # validation pass, and still never persisted: no caller has ever had a provider
+    # PaymentMethod response to populate these from, which is why the route refuses instead
+    # of blaming the caller for omitting them.
+    brand: str = Field(..., description="Card network brand (e.g. 'visa', 'mastercard')")
+    last4: str = Field(..., min_length=4, max_length=4, description="Last 4 digits of the card")
+    expiry_month: int = Field(..., ge=1, le=12, description="Expiry month (1-12)")
+    expiry_year: int = Field(..., ge=2024, description="Expiry year (4-digit)")
 
 
 # ── SUPPORT ───────────────────────────────────────────────────────────────

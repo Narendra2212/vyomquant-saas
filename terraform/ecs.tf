@@ -43,7 +43,7 @@ resource "aws_ecs_task_definition" "api" {
         # already carries TRUSTED_PROXY_HOPS=2, not the code's own fail-safe default of 1.
         # Declared here so a future terraform-driven redeploy of this task definition cannot
         # silently drop back to the default and start misattributing/rejecting every genuine
-        # Stripe/Razorpay webhook. See backend_app/routers/billing.py's own
+        # Razorpay webhook. See backend_app/routers/billing.py's own
         # _TRUSTED_PROXY_HOPS_DEFAULT comment and this finding's ledger entry for the evidence.
         { name = "TRUSTED_PROXY_HOPS", value = "2" }
       ]

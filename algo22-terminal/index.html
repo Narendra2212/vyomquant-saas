@@ -21,11 +21,18 @@
        module already covered by 'self' -- see that file's header comment. The origins below
        are every one this build actually loads from, confirmed by grepping src/: Google Fonts'
        stylesheet (style-src/font-src), the Sentry/GA/Clarity loaders bootstrap.js injects
-       (script-src), and Razorpay Standard Checkout, the one real payment path on this
-       platform (src/utils/razorpayCheckout.js) -- Stripe is NOT included because
-       src/pages/Billing.jsx documents that this deployment has no live Stripe secret and every
-       Stripe-only endpoint 500s by design; granting Stripe origins here would be a permission
-       for a path that cannot be reached. connect-src's *.vyomquant.in/.com hosts and
+       (script-src), and Razorpay Standard Checkout, the ONLY payment path on this
+       platform (src/utils/razorpayCheckout.js) -- Stripe is NOT included because Stripe has
+       been REMOVED FROM THE PRODUCT IN FULL: no webhook route, no checkout branch, no SDK in
+       requirements-base.txt. Granting Stripe origins here would be a permission for code
+       that does not exist. (The reason recorded here previously was weaker and is now out of
+       date -- it said this deployment merely had no live Stripe secret and that Stripe-only
+       endpoints 500ed by design. src-tauri/tauri.conf.json had NOT reached the same
+       conclusion and granted js.stripe.com and api.stripe.com until it was corrected;
+       tests/test_tauri_csp_configuration.py now holds the two policies to the same answer.)
+       frame-src is REQUIRED, not optional: Standard Checkout renders as a modal iframe, so
+       permitting the script that opens it without the frame it opens would fail only at the
+       moment a customer tries to pay. connect-src's *.vyomquant.in/.com hosts and
        wildcarded Supabase host cover every topology the deploy workflow's own API-hostname
        allow-list names (same-origin CloudFront proxy, a dedicated api.vyomquant.in, or the raw
        CloudFront domain). -->

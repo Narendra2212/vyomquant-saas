@@ -560,46 +560,6 @@
           "response": []
         },
         {
-          "name": "Stripe Webhook",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/api/billing/webhook/stripe",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "api",
-                "billing",
-                "webhook",
-                "stripe"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{bearer_token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"sample_key\": \"sample_value\"\n}"
-            }
-          },
-          "response": []
-        },
-        {
           "name": "Razorpay Webhook",
           "request": {
             "method": "POST",
