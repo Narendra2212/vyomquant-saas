@@ -48,6 +48,7 @@ same ``_Supabase``/``_Query`` fake, the same real ``AssetUniverse``, the same
 environment the write path is.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -541,16 +542,30 @@ class TestTheRefusalsThatAreAboutTheRequest:
         assert condition["code"] == "EXECUTION_CONFIG_UNKNOWN_FIELD"
 
     def test_a_known_but_unenforced_execution_config_field_is_a_reported_condition(self):
-        """DEPLOY-01: slippage_tolerance_bps is a published field, but nothing in the
-        execution path reads it (there is no slippage-tolerance check on this platform's
-        order path) -- a value here is refused at preflight, the same as an unknown field,
-        rather than reported as passing and silently discarded on deploy."""
-        assert "slippage_tolerance_bps" in db.UNENFORCED_EXECUTION_CONFIG_FIELDS
+        """DEPLOY-01: a published field that no execution path reads is refused at
+        preflight, the same as an unknown field, rather than reported as passing and
+        silently discarded on deploy.
+
+        The field is taken from ``db.UNENFORCED_EXECUTION_CONFIG_FIELDS`` rather than
+        named here. This test used to hardcode ``slippage_tolerance_bps`` on the grounds
+        that "there is no slippage-tolerance check on this platform's order path" -- which
+        was measured and found false (``_execute_trade_internal`` already submits a LIMIT
+        at the decision price, so the order path was always bounded), and the field is now
+        enforced. A hardcoded example makes this test fail every time a field is correctly
+        enforced, which points the guard in the wrong direction: it should shrink as the
+        backlog drains, not break.
+        """
+        assert db.UNENFORCED_EXECUTION_CONFIG_FIELDS, (
+            "nothing is unenforced any more, so there is no field left to exercise this "
+            "refusal with -- the preflight path needs a dedicated fixture instead of a "
+            "real field, and this test should be rewritten rather than deleted"
+        )
+        field = db.UNENFORCED_EXECUTION_CONFIG_FIELDS[0]
         response = _get(
             _sb(),
             params={
                 **_passing_params(),
-                "execution_config": '{"slippage_tolerance_bps": 25}',
+                "execution_config": json.dumps({field: 25}),
             },
         )
 
