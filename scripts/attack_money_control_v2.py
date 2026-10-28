@@ -133,20 +133,57 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ATTACK 2: STRIPE WEBHOOK DEDUPLICATION & ATOMIC LOCKING (BUG-BILL-01)
+# ATTACK 2: RAZORPAY WEBHOOK DEDUPLICATION & EVENT EXTRACTION (BUG-BILL-01)
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# Was "STRIPE WEBHOOK IDEMPOTENCY", checking that stripe_webhook's source read
+# `event["id"]` rather than a non-existent `stripe-event-id` header. Stripe is removed from
+# the product in full, so that handler is gone; Razorpay is the only gateway and the same
+# defect class lives in `_razorpay_event_id`, which is what this now checks.
+#
+# The Razorpay shape is harder than Stripe's, which is why the function exists at all:
+# Razorpay does not reliably send an event id. `_razorpay_event_id` tries, in order, the
+# `x-razorpay-event-id` header, the body's own `event_id`, and finally the entity id inside
+# a known container (payment / refund / order / subscription / invoice) QUALIFIED BY the
+# event name. The last fallback is the one that matters: before it existed, a
+# `refund.processed` delivery produced no id at all, which skipped BOTH idempotency layers
+# and re-executed the commission reversal, the obligation reversal, the settlement reversal
+# and the plan revocation on every redelivery -- and Razorpay redelivers for days.
 print("\n" + "=" * 72)
-print("ATTACK 2 — STRIPE WEBHOOK IDEMPOTENCY & EVENT EXTRACTION")
+print("ATTACK 2 — RAZORPAY WEBHOOK IDEMPOTENCY & EVENT EXTRACTION")
 print("=" * 72)
 
-from backend_app.routers.billing import stripe_webhook
+from backend_app.routers.billing import _razorpay_event_id, razorpay_webhook
 
-src_code = inspect.getsource(stripe_webhook)
+handler_src = inspect.getsource(razorpay_webhook)
+extractor_src = inspect.getsource(_razorpay_event_id)
 
-if 'event.get("id")' in src_code or "event['id']" in src_code:
-    record_pass("2.1 Stripe webhook extracts event['id'] from verified event payload")
+if "_razorpay_event_id(" in handler_src:
+    record_pass("2.1 Razorpay webhook derives an event id through _razorpay_event_id")
 else:
-    record_bug("BILL-01", "P0", "Stripe webhook misses event['id']", "Reads missing stripe-event-id header", "event['id']", "request.headers.get('stripe-event-id')", "Webhook deduplication bypassed")
+    record_bug("BILL-01", "P0", "Razorpay webhook does not derive an event id",
+               "no _razorpay_event_id call in the handler", "_razorpay_event_id(request, payload)",
+               "absent", "Webhook deduplication bypassed on every delivery")
+
+# Refusing when no id can be derived is the half that stops a silent unguarded run.
+if "Webhook carries no identifiable event id" in handler_src:
+    record_pass("2.2 Razorpay webhook REFUSES (400) when no event id can be derived")
+else:
+    record_bug("BILL-01", "P0", "Razorpay webhook proceeds without an event id",
+               "falls through with idempotency_key=None", "HTTPException(400)",
+               "unguarded execution", "Refund reversals re-execute on every redelivery")
+
+# And the entity-container fallback is what makes a refund identifiable at all.
+_probe = _razorpay_event_id(
+    type("R", (), {"headers": {}})(),
+    {"event": "refund.processed", "payload": {"refund": {"entity": {"id": "rfnd_probe"}}}},
+)
+if _probe == "refund.processed:rfnd_probe":
+    record_pass("2.3 A refund delivery with no event-id header is still identifiable")
+else:
+    record_bug("BILL-01", "P0", "Refund deliveries carry no derivable event id",
+               repr(_probe), "refund.processed:rfnd_probe", repr(_probe),
+               "Refund reversal re-executes on every redelivery")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
