@@ -120,6 +120,10 @@ import FinalCTA from '../../../src/components/landing/FinalCTA';
 import Footer from '../../../src/components/landing/Footer';
 
 import { artifactFieldFor } from '../../../src/components/download/PlatformArtifact';
+import {
+  DESKTOP_RELEASE,
+  artifactForPlatform,
+} from '../../../src/design/desktopReleases';
 
 afterEach(cleanup);
 
@@ -518,38 +522,45 @@ describe('Landing_Surface — each rendered section carries its own content', ()
   });
 
   describe('9 — DownloadSection', () => {
-    /** The four withdrawn artifacts, in the order the section renders them. */
-    const WITHDRAWN = ['windows', 'macos', 'linuxAppImage', 'linuxDeb'];
+    /** The four platforms, in the order the section renders them. */
+    const PLATFORMS = ['windows', 'macos', 'linuxAppImage', 'linuxDeb'];
 
-    it('renders the platform heading, the web card, and every artifact with its declared reason', () => {
+    it('renders the platform heading, the web card, and a real download for every platform', () => {
       mountRouted(<DownloadSection />);
 
       expect(
         screen.getByRole('heading', {
           level: 2,
-          name: 'Trade in the browser today',
+          name: 'Trade in the browser, or on your desktop',
         }),
       ).toBeTruthy();
 
-      // The one thing this section can offer, and the link the download suite also pins.
+      // Still the lead option, and the link the download suite also pins.
       expect(screen.getByRole('heading', { level: 3, name: 'Web platform' })).toBeTruthy();
       expect(screen.getByRole('link', { name: /Launch in browser/ }).getAttribute('href')).toBe(
         '/app',
       );
 
-      // One `unavailable` marker per withdrawn artifact — no more, no fewer.
-      expect(screen.getAllByText('Not available')).toHaveLength(WITHDRAWN.length);
+      // The four `unavailable` markers are GONE, because the four artifacts are published.
+      expect(screen.queryAllByText('Not available')).toHaveLength(0);
 
-      WITHDRAWN.forEach((platform) => {
+      PLATFORMS.forEach((platform) => {
         const field = artifactFieldFor(platform);
+        const declared = artifactForPlatform(platform);
+        expect(declared, `${platform} is not published`).not.toBeNull();
+
         expect(screen.getByText(field.label)).toBeTruthy();
-        // The declared human reason, which is what makes the marker a withdrawal rather than
-        // a blank card (Requirement 19.3).
-        expect(screen.getByText(field.reason)).toBeTruthy();
+        // The href comes from the declaration, so this fails if a URL is ever typed into
+        // the component instead — which is how the 403-ing links got here the first time.
+        const link = screen
+          .getAllByRole('link')
+          .find((a) => a.getAttribute('href') === declared.url);
+        expect(link, `no link to ${declared.filename}`).toBeTruthy();
+        expect(link.getAttribute('download')).toBe(declared.filename);
       });
     });
 
-    it('announces desktop as in development, without claiming a build that does not exist', () => {
+    it('announces the published beta, and states that it is unsigned', () => {
       /*
        * UPDATED, AND THE OLD ASSERTIONS WERE PINNING A FALSE CLAIM.
        *
@@ -578,13 +589,24 @@ describe('Landing_Surface — each rendered section carries its own content', ()
        */
       mountRouted(<DownloadSection />);
 
-      expect(screen.getByText('In development')).toBeTruthy();
-      expect(screen.getByText(/Native desktop terminals are in development on Tauri/)).toBeTruthy();
+      // The badge carries the published version and the one caveat that matters, read from
+      // the declaration rather than typed, so it cannot contradict the cards beneath it.
+      expect(
+        screen.getByText(`v${DESKTOP_RELEASE.version} beta · unsigned`),
+      ).toBeTruthy();
       expect(screen.getByText('Available now · free tier included')).toBeTruthy();
+      // Verifiable off-page: the release notes carry every checksum.
+      expect(
+        screen.getAllByRole('link').some((a) => a.getAttribute('href') === DESKTOP_RELEASE.notesUrl),
+      ).toBe(true);
 
-      // And the retired claims are genuinely gone from the section, not merely unasserted.
+      // Every retired claim is genuinely gone from the section, not merely unasserted. The
+      // first two were pinned here while three of the four files were text placeholders; the
+      // last two described the period when nothing was published at all.
       expect(screen.queryByText('In final testing')).toBeNull();
       expect(screen.queryByText(/Native terminals for Windows, macOS and Linux/)).toBeNull();
+      expect(screen.queryByText('In development')).toBeNull();
+      expect(screen.queryByText(/none is published for\s+download yet/)).toBeNull();
     });
   });
 
