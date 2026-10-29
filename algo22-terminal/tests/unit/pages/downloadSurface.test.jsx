@@ -1,40 +1,40 @@
 /**
- * tests/unit/pages/downloadSurface.test.jsx — production-launch-hardening task 4.3.
+ * tests/unit/pages/downloadSurface.test.jsx
  *
  * Requirements 1.30, 2.30, 3.6. Preservation 3.7.
  *
- * WHAT IS BEING ASSERTED
- * ----------------------
- * `/download` and the landing page's download section advertised four desktop installers
- * with four hardcoded sizes — 84.2, 78.5, 75.4 and 68.2 MB — four SHA-256 strings, and four
- * links. **All four URLs return 403**, verified against production during design: CI's
- * `dist/` carries no `releases/` directory, so `aws s3 sync dist/ --delete` deletes that
- * prefix from the bucket on every deploy. The advertisement was withdrawn rather than
- * relabelled, through the convention this app already uses for an absent figure.
+ * THE HISTORY THIS FILE EXISTS TO POLICE
+ * --------------------------------------
+ * `/download` and the landing page's download section once advertised four desktop installers
+ * with four hardcoded sizes — 84.2, 78.5, 75.4 and 68.2 MB — four SHA-256 strings, one of
+ * which was the hash of the EMPTY STRING, and four links. All four URLs returned 403: CI's
+ * `dist/` carries no `releases/` directory, so `aws s3 sync dist/ --delete` deleted that
+ * prefix from the bucket on every deploy. Three of the four files described did not exist;
+ * one was a 69-byte text file. Task 4.3 withdrew the whole advertisement.
  *
- * Three claims, in the order they matter:
+ * The artifacts are now genuinely published, as GitHub release `desktop-v0.1.0`. So this file
+ * no longer asserts absence — it asserts that what is rendered is READ FROM A DECLARATION and
+ * that none of the old fabrications has crept back. Five claims:
  *
- *   1. **Each card states not-available and carries its declared reason.** Not a blank card,
- *      not an empty state ("you have none of these"), not an error. `ds/Panel`'s
- *      `unavailable` state with the reason `design/pageFields` declares.
- *   2. **No request is issued.** `usePanelState` short-circuits on the reason before it
- *      consults `enabled`, and never calls the reader (Requirement 19.3). Asserted twice:
- *      at the hook, with a reader that records every call, and at the two surfaces, with
- *      `fetch`, `XMLHttpRequest` and `HTMLAnchorElement.click` all recording.
- *   3. **No download link is rendered for a platform with no artifact**, and no size,
- *      checksum or figure travels with the marker (3.7: the marker never renders `0`).
+ *   1. **Every published artifact is fully declared**: url, exact byte count, 64-hex SHA-256,
+ *      filename, requirements and a first-run step. No digest is the empty-string hash.
+ *   2. **No request is issued by either surface.** A download is a user-initiated anchor
+ *      navigation, not a fetch: mounting the page, and switching every tab, must leave
+ *      `fetch`, `XMLHttpRequest` and `HTMLAnchorElement.click` at zero calls. The old
+ *      `handleDownload` clicked an anchor for the user, which is what produced the 403.
+ *   3. **Every rendered size is derived from the declared byte count**, so the figure on
+ *      screen and the file cannot disagree. None of the four withdrawn size strings appears.
+ *   4. **The unsigned consequence is stated on every card**, because Gatekeeper REFUSES an
+ *      unnotarized app and a user given no instruction concludes the download is broken.
+ *   5. **The withdrawal machinery still works.** A platform declared in `pageFields` but NOT
+ *      published still renders the not-available marker with its reason and no link. Proved
+ *      by mocking one platform out of `desktopReleases`, because all four are published today
+ *      and a guarantee that cannot be observed failing is not a guarantee.
  *
- * WHY THE HOOK IS TESTED DIRECTLY AS WELL AS THROUGH THE PAGE
- * ----------------------------------------------------------
- * `PlatformArtifact` passes `null` as its reader, so "the surface issued no request" would be
- * true of it even if the short-circuit were broken. Section 2 closes that: it drives
- * `usePanelState` with a reader that WOULD issue one and asserts the declared reason stops it,
- * and — in the same test — that the identical reader IS called once the reason is removed. A
- * guard that cannot be observed failing is not a guard.
- *
- * NOTHING HERE IS MOCKED. `Navbar` and `Footer` are real (they import a router `Link` and two
- * icons, nothing else), `design/pageFields` is real, `usePanelState` and `ds/Panel` are real.
- * The only doubles are the three network recorders, and they exist to prove absence.
+ * NOTHING HERE IS MOCKED except where section 5 says so. `Navbar` and `Footer` are real,
+ * `design/pageFields` and `design/desktopReleases` are real, `usePanelState` and `ds/Panel`
+ * are real. The only other doubles are the three network recorders, which exist to prove
+ * absence.
  */
 
 import React from 'react';
@@ -46,6 +46,13 @@ import DownloadPage from '../../../src/components/download/DownloadPage';
 import DownloadSection from '../../../src/components/landing/DownloadSection';
 import { PlatformArtifact } from '../../../src/components/download/PlatformArtifact';
 import {
+  DESKTOP_ARTIFACTS,
+  DESKTOP_PLATFORM_ORDER,
+  DESKTOP_RELEASE,
+  artifactForPlatform,
+  formatArtifactSize,
+} from '../../../src/design/desktopReleases';
+import {
   ABSENCE,
   PAGES,
   PAGE_FIELDS_BY_PAGE,
@@ -55,7 +62,7 @@ import {
 } from '../../../src/design/pageFields';
 import { PANEL_STATES, usePanelState } from '../../../src/hooks/usePanelState';
 
-/** The four artifacts the two surfaces used to link, and the tab that selects each on /download. */
+/** The four artifacts both surfaces render, and the tab that selects each on /download. */
 const PLATFORMS = Object.freeze([
   { field: 'windows', tab: 'Windows' },
   { field: 'macos', tab: 'macOS' },
@@ -66,14 +73,14 @@ const PLATFORMS = Object.freeze([
 const fieldFor = (platform) =>
   PAGE_FIELD_BY_KEY[pageFieldKey({ page: PAGES.DOWNLOAD, field: platform })];
 
-/** The four figures that used to be rendered beside the four links. */
+/** The four figures the surfaces used to invent. None may return, in any form. */
 const WITHDRAWN_SIZES = Object.freeze(['84.2', '78.5', '75.4', '68.2']);
 
-/** A number with a unit — a size, wherever it appears. */
-const SIZE_SHAPED = /\d[\d.]*\s*(?:B|KB|MB|GB|MiB|GiB)\b/i;
+/** `sha256("")` — published on this page once, as a real file's checksum. */
+const EMPTY_STRING_SHA256 =
+  'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
-/** An installer extension on an href, whatever the path in front of it. */
-const INSTALLER_HREF = /\.(?:exe|dmg|AppImage|deb)(?:$|[?#])/i;
+const HEX64 = /^[0-9a-f]{64}$/;
 
 // ---------------------------------------------------------------------------
 // The network recorders. Every one of them must stay at zero calls.
@@ -84,8 +91,6 @@ let requested;
 beforeEach(() => {
   requested = [];
 
-  // `fetch` exists in this environment (Node's), so this replaces it rather than defining
-  // one; a surface that reached for it would be recorded and would not reach the network.
   vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     requested.push(`fetch ${typeof input === 'string' ? input : input?.url}`);
     return Promise.reject(new Error('downloadSurface.test: no request expected'));
@@ -96,9 +101,9 @@ beforeEach(() => {
   });
   vi.spyOn(XMLHttpRequest.prototype, 'send').mockImplementation(() => {});
 
-  // The withdrawn `handleDownload` fetched nothing directly: it built an anchor and clicked
-  // it, which is what made the browser issue the 403. A click on a detached anchor is
-  // therefore a request for the purposes of this test.
+  // The withdrawn `handleDownload` built an anchor and clicked it, which is what made the
+  // browser issue the 403. A programmatic click is therefore a request for this test's
+  // purposes; a user's own click on a rendered anchor is not and never reaches here.
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function record() {
     requested.push(`anchor click ${this.getAttribute('href')}`);
   });
@@ -123,7 +128,6 @@ const renderSection = () =>
     </MemoryRouter>,
   );
 
-/** Click the tab whose label leads its accessible text. The badge may follow it. */
 function selectPlatform(container, label) {
   const tab = [...container.querySelectorAll('button')].find((button) =>
     button.textContent.trim().startsWith(label),
@@ -136,36 +140,103 @@ function selectPlatform(container, label) {
 const cardFor = (container, platform) =>
   container.querySelector(`[data-download-platform="${platform}"]`);
 
+const downloadLinkIn = (card) =>
+  [...card.querySelectorAll('a[href]')].find((a) => a.hasAttribute('download'));
+
 // ---------------------------------------------------------------------------
-// 1. The declaration
+// 1. The declarations
 // ---------------------------------------------------------------------------
 
-describe('the four installers are declared unavailable, with reasons', () => {
-  it('declares exactly the four artifacts the surfaces used to link', () => {
+describe('the four platforms are declared, in both tables', () => {
+  it('pageFields still declares exactly the four, in render order', () => {
     expect(PAGE_FIELDS_BY_PAGE[PAGES.DOWNLOAD].map((f) => f.field)).toEqual(
       PLATFORMS.map((p) => p.field),
     );
   });
 
+  it('desktopReleases declares the same four, in the same order', () => {
+    expect(DESKTOP_PLATFORM_ORDER).toEqual(PLATFORMS.map((p) => p.field));
+    expect(Object.keys(DESKTOP_ARTIFACTS).sort()).toEqual(
+      PLATFORMS.map((p) => p.field).sort(),
+    );
+  });
+
   it.each(PLATFORMS.map((p) => [p.field]))(
-    '%s is UNAVAILABLE / UNREPORTED with a reason and no path',
+    '%s keeps a fallback withdrawal entry with a reason and no path',
     (platform) => {
+      // Still UNAVAILABLE in `pageFields`: that entry is now the FALLBACK for a platform
+      // with no published build, and the source of the rendered label in both states.
       const field = fieldFor(platform);
 
       expect(field.verdict).toBe(VERDICT.UNAVAILABLE);
       expect(field.absence).toBe(ABSENCE.UNREPORTED);
-      // Requirement 19.3: "not available" with no reason tells a trader what a blank cell does.
       expect(field.reason.trim().length).toBeGreaterThan(20);
-      // Not a value on a response. A page that read one would be reading a URL to render.
       expect(field.path).toBeNull();
-      // And the reason itself carries no figure — no size survives in the copy either.
-      expect(field.reason).not.toMatch(SIZE_SHAPED);
+      expect(field.label.trim().length).toBeGreaterThan(0);
     },
   );
+
+  it.each(PLATFORMS.map((p) => [p.field]))(
+    '%s declares a url, an exact byte count, a real digest and a first-run step',
+    (platform) => {
+      const a = artifactForPlatform(platform);
+      expect(a, `${platform} is not published`).not.toBeNull();
+
+      expect(a.url).toMatch(/^https:\/\/github\.com\/.+\/releases\/download\/.+/);
+      expect(a.url.endsWith(a.filename)).toBe(true);
+      expect(a.filename).toMatch(/\.(?:exe|dmg|AppImage|deb)$/);
+
+      // An exact count, above the 1 MiB floor the build workflow itself enforces. The
+      // placeholders this page used to describe were 64-69 bytes.
+      expect(Number.isInteger(a.bytes)).toBe(true);
+      expect(a.bytes).toBeGreaterThan(1024 * 1024);
+
+      expect(a.sha256).toMatch(HEX64);
+      expect(a.sha256).not.toBe(EMPTY_STRING_SHA256);
+
+      expect(a.requires.trim().length).toBeGreaterThan(0);
+      expect(a.firstRun.trim().length).toBeGreaterThan(0);
+    },
+  );
+
+  it('declares four distinct files and four distinct digests', () => {
+    const files = DESKTOP_PLATFORM_ORDER.map((p) => DESKTOP_ARTIFACTS[p].filename);
+    const digests = DESKTOP_PLATFORM_ORDER.map((p) => DESKTOP_ARTIFACTS[p].sha256);
+    expect(new Set(files).size).toBe(files.length);
+    expect(new Set(digests).size).toBe(digests.length);
+  });
+
+  it('records that the builds are not signed, rather than leaving the UI to decide', () => {
+    expect(DESKTOP_RELEASE.signed).toBe(false);
+    expect(DESKTOP_RELEASE.notesUrl).toMatch(/^https:\/\//);
+  });
+
+  it('derives the displayed size from the byte count', () => {
+    // Not a stored string. This is the property that stops "78.5 MB" appearing beside a
+    // 69-byte file ever again.
+    for (const platform of DESKTOP_PLATFORM_ORDER) {
+      const { bytes } = DESKTOP_ARTIFACTS[platform];
+      const expected = `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+      expect(formatArtifactSize(bytes)).toBe(expected);
+    }
+    // And it refuses to render a figure for a non-size.
+    expect(formatArtifactSize(0)).toBe('');
+    expect(formatArtifactSize(-1)).toBe('');
+    expect(formatArtifactSize(undefined)).toBe('');
+  });
+
+  it('declares none of the four withdrawn sizes', () => {
+    const rendered = DESKTOP_PLATFORM_ORDER.map((p) =>
+      formatArtifactSize(DESKTOP_ARTIFACTS[p].bytes),
+    ).join(' ');
+    for (const size of WITHDRAWN_SIZES) {
+      expect(rendered).not.toContain(`${size} MB`);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
-// 2. The short-circuit, at the hook
+// 2. The short-circuit, at the hook (unchanged: it still governs the fallback)
 // ---------------------------------------------------------------------------
 
 describe('usePanelState reaches `unavailable` without calling the reader', () => {
@@ -176,8 +247,7 @@ describe('usePanelState reaches `unavailable` without calling the reader', () =>
 
   it('never calls a reader that would issue a request, and calls it once the reason goes', () => {
     const reader = vi.fn(() => fetch('/releases/windows/VyomQuant-Setup-0.1.0.exe'));
-    const { field, reason } = { field: 'windows', reason: fieldFor('windows').reason };
-    expect(field).toBe('windows');
+    const reason = fieldFor('windows').reason;
 
     const withReason = render(<Probe reason={reason} reader={reader} />);
     expect(withReason.getByTestId('state').textContent).toBe(PANEL_STATES.UNAVAILABLE);
@@ -197,76 +267,73 @@ describe('usePanelState reaches `unavailable` without calling the reader', () =>
 // 3. /download
 // ---------------------------------------------------------------------------
 
-describe('/download renders each platform as not-available, and offers nothing', () => {
+describe('/download offers every platform its real installer', () => {
   it.each(PLATFORMS.map((p) => [p.tab, p.field]))(
-    'the %s tab renders the marker carrying the declared reason',
+    'the %s tab links the declared artifact, at the declared size',
     (tab, platform) => {
       const { container } = renderPage();
       selectPlatform(container, tab);
 
       const card = cardFor(container, platform);
       expect(card, `no card for ${platform}`).not.toBeNull();
-      // Not `empty` (which claims the trader has none), not `error` (which claims something
-      // broke), not `idle` (which says nothing at all).
-      expect(card.getAttribute('data-panel-state')).toBe(PANEL_STATES.UNAVAILABLE);
-      expect(card.textContent).toContain('Not available');
-      expect(card.textContent).toContain(fieldFor(platform).reason);
+      expect(card.getAttribute('data-panel-state')).toBe(PANEL_STATES.READY);
+      expect(card.textContent).toContain(fieldFor(platform).label);
+
+      const declared = artifactForPlatform(platform);
+      const link = downloadLinkIn(card);
+      expect(link, `no download link on the ${platform} card`).toBeDefined();
+      expect(link.getAttribute('href')).toBe(declared.url);
+      expect(link.getAttribute('download')).toBe(declared.filename);
+
+      // The size on screen is the declared byte count, formatted — not a typed string.
+      expect(card.textContent).toContain(formatArtifactSize(declared.bytes));
+      expect(card.textContent).toContain(declared.sha256);
+      expect(card.textContent).toContain(declared.requires);
     },
   );
 
   it.each(PLATFORMS.map((p) => [p.tab, p.field]))(
-    'the %s card carries no link, no control, no size and no figure',
+    'the %s card states what the operating system will demand on first launch',
     (tab, platform) => {
       const { container } = renderPage();
       selectPlatform(container, tab);
       const card = cardFor(container, platform);
 
-      expect(card.querySelectorAll('a')).toHaveLength(0);
-      expect(card.querySelectorAll('button')).toHaveLength(0);
-      expect(card.querySelectorAll('[download]')).toHaveLength(0);
-      expect(card.textContent).not.toMatch(SIZE_SHAPED);
-      // 3.7: the not-available marker never renders `0`. Nor any other bare figure — a
-      // withdrawn card has no reading to report.
-      expect(card.textContent).not.toMatch(/\b0\b/);
-      expect(card.textContent).not.toMatch(/sha-?256/i);
+      // Unsigned builds: the warning is not optional copy, it is the difference between a
+      // user installing the app and concluding the download is corrupt.
+      expect(card.textContent).toContain(artifactForPlatform(platform).firstRun);
     },
   );
 
-  it('renders no link to any installer anywhere on the page', () => {
+  it('renders none of the four withdrawn size strings, on any tab', () => {
     const { container } = renderPage();
 
-    for (const anchor of container.querySelectorAll('a[href]')) {
-      const href = anchor.getAttribute('href');
-      expect(href, `${href} points into releases/`).not.toContain('releases');
-      expect(href).not.toMatch(INSTALLER_HREF);
-    }
-    expect(container.querySelectorAll('[download]')).toHaveLength(0);
-  });
-
-  it('renders none of the four withdrawn size strings', () => {
-    const { container } = renderPage();
-
-    // Every tab, because each one used to carry its own figure.
     for (const { tab } of PLATFORMS) {
       selectPlatform(container, tab);
       for (const size of WITHDRAWN_SIZES) {
-        expect(container.textContent, `${size} MB is still on the page`).not.toContain(
+        expect(container.textContent, `${size} MB is back on the page`).not.toContain(
           `${size} MB`,
         );
       }
     }
   });
 
+  it('publishes no digest that is the hash of the empty string', () => {
+    const { container } = renderPage();
+    for (const { tab } of PLATFORMS) selectPlatform(container, tab);
+    expect(container.textContent).not.toContain(EMPTY_STRING_SHA256);
+  });
+
   it('issues no request while mounting or while switching platform', () => {
+    // A download is an anchor the USER activates. Nothing here may fetch the artifact, HEAD
+    // it for a size, or click on the user's behalf.
     const { container } = renderPage();
     for (const { tab } of PLATFORMS) selectPlatform(container, tab);
 
     expect(requested).toEqual([]);
   });
 
-  it('still offers the web platform, which is the thing that does work', () => {
-    // Non-vacuity for the assertions above: they would also pass on a page that rendered
-    // nothing at all. The honest surface keeps its one real destination.
+  it('still offers the web platform, which needs no install', () => {
     const { container } = renderPage();
     const appLinks = [...container.querySelectorAll('a[href]')].filter(
       (a) => a.getAttribute('href') === '/app',
@@ -280,8 +347,8 @@ describe('/download renders each platform as not-available, and offers nothing',
 // 4. The landing section
 // ---------------------------------------------------------------------------
 
-describe('the landing download section states the same four reasons', () => {
-  it('renders one not-available panel per withdrawn artifact', () => {
+describe('the landing download section offers the same four installers', () => {
+  it('renders one ready card per platform, in order, each linking its artifact', () => {
     const { container } = renderSection();
 
     const cards = [...container.querySelectorAll('[data-download-platform]')];
@@ -291,27 +358,23 @@ describe('the landing download section states the same four reasons', () => {
 
     for (const card of cards) {
       const platform = card.getAttribute('data-download-platform');
-      expect(card.getAttribute('data-panel-state')).toBe(PANEL_STATES.UNAVAILABLE);
-      expect(card.textContent).toContain('Not available');
-      expect(card.textContent).toContain(fieldFor(platform).reason);
-      expect(card.querySelectorAll('a')).toHaveLength(0);
-      expect(card.textContent).not.toMatch(SIZE_SHAPED);
-      expect(card.textContent).not.toMatch(/\b0\b/);
+      const declared = artifactForPlatform(platform);
+
+      expect(card.getAttribute('data-panel-state')).toBe(PANEL_STATES.READY);
+      expect(card.textContent).toContain(fieldFor(platform).label);
+
+      const link = downloadLinkIn(card);
+      expect(link, `no download link for ${platform} on the landing page`).toBeDefined();
+      expect(link.getAttribute('href')).toBe(declared.url);
+      expect(card.textContent).toContain(formatArtifactSize(declared.bytes));
+      expect(card.textContent).toContain(declared.firstRun);
     }
   });
 
-  it('renders no installer link and no download attribute, and issues no request', () => {
+  it('issues no request, and keeps the web platform card', () => {
     const { container } = renderSection();
 
-    for (const anchor of container.querySelectorAll('a[href]')) {
-      const href = anchor.getAttribute('href');
-      expect(href, `${href} points into releases/`).not.toContain('releases');
-      expect(href).not.toMatch(INSTALLER_HREF);
-    }
-    expect(container.querySelectorAll('[download]')).toHaveLength(0);
     expect(requested).toEqual([]);
-
-    // The web platform card is untouched.
     expect(
       [...container.querySelectorAll('a[href]')].some((a) => a.getAttribute('href') === '/app'),
     ).toBe(true);
@@ -323,29 +386,70 @@ describe('the landing download section states the same four reasons', () => {
     expect(container.textContent).not.toContain('84.2 MB');
     expect(container.textContent).not.toContain('78.5 MB');
   });
+
+  it('links the release notes, so the checksums are verifiable off-page', () => {
+    const { container } = renderSection();
+    const notes = [...container.querySelectorAll('a[href]')].map((a) => a.getAttribute('href'));
+    expect(notes).toContain(DESKTOP_RELEASE.notesUrl);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// 5. The renderer reads the declaration rather than holding copy of its own
+// 5. The renderer, and the withdrawal path that must still work
 // ---------------------------------------------------------------------------
 
 describe('PlatformArtifact', () => {
-  it('renders the declared reason verbatim, for every platform', () => {
+  it('renders the declared label for every platform', () => {
     for (const { field } of PLATFORMS) {
       const { container } = render(<PlatformArtifact platform={field} />);
-      const card = cardFor(container, field);
-
-      expect(card.textContent).toContain(fieldFor(field).reason);
-      expect(card.textContent).toContain(fieldFor(field).label);
+      expect(cardFor(container, field).textContent).toContain(fieldFor(field).label);
       cleanup();
     }
   });
 
-  it('renders nothing for a platform that is not declared', () => {
-    // Rather than an unexplained card: the reason lives in the declaration, and `ds/Panel`
-    // may not be `unavailable` without one.
+  it('renders nothing for a platform that is not declared at all', () => {
     const { container } = render(<PlatformArtifact platform="solaris" />);
     expect(container.innerHTML).toBe('');
     expect(requested).toEqual([]);
+  });
+});
+
+describe('a platform with no published artifact still reports its reason', () => {
+  // All four are published today, so the fallback cannot be observed with real data. It is
+  // the guarantee that protects the NEXT platform without a build, so it is exercised by
+  // removing one from the published table.
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('renders the not-available marker, the declared reason, and no link', async () => {
+    vi.doMock('../../../src/design/desktopReleases', async () => {
+      const real = await vi.importActual('../../../src/design/desktopReleases');
+      return {
+        ...real,
+        // macOS unpublished; the other three untouched.
+        artifactForPlatform: (platform) =>
+          (platform === 'macos' ? null : real.artifactForPlatform(platform)),
+      };
+    });
+
+    const { PlatformArtifact: Subject } = await import(
+      '../../../src/components/download/PlatformArtifact'
+    );
+
+    const { container } = render(<Subject platform="macos" />);
+    const card = cardFor(container, 'macos');
+
+    expect(card.getAttribute('data-panel-state')).toBe(PANEL_STATES.UNAVAILABLE);
+    expect(card.textContent).toContain('Not available');
+    expect(card.textContent).toContain(fieldFor('macos').reason);
+    // Requirement 3.7: the marker carries no link, no size, no checksum and no `0`.
+    expect(card.querySelectorAll('a')).toHaveLength(0);
+    expect(card.querySelectorAll('[download]')).toHaveLength(0);
+    expect(card.textContent).not.toMatch(/sha-?256/i);
+    expect(card.textContent).not.toMatch(/\b0\b/);
+    expect(requested).toEqual([]);
+
+    vi.doUnmock('../../../src/design/desktopReleases');
   });
 });

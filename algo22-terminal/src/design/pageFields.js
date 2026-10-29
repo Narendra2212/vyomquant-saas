@@ -1833,19 +1833,27 @@ const SIGNAL_TRACE_FIELDS = [
  * same convention: `VERDICT.UNAVAILABLE` with a reason, rendered by `ds/Panel`'s
  * `unavailable` state, which `usePanelState` reaches WITHOUT issuing a request.
  *
- * WHY 403 AND NOT 404, AND WHY IT WILL NOT HEAL ON ITS OWN
- * -------------------------------------------------------
+ * WHY 403 AND NOT 404, AND HOW IT WAS ACTUALLY RESOLVED
+ * -----------------------------------------------------
  * CI's `dist/` contains no `releases/` directory, and `aws s3 sync dist/ --delete` therefore
- * *deletes* the `/releases/` prefix from the bucket on every deploy. The real 112 MB Windows
- * installer lives at `algo22-terminal/releases/`, a SIBLING of `public/` that Vite never
- * copies, so it never enters `dist/` and never survives a sync. Publishing was considered and
- * rejected: it means either committing 112 MB to the repository or adding an upload step
- * outside the `dist/` sync, and the mac and linux builds do not exist at all.
+ * *deletes* the `/releases/` prefix from the bucket on every deploy. The 112 MB Windows
+ * installer then in the tree lived at `algo22-terminal/releases/`, a SIBLING of `public/` that
+ * Vite never copies, so it never entered `dist/` and never survived a sync.
  *
- * `absence: 'unreported'` therefore reads, for these four, as "nothing published carries it".
- * It is permanent in this module's sense — no backend change resolves it — and restoring a
- * platform is additive rather than a code change to a page: produce the artifact, upload it,
- * and flip that one entry's `verdict` here. The page reads the verdict; it holds no URL.
+ * THE FOUR ARTIFACTS ARE NOW PUBLISHED, AND NOT THROUGH THIS TABLE. Hosting them in the
+ * frontend bucket was rejected for the reason above — the `--delete` sync is hostile to any
+ * prefix `dist/` does not contain — so they are published as GitHub release `desktop-v0.1.0`,
+ * built by `07-desktop-build.yml` on all three runners. The published url, exact byte count
+ * and SHA-256 of each live in `design/desktopReleases.js`, NOT here, because `entry()`'s own
+ * contract makes this table the wrong home: `path` must be non-null exactly when the verdict
+ * is `available`, and a static file has no response path to name.
+ *
+ * SO THESE FOUR ENTRIES ARE NOW THE FALLBACK, AND THEY ARE STILL LOAD-BEARING. They supply the
+ * rendered `label` in both states, and the `reason` for any platform that has no published
+ * build. `PlatformArtifact` prefers `desktopReleases` and falls back here, so the next
+ * platform without an artifact keeps the not-available marker with its reason and no page
+ * changes. `absence: 'unreported'` continues to read, in that fallback, as "nothing published
+ * carries it".
  *
  * `field` IS THE PLATFORM KEY THE PAGE ALREADY USES
  * ------------------------------------------------
@@ -1876,11 +1884,13 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No Windows installer is published for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'The one platform whose artifact EXISTS: `algo22-terminal/releases/windows/'
-      + 'VyomQuant-Setup-0.1.0.exe`, 112,117,309 bytes. It is a sibling of `public/`, so Vite '
-      + 'never copies it into `dist/` and the S3 sync never publishes it. The reason therefore '
-      + 'says "not published" and not "not built" — the two are different facts and a trader '
-      + 'reading the second would be told something untrue.',
+    note: 'PUBLISHED as `VyomQuant_0.1.0_x64-setup.exe` in release `desktop-v0.1.0`; the live '
+      + 'url, byte count and SHA-256 are in `design/desktopReleases.js` and this reason is now '
+      + 'only the fallback. History: a 112,117,309-byte `releases/windows/'
+      + 'VyomQuant-Setup-0.1.0.exe` sat in the tree as a sibling of `public/`, so Vite never '
+      + 'copied it into `dist/` and the S3 sync never published it. The current artifact is a '
+      + 'Tauri NSIS installer at 2.4 MiB rather than that Electron build — Tauri uses the OS '
+      + 'webview instead of shipping a browser engine, which is why it is ~44x smaller.',
   }),
   entry({
     page: PAGES.DOWNLOAD,
@@ -1893,8 +1903,12 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No macOS build has been produced for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'No universal DMG exists anywhere in the tree. The page previously advertised it at '
-      + '78.5 MB with a SHA-256 that is the hash of the empty string.',
+    note: 'PUBLISHED as `VyomQuant_0.1.0_universal.dmg` (arm64 + x86_64) in release '
+      + '`desktop-v0.1.0`; url, byte count and SHA-256 in `design/desktopReleases.js`. It is '
+      + 'UNNOTARIZED, which is a harder problem than unsigned: Gatekeeper refuses the first '
+      + 'launch outright, so the card carries the right-click-Open step. History: no DMG '
+      + 'existed anywhere in the tree and the page advertised one at 78.5 MB with a SHA-256 '
+      + 'that is the hash of the EMPTY STRING.',
   }),
   entry({
     page: PAGES.DOWNLOAD,
@@ -1907,9 +1921,14 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No Linux AppImage has been produced for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'No AppImage exists. A 64-byte text file named `.AppImage` sat under '
-      + '`public/releases/` and was publishable; task 4.2 removed it and added the deploy-time '
-      + 'size gate that rejects its return.',
+    note: 'PUBLISHED as `VyomQuant_0.1.0_amd64.AppImage` in release `desktop-v0.1.0`; url, '
+      + 'byte count and SHA-256 in `design/desktopReleases.js`. Built on ubuntu-22.04 on '
+      + 'purpose, so it does not demand a newer glibc than older desktops carry. At 78.8 MiB '
+      + 'it is much larger than the other bundles because an AppImage carries its own GTK and '
+      + 'WebKit rather than using the ones already on the host. History: a 64-byte TEXT file '
+      + 'named `.AppImage` '
+      + 'sat under `public/releases/` and was publishable; task 4.2 removed it and added the '
+      + 'deploy-time size gate that rejects its return.',
   }),
   entry({
     page: PAGES.DOWNLOAD,
@@ -1921,8 +1940,12 @@ const DOWNLOAD_FIELDS = [
     verdict: VERDICT.UNAVAILABLE,
     absence: ABSENCE.UNREPORTED,
     reason: 'No Debian package has been produced for this release, so there is nothing to '
-      + 'download here.' + RUN_IN_BROWSER,
-    note: 'No .deb exists. Same provenance as the AppImage: a 67-byte placeholder on a '
+    note: 'PUBLISHED as `VyomQuant_0.1.0_amd64.deb` in release `desktop-v0.1.0`; url, byte '
+      + 'count and SHA-256 in `design/desktopReleases.js`. An `.rpm` is published in the same '
+      + 'release but has no card here, because this table declares the four platforms the two '
+      + 'surfaces render and adding a fifth is a surface decision rather than a packaging one. '
+      + 'History: same provenance as the AppImage — a 67-byte placeholder on a publishable '
+      + 'path, removed by task 4.2.', AppImage: a 67-byte placeholder on a '
       + 'publishable path, removed by task 4.2.',
   }),
 ];

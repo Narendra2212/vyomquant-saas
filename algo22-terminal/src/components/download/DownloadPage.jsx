@@ -1,23 +1,28 @@
 /**
  * /download — production-launch-hardening task 4.3.
  *
- * WHAT CHANGED, AND WHY THERE IS NO URL IN THIS FILE ANY MORE
- * ---------------------------------------------------------
- * This page advertised four installers — with four hardcoded sizes (84.2 / 78.5 / 75.4 /
+ * WHY THERE IS STILL NO URL IN THIS FILE
+ * --------------------------------------
+ * This page once advertised four installers — with four hardcoded sizes (84.2 / 78.5 / 75.4 /
  * 68.2 MB), four SHA-256 strings and a "Code Signed / Verified Publisher / Production Build"
- * row — and served none of them. All four URLs return 403: CI's `dist/` carries no
- * `releases/` directory and `aws s3 sync dist/ --delete` deletes that prefix from the bucket
- * on every deploy. A size or a checksum for a file that does not exist is a fabricated figure
- * on a rendered surface, so the whole advertisement is withdrawn rather than relabelled.
+ * row — and served none of them. All four URLs returned 403: CI's `dist/` carried no
+ * `releases/` directory and `aws s3 sync dist/ --delete` deleted that prefix from the bucket
+ * on every deploy. Task 4.3 withdrew the advertisement rather than relabel it.
  *
- * The four cards now render through the SAME convention every absent figure in this app uses:
- * `design/pageFields` declares each platform `VERDICT.UNAVAILABLE` with a reason,
- * `usePanelState` short-circuits to `unavailable` on that reason — issuing no request at all
- * (Requirement 19.3) — and `ds/Panel` renders the not-available marker carrying it. No new
- * primitive, no new copy path, no new state.
+ * The artifacts are now genuinely published, as GitHub release `desktop-v0.1.0`. The cards
+ * still render through a DECLARATION rather than from copy in this file:
+ * `design/desktopReleases.js` carries each published artifact's url, exact byte count and
+ * SHA-256; `design/pageFields.js` still carries the label and the withdrawal reason for any
+ * platform that has no published build. `PlatformArtifact` prefers the first and falls back to
+ * the second, so adding or retiring a platform is one edit in a declaration and none here.
  *
- * Restoring a platform is one edit in `pageFields.js` once its artifact is actually
- * published; nothing here needs to change for that, because nothing here holds a URL.
+ * That is the point of the arrangement: this file cannot state a size, a checksum or a URL,
+ * so it cannot state one that is wrong. Every figure it used to invent is now derived from a
+ * byte count that was measured against the published file.
+ *
+ * The builds are UNSIGNED and the macOS DMG is UNNOTARIZED. Each card renders its own
+ * first-run step from the declaration, because Gatekeeper refuses an unnotarized app outright
+ * and a user given no instruction concludes the download is broken.
  */
 
 import React, { useState, useEffect } from 'react'
@@ -25,19 +30,23 @@ import { Link } from 'react-router-dom'
 import { Cpu, HardDrive, MemoryStick, Wifi, ArrowRight, Calendar, GitBranch, FileText, Monitor, Globe, Sparkles } from 'lucide-react'
 import Navbar from '../landing/Navbar'
 import Footer from '../landing/Footer'
+import { DESKTOP_RELEASE } from '../../design/desktopReleases'
 import { PlatformArtifact } from './PlatformArtifact'
 
+// Read from the declaration rather than restated, so the version in the header and the
+// version on the four cards cannot disagree.
 const RELEASE_CONFIG = {
-  version: 'v0.1.0',
-  buildDate: '2026-07-24',
-  publisher: 'Aerora Dynamics Private Limited'
+  version: `v${DESKTOP_RELEASE.version}`,
+  buildDate: DESKTOP_RELEASE.publishedOn,
+  publisher: DESKTOP_RELEASE.publisher
 }
 
 const RELEASE_NOTES = [
   // The first line used to read "Initial production desktop release for Windows, macOS, and
-  // Linux". No installer is published for any of the three, so it claimed a release that did
-  // not reach a user — the same fabrication as the sizes, in the next column.
-  { version: 'v0.1.0', date: '2026-07-24', changes: ['Initial release, on the web platform. No desktop installer is published yet — see the platform card above', 'Integrated Tauri & Electron dual runtime for high-performance execution', 'Direct connection to AWS ECS production backend cluster', 'Supabase authentication & encrypted local security vault integration', 'Real-time WebSocket market feeds and interactive charts'] }
+  // Linux" while no installer was published for any of the three — the same fabrication as
+  // the sizes, in the next column. All three are now published and verified, so the line
+  // states that, together with the one thing CI does NOT establish about them.
+  { version: `v${DESKTOP_RELEASE.version}`, date: DESKTOP_RELEASE.publishedOn, changes: ['Desktop builds published for Windows (x64), macOS (universal) and Linux (AppImage, DEB, RPM)', 'Unsigned and unnotarized: CI compiles and bundles these but does not install or launch them, so treat this as a beta', 'Every published file was magic-byte identified and re-fetched anonymously to confirm it serves, before any URL was advertised', 'Built on Tauri 2 — the bundles use your OS webview rather than shipping a browser engine', 'Direct connection to the AWS ECS production backend cluster', 'Supabase authentication & encrypted local security vault integration', 'Real-time WebSocket market feeds and interactive charts'] }
 ]
 
 const SYSTEM_REQUIREMENTS = {
@@ -71,14 +80,18 @@ export default function DownloadPage() {
     }
   }, [])
 
-  // No `handleDownload`. There is nothing to hand a click to, and a control that starts a
-  // request which can only 403 is exactly the non-functional control Requirement 19.4 forbids.
-  // There is no download-tracking call here either, for the same reason: an artifact
-  // nobody can fetch has no download to count. DEPLOY-05 has since REMOVED the
-  // `downloadAnalyticsApi` module this comment used to name - it wrote to a
-  // `download_analytics` table that was declared in no migration and had no writer, and
-  // the admin dashboard's read of it threw a missing-relation error at every admin who
-  // opened that tab.
+  // STILL no `handleDownload`, even now that the artifacts are published. Each card renders a
+  // plain anchor carrying `href` and `download`, so the browser performs the transfer and the
+  // user's own click starts it. A JS handler here would add a code path between the button and
+  // the file for no gain, and it is what the withdrawn version used to click on the user's
+  // behalf against a URL that could only 403.
+  //
+  // There is no download-tracking call either. DEPLOY-05 REMOVED the `downloadAnalyticsApi`
+  // module this comment used to name - it wrote to a `download_analytics` table that was
+  // declared in no migration and had no writer, and the admin dashboard's read of it threw a
+  // missing-relation error at every admin who opened that tab. Counting downloads needs that
+  // table to exist first; GitHub's own per-asset download counts are available in the
+  // meantime.
 
   const activeReqs = SYSTEM_REQUIREMENTS[activePlatform.startsWith('linux') ? 'linux' : activePlatform] || SYSTEM_REQUIREMENTS.windows
 
