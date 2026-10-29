@@ -50,6 +50,14 @@ USAGE
     python scripts/check_production_privileges.py              # read-only, exit 1 on drift
     python scripts/check_production_privileges.py --json       # machine-readable
     python scripts/check_production_privileges.py --verbose    # also print the clean state
+    python scripts/check_production_privileges.py --advisory   # report extra grants
+                                                               # instead of failing
+
+Invariant 3 (no `authenticated` write beyond a recorded path-(A) need) is BLOCKING as of
+the SEC-22 drain, which took the least-privilege backlog from 106 grants to 0. It used to
+be advisory; see INVARIANT 3 IS NOW BLOCKING below for why it could not be before, and
+what changed. `--advisory` restores the old reporting behaviour for diagnosing an
+environment, and is not for landing a change.
 
 Reads the DSN from AWS Secrets Manager (``vyomquant/production/database_url``) and NEVER
 prints it. Requires ``secretsmanager:GetSecretValue``. Catalog SELECTs only -- this script
@@ -192,6 +200,88 @@ PATH_A_ALLOWLIST: dict[str, dict] = {
                "async call with access_token=None, so it is very likely already "
                "non-functional. Grant retained for the same reason as copilot.",
     },
+    # ─────────────────────────────────────────────────────────────────────────────
+    # THE paper_* FAMILY. Added after measuring, not after grepping, and this is the
+    # reason the earlier passes could not place them: every write lives in
+    # backend/paper/paper_repository.py, and every function there takes its client as a
+    # PARAMETER (`supabase: Any`, the first argument of all ~40 of them). The repository
+    # is called from two directions with two different roles --
+    #
+    #   routers/paper_trading.py::_persistence(user) returns
+    #       get_paper_trading_service().persistence_client(user["access_token"])
+    #   i.e. a client carrying the caller's JWT, so auth.uid() resolves and these
+    #   policies apply to the identity that made the request. THAT is path (A).
+    #
+    #   the session loop passes get_service_supabase() to the same functions, which is
+    #   path (B) and is why one of them documents "must be called with a SERVICE-ROLE
+    #   client, and never with a request-scoped one".
+    #
+    # A static reader therefore sees both roles flowing into one function and can resolve
+    # neither, which is exactly what it reported. The route half is a real path-(A) need.
+    # ─────────────────────────────────────────────────────────────────────────────
+    "paper_accounts": {
+        "authenticated": {"INSERT", "UPDATE"},
+        "why": "backend/paper/paper_repository.py:1378 get_or_create_account, reached "
+               "from routers/paper_trading.py via _persistence(user)",
+    },
+    "paper_orders": {
+        "authenticated": {"INSERT", "UPDATE"},
+        "why": "paper_repository.py:2153 insert_order, :2174 update_order",
+    },
+    "paper_positions": {
+        "authenticated": {"INSERT", "UPDATE"},
+        "why": "paper_repository.py:2440 upsert_position",
+    },
+    "paper_fills": {
+        "authenticated": {"INSERT"},
+        "why": "paper_repository.py:2328 insert_fill. INSERT only -- migration 009's own "
+               "comment pins paper_fills as append-only",
+    },
+    "paper_trades": {
+        "authenticated": {"INSERT"},
+        "why": "paper_repository.py:2551 insert_trade",
+    },
+    "paper_balance_events": {
+        "authenticated": {"INSERT"},
+        "why": "paper_repository.py:2499 insert_balance_event",
+    },
+    "paper_equity_snapshots": {
+        "authenticated": {"INSERT"},
+        "why": "paper_repository.py:2612 insert_equity_snapshot",
+    },
+    "paper_metrics": {
+        "authenticated": {"INSERT", "UPDATE"},
+        "why": "paper_repository.py:2931 insert_metrics",
+    },
+    "paper_sessions": {
+        "authenticated": {"INSERT", "UPDATE"},
+        "why": "paper_repository.py:4043 insert_session, :4144 touch_session_heartbeat",
+    },
+    "paper_events": {
+        "authenticated": {"INSERT"},
+        "why": "paper_repository.py:3869 insert_session_event",
+    },
+    "paper_market_events": {
+        "authenticated": {"INSERT"},
+        "why": "paper_repository.py:3629 insert_market_event",
+    },
+    "block_registry_snapshots": {
+        "authenticated": {"INSERT"},
+        "why": "backend/registry_snapshot_service.py:440 write_registry_snapshot, "
+               "reached from strategy_service.py:1187 create_version -- which is itself "
+               "a confirmed path-(A) writer of strategies and strategy_versions. That "
+               "module's docstring states it is called 'with the request-scoped client "
+               "it already holds'.",
+    },
+    "order_lifecycle_transitions": {
+        "authenticated": {"INSERT"},
+        "why": "backend/signal_service.py:3553 _insert_transition_row, reached from "
+               "anchor_generated_transition and apply_order_lifecycle_state at six call "
+               "sites in that module, with the same client that writes `signals`. "
+               "INSERT ONLY, deliberately: an INSERT is the only write operation anywhere "
+               "in the codebase for this table, and DELETE/UPDATE on a lifecycle audit "
+               "trail would let a signed-in user rewrite the record of what an order did.",
+    },
     "waitlist": {
         "authenticated": {"UPDATE", "DELETE"},
         "why": "The only table the browser writes directly with the anon key: "
@@ -224,29 +314,47 @@ PATH_A_ALLOWLIST: dict[str, dict] = {
 ANON_WRITE_ALLOWLIST: dict[str, set[str]] = {}
 
 # ─────────────────────────────────────────────────────────────────────────────────
-# WHY INVARIANT 3 IS ADVISORY AND NOT BLOCKING.
+# INVARIANT 3 IS NOW BLOCKING. THE BACKLOG IS DRAINED.
 #
-# `authenticated` still holds writes on roughly 45 tables that no path-(A) code appears to
-# touch. Removing them is correct least-privilege work. It is NOT done, and this check does
-# not fail on it, for a measured reason:
+# It used to be advisory, for a measured reason worth keeping: deriving the path-(A)
+# inventory from source proved unreliable three times in a row. The routers wrap the two
+# client factories in local helpers (`_sb`, `_get_supabase`, `_client`), so the call sites
+# do not grep as factory names. Two separate full passes produced a list missing
+# `strategies` DELETE (backend/strategy_service.py:2502), `strategy_backtests`
+# (backend/backtest_service.py:776), `training_jobs` and `training_governance_decisions`,
+# and `model_versions`. Each omission, had it driven a REVOKE, would have taken a working
+# production feature offline. So an EXTRA privilege was reported as a backlog rather than
+# failed on.
 #
-# Deriving the path-(A) inventory from source proved unreliable three times in a row. The
-# routers wrap the two client factories in local helpers (`_sb`, `_get_supabase`, `_client`),
-# so the call sites do not grep as factory names. Two separate full passes over the backend
-# produced a list that was missing `strategies` DELETE (backend/strategy_service.py:2502 --
-# strategy deletion), `strategy_backtests` (backend/backtest_service.py:776),
-# `training_jobs` and `training_governance_decisions` (backend/training_status.py:573) and
-# `model_versions` (backend/model_versioning.py:1963). Each omission, had it driven a
-# REVOKE, would have taken a working production feature offline.
+# WHAT CHANGED. The inventory is no longer derived by grep.
+# `scripts/sec22_authenticated_write_inventory.py` resolves which database role each
+# Supabase client maps to and propagates it through the local helpers, FastAPI
+# `Depends(...)` parameters, module-level table-name constants and clients passed as
+# ordinary arguments. Its negative control is those four missed call sites: it must
+# rediscover all of them or it exits non-zero, and
+# `tests/test_sec22_authenticated_write_inventory.py` pins that. So the list that drove
+# the drain is checkable, and stays checkable.
 #
-# So the asymmetry is deliberate: a MISSING privilege that path-(A) code needs is a broken
-# feature and fails this check; an EXTRA privilege is a defence-in-depth gap and is
-# reported as a backlog. The extra grants are not an open door -- every one of these tables
-# has RLS enabled with per-user policies, and `anon` now holds no write at all, so reaching
-# them requires a valid signed-in JWT and confines the caller to their own rows.
+# THE DRAIN, 106 grants to 0, in six tranches, each requiring TWO independent arguments --
+# no path-(A) writer in source, AND the database itself showing the grant could not be
+# used (RLS enabled with no policy admitting that command, or the writer resolving to
+# service_role). Where the two disagreed, the table was excluded and reported, which is
+# what halved the first candidate list. 51 grants were revoked across 24 tables; the other
+# 55 turned out to be GENUINE NEEDS the allowlist had simply never recorded -- most of the
+# paper_* family, whose writes all live in one repository that takes its client as a
+# parameter and is called with both roles from different directions. Documenting a real
+# need shrinks this backlog just as legitimately as revoking an unreal one, and conflating
+# the two is what made the number look like 106 tables of over-grant.
 #
-# To drain the backlog: revoke ONE table, run the feature's integration test, keep it.
-# Then pass --strict here so the drained table can never regress. Do not sweep.
+# SO THE ASYMMETRY REMAINS, with both sides now blocking: a MISSING privilege that
+# path-(A) code needs is a broken feature, and an EXTRA privilege is a least-privilege
+# regression. Either fails this check.
+#
+# TO ADD A PRIVILEGE: put it in PATH_A_ALLOWLIST with the call site that needs it, the way
+# every entry above does. An entry with no `why` naming real code is how a hole gets opened
+# by a checklist rather than by a decision -- see the ANON_WRITE_ALLOWLIST note for the one
+# time that nearly happened here. `--advisory` exists for diagnosing a broken environment,
+# not for landing a change.
 # ─────────────────────────────────────────────────────────────────────────────────
 
 #: Platform-owned tables the backend must keep writing as service_role.
@@ -279,11 +387,20 @@ def main() -> int:  # noqa: C901 - a checklist; splitting it would hide the inva
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--verbose", action="store_true", help="also print the clean state")
+    # The backlog is drained, so failing on an extra grant is now the DEFAULT. `--strict`
+    # is kept as an accepted no-op because the ledger, the breach runbook and
+    # sec22_plan_privilege_drain.py all name it, and a flag that silently vanishes turns
+    # a documented command into an argparse error.
     parser.add_argument(
         "--strict", action="store_true",
-        help="also fail on the least-privilege backlog (extra `authenticated` write "
-             "grants beyond known path-(A) needs). Turn this on once the backlog is "
-             "drained table by table; see WHY INVARIANT 3 IS ADVISORY, below.",
+        help="accepted and ignored: this is now the default. Kept so documented "
+             "commands that pass it keep working.",
+    )
+    parser.add_argument(
+        "--advisory", action="store_true",
+        help="report extra `authenticated` write grants instead of failing on them. For "
+             "diagnosing an environment, NOT for landing a change -- the least-privilege "
+             "backlog was drained to zero and this check is what keeps it there.",
     )
     args = parser.parse_args()
 
@@ -352,7 +469,7 @@ def main() -> int:  # noqa: C901 - a checklist; splitting it would hide the inva
         # unless --strict.
         for priv in sorted(held - allowed):
             msg = f"authenticated holds {priv} on public.{t} beyond any known path-(A) need"
-            if args.strict:
+            if not args.advisory:
                 flag(3, msg)
             else:
                 backlog.append(msg)
@@ -452,7 +569,7 @@ def main() -> int:  # noqa: C901 - a checklist; splitting it would hide the inva
                   "needs a valid\n    signed-in JWT and confines the caller to their own "
                   "rows.")
             print("    Drain one table at a time, each with its feature test; then "
-                  "run with --strict.")
+                  "drop --advisory to make them blocking again.")
             if args.verbose:
                 for b in backlog:
                     print(f"       {b}")
