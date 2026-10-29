@@ -21,6 +21,7 @@ import axios from 'axios';
 import * as Sentry from "@sentry/react";
 import { CONFIG } from './config.js';
 import { supabase } from './supabase.js';
+import { carriesLiveSession } from './auth/sessionEvents.js';
 import { resetGlobalDedupCache } from './utils/eventDedupCache.js';
 
 /**
@@ -578,7 +579,11 @@ export const logout = async () => {
 
 // Listen for Supabase token refreshes and propagate them
 supabase.auth.onAuthStateChange((event, session) => {
-  if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+  // `carriesLiveSession` rather than `'TOKEN_REFRESHED' || 'SIGNED_IN'`: that pair omitted
+  // `INITIAL_SESSION`, which is what supabase-js emits when it restores a persisted
+  // session, so every request this client made for a returning user went out unauthenticated
+  // until the first token refresh happened to fire. See `auth/sessionEvents.js`.
+  if (carriesLiveSession(event)) {
     if (session?.access_token) {
       sessionStorage.setItem("token", session.access_token);
       // Propagate to websocket layer if client is available
