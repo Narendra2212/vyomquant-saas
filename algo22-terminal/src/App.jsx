@@ -5,6 +5,7 @@ import { AppStateProvider } from './AppState';
 import wsClient from './websocketClient';
 import { Lock } from "lucide-react";
 import { supabase } from './supabase';
+import { carriesLiveSession } from './auth/sessionEvents';
 import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
@@ -543,7 +544,22 @@ function PasswordRecoveryHandler() {
     // Subscribe to onAuthStateChange for live session events
     if (supabase?.auth?.onAuthStateChange) {
       const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-        if (session?.access_token && (sessionStorage.getItem("token") || event === "SIGNED_IN")) {
+        /*
+          `carriesLiveSession(event)` rather than a literal. This condition used to read
+          `sessionStorage.getItem("token") || event === "SIGNED_IN"`, which admitted a
+          restored session only if THIS TAB had already mirrored one. supabase-js emits
+          `INITIAL_SESSION` when it restores a persisted session — and the client is
+          configured `persistSession: true` — so a returning user satisfied neither arm and
+          had a live session this app could not see.
+
+          That left the two authorities disagreeing: `AuthRedirect` above reads
+          `supabase.auth.getSession()` and navigates such a user INTO the app, while
+          `AuthGuard` reads `getEffectiveToken()`, finds `sessionStorage` empty, and bounces
+          them straight back out. It also left the realtime layer unable to authenticate at
+          all, because `websocketClient.readSessionToken()` reads this same key.
+          See `auth/sessionEvents.js`.
+        */
+        if (session?.access_token && carriesLiveSession(event)) {
           sessionStorage.setItem("token", session.access_token);
         } else if (event === "SIGNED_OUT") {
           sessionStorage.removeItem("token");
