@@ -763,17 +763,59 @@ describe('Landing_Surface — the withdrawn claims stay withdrawn', () => {
     }
   });
 
-  it('links into no withdrawn installer, from any section', () => {
-    // Eleven sites advertised these across `Hero`, `Navbar`, `FinalCTA` and `Footer`, while
-    // `DownloadSection` said on the same page that the builds are not published.
+  it('links no installer that is not a declared, published artifact', () => {
+    /*
+     * NARROWED, DELIBERATELY, AND NOT WEAKENED.
+     *
+     * This test used to assert that NO href anywhere contained the substring "releases",
+     * because eleven sites across `Hero`, `Navbar`, `FinalCTA` and `Footer` advertised
+     * same-origin `/releases/...` installers while `DownloadSection` said on the same page
+     * that nothing was published. Those URLs returned 403 and structurally always would:
+     * CI's `dist/` carries no `releases/` directory, so `aws s3 sync dist/ --delete` removes
+     * that prefix from the bucket on every deploy.
+     *
+     * The artifacts are now published as GitHub release `desktop-v0.1.0`, and a GitHub asset
+     * URL necessarily contains `/releases/download/`. A bare substring check would therefore
+     * reject the one link that works, so the assertion is restated as what it was always
+     * really protecting:
+     *
+     *   1. no SAME-ORIGIN `/releases/...` link, which is the dead path;
+     *   2. every `download` anchor points at a URL some declaration actually publishes, so a
+     *      download attribute cannot appear on an artifact nobody declared;
+     *   3. no deep-link to a per-platform anchor that does not exist.
+     */
     const { container } = mountPage();
+
+    const publishedUrls = new Set(
+      ['windows', 'macos', 'linuxAppImage', 'linuxDeb']
+        .map((p) => artifactForPlatform(p))
+        .filter(Boolean)
+        .map((a) => a.url),
+    );
+    expect(publishedUrls.size).toBeGreaterThan(0);
 
     for (const anchor of container.querySelectorAll('a[href]')) {
       const href = anchor.getAttribute('href');
-      expect(href, `${href} points into releases/`).not.toContain('releases');
+
+      // (1) The dead same-origin prefix, in either spelling.
+      expect(href, `${href} points at the same-origin /releases/ prefix, which 403s`)
+        .not.toMatch(/^\/releases\//);
+      expect(href, `${href} points at the same-origin /releases/ prefix, which 403s`)
+        .not.toMatch(/\/\/(?:www\.|app\.)?vyomquant\.in\/releases\//);
+
+      // (3) A per-platform fragment nothing on the page defines.
       expect(href, `${href} deep-links a withdrawn artifact`).not.toMatch(/#(windows|macos)$/);
     }
-    expect(container.querySelectorAll('[download]')).toHaveLength(0);
+
+    // (2) Every download control is a declared artifact — no more, no fewer.
+    const downloadHrefs = [...container.querySelectorAll('a[download]')].map((a) =>
+      a.getAttribute('href'),
+    );
+    expect(downloadHrefs.length).toBe(publishedUrls.size);
+    for (const href of downloadHrefs) {
+      expect(publishedUrls.has(href), `${href} is offered for download but declared nowhere`)
+        .toBe(true);
+    }
   });
 
   it('resolves every in-page scroll target it offers', () => {
