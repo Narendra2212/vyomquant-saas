@@ -1,6 +1,0 @@
-START=2026-10-09T12:04:45.8084970+05:30
-DSN=postgresql://postgres:@127.0.0.1:58620/postgres
-ARGS=tests\test_cross_tenant_read_sweep_postgres.py
-......                                                                   [100%]
-6 passed in 10.48s
-EXITCODE=0

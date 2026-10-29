@@ -1,6 +1,0 @@
-assert response.status_code == 200
-E   assert 422 == 200
-E    +  where 422 = <Response [422 Unprocessable Entity]>.status_code
-FAILED tests/test_task_5_3_rename_strategy.py::TestTheRouteIsReachableAndNotShadowed::test_the_edit_route_still_works
-1 failed, 82 passed in 14.80s
-NONCE_END=RG6A

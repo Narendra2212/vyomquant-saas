@@ -399,3 +399,17 @@ staging/pgdata*/
 staging/redis/
 staging/*.log
 staging/pg_dsn.txt
+
+# HY-01: pytest junit-xml reports. 24 of these were committed -- 39.5 MB, every one a
+# `<testsuites name="pytest tests">` dump from a historical full-regression run
+# (fullreg_FULLREG_P7..P10, fullreg_FINAL, p11b*_diag/*). A test report is output: it
+# describes a run that already happened, on a tree that has since moved on, and nothing in
+# this repository reads one.
+#
+# Only the .xml shape is ignored wholesale, deliberately. A blanket `staging/*.txt` would
+# be wrong: 1159 of the 1176 committed .txt files were likewise unreferenced probe output
+# and were removed, but 17 are cited by name from tests and scripts (sweep_anon.txt,
+# p10exch01_endpoints.txt, p11b22_entry_staged.txt and siblings), so the extension alone
+# does not decide it. Same for .json -- 48 removed, 5 kept, including
+# provisioning_snapshot.json, which DATABASE_PROVISIONING_RUNBOOK.md calls "the artefact".
+staging/*.xml

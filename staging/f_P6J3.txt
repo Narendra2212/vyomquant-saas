@@ -1,5 +1,0 @@
-REPRO_ORDER: 8 failed, 83 passed in 78.90s (0:01:18)
-  E   assert 429 == 409
-  C:\aerora_quant_backend_updated_final1\tests\test_task_6_1_backtest_execute.py:549: assert 429 == 409
-  E   assert 429 == 200
-NONCE_END=P6J3

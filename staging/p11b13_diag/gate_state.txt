@@ -1,3 +1,0 @@
-real-Redis gate: state=run (AERORA_TEST_REDIS_URL=set, remote_allowed=False)
-state=run
-reason=(none)

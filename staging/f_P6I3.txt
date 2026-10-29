@@ -1,2 +1,0 @@
-TARGET_ALONE:  elapsed=21s
-NONCE_END=P6I3

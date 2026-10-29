@@ -1,4 +1,0 @@
-=== REPRO ORDER after the fix (3 polluters + target) ===
-  91 passed in 86.43s (0:01:26)
-=== CONTROL: target alone ===
-NONCE_END=P6I1

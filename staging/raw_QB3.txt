@@ -1,2 +1,0 @@
-compile_exit=0
-NONCE_END=QB3

@@ -1,8 +1,0 @@
-START=2026-10-09T01:05:38.7319977+05:30
-DSN=postgresql://postgres:@127.0.0.1:58620/postgres
-ARGS=tests\test_validation_sweep.py -k clone_strategy or unpublish_strategy
-ERROR: file or directory not found: or
-System.Management.Automation.RemoteException
-
-no tests ran in 0.59s
-EXITCODE=4

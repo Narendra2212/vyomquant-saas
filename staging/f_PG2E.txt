@@ -1,6 +1,0 @@
-outcomes=6209 time=11:27:18 state=ALIVE
-tests/property/test_protected_logic_containment.py::test_trace_and_export_surfaces_contain_no_protected_logic FAILED [  1%]
-tests/test_bandit_sast_gate_is_green.py::test_every_interpolation_into_sql_is_constrained_before_it_gets_there FAILED [  8%]
-tests/test_exchange_safety_fix.py::test_connection_pooling_safety FAILED [ 20%]
-tests/test_no_unused_jwt_library.py::test_nothing_imports_jose 
-NONCE_END=PG2E

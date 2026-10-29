@@ -1,7 +1,0 @@
-staging\raw_P6I3.txt size=15110 mtime=13:30:07
-   ERROR tests/test_task_6_1_backtest_execute.py - MemoryError
-   !!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
-staging\raw_P6I2.txt size=7490 mtime=13:30:07
-   + FullyQualifiedErrorId
-   : NativeCommandError
-NONCE_END=P6I4
