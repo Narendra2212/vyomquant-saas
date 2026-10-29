@@ -1,7 +1,0 @@
-=== BASELINE AT HEAD 074b772a (clean worktree, no remediation) ===
-tests/test_strategy_status_publish.py -> 4 failed, 2 passed in 4.89s
-tests/test_task_6_1_backtest_execute.py -> 33 passed in 10.29s
-tests/test_task_5_3_rename_strategy.py -> 50 passed in 9.92s
-tests/test_task_8_4_runtime_readiness_gate.py -> 1 failed, 56 passed in 11.45s
-tests/test_validation_sweep.py -> 3 failed, 389 passed, 1 skipped in 25.13s
-NONCE_END=WT5B

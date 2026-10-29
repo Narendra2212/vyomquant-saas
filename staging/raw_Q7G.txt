@@ -1,5 +1,0 @@
-compile_exit=0
-ACCOUNTS_TABLE ... METRICS_TABLE   the eight table names, spelled once each
-ACCOUNTS_TABLE = "paper_accounts"
-FILLS_TABLE = "paper_fills"
-NONCE_END=Q7G

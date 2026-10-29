@@ -1,6 +1,0 @@
-START=2026-10-09T12:01:28.7360870+05:30
-DSN=postgresql://postgres:@127.0.0.1:58620/postgres
-ARGS=tests\test_production_security_probe_rolls_back_postgres.py
-....................                                                     [100%]
-20 passed in 8.33s
-EXITCODE=0

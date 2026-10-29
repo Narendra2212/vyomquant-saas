@@ -1,2 +1,0 @@
-DONE=False
-NONCE_END=QH2

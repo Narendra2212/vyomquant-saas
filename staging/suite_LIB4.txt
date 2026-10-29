@@ -1,3 +1,0 @@
-START=2026-10-08T21:16:42.6887590+05:30
-FILES=tests\test_validation_sweep.py tests\property\test_protected_logic_containment.py tests\test_entitlement_matrix.py tests\test_library_route_resolution.py tests\test_library_detail_projection_regression.py tests\test_library_detail_visibility_and_omission.py tests\test_library_schema_contract.py tests\test_marketplace_error_surface.py tests\test_ml_model_path_containment.py tests\test_marketplace_pipeline.py tests\test_ml_node_detection_is_one_vocabulary.py
-EXITCODE=-1073741510

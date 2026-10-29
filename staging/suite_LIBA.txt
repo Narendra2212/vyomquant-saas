@@ -1,6 +1,0 @@
-START=2026-10-09T01:27:01.7800064+05:30
-FILES=tests\test_lib04_a_broken_client_is_503_not_500.py
-...................                                                      [100%]
-19 passed in 4.13s
-EXITCODE=0
-END=2026-10-09T01:27:08.0216351+05:30

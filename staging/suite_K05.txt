@@ -1,7 +1,0 @@
-START=2026-10-09T13:00:07.5768754+05:30
-FILES=tests\test_trade02_kill_switch_fails_closed.py tests\test_live_risk_gate_enforcement.py tests\test_execution_environment_guard.py tests\regression\test_baseline_unchanged.py
-........................................................................ [ 54%]
-............................................................             [100%]
-132 passed in 49.62s
-EXITCODE=0
-END=2026-10-09T13:01:15.2315428+05:30

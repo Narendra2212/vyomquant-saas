@@ -1,2 +1,0 @@
-    with self.open(mode='r', encoding=encoding, errors=errors) as f:
-NONCE_END=FULLREG1

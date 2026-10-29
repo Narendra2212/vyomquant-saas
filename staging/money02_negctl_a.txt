@@ -1,6 +1,0 @@
-E       AssertionError: assert [(2130, 'stri...hook', 'USD')] == []
-E         
-E         Left contains 3 more items, first extra item: (2130, 'stripe_webhook', 'USD')
-E         Use -v to get more diff
-FAILED tests/test_money02_billing_amount_precision.py::test_the_currency_detector_reports_an_unconverted_pre_fix_module
-1 failed, 48 passed, 8 warnings in 20.19s

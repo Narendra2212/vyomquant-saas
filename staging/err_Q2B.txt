@@ -1,1 +1,0 @@
-A paper fill was refused by an invariant: the fill of 500.00000000 BTC-USDT at 1.00050000 with fee 0.50 would drive available_balance to -400.7500000000 (Requirement 18.4)

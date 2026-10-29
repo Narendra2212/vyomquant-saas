@@ -1,6 +1,0 @@
-START=2026-10-09T00:04:10.9331110+05:30
-FILES=tests\test_orm_models_match_provisioned_schema.py tests\property\test_order_idempotence_under_retry.py
-sssss...                                                                 [100%]
-3 passed, 5 skipped in 7.63s
-EXITCODE=0
-END=2026-10-09T00:04:21.5029642+05:30

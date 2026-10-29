@@ -1,1 +1,0 @@
-DONE_FULLREG_P6 exit=1

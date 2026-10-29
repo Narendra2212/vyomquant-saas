@@ -1,6 +1,0 @@
-START=2026-10-08T21:35:12.7974834+05:30
-FILES=tests\test_exchange_safety_fix.py tests\test_connection_engine_deterministic_error_regression.py tests\test_exchange_executor_cache_is_per_tenant.py
-....................................                                     [100%]
-36 passed in 34.56s
-EXITCODE=0
-END=2026-10-08T21:36:01.0207029+05:30

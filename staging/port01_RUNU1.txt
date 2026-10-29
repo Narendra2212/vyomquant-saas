@@ -1,2 +1,0 @@
-7 passed, 8 warnings in 12.15s
-NONCE_END=RUNU1

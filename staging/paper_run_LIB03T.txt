@@ -1,7 +1,0 @@
-START=2026-10-08T21:16:00.3869300+05:30
-DSN=postgresql://postgres:@127.0.0.1:57227/postgres
-FILES=tests\test_lib01_clone_strategy_postgres.py
-.................                                                        [100%]
-17 passed in 13.65s
-EXITCODE=0
-END=2026-10-08T21:16:16.4147187+05:30

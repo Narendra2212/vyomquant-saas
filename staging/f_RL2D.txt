@@ -1,5 +1,0 @@
-E   RuntimeError: FATAL: rate limiting has no shared store. REDIS_URL is missing or empty. (ENV=production, REDIS_URL=empty). In-memory rate limiting is per-process: with more than one replica the effective limit becomes the configured limit times the replica count, so it is refused outside an explicitly local environment. Set REDIS_URL to a reachable Redis, or declare the environment with DEV_MODE=true / ENV=development.
-C:\aerora_quant_backend_updated_final1\backend_app\core\rate_limit.py:154: RuntimeError: FATAL: rate limiting has no shared store. REDIS_URL is missing or empty. (ENV=production, REDIS_URL=empty). In-memory rate limiting is per-process: with more than one replica the effective limit becomes the configured limit times the replica count, so it is refused outside an explicitly local environment. Set REDIS_URL to a reachable Redis, or declare the environment with DEV_MODE=true / ENV=development.
-FAILED tests/test_api03_rate_limit_storage_is_fail_closed.py::test_explicit_dev_mode_may_use_memory_even_in_production
-1 failed, 31 passed in 1.59s
-NONCE_END=RL2D

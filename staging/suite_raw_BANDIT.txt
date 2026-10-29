@@ -1,8 +1,0 @@
-START=2026-10-10T01:08:50.7862111+05:30
-============================= test session starts =============================
-collected 14158 items / 14155 deselected / 3 selected
-
-tests\test_bandit_sast_gate_is_green.py ...                              [100%]
-
-=============== 3 passed, 14155 deselected in 158.80s (0:02:38) ===============
-EXITCODE=0

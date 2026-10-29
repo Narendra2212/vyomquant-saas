@@ -1,1 +1,0 @@
-DONE_P10B_PROPDIR exit=0

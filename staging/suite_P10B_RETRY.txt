@@ -1,8 +1,0 @@
-START=2026-10-10T05:17:52.6597366+05:30
-FILES=tests/crash_recovery/test_worker_crash_mid_submission.py tests/property/test_paper_idempotence.py tests/test_atomic_idempotency_fix.py tests/test_idempotent_submission_fails_closed.py tests/test_order_normalization_and_venue_idempotency.py tests/test_idempotency_lua_prefix_agreement.py tests/test_chaos_recovery.py tests/test_signal_lifecycle_idempotency_migration.py tests/test_task_9_1_signal_idempotency_key.py tests/property/test_expiry_sweep_idempotence.py tests/property/test_settlement_idempotence.py
-........................................................................ [ 43%]
-........................................................................ [ 87%]
-.....................                                                    [100%]
-165 passed in 76.69s (0:01:16)
-EXITCODE=0
-END=2026-10-10T05:19:24.2127243+05:30

@@ -1,4 +1,0 @@
-compile_exit=0
----PAPER01+02---
-ALIVE=False
-NONCE_END=QF2
