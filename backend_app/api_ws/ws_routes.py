@@ -1048,7 +1048,35 @@ async def ws_pnl(
         await manager.unsubscribe("pnl", user_id, websocket)
 
 
+#: How often a connected /ws/pnl client is sent a fresh P&L frame.
+#:
+#: THIS LOOP USED TO HAVE NO SLEEP AT ALL. Every iteration calls
+#: TelemetryEngine.get_live_pnl, which issues a QuestDB REST query
+#: ("SELECT * FROM live_user_pnl WHERE user_id = ..."), so an unpaced loop
+#: re-queried QuestDB and re-broadcast to the socket as fast as a loopback HTTP
+#: round-trip completes -- on the order of hundreds of queries per second, PER
+#: CONNECTED CLIENT, against a QuestDB that runs as a sidecar container inside
+#: the same 1-vCPU API task (cpu 1024, WORKERS=2). One authenticated user
+#: opening this socket was therefore enough to saturate the query path and the
+#: event loop for every other request the API was serving.
+#:
+#: 2 seconds keeps a P&L figure looking continuous to a human while sitting
+#: well inside the cadences this file already treats as live (the same handler
+#: pings on a 30s receive timeout). Env-overridable so an operator can slow it
+#: down under load without a deploy.
+_PNL_PUSH_INTERVAL_SECONDS = float(os.getenv("WS_PNL_PUSH_INTERVAL_SECONDS", "2"))
+
+
 async def _push_pnl(telemetry, user_id, manager):
+    """Send one subscriber a live P&L frame every _PNL_PUSH_INTERVAL_SECONDS.
+
+    Fail-soft as well as paced. Nothing ever awaits this task -- ws_pnl only
+    cancels it in its finally block -- so before this change ANY exception out
+    of get_live_pnl (QuestDB unreachable, a malformed row) ended P&L for that
+    connection permanently and surfaced only as a never-retrieved task
+    exception at garbage-collection time. A transient failure is now logged and
+    retried on the next tick.
+    """
     while True:
         try:
             result = await telemetry.get_live_pnl(user_id)
@@ -1061,6 +1089,22 @@ async def _push_pnl(telemetry, user_id, manager):
                         **{c["name"]: v for c, v in zip(cols, rows[0])},
                     }
                     await manager.broadcast_pnl(user_id, pnl_data)
+        except asyncio.CancelledError:
+            break
+        except ValueError:
+            # get_live_pnl's _safe_uuid rejected user_id. Permanent for this
+            # connection, so retrying every tick would only log forever. The
+            # id is not interpolated into the message.
+            logger.warning("[ws_pnl] malformed user_id; stopping P&L poll for this connection")
+            break
+        except Exception:
+            logger.exception("[ws_pnl] live P&L poll failed; retrying after the next interval")
+
+        # Paced on EVERY path, the error path included, so a persistent
+        # telemetry failure cannot reintroduce the same hot loop by way of the
+        # exception handler.
+        try:
+            await asyncio.sleep(_PNL_PUSH_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             break
 
