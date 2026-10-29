@@ -89,25 +89,62 @@ resource "aws_security_group" "ecs_tasks" {
   }
 }
 
+# INF-02: this group is REAL and is now tracked in terraform state.
+#
+# It was previously described in this entry's own ledger text as "orphaned" -- meaning only
+# that nothing else in this root module referenced it after redis.tf's managed replication
+# group became a data source. It is not orphaned in the sense that matters: the live group
+# sg-00c4bac4f05c9922b carries all six running ElastiCache nodes
+# (vyomquant-redis-production-0001-00{1,2,3} and vyomquant-redis-production-cmd-00{1,2,3},
+# every one `available`), so deleting the configuration would have dropped the one accurate
+# description of a load-bearing production resource. It was imported instead.
+#
+# Three fields below are written to match the LIVE group exactly, because `name` and
+# `description` are both ForceNew on aws_security_group -- a mismatch does not produce a
+# harmless diff, it produces "must be replaced", and replacing this group would detach six
+# live Redis nodes:
+#
+#   name        already matched ("vyomquant-redis-sg-production" via var.environment)
+#   description was "Security group for Redis"; the live value is the longer string below
+#   ingress     referenced the MANAGED aws_security_group.ecs_tasks, which does not exist
+#               in this account at all. Production runs every ECS task on the VPC's DEFAULT
+#               security group (sg-0262aed02d8df0356), which is what the live rule actually
+#               admits. existing_vpc.tf already declares a data source for precisely that
+#               group, under confusingly the same name, so the reference is repointed at
+#               the data source -- the real thing -- rather than the fictional resource.
+#
+# That ECS tasks run on the VPC default security group is a posture problem in its own
+# right (a shared, implicitly-permissive group), but it is a live-infrastructure decision
+# with real blast radius, not a documentation fix, so it is recorded rather than changed
+# here. terraform's job in this finding is to describe production accurately first.
 resource "aws_security_group" "redis" {
   name        = "vyomquant-redis-sg-${var.environment}"
-  description = "Security group for Redis"
+  description = "Security group for Redis - allows access only from existing ECS tasks"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "Allow from ECS tasks"
+    description     = "Allow Redis from existing ECS tasks"
     protocol        = "tcp"
     from_port       = 6379
     to_port         = 6379
-    security_groups = [aws_security_group.ecs_tasks.id]
+    security_groups = [data.aws_security_group.ecs_tasks.id]
   }
 
-  # CI-05: was open to 0.0.0.0/0. A managed ElastiCache node has no legitimate reason to
-  # originate a connection to the public internet; restricted to this VPC's own CIDR
-  # (intra-VPC only), which still covers anything AWS's own managed replication/backup
-  # machinery needs without opening a path to anywhere on the internet.
+  # CI-05: was open to 0.0.0.0/0 BOTH here and live. A managed ElastiCache node has no
+  # legitimate reason to originate a connection to the public internet; restricted to this
+  # VPC's own CIDR (intra-VPC only), which still covers the intra-cluster replication AWS's
+  # managed machinery needs -- all six node addresses (10.0.131.77, .134.167, .137.54,
+  # .145.139, .145.189, .156.27) are inside 10.0.0.0/16.
+  #
+  # Unlike the ALB's egress, this one was NOT in force when it was written: the committed
+  # configuration said var.vpc_cidr while the live group still egressed to 0.0.0.0/0 -- a
+  # second instance of CI-05's "control committed, never applied" gap, found by comparing
+  # this file against the live group rather than by re-reading the file. Applied directly
+  # (authorize the VPC-CIDR rule first, then revoke 0.0.0.0/0, so the nodes were never
+  # without egress) and verified by the application's own /health continuing to report
+  # redis connected afterwards.
   egress {
-    description = "Intra-VPC only"
+    description = "CI-05/INF-02: intra-VPC only"
     protocol    = "-1"
     from_port   = 0
     to_port     = 0

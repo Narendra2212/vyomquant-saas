@@ -25,7 +25,7 @@ resource "aws_ecs_task_definition" "api" {
   container_definitions = jsonencode([
     {
       name      = "api"
-      image     = "vyomquant-api:latest" # ECR URL goes here
+      image     = local.backend_image
       essential = true
       portMappings = [
         {
@@ -175,8 +175,11 @@ resource "aws_ecs_task_definition" "mds" {
 
   container_definitions = jsonencode([
     {
-      name      = "mds"
-      image     = "vyomquant-mds:latest" # ECR URL goes here
+      name = "mds"
+      # NOT a `vyomquant-mds` image, despite that repository existing. The live
+      # vyomquant-mds:5 task definition references .../vyomquant-api, so the MDS runs the
+      # backend image with a different command -- measured, not assumed.
+      image     = local.backend_image
       essential = true
       portMappings = [
         {
@@ -265,8 +268,11 @@ resource "aws_ecs_task_definition" "simulator" {
 
   container_definitions = jsonencode([
     {
-      name      = "simulator"
-      image     = "vyomquant-simulator:latest" # ECR URL goes here
+      name = "simulator"
+      # Well-formed but currently unresolvable: no vyomquant-simulator ECR repository
+      # exists and no simulator task definition is ACTIVE. See
+      # var.simulator_image_repository.
+      image     = local.simulator_image
       essential = true
       portMappings = [
         {
@@ -400,8 +406,10 @@ resource "aws_ecs_task_definition" "workers" {
 
   container_definitions = jsonencode([
     {
-      name      = "worker-${each.key}"
-      image     = "vyomquant-api:latest" # Workers use the backend image
+      name = "worker-${each.key}"
+      # Workers use the backend image, differing only by command. The live worker task
+      # definitions all reference .../vyomquant-api at the same commit SHA as the API.
+      image     = local.backend_image
       essential = true
       command   = each.value.command
       environment = [
@@ -468,4 +476,32 @@ resource "aws_ecs_service" "workers" {
     enable   = true
     rollback = true
   }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# INF-02: the registry is DERIVED, not written down.
+#
+# Hardcoding "273709947018.dkr.ecr.ap-southeast-1.amazonaws.com" would pin the account id
+# into the configuration, which is both a disclosure and a thing that silently breaks in
+# any other account. `data.aws_caller_identity.current` is already declared in iam.tf and
+# var.aws_region already exists, so the registry host composes from facts the provider
+# supplies.
+# ─────────────────────────────────────────────────────────────────────────────────
+locals {
+  ecr_registry = join("", [
+    data.aws_caller_identity.current.account_id,
+    ".dkr.ecr.", var.aws_region, ".amazonaws.com",
+  ])
+
+  #: The one image that serves the API, the MDS and every worker. See the note on
+  #: var.backend_image_repository for the measurement behind "one image".
+  backend_image = join("", [
+    local.ecr_registry, "/", var.backend_image_repository, ":", var.image_tag,
+  ])
+
+  #: Well-formed, and currently unresolvable -- no such ECR repository exists. See the
+  #: note on var.simulator_image_repository.
+  simulator_image = join("", [
+    local.ecr_registry, "/", var.simulator_image_repository, ":", var.image_tag,
+  ])
 }

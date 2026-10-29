@@ -120,3 +120,59 @@ variable "metrics_scrape_token" {
   type        = string
   sensitive   = true
 }
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# CONTAINER IMAGES (INF-02).
+#
+# ecs.tf previously carried four BARE image names -- "vyomquant-api:latest", each with a
+# trailing comment "# ECR URL goes here". A bare name has no registry, so it is not a
+# pullable reference at all: an apply would have produced task definitions that cannot
+# start. The live task definitions were read to find what production actually uses
+# (`ecs describe-task-definition` across every ACTIVE family):
+#
+#   vyomquant-api:251                 .../vyomquant-api:6b36287f…   (a COMMIT SHA, not latest)
+#   vyomquant-mds:5                   .../vyomquant-api:e1dd3b94…   (the API image, not an mds one)
+#   vyomquant-worker-{dag,command,backtest,exchange_fills,marketplace_expiry}
+#                                     .../vyomquant-api:6b36287f…
+#
+# So one image serves the API, the MDS and every worker; they differ only by command. The
+# `vyomquant-mds` and `vyomquant-worker` ECR repositories exist but nothing in production
+# uses them.
+# ─────────────────────────────────────────────────────────────────────────────────
+
+variable "image_tag" {
+  description = <<-EOT
+    The tag to deploy. Production uses the COMMIT SHA, not a moving tag -- CI-02 removed
+    the `:latest` push precisely so a task definition names an immutable artifact. The
+    default is "latest" only so `terraform plan` can run without a value; a real deploy
+    passes the SHA.
+  EOT
+  type        = string
+  default     = "latest"
+}
+
+variable "backend_image_repository" {
+  description = <<-EOT
+    The ECR repository holding the backend image. One image serves the API, the MDS and
+    every worker -- measured from the live task definitions, which all reference
+    `vyomquant-api` and differ only in the command they run.
+  EOT
+  type        = string
+  default     = "vyomquant-api"
+}
+
+variable "simulator_image_repository" {
+  description = <<-EOT
+    The ECR repository for the exchange simulator.
+
+    MEASURED GAP, recorded rather than hidden behind a default that looks fine: no
+    `vyomquant-simulator` repository exists in this account (`ecr describe-repositories`
+    returns vyomquant-api, -tee, -mds, -worker, -frontend and nothing else), and no
+    simulator task definition family is ACTIVE either. So `aws_ecs_task_definition.simulator`
+    and `aws_ecs_service.simulator` in ecs.tf describe a service that has never run. The
+    reference below is therefore well-formed but unresolvable until the repository is
+    created and an image pushed -- which is a deliberate decision, not a default.
+  EOT
+  type        = string
+  default     = "vyomquant-simulator"
+}
