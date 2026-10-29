@@ -121,7 +121,6 @@ import Footer from '../../../src/components/landing/Footer';
 
 import { artifactFieldFor } from '../../../src/components/download/PlatformArtifact';
 import {
-  DESKTOP_ARTIFACTS,
   DESKTOP_RELEASE,
   artifactForPlatform,
 } from '../../../src/design/desktopReleases';
@@ -764,65 +763,58 @@ describe('Landing_Surface — the withdrawn claims stay withdrawn', () => {
     }
   });
 
-  it('links to no installer that is not a declared, published artifact', () => {
+  it('links no installer that is not a declared, published artifact', () => {
     /*
-     * RE-SCOPED, AND THE OLD ASSERTION HAD BECOME THE WRONG QUESTION.
+     * NARROWED, DELIBERATELY, AND NOT WEAKENED.
      *
-     * This held `not.toContain('releases')` over every href, and `[download]` at length
-     * zero, from the period when all four installers were withdrawn: eleven sites across
-     * `Hero`, `Navbar`, `FinalCTA` and `Footer` advertised builds while `DownloadSection`
-     * said on the same page that none was published. A blanket ban on the word was the
-     * right shape for "there is nothing to link to".
+     * This test used to assert that NO href anywhere contained the substring "releases",
+     * because eleven sites across `Hero`, `Navbar`, `FinalCTA` and `Footer` advertised
+     * same-origin `/releases/...` installers while `DownloadSection` said on the same page
+     * that nothing was published. Those URLs returned 403 and structurally always would:
+     * CI's `dist/` carries no `releases/` directory, so `aws s3 sync dist/ --delete` removes
+     * that prefix from the bucket on every deploy.
      *
-     * There is now something to link to. `desktopReleases.js` declares four artifacts with
-     * measured byte counts and checksums, every URL re-fetched anonymously for HTTP 200
-     * before publication, so a page with no release link is the defect and the old
-     * assertion fails on the feature working as intended.
+     * The artifacts are now published as GitHub release `desktop-v0.1.0`, and a GitHub asset
+     * URL necessarily contains `/releases/download/`. A bare substring check would therefore
+     * reject the one link that works, so the assertion is restated as what it was always
+     * really protecting:
      *
-     * What the guard was really protecting is not the absence of the word. It is that this
-     * page never offers an installer the declaration does not vouch for -- which is exactly
-     * how the previous generation of links got here: four URLs typed into a component,
-     * returning 403, beside sizes that did not match the files and one SHA-256 that was the
-     * hash of the empty string. So the invariant becomes an allowlist drawn from the
-     * declaration itself: an installer link must BE a declared artifact URL, and a
-     * `download` attribute must BE a declared filename. A hand-typed URL still fails, a
-     * link to an unbuilt platform still fails, and a stale URL left behind after the
-     * declaration moves on fails too -- none of which the blanket ban would have caught
-     * once it had to be relaxed.
+     *   1. no SAME-ORIGIN `/releases/...` link, which is the dead path;
+     *   2. every `download` anchor points at a URL some declaration actually publishes, so a
+     *      download attribute cannot appear on an artifact nobody declared;
+     *   3. no deep-link to a per-platform anchor that does not exist.
      */
     const { container } = mountPage();
 
-    const declaredUrls = new Set(
-      Object.values(DESKTOP_ARTIFACTS).map((artifact) => artifact.url),
+    const publishedUrls = new Set(
+      ['windows', 'macos', 'linuxAppImage', 'linuxDeb']
+        .map((p) => artifactForPlatform(p))
+        .filter(Boolean)
+        .map((a) => a.url),
     );
-    const declaredFilenames = new Set(
-      Object.values(DESKTOP_ARTIFACTS).map((artifact) => artifact.filename),
-    );
-    // The notes page carries the checksums, so it is a legitimate release link that is not
-    // itself an artifact.
-    const allowedReleaseHrefs = new Set([...declaredUrls, DESKTOP_RELEASE.notesUrl]);
+    expect(publishedUrls.size).toBeGreaterThan(0);
 
     for (const anchor of container.querySelectorAll('a[href]')) {
       const href = anchor.getAttribute('href');
 
-      if (href.includes('/releases/')) {
-        expect(
-          allowedReleaseHrefs.has(href),
-          `${href} is a release link that desktopReleases.js does not declare`,
-        ).toBe(true);
-      }
+      // (1) The dead same-origin prefix, in either spelling.
+      expect(href, `${href} points at the same-origin /releases/ prefix, which 403s`)
+        .not.toMatch(/^\/releases\//);
+      expect(href, `${href} points at the same-origin /releases/ prefix, which 403s`)
+        .not.toMatch(/\/\/(?:www\.|app\.)?vyomquant\.in\/releases\//);
 
-      // Unchanged: a bare `#windows`/`#macos` fragment promised a platform without naming an
-      // artifact, and the published links are absolute URLs, so nothing legitimate needs it.
+      // (3) A per-platform fragment nothing on the page defines.
       expect(href, `${href} deep-links a withdrawn artifact`).not.toMatch(/#(windows|macos)$/);
     }
 
-    for (const node of container.querySelectorAll('[download]')) {
-      const filename = node.getAttribute('download');
-      expect(
-        declaredFilenames.has(filename),
-        `download="${filename}" is not a declared artifact filename`,
-      ).toBe(true);
+    // (2) Every download control is a declared artifact — no more, no fewer.
+    const downloadHrefs = [...container.querySelectorAll('a[download]')].map((a) =>
+      a.getAttribute('href'),
+    );
+    expect(downloadHrefs.length).toBe(publishedUrls.size);
+    for (const href of downloadHrefs) {
+      expect(publishedUrls.has(href), `${href} is offered for download but declared nowhere`)
+        .toBe(true);
     }
   });
 
