@@ -1926,8 +1926,8 @@ const DOWNLOAD_FIELDS = [
       + 'purpose, so it does not demand a newer glibc than older desktops carry. At 78.8 MiB '
       + 'it is much larger than the other bundles because an AppImage carries its own GTK and '
       + 'WebKit rather than using the ones already on the host. History: a 64-byte TEXT file '
-      + 'named `.AppImage` '
-      + 'sat under `public/releases/` and was publishable; task 4.2 removed it and added the '
+      + 'named `.AppImage` sat under `public/releases/` and was publishable; task 4.2 '
+      + 'removed it and added the '
       + 'deploy-time size gate that rejects its return.',
   }),
   entry({
@@ -1940,13 +1940,13 @@ const DOWNLOAD_FIELDS = [
     verdict: VERDICT.UNAVAILABLE,
     absence: ABSENCE.UNREPORTED,
     reason: 'No Debian package has been produced for this release, so there is nothing to '
+      + 'download here.' + RUN_IN_BROWSER,
     note: 'PUBLISHED as `VyomQuant_0.1.0_amd64.deb` in release `desktop-v0.1.0`; url, byte '
       + 'count and SHA-256 in `design/desktopReleases.js`. An `.rpm` is published in the same '
       + 'release but has no card here, because this table declares the four platforms the two '
       + 'surfaces render and adding a fifth is a surface decision rather than a packaging one. '
       + 'History: same provenance as the AppImage — a 67-byte placeholder on a publishable '
-      + 'path, removed by task 4.2.', AppImage: a 67-byte placeholder on a '
-      + 'publishable path, removed by task 4.2.',
+      + 'path, removed by task 4.2.',
   }),
 ];
 
