@@ -378,23 +378,47 @@ class TestPublishedPricing:
         config = SubscriptionEngine.get_plan_config("pro")
         priced = run(FXService.localize_plan_price(config.pricing, "EUR", PRICE_BASE_CURRENCY))
         assert priced.price_source == "fx"
-        assert priced.checkout_currency == "EUR"
         assert priced.localized_price > 0
 
-    def test_publishing_a_second_currency_makes_it_authoritative(self):
-        """The extension point: a committed price point is charged verbatim, not converted.
+        # EUR is a DISPLAY currency. It used to be directly chargeable (Stripe took it), so this
+        # asserted `checkout_currency == "EUR"`. Razorpay is now the only gateway and INR is the
+        # only currency this platform can CHARGE, so the quote is converted for presentation and
+        # the charge is taken in the base. Both figures are reported, and is_direct_checkout is
+        # False, which is what lets a surface state the charge instead of implying the displayed
+        # figure is it.
+        assert priced.checkout_currency == PRICE_BASE_CURRENCY
+        assert priced.is_direct_checkout is False
 
-        Asserted so the mechanism is known to work before anyone needs it — publishing a USD price
-        point is a one-line catalogue change, and this is the proof it will be honoured rather than
-        silently converted.
+    def test_publishing_a_second_currency_is_honoured_for_DISPLAY_but_not_for_the_CHARGE(self):
+        """The extension point is now HALF available, and this pins which half.
+
+        It used to be whole: publishing a USD price point meant US customers were quoted AND
+        charged that exact figure, because Stripe could take USD. With Razorpay the only gateway
+        and its international capability unmeasured for this account, INR is the only currency
+        this platform can charge. So a published non-INR figure governs the DISPLAYED price
+        (`minor_units`, `price_source == "published"`, no FX estimate) and does NOT govern the
+        charge, which stays on the INR figure.
+
+        The practical consequence, stated here because it is easy to get wrong: publishing
+        ``{"USD": 999}`` next to ``{"INR": 99900}`` advertises $9.99 to a US visitor while
+        actually charging ₹999 -- about $12 at spot. Do not publish a non-INR price point
+        expecting it to be charged until Razorpay's international capability has been measured
+        for this specific account. The catalogue cannot overrule the gateway.
         """
         from backend_app.core.fx_service import FXService
 
         published = {PRICE_BASE_CURRENCY: 99900, "USD": 999}
         priced = run(FXService.localize_plan_price(published, "USD", PRICE_BASE_CURRENCY))
+
+        # The DISPLAY half still works: the committed figure is used verbatim, not converted.
         assert priced.price_source == "published"
         assert priced.minor_units == 999
-        assert priced.checkout_amount_minor == 999
+        assert priced.localized_price == 9.99
+
+        # The CHARGE half does not, and says so rather than pretending otherwise.
+        assert priced.checkout_currency == PRICE_BASE_CURRENCY
+        assert priced.checkout_amount_minor == 99900
+        assert priced.is_direct_checkout is False
 
     def test_free_consults_no_exchange_rate(self):
         """Zero is zero in every currency, and a rate failure must not make Free purchasable."""

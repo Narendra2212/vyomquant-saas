@@ -233,18 +233,6 @@ class TestCancelResumeEndpoints:
         resume_section = source[resume_idx:resume_idx + 200]
         assert "@limiter.limit" in resume_section
 
-    def test_portal_is_rate_limited(self):
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        portal_idx = source.index('@router.post("/portal")')
-        portal_section = source[portal_idx:portal_idx + 200]
-        assert "@limiter.limit" in portal_section
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. Stripe Checkout includes subscription_data.metadata
@@ -252,19 +240,6 @@ class TestCancelResumeEndpoints:
 
 
 class TestStripeCheckoutMetadata:
-    def test_checkout_sets_subscription_data_metadata(self):
-        """For subscription mode, Stripe checkout must attach subscription_data.metadata."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        assert 'subscription_data' in source
-        assert '"metadata"' in source or "'metadata'" in source
-        # Verify item_key is in subscription_data
-        assert '"item_key"' in source or "'item_key'" in source
 
     def test_checkout_success_url_points_to_billing_page(self):
         """Success URL should redirect to /app/billing not /dashboard."""
@@ -284,16 +259,6 @@ class TestStripeCheckoutMetadata:
 
 
 class TestWebhookIdempotency:
-    def test_stripe_idempotency_key_format(self):
-        """Stripe idempotency key must use webhook:stripe:{event_id} pattern."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        assert 'webhook:stripe:{event_id}' in source
 
     def test_razorpay_idempotency_key_format(self):
         """Razorpay idempotency key must use webhook:razorpay:{event_id} pattern."""
@@ -325,24 +290,6 @@ class TestWebhookIdempotency:
 
 
 class TestPaymentSucceededNotification:
-    def test_stripe_payment_succeeded_notification(self):
-        """Stripe payment webhook must dispatch payment_succeeded notification."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        # Bounded by the branch, not by a 5,000-character guess -- see
-        # `_stripe_branch_body`. The guess failed once the MONEY-07 currency guard was
-        # added ahead of the notification, while the dispatch itself was untouched.
-        stripe_section = _stripe_branch_body(source, "checkout.session.completed")
-        assert "payment_succeeded" in stripe_section, (
-            "Stripe checkout.session.completed handler must dispatch payment_succeeded notification"
-        )
-        # Also verify at file level that Payment Successful appears in billing context
-        assert "Payment Successful" in source
 
     def test_razorpay_payment_succeeded_notification(self):
         """Razorpay payment.captured webhook must dispatch payment_succeeded notification."""
@@ -452,124 +399,9 @@ def _razorpay_branch_body(source: str, event_name: str) -> str:
     return body
 
 
-class TestRenewalHandler:
-    def test_invoice_payment_succeeded_handler_exists(self):
-        """Stripe invoice.payment_succeeded must renew subscription."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        assert 'invoice.payment_succeeded' in source
-        assert "BillingLifecycle.renew_subscription" in source
-
-    def test_renewal_inserts_billing_invoice(self):
-        """Renewal must insert into billing_invoices table."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        renewal_section = _stripe_branch_body(source, "invoice.payment_succeeded")
-        assert 'billing_invoices' in renewal_section
-
-    def test_renewal_dispatches_notification(self):
-        """Renewal must dispatch subscription_renewed notification."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        renewal_section = _stripe_branch_body(source, "invoice.payment_succeeded")
-        assert "subscription_renewed" in renewal_section
-        assert "Subscription Renewed" in renewal_section
-
-    def test_the_branch_boundary_does_not_swallow_the_next_handler(self):
-        """CONTROL: the scoping must not be so wide that any assertion would pass.
-
-        If `_stripe_branch_body` ran to the end of the file, both tests above would pass
-        no matter what the renewal handler contained. So assert the boundary actually
-        stops: the renewal branch must NOT contain the payment-FAILED handler's
-        distinctive content, and vice versa.
-        """
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-
-        renewal = _stripe_branch_body(source, "invoice.payment_succeeded")
-        failure = _stripe_branch_body(source, "invoice.payment_failed")
-
-        assert "invoice.payment_failed" not in renewal, (
-            "the renewal branch body ran past its own boundary into the payment-failed "
-            "handler, so the renewal assertions prove nothing about the renewal handler"
-        )
-        assert "subscription_renewed" not in failure, (
-            "the payment-failed branch body includes the renewal notification, so the "
-            "boundary search is resolving the wrong region"
-        )
-        assert len(renewal) < len(source) // 2, (
-            f"the renewal branch resolved to {len(renewal)} of {len(source)} characters, "
-            f"which is not a single branch"
-        )
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 9. Payment failure: invoice.payment_failed → account frozen + notification
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestPaymentFailureHandler:
-    def test_payment_failed_freezes_account(self):
-        """invoice.payment_failed must freeze account and set past_due status."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        fail_idx = source.index("invoice.payment_failed")
-        fail_section = source[fail_idx:fail_idx + 2000]
-        assert "is_frozen" in fail_section
-        assert "past_due" in fail_section
-
-    def test_payment_failed_sends_notification(self):
-        """invoice.payment_failed must dispatch payment_failed notification."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        fail_idx = source.index("invoice.payment_failed")
-        fail_section = source[fail_idx:fail_idx + 2000]
-        assert "payment_failed" in fail_section
-        assert "Payment Failed" in fail_section
-        assert "severity" in fail_section and "critical" in fail_section
-
-    def test_payment_failed_broadcasts_ws(self):
-        """invoice.payment_failed must broadcast to WebSocket via RealtimeSync."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        fail_idx = source.index("invoice.payment_failed")
-        fail_section = source[fail_idx:fail_idx + 2000]
-        assert "RealtimeSync.sync_subscription_change" in fail_section
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -578,18 +410,6 @@ class TestPaymentFailureHandler:
 
 
 class TestBillingInvoiceInserts:
-    def test_stripe_payment_inserts_invoice(self):
-        """Stripe checkout.session.completed must insert into billing_invoices."""
-        import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "backend_app", "routers", "billing.py"
-        )
-        with open(path, encoding="utf-8") as f:
-            source = f.read()
-        cs_section = _stripe_branch_body(source, "checkout.session.completed")
-        assert 'billing_invoices' in cs_section
-        assert '"provider": "stripe"' in cs_section or "'provider': 'stripe'" in cs_section
 
     def test_razorpay_payment_inserts_invoice(self):
         """Razorpay payment.captured must insert into billing_invoices."""
@@ -1346,7 +1166,7 @@ class _MarketplaceAuditRecorder:
         self.actions.append(getattr(action, "name", str(action)))
 
 
-def _marketplace_subscription(status="pending", price_minor=1999, currency="USD", period_expiry=None):
+def _marketplace_subscription(status="pending", price_minor=1999, currency="INR", period_expiry=None):
     return {
         "id": MARKETPLACE_SUBSCRIPTION_ID,
         "library_id": MARKETPLACE_LIBRARY_ID,
@@ -1357,24 +1177,44 @@ def _marketplace_subscription(status="pending", price_minor=1999, currency="USD"
         "currency": currency,
         "period_start": None,
         "period_expiry": period_expiry,
-        "provider": "stripe",
-        "provider_reference": "cs_test_1",
+        "provider": "razorpay",
+        "provider_reference": "order_test_1",
     }
 
 
-def _stripe_marketplace_session(amount_total=1999, currency="usd", payment_intent="pi_test_1"):
+def _razorpay_marketplace_payment(amount=1999, currency="INR", payment_id="pay_test_1"):
+    """A Razorpay ``payment.captured`` entity for the marketplace settlement tests.
+
+    REPLACES ``_stripe_marketplace_session``. This class tests the SETTLEMENT contract --
+    the 90/10 split, the integer Minor_Units, the one-ledger-row invariant and the paid
+    period -- none of which is Stripe-specific. It just happened to drive that contract
+    through a Stripe Checkout Session, so when Stripe was removed every test in the class
+    failed on the deleted ``_stripe_settlement_metadata``. Porting the FIXTURE keeps the
+    assertions, which are the part worth keeping.
+
+    Field mapping, so the translation is auditable rather than approximate:
+
+        session["payment_intent"]  ->  payment["id"]          the refund reference
+        session["amount_total"]    ->  payment["amount"]      already minor units in both
+        session["created_at"]         ->  payment["created_at"]  epoch seconds in both
+        session["metadata"]        ->  payment["notes"]       and "item_key" -> "item"
+
+    ``notes`` carries BOTH ``item`` and ``item_key``: ``checkout_service`` writes both
+    halves, and ``_razorpay_settlement_metadata`` reads ``item`` first with ``item_key`` as
+    its fallback, so including both is what the real payload looks like.
+    """
     return {
-        "id": "cs_test_1",
-        "payment_intent": payment_intent,
-        "amount_total": amount_total,
+        "id": payment_id,
+        "amount": amount,
         "currency": currency,
-        "created": int(CONFIRMED_AT_UTC.timestamp()),
-        "metadata": {
+        "created_at": int(CONFIRMED_AT_UTC.timestamp()),
+        "notes": {
             "user_id": MARKETPLACE_USER_ID,
             "subscription_id": MARKETPLACE_SUBSCRIPTION_ID,
             "library_id": MARKETPLACE_LIBRARY_ID,
+            "item": MARKETPLACE_ITEM_KEY,
             "item_key": MARKETPLACE_ITEM_KEY,
-            "currency": "USD",
+            "currency": currency,
         },
     }
 
@@ -1402,11 +1242,11 @@ class TestMarketplaceSettlementWiring:
         """Requirements 9.5, 10.4: one webhook confirmation, one ledger row, one paid period."""
         billing, audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session()
+        session = _razorpay_marketplace_payment()
 
-        metadata = billing._stripe_settlement_metadata(session["metadata"], session)
-        assert metadata["provider"] == "stripe"
-        assert metadata["provider_reference"] == "pi_test_1"
+        metadata = billing._razorpay_settlement_metadata(session["notes"], session)
+        assert metadata["provider"] == "razorpay"
+        assert metadata["provider_reference"] == "pay_test_1"
         assert metadata["amount_minor"] == 1999
 
         _run_marketplace_coroutine(
@@ -1423,7 +1263,7 @@ class TestMarketplaceSettlementWiring:
             1799,
             200,
         )
-        assert row["currency"] == "USD"
+        assert row["currency"] == "INR"
         assert row["is_reversal"] is False
 
         stored = client.subscription
@@ -1441,8 +1281,8 @@ class TestMarketplaceSettlementWiring:
         """Requirement 9.6: the same end state as a single delivery, Redis lock or no Redis lock."""
         billing, audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session()
-        metadata = billing._stripe_settlement_metadata(session["metadata"], session)
+        session = _razorpay_marketplace_payment()
+        metadata = billing._razorpay_settlement_metadata(session["notes"], session)
 
         for _ in range(3):
             _run_marketplace_coroutine(
@@ -1461,14 +1301,14 @@ class TestMarketplaceSettlementWiring:
         """Requirement 9.14: no transition, no record, no entitlement — an audit line instead."""
         billing, audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session(amount_total=100)
+        session = _razorpay_marketplace_payment(amount=100)
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -1506,15 +1346,17 @@ class TestMarketplaceSettlementWiring:
         assert billing._exact_minor_units("1999") == 1999
         assert billing._exact_minor_units(True) is None
 
-        session = _stripe_marketplace_session()
-        session["amount_total"] = 19.99
+        session = _razorpay_marketplace_payment()
+        # `amount`, not Stripe's `amount_total` -- setting the wrong key meant the float
+        # never reached the metadata and the test passed by not exercising anything.
+        session["amount"] = 19.99
         with pytest.raises(Exception) as caught:
             _run_marketplace_coroutine(
                 billing._apply_billing_entitlement(
                     MARKETPLACE_USER_ID,
                     MARKETPLACE_ITEM_KEY,
                     False,
-                    billing._stripe_settlement_metadata(session["metadata"], session),
+                    billing._razorpay_settlement_metadata(session["notes"], session),
                 )
             )
         assert getattr(caught.value, "status_code", None) == 400
@@ -1566,14 +1408,14 @@ class TestMarketplaceSettlementWiring:
             )
         )
         client.subscription["period_start"] = "2025-05-25T12:00:00+00:00"
-        session = _stripe_marketplace_session(payment_intent="pi_renewal_1")
+        session = _razorpay_marketplace_payment(payment_id="pay_renewal_1")
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -1591,13 +1433,13 @@ class TestMarketplaceSettlementWiring:
         """Requirement 10.8: a refund is an additional row; nothing is updated or deleted."""
         billing, audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session()
+        session = _razorpay_marketplace_payment()
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
         payment_row = dict(client.settlements[0])
@@ -1605,14 +1447,14 @@ class TestMarketplaceSettlementWiring:
         _run_marketplace_coroutine(
             billing._settle_marketplace_reversal(
                 provider="stripe",
-                payment_reference="pi_test_1",
+                payment_reference="pay_test_1",
                 event_metadata={
                     "item_key": MARKETPLACE_ITEM_KEY,
                     "subscription_id": MARKETPLACE_SUBSCRIPTION_ID,
                 },
                 amount_minor=1999,
-                currency="USD",
-                event_name="charge.refunded",
+                currency="INR",
+                event_name="refund.processed",
             )
         )
 
@@ -1620,7 +1462,7 @@ class TestMarketplaceSettlementWiring:
         assert client.settlements[0] == payment_row, "the original settlement was modified"
         reversal = client.settlements[1]
         assert reversal["is_reversal"] is True
-        assert reversal["reverses_reference"] == "pi_test_1"
+        assert reversal["reverses_reference"] == "pay_test_1"
         assert reversal["owner_share_minor"] + reversal["platform_fee_minor"] == 1999
         assert client.subscription["status"] == "refunded"
 
@@ -1634,15 +1476,15 @@ class TestMarketplaceSettlementWiring:
     # subscriber kept the entitlement. Correlation now reads the payment's own Settlement_Record
     # back by the reference the refund event does carry.
 
-    def _settle_stripe_payment(self, billing, client, payment_intent="pi_test_1"):
+    def _settle_marketplace_payment(self, billing, client, payment_id="pay_test_1"):
         """One confirmed marketplace payment, so the ledger has the row a refund correlates to."""
-        session = _stripe_marketplace_session(payment_intent=payment_intent)
+        session = _razorpay_marketplace_payment(payment_id=payment_id)
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
         assert len(client.settlements) == 1, "the payment under refund was not settled"
@@ -1654,17 +1496,17 @@ class TestMarketplaceSettlementWiring:
         """Requirements 10.4, 10.8: the Subscription comes from the ledger row, not the event."""
         billing, audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        payment_row = self._settle_stripe_payment(billing, client)
+        payment_row = self._settle_marketplace_payment(billing, client)
 
         # Exactly what Stripe delivers today: a charge with an empty metadata object.
         _run_marketplace_coroutine(
             billing._settle_marketplace_reversal(
                 provider="stripe",
-                payment_reference="pi_test_1",
+                payment_reference="pay_test_1",
                 event_metadata={},
                 amount_minor=1999,
-                currency="usd",
-                event_name="charge.refunded",
+                currency="INR",
+                event_name="refund.processed",
             )
         )
 
@@ -1675,11 +1517,11 @@ class TestMarketplaceSettlementWiring:
         assert client.settlements[0] == payment_row, "the original settlement was modified"
         reversal = client.settlements[1]
         assert reversal["is_reversal"] is True
-        assert reversal["reverses_reference"] == "pi_test_1"
+        assert reversal["reverses_reference"] == "pay_test_1"
         assert reversal["subscription_id"] == MARKETPLACE_SUBSCRIPTION_ID
         # The currency and amount are the ledger's own, so an event that omits the currency
         # entirely still reverses in the currency the payment settled in.
-        assert reversal["currency"] == "USD"
+        assert reversal["currency"] == "INR"
         assert reversal["amount_minor"] == 1999
         assert reversal["owner_share_minor"] + reversal["platform_fee_minor"] == 1999
         assert client.subscription["status"] == "refunded"
@@ -1689,17 +1531,17 @@ class TestMarketplaceSettlementWiring:
         """Requirements 9.6, 10.10: ``uq_settlement_reference_reversal`` makes it a no-op."""
         billing, audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        self._settle_stripe_payment(billing, client)
+        self._settle_marketplace_payment(billing, client)
 
         for _ in range(3):
             _run_marketplace_coroutine(
                 billing._settle_marketplace_reversal(
                     provider="stripe",
-                    payment_reference="pi_test_1",
+                    payment_reference="pay_test_1",
                     event_metadata={},
                     amount_minor=1999,
-                    currency="usd",
-                    event_name="charge.refunded",
+                    currency="INR",
+                    event_name="refund.processed",
                 )
             )
 
@@ -1721,11 +1563,11 @@ class TestMarketplaceSettlementWiring:
         _run_marketplace_coroutine(
             billing._settle_marketplace_reversal(
                 provider="stripe",
-                payment_reference="pi_never_settled",
+                payment_reference="pay_never_settled",
                 event_metadata={},
                 amount_minor=1999,
-                currency="usd",
-                event_name="charge.refunded",
+                currency="INR",
+                event_name="refund.processed",
             )
         )
 
@@ -1748,11 +1590,11 @@ class TestMarketplaceSettlementWiring:
             _run_marketplace_coroutine(
                 billing._settle_marketplace_reversal(
                     provider="stripe",
-                    payment_reference="pi_test_1",
+                    payment_reference="pay_test_1",
                     event_metadata={},
                     amount_minor=1999,
-                    currency="usd",
-                    event_name="charge.refunded",
+                    currency="INR",
+                    event_name="refund.processed",
                 )
             )
 
@@ -1774,16 +1616,16 @@ class TestMarketplaceSettlementWiring:
         """
         billing, audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        payment_row = self._settle_stripe_payment(billing, client)
+        payment_row = self._settle_marketplace_payment(billing, client)
 
         _run_marketplace_coroutine(
             billing._settle_marketplace_reversal(
                 provider="stripe",
-                payment_reference="pi_test_1",
+                payment_reference="pay_test_1",
                 event_metadata={},
                 amount_minor=500,
-                currency="usd",
-                event_name="charge.refunded",
+                currency="INR",
+                event_name="refund.processed",
             )
         )
 
@@ -1796,16 +1638,16 @@ class TestMarketplaceSettlementWiring:
         """Requirement 10.3: an inexact amount is a refusal, not a rounded ledger row."""
         billing, _audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        payment_row = self._settle_stripe_payment(billing, client)
+        payment_row = self._settle_marketplace_payment(billing, client)
 
         _run_marketplace_coroutine(
             billing._settle_marketplace_reversal(
                 provider="stripe",
-                payment_reference="pi_test_1",
+                payment_reference="pay_test_1",
                 event_metadata={},
                 amount_minor=19.99,
-                currency="usd",
-                event_name="charge.refunded",
+                currency="INR",
+                event_name="refund.processed",
             )
         )
 
@@ -1878,43 +1720,25 @@ class TestMarketplaceSettlementWiring:
         with open(path, encoding="utf-8") as f:
             source = f.read()
 
-        assert 'if event["type"] == "charge.refunded":' in source
-        assert 'if payload.get("event") == "refund.processed":' in source
+        # The Stripe companion assertion -- on `event["type"] == "charge.refunded"` -- was
+        # removed with the provider. What remains is the INNER guard, which is where the
+        # decision actually lives: `refund.failed` still REACHES the handler (the webhook
+        # dispatches on both so Razorpay does not retry it forever) and is then refused for
+        # settlement, because a failed refund means the money never came back.
+        assert 'if payload.get("event") == "refund.processed":' in source, (
+            "the settlement reversal is no longer guarded to refund.processed, so a "
+            "refund.failed could subtract an owner's earning for money that never moved"
+        )
+        assert '("refund.processed", "refund.failed")' in source, (
+            "refund.failed no longer reaches the handler, so Razorpay would retry it"
+        )
         # Exactly two calls: one per provider, both inside those gates.
-        assert source.count("await _settle_marketplace_reversal(") == 2
+        # ONE call site, not two: there was one per webhook handler and Stripe's is gone.
+        # Still asserted as an exact count rather than ">= 1", because the property worth
+        # keeping is that there is exactly ONE reversal writer -- two would be two chances
+        # to subtract an owner's earning for the same refund.
+        assert source.count("await _settle_marketplace_reversal(") == 1
 
-    def test_the_stripe_session_carries_the_settlement_metadata_onto_the_payment(self):
-        """Belt and braces (task 19.16): the Charge/PaymentIntent gets the same metadata.
-
-        Stripe copies session metadata to the PaymentIntent only when the session asked it to, and
-        the Charge is what ``charge.refunded`` delivers. The two objects are built from one
-        ``_settlement_metadata`` call, so they cannot disagree.
-        """
-        from backend_app.backend.marketplace import checkout_service as cs
-
-        context = cs.CheckoutContext(
-            provider="stripe",
-            subscription_id=MARKETPLACE_SUBSCRIPTION_ID,
-            listing_id=MARKETPLACE_LIBRARY_ID,
-            listing_name="Mean Reversion",
-            purchaser_id=MARKETPLACE_USER_ID,
-            amount_minor=1999,
-            currency="USD",
-        )
-        metadata = cs._settlement_metadata(context)
-        assert metadata["item_key"] == f"marketplace_{MARKETPLACE_LIBRARY_ID}"
-        assert metadata["subscription_id"] == MARKETPLACE_SUBSCRIPTION_ID
-
-        import inspect
-        source = inspect.getsource(cs._stripe_session)
-        assert 'payment_intent_data={"metadata": dict(metadata)}' in source, (
-            "the Stripe session no longer copies the settlement metadata onto the PaymentIntent, "
-            "so a refund event carries no item_key or subscription_id"
-        )
-        assert "metadata=dict(metadata)" in source, (
-            "the session metadata and the payment metadata must come from the one "
-            "_settlement_metadata object"
-        )
 
     def test_a_plan_refund_records_no_marketplace_reversal(self, marketplace_billing):
         """The reversal call is taken only when the refunded item_key was a marketplace one."""
@@ -1924,11 +1748,11 @@ class TestMarketplaceSettlementWiring:
         _run_marketplace_coroutine(
             billing._settle_marketplace_reversal(
                 provider="stripe",
-                payment_reference="pi_plan_1",
+                payment_reference="pay_plan_1",
                 event_metadata={"item_key": "pro", "subscription_id": "irrelevant"},
                 amount_minor=4999,
-                currency="USD",
-                event_name="charge.refunded",
+                currency="INR",
+                event_name="refund.processed",
             )
         )
 
@@ -1947,12 +1771,26 @@ class TestMarketplaceSettlementWiring:
         for control in (
             "_validate_webhook_signature",
             "_validate_webhook_ip",
-            "STRIPE_WEBHOOK_IPS",
-            "_validate_webhook_timestamp",
+            "RAZORPAY_WEBHOOK_IPS",
+            # `_validate_webhook_timestamp` is NOT listed, and its absence is asserted
+            # below rather than merely untested. It was deleted because it could not
+            # refuse anything -- see the block above `_razorpay_event_id` in billing.py.
+            "_razorpay_event_id",
         ):
             assert control in source, f"{control} was removed"
 
-        assert source.count('@router.post("/webhook/stripe")') == 1
+        # The DEFINITION, not the name: billing.py carries a comment block explaining why
+        # the validator was deleted, and that block necessarily names it. Asserting on the
+        # bare name made this test fail on its own documentation.
+        assert "def _validate_webhook_timestamp" not in source, (
+            "the timestamp validator is back. It claimed to reject webhooks older than 5 "
+            "minutes and could not: Razorpay sends no timestamp header, and its own 403 "
+            "sat inside a try whose blanket except downgraded it to a warning. Replay "
+            "protection here is the two idempotency layers, which reject by identity."
+        )
+        assert source.count('@router.post("/webhook/stripe")') == 0, (
+            "the Stripe webhook is back; Razorpay is the only gateway"
+        )
         assert source.count('@router.post("/webhook/razorpay")') == 1
         # One entitlement funnel: the marketplace dispatch statement appears exactly once.
         assert source.count('if item_key.startswith("marketplace_"):') == 1
@@ -1990,14 +1828,14 @@ class TestMarketplaceSettlementWiring:
         """
         billing, _audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session()
+        session = _razorpay_marketplace_payment()
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2007,10 +1845,10 @@ class TestMarketplaceSettlementWiring:
         assert row["listing_id"] == MARKETPLACE_LIBRARY_ID
         assert row["owner_id"] == MARKETPLACE_OWNER_ID
         assert row["purchaser_id"] == MARKETPLACE_USER_ID
-        assert row["provider"] == "stripe"
+        assert row["provider"] == "razorpay"
         # The PaymentIntent, not the Checkout Session id: it is what ``charge.refunded`` carries,
         # so a payment and its later reversal deduplicate against the same reference.
-        assert row["provider_reference"] == "pi_test_1"
+        assert row["provider_reference"] == "pay_test_1"
         assert row["reverses_reference"] is None
         # The provider's own confirmation instant, not a clock read here, so the period arithmetic
         # is reproducible after the fact (Requirements 11.4, 11.5).
@@ -2037,14 +1875,14 @@ class TestMarketplaceSettlementWiring:
         """
         billing, _audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session()
+        session = _razorpay_marketplace_payment()
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2075,14 +1913,14 @@ class TestMarketplaceSettlementWiring:
         """
         billing, _audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session()
+        session = _razorpay_marketplace_payment()
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2118,14 +1956,14 @@ class TestMarketplaceSettlementWiring:
             )
         )
         client.subscription["period_start"] = "2025-05-25T12:00:00+00:00"
-        session = _stripe_marketplace_session(payment_intent="pi_renewal_history")
+        session = _razorpay_marketplace_payment(payment_id="pay_renewal_history")
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2150,14 +1988,14 @@ class TestMarketplaceSettlementWiring:
 
         billing, _audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session()
+        session = _razorpay_marketplace_payment()
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2187,15 +2025,15 @@ class TestMarketplaceSettlementWiring:
         confirmed_at = __import__("datetime").datetime(
             2025, 1, 31, 9, 30, 0, tzinfo=__import__("datetime").timezone.utc
         )
-        session = _stripe_marketplace_session(payment_intent="pi_january_31")
-        session["created"] = int(confirmed_at.timestamp())
+        session = _razorpay_marketplace_payment(payment_id="pay_january_31")
+        session["created_at"] = int(confirmed_at.timestamp())
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2236,14 +2074,14 @@ class TestMarketplaceSettlementWiring:
             )
         )
         client.subscription["period_start"] = "2025-03-10T12:00:00+00:00"
-        session = _stripe_marketplace_session(payment_intent="pi_reactivation")
+        session = _razorpay_marketplace_payment(payment_id="pay_reactivation")
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2358,14 +2196,14 @@ class TestMarketplaceSettlementWiring:
         # A cancelled row carries a cancellation timestamp; a reactivating payment must clear it,
         # or the row reads as simultaneously live and cancelled.
         client.subscription["cancelled_at"] = "2025-05-02T08:00:00+00:00"
-        session = _stripe_marketplace_session(payment_intent=f"pi_from_{from_status}")
+        session = _razorpay_marketplace_payment(payment_id=f"pi_from_{from_status}")
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2452,19 +2290,19 @@ class TestMarketplaceSettlementWiring:
         """
         billing, audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription(status="refunded")))
-        session = _stripe_marketplace_session(payment_intent="pi_after_refund")
+        session = _razorpay_marketplace_payment(payment_id="pay_after_refund")
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
         assert len(client.settlements) == 1, "the money that moved was not recorded"
-        assert client.settlements[0]["provider_reference"] == "pi_after_refund"
+        assert client.settlements[0]["provider_reference"] == "pay_after_refund"
         stored = client.subscription
         assert stored["status"] == "refunded", "a terminal Subscription was reactivated"
         assert stored["period_expiry"] is None
@@ -2486,14 +2324,14 @@ class TestMarketplaceSettlementWiring:
         """
         billing, _audit, bind = marketplace_billing
         client = bind(_MarketplaceSupabase(_marketplace_subscription()))
-        session = _stripe_marketplace_session()
+        session = _razorpay_marketplace_payment()
 
         _run_marketplace_coroutine(
             billing._apply_billing_entitlement(
                 MARKETPLACE_USER_ID,
                 MARKETPLACE_ITEM_KEY,
                 False,
-                billing._stripe_settlement_metadata(session["metadata"], session),
+                billing._razorpay_settlement_metadata(session["notes"], session),
             )
         )
 
@@ -2565,11 +2403,12 @@ class TestMarketplaceSettlementWiring:
         # The router never writes the ledger itself: settlement_service is the one writer, which is
         # what makes the 90/10 split, the uniqueness constraint and the audit unavoidable.
         assert 'table("marketplace_settlements")' not in source
-        # And it still holds the signature/IP/timestamp controls this task did not touch.
+        # And it still holds the signature/IP controls this task did not touch. The
+        # timestamp control is deliberately absent -- it could not refuse anything, so its
+        # removal is asserted elsewhere in this file rather than its presence here.
         for control in (
             "_validate_webhook_signature",
             "_validate_webhook_ip",
-            "STRIPE_WEBHOOK_IPS",
-            "_validate_webhook_timestamp",
+            "RAZORPAY_WEBHOOK_IPS",
         ):
             assert control in source, f"{control} was removed"

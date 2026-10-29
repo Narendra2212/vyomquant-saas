@@ -77,7 +77,7 @@ resource "aws_security_group" "ecs_tasks" {
   }
 
   # CI-05: was open to 0.0.0.0/0. ECS tasks genuinely need broad internet egress --
-  # Supabase, the payment providers (Razorpay/Stripe) and every exchange ccxt talks to are
+  # Supabase, the payment provider (Razorpay) and every exchange ccxt talks to are
   # all at IP ranges this account does not control and cannot practically enumerate -- so
   # this one is not narrowed here. See terraform/.trivyignore for the explicit, reviewed
   # exception this is accepted under, rather than leaving an undocumented CRITICAL finding.

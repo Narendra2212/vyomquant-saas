@@ -1,5 +1,6 @@
 {
   "_baseline_note_auth01_signout_revokes_session": "AUTH-01 AUTHORISES the added `signOut` entry in `supabase_auth_calls`. The /signout endpoint (backend_app/routers/auth.py) used to build an anonymous, never-authenticated-as-the-caller Supabase client and call its plain `sign_out()` -- a no-op, since that client never held a session to begin with, so the caller's refresh token stayed valid indefinitely despite a 200 response. The fix calls `service_client.auth.admin.sign_out(jwt=..., scope=\"global\")` instead, which actually revokes the caller's own session server-side by JWT. This is a NEW, real network call where there effectively was none before (the old call never reached Supabase in any observable way) -- not a removal, rename, retype or re-meaning of anything already recorded. Evidence: commit b3701ba, tests/test_auth01_signout_revokes_the_real_session.py (4 passed).",
+  "_baseline_note_password_recovery": "PASSWORD RECOVERY AUTHORISES this re-record: ONE entry is ADDED to `supabase_auth_calls` -- `resetPasswordForEmail` -- and nothing is removed, renamed or retyped. Password recovery previously could not be STARTED from the product. `/reset-password` and `pages/UpdatePasswordPage.jsx` already existed and `App.jsx` already intercepted a `type=recovery` hash, but there was no `resetPasswordForEmail` call site anywhere in `src/` -- a fact recorded in the comments of `src/supabase.js` and `src/App.jsx`, and in `tests/unit/pages/authRedirectOrigin.test.jsx`, which listed the method with the note \"no call site today\" and predicted a forgot-password screen as one of the two most likely next additions. So the only route back into a locked-out account was an operator triggering a recovery email by hand from the Supabase dashboard. A *Forgot password?* control on the sign-in form now dispatches it, with an explicit `redirectTo` naming `/reset-password` so the app controls -- and can assert -- which path the link lands on, which those same comments recorded that it could not. The success message is deliberately conditional (\"If an account exists for that address...\") so the form is not an account-enumeration oracle. Covered by tests/unit/authPasswordRecovery.test.jsx (8 tests).",
   "api_call_count": 0,
   "api_calls": [],
   "capture": "surface_sign_in",
@@ -8,6 +9,7 @@
     "pages/AuthPage.jsx"
   ],
   "supabase_auth_calls": [
+    "resetPasswordForEmail",
     "signInWithOAuth",
     "signInWithOtp",
     "signInWithPassword",

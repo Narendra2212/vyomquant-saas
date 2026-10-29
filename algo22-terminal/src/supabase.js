@@ -132,6 +132,16 @@ function createUnconfiguredClient() {
       signUp: () => ({ data: { user: null, session: null }, error: notConfiguredError() }),
       signOut: () => ({ error: null }),
       getUser: () => ({ data: { user: null }, error: notConfiguredError() }),
+      // Added with the *Forgot password?* control on `pages/AuthPage.jsx`. Before that
+      // control existed there was no `resetPasswordForEmail` call site anywhere in `src/`
+      // (the comment further down this file still records the consequence), so the stub
+      // did not need it. Now it does, and the reason is the whole point of this object:
+      // without the entry, pressing the control on a deployment whose Supabase config is
+      // missing throws `TypeError: supabase.auth.resetPasswordForEmail is not a function`
+      // -- an unhandled crash -- instead of the handler catching a "Supabase not
+      // configured" error and rendering it. A stub that omits a method the app calls is
+      // worse than no stub, because it converts a clean refusal into a broken page.
+      resetPasswordForEmail: () => ({ data: null, error: notConfiguredError() }),
       // FE-01: `App.jsx`'s `useGuardedAuthToken` (`AuthGuard`/`GuestGuard`) and
       // `PasswordRecoveryHandler` both now await `getSession()` while a PKCE code
       // exchange may be in flight. Resolves with no session and no error -- the

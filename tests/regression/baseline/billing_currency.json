@@ -1,4 +1,5 @@
 {
+  "_baseline_note_razorpay_only_currency_fallback": "RAZORPAY-ONLY AUTHORISES this re-record. Four members of GET /api/billing/currency's EXCEPTION FALLBACK return changed from a recorded literal (`str`) to `computed`: currency, checkout_currency, checkout_currency_symbol and checkout_provider. NO KEY WAS ADDED, REMOVED OR RETYPED -- every one is still a string in the response. What changed is that the handler DERIVES them now instead of hardcoding them. It hardcoded checkout_provider=\"stripe\", checkout_currency=\"USD\" and is_direct_checkout=True, and once Razorpay became the only gateway all three contradicted FXService.resolve_checkout_provider_and_currency, which answers (\"razorpay\", \"INR\") for a USD viewer. is_direct_checkout is the field Billing.jsx branches on to show the \"you will be charged in <currency>\" notice (showsCheckoutConversion tests `is_direct_checkout === false`), so reporting True suppressed that notice on the one path where it mattered most: the buyer saw a USD figure and was never told the charge lands in a different currency. This fallback fires on any failure in the geo/FX/Redis lookup, which is ordinary operation rather than a freak case. It now calls the same resolver the success path calls, so the two cannot disagree again.",
   "capture": "billing_currency",
   "frontend_bindings": {
     "getCurrency": [
@@ -44,12 +45,12 @@
             "computed",
             "computed",
             {
-              "checkout_currency": "str",
-              "checkout_currency_symbol": "str",
-              "checkout_provider": "str",
+              "checkout_currency": "computed",
+              "checkout_currency_symbol": "computed",
+              "checkout_provider": "computed",
               "country": "str",
               "country_name": "str",
-              "currency": "str",
+              "currency": "computed",
               "currency_source": "str",
               "currency_symbol": "str",
               "fx_rate": "float",

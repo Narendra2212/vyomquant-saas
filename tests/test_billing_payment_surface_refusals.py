@@ -235,38 +235,57 @@ def test_portal_separates_an_unconfigured_deployment_from_a_provider_without_one
     _assert_invents_nothing(response)
 
 
-def test_portal_still_opens_a_stripe_session_when_stripe_is_the_configured_provider(
+def test_a_leftover_stripe_secret_cannot_resurrect_a_portal(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The Stripe branch is preserved: this is additive, not a removal.
+    """There is NO success path left, and a stale ``STRIPE_SECRET_KEY`` does not create one.
 
-    Driven through the Stripe SDK's own three entry points, patched - so the branch is proved
-    to run without a network call and without a real credential. The URL asserted is the one
-    the patched session returns; nothing here would pass if the handler invented its own.
+    This was test_portal_still_opens_a_stripe_session_when_stripe_is_the_configured_provider,
+    which patched ``stripe.Customer.list`` and ``stripe.billing_portal.Session.create`` and
+    asserted a 200 with a real portal URL. Stripe has since been removed from the product in
+    full -- the SDK is out of ``requirements-base.txt``, the branch is deleted, and
+    ``_SUPPORTED_PROVIDERS`` is ``("razorpay",)`` -- so that path cannot be reached and the
+    test cannot even import its way to the assertion.
+
+    What replaces it is the property that actually matters for a removal: an operator who
+    leaves ``STRIPE_SECRET_KEY`` set in a deployment (and ``.env.example`` warns that such a
+    variable is doing nothing) gets the same honest refusal as everyone else, rather than a
+    half-live second gateway. Asserted for BOTH orderings -- Stripe secret alone, and Stripe
+    secret alongside Razorpay's -- because "is a provider live" is read from the environment
+    and a leftover key must not change the answer either way.
     """
+    # Stripe's secret present and Razorpay's absent: no provider is live, so this is the
+    # deployment-fault refusal, NOT a Stripe portal.
     monkeypatch.setenv("STRIPE_SECRET_KEY", _FAKE_STRIPE_SECRET)
     monkeypatch.delenv("RAZORPAY_KEY_ID", raising=False)
     monkeypatch.delenv("RAZORPAY_KEY_SECRET", raising=False)
 
-    customer = type("Customer", (), {"id": "cus_stub", "metadata": {"user_id": _USER["id"]}})()
-    customers = type("CustomerList", (), {"data": [customer]})()
-    session = type("PortalSession", (), {"url": "https://billing.stripe.test/session/stub"})()
-
-    import stripe
-
-    with (
-        patch.object(stripe.Customer, "list", return_value=customers) as listed,
-        patch.object(stripe.billing_portal.Session, "create", return_value=session) as created,
-    ):
-        response = client.post("/api/billing/portal", json={})
-
-    assert response.status_code == 200, (
-        f"the Stripe branch must still work when Stripe is genuinely configured, got "
+    response = client.post("/api/billing/portal", json={})
+    assert response.status_code == 503, (
+        f"a leftover Stripe secret must not be treated as a live provider, got "
         f"{response.status_code}: {response.text[:500]!r}"
     )
-    assert response.json() == {"url": "https://billing.stripe.test/session/stub"}
-    assert listed.called, "the Stripe customer lookup was skipped"
-    assert created.called, "no Stripe billing-portal session was created"
+    assert _refusal(response)["error"] == "PAYMENT_PROVIDER_NOT_CONFIGURED"
+    assert "stripe" not in response.text.lower(), (
+        "the refusal names Stripe, which is not a provider this platform has"
+    )
+
+    # Stripe's secret present AND Razorpay live: still the no-portal refusal, naming Razorpay.
+    monkeypatch.setenv("RAZORPAY_KEY_ID", _FAKE_RAZORPAY_KEY_ID)
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", _FAKE_RAZORPAY_SECRET)
+
+    response = client.post("/api/billing/portal", json={})
+    assert response.status_code == 501, (
+        f"expected the no-hosted-portal refusal, got {response.status_code}: "
+        f"{response.text[:500]!r}"
+    )
+    body = _refusal(response)
+    assert body["error"] == "PROVIDER_HAS_NO_BILLING_PORTAL"
+    assert "Razorpay" in body["message"]
+    assert "stripe" not in body["message"].lower()
+
+    # And no response on either branch ever carries a URL for a caller to open.
+    assert "url" not in response.json()
 
 
 # ══════════════════════════════════════════════════════════════════════════

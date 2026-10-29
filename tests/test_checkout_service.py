@@ -235,7 +235,10 @@ def _listing_row(
     *,
     author_id: str = OWNER_ID,
     price_minor: Optional[int] = PRICE_MINOR_1999,
-    currency: str = "USD",
+    # INR, not USD: it is the only currency PROVIDER_FOR_CURRENCY still routes, so a USD
+    # default made every test in this file refuse with `currency_not_offered` before
+    # reaching the behaviour it was written to check.
+    currency: str = "INR",
     submission_state: Optional[str] = "PUBLISHED",
     name: str = "Momentum Breakout",
 ) -> Dict[str, Any]:
@@ -346,7 +349,7 @@ def _checkout(
     factory: Any,
     *,
     caller: Any = None,
-    currency: str = "USD",
+    currency: str = "INR",
     deadline_seconds: float = PROVIDER_DEADLINE_SECONDS,
 ) -> CheckoutResult:
     return _run(
@@ -377,7 +380,7 @@ def test_unpublished_submission_is_refused_409_and_writes_nothing():
     assert raised.value.http_status == 409
     assert raised.value.details.get("reason") == "not_published"
     assert not client.wrote_subscription(), "a refusal created a Subscription row"
-    assert ("provider", "stripe") not in client.op_names()
+    assert ("provider", "razorpay") not in client.op_names()
 
 
 def test_listing_with_no_submission_at_all_is_refused_409():
@@ -531,7 +534,7 @@ def test_pending_insert_records_both_split_components_and_conserves_the_amount()
 
     assert payload["status"] == "pending"
     assert payload["owner_id"] == OWNER_ID
-    assert payload["currency"] == "USD"
+    assert payload["currency"] == "INR"
     assert payload["started_at"], "the creation timestamp is recorded"
 
     # The result reports the same integers it persisted.
@@ -590,7 +593,7 @@ def test_pending_row_is_committed_before_the_provider_session_is_requested():
 
     ops = client.op_names()
     insert_at = ops.index(("insert", "library_subscriptions"))
-    provider_at = ops.index(("provider", "stripe"))
+    provider_at = ops.index(("provider", "razorpay"))
     assert insert_at < provider_at, f"provider session requested before the commit: {ops}"
 
     # The row was already visible to the provider step, carrying its full image.
@@ -609,14 +612,14 @@ def test_successful_checkout_records_the_provider_reference_and_session_instant(
 
     result = _checkout(client, _ok_factory(client, reference="cs_live_abc"))
 
-    assert result.provider == "stripe"
+    assert result.provider == "razorpay"
     assert result.provider_reference == "cs_live_abc"
     assert result.checkout_url == "https://provider.example/checkout/1"
 
     stored = client.subscription_rows[0]
     assert stored["provider_reference"] == "cs_live_abc"
     assert stored["provider_session_at"], "provider_session_at must be recorded"
-    assert stored["provider"] == "stripe"
+    assert stored["provider"] == "razorpay"
     # The status is NOT advanced by checkout — only a confirmed payment may do that.
     assert stored["status"] == "pending"
 
@@ -774,18 +777,36 @@ def test_the_checkout_manifest_entry_exists_and_covers_both_projections():
         assert key in subscription_columns, f"{key!r} is written but not declared"
 
 
-def test_no_third_payment_provider_can_be_constructed():
-    """Requirement 9.1: exactly two providers, and a ProviderSession cannot name a third."""
-    assert cs.SUPPORTED_PROVIDERS == frozenset({"stripe", "razorpay"})
+def test_no_second_payment_provider_can_be_constructed():
+    """Requirement 9.1: exactly ONE provider, and a ProviderSession cannot name another.
+
+    This was test_no_third_payment_provider_can_be_constructed and asserted
+    ``frozenset({"stripe", "razorpay"})``. Stripe was removed from the product in full, so
+    the set is now a single element and ``"stripe"`` must be refused by the same validation
+    that refuses ``"paypal"`` -- it has no more standing here than any other name this code
+    cannot route money through.
+    """
+    assert cs.SUPPORTED_PROVIDERS == frozenset({"razorpay"})
     assert set(cs.PROVIDER_FOR_CURRENCY.values()) <= cs.SUPPORTED_PROVIDERS
+
+    for rejected in ("paypal", "stripe"):
+        with pytest.raises(ValueError):
+            ProviderSession(provider=rejected, reference="x")
+
+    # An empty reference is still refused for the provider that IS supported.
     with pytest.raises(ValueError):
-        ProviderSession(provider="paypal", reference="x")
-    with pytest.raises(ValueError):
-        ProviderSession(provider="stripe", reference="")
+        ProviderSession(provider="razorpay", reference="")
 
 
-def test_inr_routes_to_razorpay_and_usd_to_stripe():
-    """The same currency -> provider routing ``billing.create_payment_link`` already applies."""
+def test_inr_routes_to_razorpay_and_no_other_currency_is_offered():
+    """INR is the only chargeable currency, so it is the only routable one.
+
+    This was test_inr_routes_to_razorpay_and_usd_to_stripe. ``PROVIDER_FOR_CURRENCY["USD"]``
+    was deleted with the provider rather than repointed at Razorpay: a Razorpay account CAN
+    be enabled for international currencies, but whether THIS account is has never been
+    measured, and routing USD at a gateway that may reject it fails after the buyer has
+    already committed. So USD has no entry, and a USD checkout is refused up front.
+    """
     client = FakeSupabase(listing_rows=[_listing_row(currency="INR")])
     factory = _ok_factory(client, reference="order_abc")
 
@@ -794,7 +815,9 @@ def test_inr_routes_to_razorpay_and_usd_to_stripe():
     assert result.provider == "razorpay"
     assert result.currency == "INR"
     assert result.amount_minor == PRICE_MINOR_1999
-    assert cs.PROVIDER_FOR_CURRENCY["USD"] == "stripe"
+
+    assert dict(cs.PROVIDER_FOR_CURRENCY) == {"INR": "razorpay"}
+    assert "USD" not in cs.PROVIDER_FOR_CURRENCY
 
 
 def test_a_currency_the_listing_is_not_priced_in_is_refused_without_conversion():

@@ -541,7 +541,13 @@ describe('outcome reporting (Requirement 20.10)', () => {
 
   it('reports a checkout this browser cannot present through showToast, saying nothing was charged', async () => {
     signIn();
-    mockApi.library.checkout.mockResolvedValue({ provider: 'stripe', session_id: 'cs_1' });
+    // The fixture provider was 'stripe' with a Stripe-shaped 'cs_1' session id. Stripe has
+    // been removed from the product in full, so the server cannot return it and a reader
+    // would be misled into thinking it might. The PROPERTY is unchanged and is about the
+    // defensive path: StrategyMarketplace.jsx presents only a razorpay session it can open
+    // or a server-supplied checkout_url, and interpolates ANY other provider name into this
+    // refusal. So the fixture just needs to be a provider this browser cannot present.
+    mockApi.library.checkout.mockResolvedValue({ provider: 'paypal', session_id: 'sess_1' });
     const { user } = await openDetail(listingDetail(PAID));
 
     await user.click(screen.getByRole('button', { name: /^subscribe$/i }));
@@ -549,7 +555,7 @@ describe('outcome reporting (Requirement 20.10)', () => {
     await waitFor(() => expect(window.showToast).toHaveBeenCalledTimes(1));
     const [type, message] = window.showToast.mock.calls[0];
     expect(type).toBe('error');
-    expect(message).toContain('stripe');
+    expect(message).toContain('paypal');
     expect(message).toMatch(/nothing has been charged/i);
     expectNoDialogAndOnlyLibrary();
   });

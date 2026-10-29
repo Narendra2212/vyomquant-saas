@@ -401,8 +401,10 @@ def main() -> int:
             "from quietly changing something already serving. It does not touch the "
             "service's network configuration -- only its task definition and desired "
             "count. This is the operation ecs_deploy_and_diagnose.redeploy_workers "
-            "performs for services matching 'vyomquant-worker-', and which nothing "
-            "performs for the ones that do not match it, mds being the live example."
+            "performs on every push to main, for services matching 'vyomquant-worker-' "
+            "and for the SIDECAR_SERVICES names above, which it now reaches through its "
+            "own SIDECAR_SERVICE_NAMES. So this flag is for deploying a worker or "
+            "sidecar AHEAD of the api's gate, not for keeping one current."
         ),
     )
     args = p.parse_args()

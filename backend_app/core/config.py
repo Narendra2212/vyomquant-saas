@@ -431,16 +431,21 @@ class Settings:
     #: accepted (the feature is simply off); EMPTY and PLACEHOLDER are fatal in a deployed
     #: environment.
     #:
-    #: STRIPE_SECRET_KEY is the clearest case in the whole finding.
-    #: ``billing._validate_keys`` accepts a Stripe key only when it starts with ``sk_live_``
-    #: — precisely so a test-mode key cannot grant a paid entitlement — and
-    #: ``.env.example``'s own placeholder is ``sk_live_your-stripe-secret-key``, which
-    #: passes that check. A prefix is not a credential.
+    #: RAZORPAY_KEY_ID is the clearest case in the whole finding.
+    #: ``billing._validate_keys`` accepts a key only when it starts with ``rzp_live_``
+    #: — precisely so a test-mode key cannot grant a paid entitlement — and a placeholder
+    #: of the shape ``rzp_live_your-key-id`` passes that check. A prefix is not a
+    #: credential, which is why these names are governed here as well as there.
+    #:
+    #: STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET were removed with the provider. They
+    #: were the original illustration of this finding (``.env.example`` shipped
+    #: ``sk_live_your-stripe-secret-key``, which satisfied the ``sk_live_`` prefix check),
+    #: and that illustration now lives in the Razorpay note above rather than being lost.
+    #: Leaving them listed would have been actively wrong: a deployment that correctly
+    #: carries no Stripe secret is not misconfigured, and EMPTY is fatal here.
     PLACEHOLDER_REJECTED_CREDENTIALS: ClassVar[tuple] = (
         "DATABASE_URL",
         "CREDENTIAL_VAULT_SALT",
-        "STRIPE_SECRET_KEY",
-        "STRIPE_WEBHOOK_SECRET",
         "RAZORPAY_KEY_ID",
         "RAZORPAY_KEY_SECRET",
         "RAZORPAY_WEBHOOK_SECRET",

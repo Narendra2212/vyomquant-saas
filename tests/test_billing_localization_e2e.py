@@ -34,7 +34,6 @@ from backend_app.core.fx_service import (
     BASELINE_FX_RATES,
     CURRENCY_DECIMALS,
     CURRENCY_SYMBOLS,
-    STRIPE_SUPPORTED_CHECKOUT_CURRENCIES,
     RAZORPAY_SUPPORTED_CHECKOUT_CURRENCIES,
 )
 from backend_app.core.pricing_service import PricingService
@@ -374,14 +373,16 @@ class TestCheckoutSecurity:
             pro_plan.pricing, "USD", PRICE_BASE_CURRENCY
         )
         assert localized.price_source == "fx"
-        assert localized.checkout_provider == "stripe"
-        assert localized.checkout_currency == "USD"
-        # The charge is the quote. These being the same field is what stops a page advertising one
-        # figure and a gateway taking another.
-        assert localized.checkout_amount_minor == localized.minor_units
+        # Razorpay is the only gateway and INR the only chargeable currency, so a USD
+        # request is DISPLAYED in USD and CHARGED in INR. `minor_units` below is still the
+        # USD display figure; `checkout_currency` is what the gateway will actually take.
+        assert localized.checkout_provider == "razorpay"
+        assert localized.checkout_currency == PRICE_BASE_CURRENCY
 
-        # It is worth the rupee price, not a round $10.00 — which is exactly what the deleted USD
-        # column would have charged.
+        # The displayed figure is still worth the rupee price rather than a round $10.00 —
+        # which is exactly what the deleted USD price column would have charged. This is the
+        # half of the original assertion that survives the provider change, because it is
+        # about the FX conversion rather than about who takes the money.
         expected = await FXService.convert_major(999.00, PRICE_BASE_CURRENCY, "USD")
         assert localized.minor_units == FXService.calculate_minor_units(expected, "USD")
 
@@ -423,25 +424,39 @@ class TestGatewayRoutingAndTransparency:
         assert provider == "razorpay"
         assert curr == "INR"
 
-    def test_stripe_supported_currencies_route_directly(self):
-        """Stripe-supported currencies (USD, EUR, GBP, JPY, AUD, CAD, CHF, AED, etc.) route directly."""
-        for c in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "SGD", "CHF", "AED", "BRL", "MXN", "ZAR", "KRW"]:
+    def test_no_currency_routes_anywhere_but_razorpay(self):
+        """Every currency routes to Razorpay, and only INR is charged directly.
+
+        REPLACES ``test_stripe_supported_currencies_route_directly``, which asserted that
+        25 currencies routed to Stripe in their own currency. Stripe was removed, so the
+        property inverted: the currencies that used to be charged directly are now
+        DISPLAY-only and the charge falls back to the base currency.
+
+        Asserted as "no currency escapes Razorpay" rather than currency-by-currency,
+        because the thing worth pinning is that a second provider cannot reappear by
+        accident -- that is what would silently route a charge at a gateway this platform
+        holds no credentials for.
+        """
+        for c in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "SGD", "CHF", "AED",
+                  "BRL", "MXN", "ZAR", "KRW", "NGN", "KES", "ZZZ"]:
             provider, curr = FXService.resolve_checkout_provider_and_currency(c)
-            assert provider == "stripe"
-            assert curr == c
+            assert provider == "razorpay", f"{c} routed to {provider!r}"
+            assert curr == "INR", f"{c} would be charged in {curr!r}, not the base currency"
 
     @pytest.mark.asyncio
-    async def test_unsupported_checkout_currency_falls_back_to_usd_transparently(self):
-        """
-        When a user's local currency is unsupported for direct gateway charging (e.g. NGN, KES),
-        display shows localized price, checkout is routed to Stripe USD, and is_direct_checkout is False.
+    async def test_unsupported_checkout_currency_falls_back_to_the_base_currency(self):
+        """A currency the gateway cannot take is displayed locally and charged in INR.
+
+        The shape of this guarantee is unchanged from the Stripe era -- display local,
+        charge something the gateway accepts, and report ``is_direct_checkout is False`` so
+        the UI can say so. Only the fallback TARGET moved, from USD to INR, because the
+        gateway that could take USD is gone.
         """
         localized = await FXService.localize_price(10.00, "NGN")
         assert localized.target_currency == "NGN"
-        assert localized.checkout_provider == "stripe"
-        assert localized.checkout_currency == "USD"
+        assert localized.checkout_provider == "razorpay"
+        assert localized.checkout_currency == "INR"
         assert localized.is_direct_checkout is False
-        assert localized.checkout_amount_minor == 1000  # Charged in USD cents ($10.00)
 
 
 # ── 7. Existing Subscriptions Stability & Tenant Isolation ────────────────────

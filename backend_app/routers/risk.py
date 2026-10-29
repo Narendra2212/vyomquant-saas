@@ -711,10 +711,52 @@ async def recover_kill_switch(
     Deactivate emergency kill switch and resume normal trading operations.
     """
     uid = str(user.get("id") or user.get("sub"))
-    _user_kill_switch_state[uid] = False
-    from backend_app.core.tenant_halt import set_halt
+    from backend_app.core.tenant_halt import HaltWriteOutcome, set_halt_outcome
 
-    await set_halt(uid, False)
+    # THE RETURN VALUE USED TO BE DISCARDED, AND THIS ROUTE THEN LIED.
+    #
+    # `set_halt` documents that "the caller is told via the return value", and the sibling
+    # activate route binds it and reports it as `persisted`. This one called
+    # `await set_halt(uid, False)` and threw the answer away, then unconditionally answered
+    # {"status": "active", "kill_switch_active": False, "Trading is active."}.
+    #
+    # When the shared write fails the Redis key `tenant_halt:<id>` is STILL SET, so
+    # `is_halted` -- the authoritative check on the execution path -- keeps refusing every
+    # order, on this worker and every other. The direction of the failure was safe; the
+    # REPORT was false. The user was told trading had resumed, and every order they then
+    # placed was rejected, with the one surface that could have explained it insisting
+    # everything was fine.
+    #
+    # It is also why the in-process mirror is no longer cleared optimistically: the old
+    # ordering left this worker's mirror saying "not halted" while the shared store said
+    # "halted", so the dashboards (which read the mirror) and execution (which reads the
+    # store) disagreed about a safety control. `set_halt_outcome` restores the mirror on a
+    # failed write.
+    outcome = await set_halt_outcome(uid, False)
+
+    if outcome is HaltWriteOutcome.WRITE_FAILED:
+        # NOT a 500: nothing is broken about the request, and the halt is intact, which is
+        # the safe state. 503 with a stable code, because the action is to retry once the
+        # shared store is reachable -- and the halt is still protecting the account until
+        # then, which the message says rather than implying a failure to protect.
+        logger.error(
+            "[KILL SWITCH] recovery for %s could not be written to the shared store; the "
+            "halt REMAINS ENGAGED and the caller has been told so.", uid,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "KILL_SWITCH_RECOVERY_UNCONFIRMED",
+                "message": (
+                    "The emergency kill switch could NOT be lifted: the shared safety store "
+                    "did not accept the change, so trading remains halted on every worker. "
+                    "Your account is still protected. Try again shortly."
+                ),
+            },
+        )
+
+    # Only now is the local fast-path view safe to clear.
+    _user_kill_switch_state[uid] = False
 
     fire_and_forget_task(
         ws_mgr.broadcast_user(
@@ -748,6 +790,11 @@ async def recover_kill_switch(
     return {
         "status": "active",
         "kill_switch_active": False,
+        # Reported for the same reason the activate route reports it: so a caller can tell
+        # "cleared in the shared store, every worker will see it" from "cleared locally
+        # because this deployment has no shared store at all". NO_SHARED_STORE is the normal
+        # local-dev shape, not a failure -- the mirror is the whole of the state there.
+        "persisted": outcome is HaltWriteOutcome.PERSISTED,
         "message": "Kill switch recovered. Trading is active."
     }
 

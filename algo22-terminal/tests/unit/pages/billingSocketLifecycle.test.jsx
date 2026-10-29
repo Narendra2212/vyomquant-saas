@@ -294,7 +294,7 @@ beforeEach(() => {
     unsatisfiable outside a test: every writer in the app writes `sessionStorage` (defect 67,
     P1 - `apiClient.js:595` on `TOKEN_REFRESHED`/`SIGNED_IN`, `:580` and `:606` on sign-out,
     `AuthPage`), and **nothing anywhere in `src/` ever wrote `userId` at all**. So this
-    effect had never run once in a real session and the Stripe-webhook-driven updates the
+    effect had never run once in a real session and the payment-webhook-driven updates the
     backend publishes on `/ws/user/{id}` had never reached the page. Section 0 below asserts
     the positive case for exactly that reason: an unmount-safety test alone passes on an
     effect that never runs.
@@ -372,7 +372,7 @@ describe('the premise of every assertion below', () => {
                                           in src/, so nothing has ever written the key
 
       So the page has never once subscribed to `/ws/user/{id}`, and the billing updates the
-      backend publishes there when a Stripe webhook lands - the entire reason this socket
+      backend publishes there when a payment webhook lands - the entire reason this socket
       exists - have never reached the UI without a manual refresh. Unifying the store alone
       would not have fixed it: the second guard still returned early.
 
@@ -637,7 +637,7 @@ describe('preservation', () => {
   it('test_preserved_subscription_frames_still_refresh_the_page', async () => {
     /*
       Passes on `F` and must keep passing. The five frame kinds at `:150-154` are the whole
-      reason the socket exists: a Stripe webhook lands, the backend publishes, and the page
+      reason the socket exists: a payment webhook lands, the backend publishes, and the page
       re-reads its entitlements without the trader refreshing.
 
       Asserted by call count on the api stub rather than by anything rendered, because the

@@ -58,10 +58,25 @@ def test_early_renewal_of_same_plan_extends_from_current_end_not_from_now():
     assert end > datetime.now(timezone.utc) + timedelta(days=45)
 
 
-def test_stripe_grant_records_only_the_provider_not_a_period():
-    sb = _SB()
-    billing._record_plan_period(sb, "u1", "pro_quant", "free", "month", "stripe")
-    assert sb.updates[-1] == {"payment_provider": "stripe"}
+def test_a_non_razorpay_provider_is_not_recorded_at_all():
+    """Razorpay is the only provider, so anything else writes NOTHING.
+
+    This used to be test_stripe_grant_records_only_the_provider_not_a_period: the guard
+    accepted ``provider in ("razorpay", "stripe")`` and the Stripe arm took an ``else``
+    branch that wrote ``{"payment_provider": "stripe"}`` and no period, because Stripe
+    subscriptions recurred and the gateway owned the period. Both the arm and the branch
+    are gone with the provider. The sole caller passes the literal "razorpay", so no
+    value other than that can reach this function from the application; the point of
+    asserting it here is that a future caller which passes something else writes no
+    profile state at all rather than recording a payment_provider that the cancel and
+    resume paths would then refuse to act on.
+    """
+    for provider in ("stripe", "paypal", "", None):
+        sb = _SB()
+        billing._record_plan_period(sb, "u1", "pro_quant", "free", "month", provider)
+        assert sb.updates == [], (
+            f"provider={provider!r} wrote {sb.updates!r}; only 'razorpay' may write here"
+        )
 
 
 def test_missing_columns_do_not_fail_the_grant_but_are_loud(caplog):

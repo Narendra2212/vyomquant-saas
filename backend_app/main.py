@@ -142,8 +142,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "https://js.sentry-cdn.com "
             "https://www.googletagmanager.com "
             "https://www.clarity.ms "
-            "https://checkout.razorpay.com "
-            "https://js.stripe.com"
+            "https://checkout.razorpay.com"
         )
         
         connect_src = (
@@ -156,8 +155,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "https://*.sentry.io "
             "https://*.clarity.ms "
             "https://www.google-analytics.com "
-            "https://api.stripe.com "
-            "https://api.razorpay.com"
+            "https://api.razorpay.com "
+            "https://lumberjack.razorpay.com"
         )
         
         style_src = (

@@ -170,16 +170,7 @@ def test_the_razorpay_handler_now_reads_the_payments_own_currency():
     )
 
 
-def test_the_stripe_handler_now_reads_the_sessions_own_currency():
-    reads = _attribute_get_calls("session", "currency")
-    scopes = {scope for _ln, scope in reads}
-    assert "stripe_webhook" in scopes, (
-        "stripe_webhook does not read the checkout session's own `currency`, and its "
-        f"amount becomes the base for a 20% referral commission. Reads in: {sorted(scopes)}"
-    )
-
-
-def test_each_handler_still_declares_exactly_one_currency_literal():
+def test_the_handler_still_declares_exactly_one_currency_literal():
     """The invariant MONEY-07's fix must NOT break.
 
     Each webhook writes a FIXED amount column (`amount_usd` / `amount_inr`) and a fixed
@@ -208,11 +199,18 @@ def test_each_handler_still_declares_exactly_one_currency_literal():
     for _ln, scope, literal in conversions:
         by_scope.setdefault(scope, set()).add(literal)
 
-    assert by_scope.get("stripe_webhook") == {"USD"}, by_scope
+    # Was two assertions, one per handler. Stripe's handler is gone with the provider.
+    # `_amount_in_declared_currency` also appears in this map with a non-literal currency:
+    # that is the shared helper, which takes the currency as a PARAMETER, and it is not a
+    # handler. The invariant being checked is that the HANDLER passes a literal, which it
+    # still does -- so the guard remains visible to a reader of the handler itself.
     assert by_scope.get("razorpay_webhook") == {"INR"}, by_scope
+    assert "stripe_webhook" not in by_scope, (
+        f"a stripe_webhook handler is back in billing.py: {by_scope}"
+    )
 
 
-def test_both_handlers_validate_the_declared_currency():
+def test_the_handler_validates_the_declared_currency_in_its_own_scope():
     """The guard is present in each handler's own scope, not in a shared helper.
 
     A shared helper would be invisible to a reader of the handler and would hide WHICH
@@ -227,7 +225,6 @@ def test_both_handlers_validate_the_declared_currency():
             calls.append(_innermost_scope(node.lineno))
 
     assert "razorpay_webhook" in calls, "the Razorpay handler does not validate currency"
-    assert "stripe_webhook" in calls, "the Stripe handler does not validate currency"
 
 
 def test_a_matching_currency_is_accepted():
@@ -319,13 +316,13 @@ def test_the_supported_set_is_derived_from_the_converter_not_restated():
     assert _SUPPORTED_PROVIDER_CURRENCIES == frozenset(money.MINOR_UNIT_EXPONENT)
 
 
-def test_no_fx_conversion_was_introduced_on_either_webhook_path():
+def test_no_fx_conversion_was_introduced_on_the_webhook_path():
     """The fix must not have reached for `core/fx_service.py` *on the webhook path*.
 
     `FXService` is float-based and falls back to baseline rates, and billing.py:2605-2611
     already records the decision not to use it when deciding what a referrer is owed.
 
-    SCOPED TO THE TWO HANDLERS, NOT THE MODULE. The first version of this test asserted
+    SCOPED TO THE HANDLER, NOT THE MODULE. The first version of this test asserted
     `"fx_service" not in source` and failed immediately: billing.py has imported
     `FXService` since long before this phase and uses it for CHECKOUT PRICING, which is a
     legitimate and unrelated use -- localising a displayed plan price is not the same as
@@ -339,7 +336,12 @@ def test_no_fx_conversion_was_introduced_on_either_webhook_path():
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
         and n.name in ("stripe_webhook", "razorpay_webhook")
     ]
-    assert len(handlers) == 2, "one of the two webhook handlers is missing"
+    # One handler now: Razorpay is the only gateway. `stripe_webhook` stays in the name
+    # tuple above deliberately -- if it ever reappears it is swept for FX calls too, rather
+    # than silently escaping this check.
+    assert [h.name for h in handlers] == ["razorpay_webhook"], (
+        f"expected exactly the Razorpay handler, found {[h.name for h in handlers]}"
+    )
 
     forbidden = {"get_fx_rate", "to_usd", "convert_major", "localize_price",
                  "localize_plan_price", "FXService"}

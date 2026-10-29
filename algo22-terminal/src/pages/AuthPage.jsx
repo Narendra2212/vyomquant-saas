@@ -508,7 +508,7 @@ export default function AuthPage({ mode = "signin" }) {
   const otpInputRefs = useRef([]);
 
   // UI / Status state
-  const [loadingAction, setLoadingAction] = useState(""); // "" | "password_auth" | "verify_otp" | "google" | "resend_otp"
+  const [loadingAction, setLoadingAction] = useState(""); // "" | "password_auth" | "verify_otp" | "google" | "resend_otp" | "password_reset"
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -935,6 +935,72 @@ export default function AuthPage({ mode = "signin" }) {
     setOtpDigits(["", "", "", "", "", ""]);
   };
 
+  // ── PASSWORD RECOVERY: the half of the flow that did not exist ──────────────
+  //
+  // `/reset-password` and `pages/UpdatePasswordPage.jsx` have always existed, and
+  // `App.jsx`'s recovery handler has always intercepted a `type=recovery` hash and sent
+  // the user there. But NOTHING IN THE APP EVER ASKED SUPABASE TO SEND THE EMAIL: there
+  // was no call to `resetPasswordForEmail` anywhere in `src/`, and both `supabase.js` and
+  // `App.jsx` say so in their own comments. So the completion half was reachable only by
+  // an operator triggering a recovery email by hand from the Supabase dashboard, and a
+  // user who forgot their password had no way to recover their account from the product.
+  //
+  // THE EXPLICIT `redirectTo` IS THE SECOND HALF OF THE FIX, not decoration. Those same
+  // comments record that the app "does not control -- and cannot assert -- which path a
+  // legitimate recovery email actually lands on, or what flow type generated it", because
+  // an omitted redirect makes Supabase fall back to the project's dashboard Site URL.
+  // Naming `/reset-password` here means the link lands on the form that completes it, and
+  // the hash-interception path in `App.jsx` becomes a fallback for old links rather than
+  // the only thing holding the flow together.
+  //
+  // IT DOES NOT SAY WHETHER THE ACCOUNT EXISTS. Supabase deliberately answers the same way
+  // for a registered and an unregistered address, and the message below preserves that: a
+  // reset form that confirms "no account with that email" is an account-enumeration oracle
+  // for anyone who wants a list of this platform's customers.
+  const handlePasswordReset = async () => {
+    setEmailTouched(true);
+
+    const targetEmail = email.trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!targetEmail || !emailRegex.test(targetEmail)) {
+      setError("Enter the email address for your account, then choose Forgot password.");
+      return;
+    }
+
+    if (loadingAction) return;
+
+    clearStatus();
+    setLoadingAction("password_reset");
+
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(targetEmail, {
+        redirectTo: getAuthRedirectUrl("/reset-password"),
+      });
+
+      // supabase-js RESOLVES with `{ error }` rather than throwing, which is the mistake
+      // the header records this page having made on the OTP dispatch: the call was awaited
+      // and its result never bound, so a rate limit was invisible and the screen reported
+      // success. Bound here for the same reason.
+      if (resetError) throw resetError;
+
+      setSuccess(
+        "If an account exists for that address, a password reset link is on its way. "
+        + "The link opens the page where you choose a new password, and it expires.",
+      );
+    } catch (err) {
+      const msg = err.message || "";
+      // Supabase rate-limits recovery dispatch per address. Saying so is more useful than
+      // "failed", because the action for the user is to wait rather than to retry.
+      if (msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("too many")) {
+        setError("Too many reset requests for that address. Wait a few minutes and try again.");
+      } else {
+        setError(msg || "Could not send a reset link. Please try again.");
+      }
+    } finally {
+      setLoadingAction("");
+    }
+  };
+
   // Google OAuth Fallback
   const handleGoogleAuth = async () => {
     if (loadingAction) return;
@@ -1258,6 +1324,33 @@ export default function AuthPage({ mode = "signin" }) {
             >
               {isUp ? "CREATE ACCOUNT & SEND OTP →" : "SIGN IN →"}
             </CommandButton>
+
+            {/* FORGOT PASSWORD — sign-in only. On the sign-up form there is no account to
+                recover yet, and offering it there would send a "no account exists" dead end
+                to someone in the middle of creating one.
+
+                `type="button"` is load-bearing: the default for a button inside a <form> is
+                `submit`, so without it a press would run `handlePasswordAuth` and attempt a
+                sign-in with whatever is in the password field instead of sending the email.
+
+                It takes the email from the field rather than opening a second screen, because
+                the field is already filled in by the time somebody discovers their password
+                is wrong, and a separate route would ask them to type it again. */}
+            {!isUp && (
+              <CommandButton
+                intent="ghost"
+                type="button"
+                data-testid="forgot-password-button"
+                onClick={handlePasswordReset}
+                loading={loadingAction === "password_reset"}
+                loadingLabel="Sending reset link..."
+                disabled={isLoading && loadingAction !== "password_reset"}
+                disabledReason={otherActionInFlight}
+                className="w-full justify-center"
+              >
+                Forgot password?
+              </CommandButton>
+            )}
 
             {/* Divider & Google OAuth. ONE Google command now, and one divider — see the
                 header on the duplicate this page carried. */}

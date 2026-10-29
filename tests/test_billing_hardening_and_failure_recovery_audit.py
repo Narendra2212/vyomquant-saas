@@ -126,32 +126,19 @@ def make_supabase_mock(
 
 class TestSubscriptionStateMachineExhaustive:
     """Audit 1: Comprehensive state transition verification."""
+    # REMOVED: the tests that stood here drove BillingLifecycle.activate_subscription /
+    # start_trial / upgrade_subscription / downgrade_subscription / renew_subscription
+    # against a Supabase mock and asserted each method's own return dict. None of those
+    # methods had a production caller -- renew_subscription's only one was inside
+    # stripe_webhook()'s invoice.payment_succeeded branch, which went with the provider --
+    # so they proved the library returned what it said it returned and nothing about what
+    # the product does. The product's real grant path is the Razorpay webhook
+    # (_apply_billing_entitlement + _record_plan_period), covered behaviourally by
+    # test_billing_e2e.py, test_bill01_razorpay_plans_expire.py and
+    # test_subscription_renewal_regression.py. The surface itself is now pinned by
+    # tests/test_billing_lifecycle_surface.py, which also records that this product has
+    # no trial, no grace period, no proration on upgrade and no scheduled downgrade.
 
-    @pytest.mark.asyncio
-    async def test_full_state_transition_lifecycle(self):
-        """Trace: Free -> Checkout -> Active -> Renewal -> Active -> Cancel Scheduled -> Expired -> Free."""
-        user_id = "usr_sm_01"
-        sb = make_supabase_mock(tier="pro", user_id=user_id)
-
-        # 1. Checkout activation
-        act = await BillingLifecycle.activate_subscription(user_id, "pro", sb)
-        assert act["status"] == "active"
-        assert act["plan"] == "pro"
-
-        # 2. Renewal
-        renew = await BillingLifecycle.renew_subscription(user_id, sb)
-        assert renew["status"] == "renewed"
-        assert renew["plan"] == "pro"
-
-        # 3. Soft cancellation
-        cancel = await BillingLifecycle.cancel_subscription(user_id, cancel_at_period_end=True, supabase=sb)
-        assert cancel["status"] == "cancelled"
-        assert cancel["cancel_at_period_end"] is True
-
-        # 4. Expiration -> Downgrade to Free
-        exp_cancel = await BillingLifecycle.cancel_subscription(user_id, cancel_at_period_end=False, supabase=sb)
-        assert exp_cancel["status"] == "cancelled"
-        assert exp_cancel["cancel_at_period_end"] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -260,33 +247,19 @@ class TestQuotaBoundaryEnforcement:
 
 class TestPaymentFailureRecoveryAudit:
     """Audit 8: Past due -> account freeze -> recovery payment -> active restoration."""
+    # REMOVED: the tests that stood here drove BillingLifecycle.activate_subscription /
+    # start_trial / upgrade_subscription / downgrade_subscription / renew_subscription
+    # against a Supabase mock and asserted each method's own return dict. None of those
+    # methods had a production caller -- renew_subscription's only one was inside
+    # stripe_webhook()'s invoice.payment_succeeded branch, which went with the provider --
+    # so they proved the library returned what it said it returned and nothing about what
+    # the product does. The product's real grant path is the Razorpay webhook
+    # (_apply_billing_entitlement + _record_plan_period), covered behaviourally by
+    # test_billing_e2e.py, test_bill01_razorpay_plans_expire.py and
+    # test_subscription_renewal_regression.py. The surface itself is now pinned by
+    # tests/test_billing_lifecycle_surface.py, which also records that this product has
+    # no trial, no grace period, no proration on upgrade and no scheduled downgrade.
 
-    @pytest.mark.asyncio
-    async def test_past_due_freeze_and_recovery_unfreeze(self):
-        """Simulate payment failure freezing account, followed by recovery unfreezing and restoring tier."""
-        user_id = "usr_recover_01"
-        sb = make_supabase_mock(tier="pro", status="active", user_id=user_id)
-
-        # 1. Simulate invoice.payment_failed -> is_frozen=True, status="past_due"
-        sb.table("profiles").update({
-            "is_frozen": True,
-            "subscription_status": "past_due",
-        }).eq("id", user_id).execute()
-        sb.table("profiles").update.assert_called_with({
-            "is_frozen": True,
-            "subscription_status": "past_due",
-        })
-
-        # 2. Simulate recovery payment -> activate subscription -> is_frozen=False, status="active"
-        rec_res = await BillingLifecycle.activate_subscription(
-            user_id=user_id,
-            plan="pro",
-            supabase=sb,
-            payment_provider="stripe",
-            payment_id="pi_recovery_123"
-        )
-        assert rec_res["status"] == "active"
-        assert rec_res["plan"] == "pro"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -295,42 +268,20 @@ class TestPaymentFailureRecoveryAudit:
 
 class TestFailureInjectionResilience:
     """Audit 13: Failure at non-critical boundaries must NEVER roll back payment or corrupt DB."""
+    # REMOVED: the tests that stood here drove BillingLifecycle.activate_subscription /
+    # start_trial / upgrade_subscription / downgrade_subscription / renew_subscription
+    # against a Supabase mock and asserted each method's own return dict. None of those
+    # methods had a production caller -- renew_subscription's only one was inside
+    # stripe_webhook()'s invoice.payment_succeeded branch, which went with the provider --
+    # so they proved the library returned what it said it returned and nothing about what
+    # the product does. The product's real grant path is the Razorpay webhook
+    # (_apply_billing_entitlement + _record_plan_period), covered behaviourally by
+    # test_billing_e2e.py, test_bill01_razorpay_plans_expire.py and
+    # test_subscription_renewal_regression.py. The surface itself is now pinned by
+    # tests/test_billing_lifecycle_surface.py, which also records that this product has
+    # no trial, no grace period, no proration on upgrade and no scheduled downgrade.
 
-    @pytest.mark.asyncio
-    async def test_websocket_failure_does_not_rollback_payment(self):
-        """If WebSocket broadcast throws an exception, payment activation still succeeds."""
-        user_id = "usr_ws_fail"
-        sb = make_supabase_mock(tier="free", user_id=user_id)
 
-        with patch("backend_app.core.realtime_sync.RealtimeSync.sync_subscription_change", new_callable=AsyncMock) as mock_ws:
-            mock_ws.side_effect = Exception("WebSocket server unreachable")
-
-            # Activate subscription
-            result = await BillingLifecycle.activate_subscription(
-                user_id=user_id,
-                plan="pro",
-                supabase=sb,
-            )
-            assert result["status"] == "active"
-            assert result["plan"] == "pro"
-
-    @pytest.mark.asyncio
-    async def test_notification_failure_does_not_rollback_payment(self):
-        """If notification dispatch encounters an error, subscription update persists."""
-        user_id = "usr_notif_fail"
-        sb = make_supabase_mock(tier="free", user_id=user_id)
-
-        with patch("backend_app.core.notification_dispatcher.dispatch_user_notification", new_callable=AsyncMock) as mock_notif:
-            mock_notif.side_effect = Exception("Notification table locked")
-
-            # Activation persists
-            result = await BillingLifecycle.activate_subscription(
-                user_id=user_id,
-                plan="pro",
-                supabase=sb,
-            )
-            assert result["status"] == "active"
-            assert result["plan"] == "pro"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

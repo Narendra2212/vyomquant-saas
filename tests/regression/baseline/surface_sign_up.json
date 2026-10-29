@@ -1,6 +1,8 @@
 {
   "_baseline_note_auth01_signout_revokes_session": "AUTH-01 AUTHORISES the added `signOut` entry in `supabase_auth_calls`. The /signout endpoint (backend_app/routers/auth.py) used to build an anonymous, never-authenticated-as-the-caller Supabase client and call its plain `sign_out()` -- a no-op, since that client never held a session to begin with, so the caller's refresh token stayed valid indefinitely despite a 200 response. The fix calls `service_client.auth.admin.sign_out(jwt=..., scope=\"global\")` instead, which actually revokes the caller's own session server-side by JWT. This is a NEW, real network call where there effectively was none before (the old call never reached Supabase in any observable way) -- not a removal, rename, retype or re-meaning of anything already recorded. Evidence: commit b3701ba, tests/test_auth01_signout_revokes_the_real_session.py (4 passed).",
+  "_baseline_note_password_recovery": "PASSWORD RECOVERY AUTHORISES this re-record: ONE entry is ADDED to `supabase_auth_calls` -- `resetPasswordForEmail` -- and nothing is removed, renamed or retyped. Password recovery previously could not be STARTED from the product. `/reset-password` and `pages/UpdatePasswordPage.jsx` already existed and `App.jsx` already intercepted a `type=recovery` hash, but there was no `resetPasswordForEmail` call site anywhere in `src/` -- a fact recorded in the comments of `src/supabase.js` and `src/App.jsx`, and in `tests/unit/pages/authRedirectOrigin.test.jsx`, which listed the method with the note \"no call site today\" and predicted a forgot-password screen as one of the two most likely next additions. So the only route back into a locked-out account was an operator triggering a recovery email by hand from the Supabase dashboard. A *Forgot password?* control on the sign-in form now dispatches it, with an explicit `redirectTo` naming `/reset-password` so the app controls -- and can assert -- which path the link lands on, which those same comments recorded that it could not. The success message is deliberately conditional (\"If an account exists for that address...\") so the form is not an account-enumeration oracle. Covered by tests/unit/authPasswordRecovery.test.jsx (8 tests).",
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. This surface captures the checkout response and the backtest handler, so it carries both of the additive changes recorded on `billing_plan_checkout.json` and `surface_backtester.json`: `interval` and `price_source` on the checkout return, and the `_quota` dependency parameter on the backtest handler. The sign-up and authentication paths themselves are untouched by this change.",
+  "_baseline_note_razorpay_only_checkout": "RAZORPAY-ONLY AUTHORISES this re-record: ONE of the two recorded `returns` variants is REMOVED and the surviving one is unchanged. POST /api/billing/checkout had two return statements, one per gateway. Stripe was removed from the product in full -- its webhook route, portal route, credential branch, cancel path and lifecycle layer are deleted, not disabled -- so its checkout branch went with it and the Razorpay variant (order_id, key_id, razorpay_key, amount, currency, interval, price_source, ...) is now the only one. NOTHING WAS REMOVED FROM A SURVIVING VARIANT: the diff reads 'key added' for order_id / key_id / razorpay_key only because the capture compares `returns` POSITIONALLY and the Razorpay entry has moved from index 1 to index 0. `currency` reads as 'computed -> str' for the same positional reason. A dormant second gateway is worse than no second gateway: it keeps a webhook route, a credential branch and an entitlement funnel alive that nobody exercises.",
   "api_call_count": 5,
   "api_calls": [
     {
@@ -136,15 +138,6 @@
               "amount": "computed",
               "checkoutUrl": "computed",
               "checkout_url": "computed",
-              "currency": "computed",
-              "interval": "computed",
-              "price_source": "computed",
-              "provider": "str"
-            },
-            {
-              "amount": "computed",
-              "checkoutUrl": "computed",
-              "checkout_url": "computed",
               "currency": "str",
               "interval": "computed",
               "key_id": "computed",
@@ -217,6 +210,7 @@
   "supabase_auth_calls": [
     "getUser",
     "mfa.getAuthenticatorAssuranceLevel",
+    "resetPasswordForEmail",
     "signInWithOAuth",
     "signInWithOtp",
     "signInWithPassword",

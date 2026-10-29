@@ -241,7 +241,11 @@ def test_amounts_are_sent_as_decimal_strings_not_floats():
     """Serialising a Decimal through float would reintroduce the defect in transport."""
     source = _billing_source()
     assert 'str(payment_amount) if payment_amount is not None else None' in source
-    assert 'str(renewal_amount) if renewal_amount is not None else None' in source
+    # `renewal_amount` was Stripe's `invoice.payment_succeeded` branch -- a RECURRING
+    # subscription renewal, which Razorpay one-time orders do not produce. The branch went
+    # with the provider, so there is no longer a renewal amount to serialise. Both
+    # round() guards stay: they cost nothing and they are the assertions that would catch
+    # float rounding being reintroduced under either name.
     assert "round(payment_amount, 2)" not in source, (
         "round() on the amount is back; that is float rounding on money."
     )
@@ -332,26 +336,92 @@ def _amount_conversions(source: str | None = None):
     return conversions
 
 
-def test_exactly_one_referral_commission_credit_remains():
-    """MONEY-04, as the invariant rather than as a deleted comment.
+def _usd_commission_argument_sites(source: str | None = None):
+    """Every EXECUTABLE place billing.py supplies a ``p_payment_amount_usd`` argument.
 
-    Two credit sites meant two currencies feeding one USD-only column. One site means
-    one currency, and the next test pins down which.
+    A dict-key / keyword-argument question asked structurally, not a substring scan.
+    billing.py's MONEY-04 note explains the deleted credit call verbatim and names
+    ``p_payment_amount_usd`` in prose while doing so, so `"p_payment_amount_usd" in source`
+    matches the comment that documents the fix -- the same false positive that made
+    :func:`_referral_commission_rpc_calls` parse with `ast` in the first place.
+    """
+    import ast
+
+    source = source if source is not None else _billing_source()
+    sites = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Dict):
+            for key in node.keys:
+                if isinstance(key, ast.Constant) and key.value == "p_payment_amount_usd":
+                    sites.append((node.lineno, _scope_of(node.lineno, source)))
+        elif isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "p_payment_amount_usd":
+                    sites.append((node.lineno, _scope_of(node.lineno, source)))
+    return sites
+
+
+def test_no_referral_commission_is_credited_anywhere_any_more():
+    """MONEY-04 is now satisfied by construction: there is no credit site to mis-denominate.
+
+    This was test_exactly_one_referral_commission_credit_remains (plus
+    test_the_surviving_credit_is_the_stripe_one, which asserted that the one survivor sat in
+    stripe_webhook). The asymmetry those two described was real: `referral_commissions` has
+    a USD-only `p_payment_amount_usd` and no currency column, so the USD/Stripe path could
+    credit and the INR/Razorpay path could not. Stripe's handler is deleted, so the credit
+    site went with it and nothing credits a commission at all.
+
+    THIS IS A PRODUCT CONSEQUENCE, NOT ONLY A TEST CHANGE. No referrer is paid automatically
+    on any payment this platform can now take. What a referral earns is recorded as an
+    OBLIGATION instead (the next assertion), which is a settleable queue rather than silent
+    loss. Crediting in INR would require `referral_commissions` to carry a currency -- doing
+    it without one would reintroduce the exact MONEY-04 defect, an INR figure in a column
+    that means dollars.
     """
     calls = _referral_commission_rpc_calls()
-    assert len(calls) == 1, (
-        "expected exactly one process_referral_commission call site; found "
-        f"{[(ln, scope) for ln, scope, _ in calls]}"
+    assert calls == [], (
+        "a referral commission credit is back in billing.py at "
+        f"{[(ln, scope) for ln, scope, _ in calls]}. `referral_commissions` still has no "
+        "currency column, so any credit on the INR path is the MONEY-04 defect."
+    )
+
+    # Nor may anything SUPPLY the USD-only argument: with no credit site there is no
+    # legitimate reason to pass it, and passing it is how one creeps back. Asked of the
+    # syntax tree, because billing.py's own MONEY-04 note names the argument in prose
+    # while explaining the call it deleted.
+    sites = _usd_commission_argument_sites()
+    assert sites == [], (
+        f"p_payment_amount_usd is supplied again at {sites}; the only path that could "
+        "honestly supply it was the USD one, and that provider is gone."
     )
 
 
-def test_the_surviving_credit_is_the_stripe_one():
-    lineno, scope, payload = _referral_commission_rpc_calls()[0]
-    assert scope == "stripe_webhook", (
-        f"the commission credit now lives in {scope}() at line {lineno}, not "
-        "stripe_webhook(). If the Razorpay path has regained a credit, MONEY-04 is open."
+def test_what_a_referral_is_owed_is_recorded_as_an_obligation_instead():
+    """MONEY-06: the surviving path states the debt rather than dropping it.
+
+    With no credit site left, this is the ONLY thing standing between a referrer and
+    silent non-payment, so it is asserted directly rather than assumed from the absence
+    above. The obligation is written from the handler's own scope, so a reader of the
+    webhook can see that the money owed is recorded.
+    """
+    import ast
+
+    tree = ast.parse(_billing_source())
+    recorded = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if name == "_record_referral_obligation":
+            recorded.append((node.lineno, _scope_of(node.lineno)))
+
+    assert recorded, (
+        "nothing calls _record_referral_obligation, so a commission that cannot be "
+        "credited is now owed to a referrer and recorded nowhere at all."
     )
-    assert "p_payment_amount_usd" in payload
+    assert {scope for _ln, scope in recorded} == {"razorpay_webhook"}, (
+        f"obligations are recorded outside the webhook handler: {recorded}"
+    )
 
 
 def test_each_webhook_converts_amounts_in_its_own_currency():
@@ -359,26 +429,32 @@ def test_each_webhook_converts_amounts_in_its_own_currency():
     by_scope: dict = {}
     for _lineno, scope, currency in _amount_conversions():
         by_scope.setdefault(scope, set()).add(currency)
-    assert by_scope.get("stripe_webhook") == {"USD"}, by_scope
+    # Was one assertion per handler. Razorpay is the only gateway, so there is one.
     assert by_scope.get("razorpay_webhook") == {"INR"}, by_scope
-
-
-def test_the_commission_base_is_denominated_in_usd():
-    """`p_payment_amount_usd` must actually receive USD.
-
-    The original defect was not a wrong number -- the arithmetic was fine -- it was a
-    correct INR number placed in a column that means dollars. So the assertion is about
-    where the value came from: the only credit site must sit in a scope that converts
-    exclusively in USD.
-    """
-    _lineno, scope, _payload = _referral_commission_rpc_calls()[0]
-    currencies = {c for _ln, s, c in _amount_conversions() if s == scope}
-    assert currencies == {"USD"}, (
-        f"the commission credit sits in {scope}(), which converts amounts as "
-        f"{sorted(map(str, currencies))}. An amount converted in any other currency "
-        "cannot be passed as p_payment_amount_usd while referral_commissions has no "
-        "currency column."
+    assert "stripe_webhook" not in by_scope, (
+        f"a stripe_webhook handler is back in billing.py: {by_scope}"
     )
+
+
+def test_no_amount_in_any_currency_can_reach_the_usd_commission_column():
+    """The same property as before, now provable without a credit site to inspect.
+
+    This used to read the one credit site, resolve its enclosing scope, and assert that
+    scope converted amounts exclusively in USD -- "a correct INR number placed in a column
+    that means dollars" was the original defect, so the assertion was about provenance.
+
+    With no credit site at all there is no provenance to check, and the stronger statement
+    is available directly: billing.py converts amounts in INR only, and names the USD
+    column nowhere, so no amount in any currency can reach it. Asserted as the conjunction
+    rather than as the absence alone, because the absence by itself would also hold on a
+    file that had quietly stopped converting anything.
+    """
+    currencies = {c for _ln, _s, c in _amount_conversions() if c is not None}
+    assert currencies == {"INR"}, (
+        f"billing.py converts provider amounts as {sorted(map(str, currencies))}; INR is "
+        "the only currency the one remaining gateway charges in."
+    )
+    assert _usd_commission_argument_sites() == []
 
 
 def test_razorpay_branch_does_not_call_the_commission_rpc():
@@ -428,31 +504,28 @@ def test_razorpay_skip_is_logged_loudly_with_settlement_facts():
         )
 
 
-def test_stripe_commission_is_still_credited():
-    """The fix must be scoped. Stripe referrals must keep working.
+def test_an_unreadable_amount_blocks_the_obligation_but_not_the_entitlement():
+    """`None` must gate the money record without discarding the purchase.
 
-    MONEY-04 is about currency mis-denomination on the Razorpay path only; removing the
-    Stripe credit as well would be an over-correction that silently stops paying
-    referrers.
+    This was asserted against the Stripe credit's guard
+    (`if payment_amount is not None and payment_amount > 0:`) alongside
+    test_stripe_commission_is_still_credited, which proved the USD credit kept working.
+    Both referred to a handler that no longer exists.
+
+    The property itself is unchanged and still load-bearing, because the surviving path
+    writes an OBLIGATION from the same unreliable input: a provider amount that may be
+    absent or unparseable must not become a `None > 0` TypeError inside a webhook that has
+    already taken the customer's money, and must not silently record a zero or a guess as
+    the sum owed. So it is asserted where the money is now recorded.
     """
     source = _billing_source()
-    stripe_start = source.index('logger.info(f"Referral commission processed for Stripe payment')
-    assert stripe_start > 0
-    window = source[max(0, stripe_start - 1200):stripe_start]
-    assert 'sb.rpc("process_referral_commission"' in window
-    assert '"p_payment_amount_usd": str(payment_amount)' in window, (
-        "the Stripe commission base is no longer sent as an exact decimal string."
+    assert "if _declared_amount is not None and _declared_amount > 0:" in source, (
+        "the referral obligation is no longer guarded against an unreadable amount; "
+        "`None > 0` raises TypeError in Python 3, inside a handler that has already "
+        "granted the entitlement for a captured payment."
     )
-
-
-def test_an_unreadable_amount_blocks_the_commission_but_not_the_entitlement():
-    """`None` must gate the credit without discarding the purchase."""
-    source = _billing_source()
-    assert "if payment_amount is not None and payment_amount > 0:" in source, (
-        "the Stripe commission is no longer guarded against an unreadable amount; "
-        "`None > 0` raises TypeError in Python 3."
-    )
-    assert "MONEY-02: no referral commission issued for Stripe" in source
+    # And the skip is still loud, so an unrecordable obligation is not a silent one.
+    assert "MONEY-04: referral commission SKIPPED" in source
 
 
 # ── 4. negative control: the detectors actually fire ────────────────────────

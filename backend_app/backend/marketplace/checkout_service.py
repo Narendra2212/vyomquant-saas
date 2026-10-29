@@ -216,15 +216,32 @@ __all__ = [
 PROVIDER_DEADLINE_SECONDS = 30
 
 #: The persisted ``marketplace_settlements.provider`` / ``library_subscriptions.provider``
-#: spellings. ``chk_settlement_provider`` pins the column to exactly these two, which is
-#: Requirement 9.1's "no third provider" written where a handler cannot talk past it.
-SUPPORTED_PROVIDERS: FrozenSet[str] = frozenset({"stripe", "razorpay"})
+#: spellings this code will WRITE. Razorpay only, since Stripe was removed.
+#:
+#: Deliberately a SUBSET of what the database admits. ``chk_settlement_provider`` is still
+#: ``CHECK (provider = ANY (ARRAY['stripe','razorpay']))`` in production (verified against the
+#: live schema, not assumed), and it is left alone on purpose. This set is what the handler may
+#: PRODUCE; the constraint is what the column may HOLD, and the two answer different questions.
+#:
+#: MEASURED, so the reasoning is not hypothetical: a sweep of all 9 provider-ish text columns
+#: in the production database found ZERO rows mentioning stripe, and ``marketplace_settlements``
+#: is empty. So narrowing the CHECK would not in fact invalidate any committed history, and is
+#: available to anyone who wants the refusal enforced at two layers instead of one. It buys
+#: little today -- this frozenset refuses 'stripe' in Python long before Postgres sees it -- so
+#: it is recorded here as an option with its evidence rather than taken as a live schema change
+#: nobody asked for.
+SUPPORTED_PROVIDERS: FrozenSet[str] = frozenset({"razorpay"})
 
-#: Currency → provider, the same routing ``billing.create_payment_link`` already applies: INR
-#: settles through Razorpay, every other supported currency through Stripe. A currency absent
-#: from :data:`money.MINOR_UNIT_EXPONENT` never reaches here - the amount read refuses it first.
+#: Currency → provider. One gateway, one currency.
+#:
+#: ``"USD": "stripe"`` was removed with the provider rather than repointed at Razorpay. A
+#: Razorpay account CAN be enabled for international currencies, but whether THIS account is
+#: has never been measured, and silently routing USD at a gateway that may reject it would
+#: fail at the worst moment -- after a buyer has committed. A currency with no entry here is
+#: refused before any money moves, which is the honest answer until someone verifies the
+#: account's enabled currency list and adds it with that evidence.
 PROVIDER_FOR_CURRENCY: Mapping[str, str] = MappingProxyType(
-    {"INR": "razorpay", "USD": "stripe"}
+    {"INR": "razorpay"}
 )
 
 #: The columns that must NOT appear in the ``PENDING`` payload, and the reason each is excluded.
@@ -1277,15 +1294,13 @@ async def _request_provider_session(
 
 
 def default_provider_session_factory(context: CheckoutContext) -> ProviderSession:
-    """Construct the session at Stripe or Razorpay. The one place either SDK is imported.
+    """Construct the order at Razorpay. The one place the SDK is imported.
 
-    Blocking on purpose: both SDKs are synchronous, and :func:`_request_provider_session`
+    Blocking on purpose: the SDK is synchronous, and :func:`_request_provider_session`
     dispatches this to a worker thread so the deadline applies. Credentials come from
     :func:`_provider_credentials`, which delegates to ``billing._validate_keys`` - so the
-    ``"sk_test_dummy"`` default the old handler carried does not exist on this path.
+    ``"rzp_test_dummy"`` placeholder is refused on this path too.
     """
-    if context.provider == "stripe":
-        return _stripe_session(context)
     if context.provider == "razorpay":
         return _razorpay_order(context)
     raise ProviderSessionFailed(
@@ -1343,77 +1358,6 @@ def _settlement_metadata(context: CheckoutContext) -> Dict[str, str]:
         "item_key": f"marketplace_{context.listing_id}",
         "currency": context.currency,
     }
-
-
-def _stripe_session(context: CheckoutContext) -> ProviderSession:
-    """A one-off Stripe Checkout Session for exactly ``context.amount_minor``.
-
-    ``unit_amount`` is the Listing's ``price_minor`` **verbatim** - Stripe's unit is the minor
-    unit, so there is nothing to convert and no ``float`` to lose precision in. A ``19.99``
-    Listing is stored as ``1999`` and charged as ``1999``.
-
-    ``mode="payment"`` rather than ``"subscription"``: the Subscription_Period is this system's
-    own calendar-month arithmetic (``subscription_period.period_for_activation``), driven by the
-    confirmed payment instant, and handing the recurrence to Stripe would make the provider's
-    billing anniversary a second source of truth for when access ends.
-
-    ``metadata`` reproduces the contract ``billing._apply_billing_entitlement`` already reads:
-    it dispatches on ``item_key.startswith("marketplace_")`` and
-    ``_apply_marketplace_entitlement`` reads ``metadata["subscription_id"]``. The existing
-    webhook therefore activates this subscription; no second webhook handler exists.
-    """
-    api_key = _provider_credentials("stripe")
-    try:
-        import stripe
-    except Exception as exc:  # noqa: BLE001 - converted to the defined outcome, not swallowed
-        raise ProviderSessionFailed(
-            f"the stripe SDK is not importable: {type(exc).__name__}: {exc}"
-        ) from exc
-
-    stripe.api_key = api_key
-    frontend = _frontend_base_url()
-    metadata = _settlement_metadata(context)
-    session = stripe.checkout.Session.create(
-        payment_method_types=["card"],
-        line_items=[
-            {
-                "price_data": {
-                    "currency": context.currency.lower(),
-                    "product_data": {"name": f"Strategy subscription: {context.listing_name}"},
-                    "unit_amount": context.amount_minor,
-                },
-                "quantity": 1,
-            }
-        ],
-        mode="payment",
-        success_url=(
-            f"{frontend}/marketplace"
-            f"?session_id={{CHECKOUT_SESSION_ID}}&sub_id={context.subscription_id}"
-        ),
-        cancel_url=f"{frontend}/marketplace",
-        client_reference_id=context.purchaser_id,
-        metadata=dict(metadata),
-        # WHY THE SAME METADATA TWICE (task 19.16, Requirements 10.4, 10.8): Stripe copies session
-        # metadata to the Checkout Session object only. The Charge and PaymentIntent - which are
-        # what ``charge.refunded`` delivers - carry metadata only when the session asked for it
-        # here. Without this, a refund event arrives with no ``item_key`` and no
-        # ``subscription_id`` at all. The value is the SAME object as ``metadata`` above, so the
-        # session and the payment cannot disagree about which Subscription this is.
-        #
-        # It is belt and braces, not the mechanism: ``billing._settle_marketplace_reversal``
-        # correlates a refund by reading the payment's own Settlement_Record back from the ledger
-        # (``settlement_service.find_settled_payment``), which does not depend on the provider
-        # having copied anything.
-        payment_intent_data={"metadata": dict(metadata)},
-    )
-    reference = _as_text(_get(session, "id"))
-    if not reference:
-        raise ProviderSessionFailed("stripe returned a session with no id")
-    return ProviderSession(
-        provider="stripe",
-        reference=reference,
-        checkout_url=_as_text(_get(session, "url")),
-    )
 
 
 def _razorpay_order(context: CheckoutContext) -> ProviderSession:

@@ -325,6 +325,92 @@ class TestWorkerRedeployment:
         with patch("scripts.ecs_deploy_and_diagnose.run_aws_cmd", return_value=(1, "", "access denied")):
             assert list_worker_services() == []
 
+    def test_list_worker_services_includes_the_mds_sidecar(self):
+        """`vyomquant-mds-service` runs the api image under a command override, exactly
+        like a worker, but its name does not match 'vyomquant-worker-'. Measured on the
+        live cluster: it sat on vyomquant-api:f39012da while the other six services had
+        moved to c9d94509, because this list was the only thing feeding redeploy_workers
+        and the prefix never selected it. It fell one deploy further behind per push.
+        """
+        from scripts.ecs_deploy_and_diagnose import list_worker_services
+
+        payload = json.dumps({
+            "serviceArns": [
+                "arn:aws:ecs:ap-southeast-1:1234:service/cluster/vyomquant-api-service-cjema2sl",
+                "arn:aws:ecs:ap-southeast-1:1234:service/cluster/vyomquant-worker-dag-service",
+                "arn:aws:ecs:ap-southeast-1:1234:service/cluster/vyomquant-mds-service",
+                "arn:aws:ecs:ap-southeast-1:1234:service/cluster/vyomquant-tee-service-production",
+            ]
+        })
+        with patch("scripts.ecs_deploy_and_diagnose.run_aws_cmd", return_value=(0, payload, "")):
+            services = list_worker_services()
+
+        assert "vyomquant-mds-service" in services, (
+            "the mds sidecar is not selected for redeployment, so every push to main "
+            "leaves it one commit further behind the rest of the cluster"
+        )
+        # The api service has already deployed itself by the time redeploy_workers runs;
+        # rolling it again here would re-deploy the thing that just proved itself healthy.
+        assert "vyomquant-api-service-cjema2sl" not in services
+        # tee was deleted (RT-23). A stale service surviving in the cluster must not be
+        # revived by being handed a fresh image.
+        assert "vyomquant-tee-service-production" not in services
+
+    def test_sidecar_service_names_agree_with_the_deploy_script(self):
+        """One declaration site, enforced rather than documented.
+
+        scripts/deploy_worker_services.py's SIDECAR_SERVICES is where a non-worker
+        service is declared; ecs_deploy_and_diagnose holds its own literal copy of the
+        service NAMES because 03-deploy.yml runs it as `python
+        scripts/ecs_deploy_and_diagnose.py`, which puts scripts/ on sys.path[0] and
+        leaves the repository root unimportable -- so a cross-module import would raise
+        ModuleNotFoundError at deploy time while passing here. This test is what stops
+        the two from drifting: add a sidecar to one and not the other and it fails.
+        """
+        from scripts.ecs_deploy_and_diagnose import SIDECAR_SERVICE_NAMES
+        from scripts.deploy_worker_services import SIDECAR_SERVICES
+
+        declared = sorted(spec["service"] for spec in SIDECAR_SERVICES.values())
+
+        assert sorted(SIDECAR_SERVICE_NAMES) == declared, (
+            f"ecs_deploy_and_diagnose.SIDECAR_SERVICE_NAMES "
+            f"{sorted(SIDECAR_SERVICE_NAMES)} does not match the services declared in "
+            f"deploy_worker_services.SIDECAR_SERVICES {declared}. A name present only "
+            f"in the deploy script is a service no push to main ever updates."
+        )
+
+    @patch("scripts.ecs_deploy_and_diagnose.run_aws_cmd")
+    @patch("scripts.ecs_deploy_and_diagnose.register_worker_task_definition")
+    @patch("scripts.ecs_deploy_and_diagnose.get_service_task_definition_arn")
+    @patch("scripts.ecs_deploy_and_diagnose.list_worker_services")
+    def test_redeploy_workers_rolls_the_sidecar_onto_the_api_image(
+        self, mock_list, mock_get_arn, mock_register, mock_run_aws_cmd
+    ):
+        """The sidecar goes down the same path as a worker: re-register the service's
+        CURRENT task definition with only the image replaced, then force a new
+        deployment. Re-registering the current revision is what preserves mds's command
+        override and its 1024/3072 sizing without this file having to know either.
+        """
+        from scripts.ecs_deploy_and_diagnose import redeploy_workers
+
+        mock_list.return_value = ["vyomquant-mds-service"]
+        mock_get_arn.return_value = "arn:aws:ecs:ap-southeast-1:1234:task-definition/vyomquant-mds:4"
+        mock_register.return_value = (True, "arn:aws:ecs:ap-southeast-1:1234:task-definition/vyomquant-mds:5")
+        mock_run_aws_cmd.return_value = (0, "Updated service", "")
+
+        results = redeploy_workers("ecr/vyomquant-api:newsha")
+
+        assert results == {"vyomquant-mds-service": True}
+        mock_register.assert_called_once_with(
+            "ecr/vyomquant-api:newsha",
+            "arn:aws:ecs:ap-southeast-1:1234:task-definition/vyomquant-mds:4",
+        )
+        args = mock_run_aws_cmd.call_args[0][0]
+        assert "update-service" in args
+        assert "vyomquant-mds-service" in args
+        assert "arn:aws:ecs:ap-southeast-1:1234:task-definition/vyomquant-mds:5" in args
+        assert "--force-new-deployment" in args
+
     def test_register_worker_task_definition_sets_image_on_every_container(self, tmp_path, monkeypatch):
         from scripts.ecs_deploy_and_diagnose import register_worker_task_definition
 

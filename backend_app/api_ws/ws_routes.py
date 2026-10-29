@@ -80,6 +80,59 @@ _FORCE_RECONNECT_THRESHOLD_SECONDS = 60  # Force reconnect if no data for 60s
 _HEARTBEAT_INTERVAL_SECONDS = 10  # Send ping every 10 seconds
 _HEARTBEAT_TIMEOUT_SECONDS = 30  # Timeout if no pong received for 30 seconds
 
+#: The frame the browser client treats as proof the server is alive.
+#: algo22-terminal/src/websocketClient.js accepts either `type` or `action`:
+#:     if (eventType === 'pong' || message.action === 'pong') { ... }
+#: so `{"type": "pong"}` satisfies it. The timestamp is for parity with the
+#: other pong senders in this codebase and is not read by the client.
+_PONG_FRAME = json.dumps({"type": "pong"})
+
+
+def _is_client_ping(raw: str) -> bool:
+    """Is this received frame the browser client's liveness ping?
+
+    The live client sends ``{"action": "ping", "timestamp": ...}``;
+    ``{"type": "ping"}`` is accepted too so either spelling works.
+    """
+    try:
+        message = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(message, dict):
+        return False
+    return message.get("type") == "ping" or message.get("action") == "ping"
+
+
+async def _receive_answering_pings(websocket: WebSocket, timeout: float) -> str:
+    """Receive one client frame, answering a client ping with a pong.
+
+    WHY THIS EXISTS. Every socket the browser opens was being closed by the
+    CLIENT about 40 seconds after it connected, forever, and the server was the
+    reason. algo22-terminal/src/websocketClient.js calls ``startHeartbeat()``
+    on open; every 30s it sends ``{action: 'ping'}`` and arms a 10s timer whose
+    expiry calls ``ws.close()``. The only thing that disarms that timer is an
+    inbound frame whose ``type`` or ``action`` is ``pong``::
+
+        if (eventType === 'pong' || message.action === 'pong') {
+          this.lastPongTime = Date.now();
+          clearTimeout(this.heartbeatTimeout);
+
+    No handler in this module ever sent one. The receive loops consumed the
+    ping and discarded it; the two loops that mention pong only handle an
+    INBOUND pong, i.e. they treat the client as the responder. So the client
+    pinged at t=30s, got nothing, and closed at t=40s -- then reconnected with
+    backoff and did it again. Every realtime feature (notifications, dashboard
+    updates, signal trace, paper prices, the connection-status indicator)
+    flapped on that cycle.
+
+    The frame is still RETURNED after being answered, so each route's own
+    handling of what it received is unchanged and this is purely additive.
+    """
+    raw = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
+    if _is_client_ping(raw) and websocket.client_state == WebSocketState.CONNECTED:
+        await websocket.send_text(_PONG_FRAME)
+    return raw
+
 async def _heartbeat_task(websocket: WebSocket, connection_id: str):
     """
     STEP 3: WebSocket Heartbeat System
@@ -543,7 +596,7 @@ async def ws_ticker(
     try:
         while True:
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                await _receive_answering_pings(websocket, 30)
             except asyncio.TimeoutError:
                 if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_text('{"type":"ping"}')
@@ -682,7 +735,7 @@ async def ws_orderbook(
     try:
         while True:
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                await _receive_answering_pings(websocket, 30)
             except asyncio.TimeoutError:
                 if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_text('{"type":"ping"}')
@@ -748,7 +801,7 @@ async def ws_candles(
     try:
         while True:
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=60)
+                await _receive_answering_pings(websocket, 60)
             except asyncio.TimeoutError:
                 if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_text('{"type":"ping"}')
@@ -829,37 +882,53 @@ async def ws_user(
     t2 = asyncio.create_task(_stream_orders(de, user_id, manager))
     t3 = asyncio.create_task(_stream_balance(de, user_id, manager))
 
-    # STEP 1: WebSocket Pong Validation - Track client responsiveness
-    last_pong_time = time.time()
-    PONG_TIMEOUT_SECONDS = 30
-    
+    # STEP 1: WebSocket liveness, counted as consecutive 30s receive intervals
+    # in which NO inbound frame arrived at all.
+    #
+    # THIS REPLACES A CHECK THAT CLOSED THE WRONG CONNECTIONS. It used to refresh
+    # `last_pong_time` only on `{"type": "pong"}` and then close the socket once
+    # 30s had passed without one. The browser client never sends that frame --
+    # algo22-terminal/src/websocketClient.js sends `{action: 'ping'}` and replies
+    # to nothing -- so the condition was unsatisfiable, and the effect was exactly
+    # backwards: a client that WAS talking to the server got closed for being
+    # "unresponsive", because the elapsed test sat on the path a received frame
+    # takes, while a wholly silent client was never closed at all, because a
+    # silent interval goes to the TimeoutError branch and never reaches the test.
+    #
+    # Liveness is "I heard from you recently". Which frame it was does not matter,
+    # so any inbound frame resets the counter. Two consecutive silent intervals is
+    # Requirement 19.10's "two consecutive heartbeats", measured against this
+    # loop's own 30s interval rather than inferred from a different timer.
+    silent_intervals = 0
+    MAX_SILENT_INTERVALS = 2
+
     try:
         # Heartbeat loop runs correctly now — not blocked by gather()
         while True:
             try:
-                message_raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-                
-                # STEP 1: Handle pong messages from client
+                message_raw = await _receive_answering_pings(websocket, 30)
+
+                # Heard from the peer: it is alive, whatever it sent.
+                silent_intervals = 0
+
                 try:
                     message = json.loads(message_raw)
                     if message.get("type") == "pong":
-                        last_pong_time = time.time()
                         logger.debug(f"[WS/user] Pong received from {user_id}")
                         continue
                 except json.JSONDecodeError:
                     pass  # Not JSON, ignore
-                
-                # STEP 1: Enforce pong timeout - close if client unresponsive
-                elapsed_since_pong = time.time() - last_pong_time
-                if elapsed_since_pong > PONG_TIMEOUT_SECONDS:
-                    logger.warning(
-                        f"[WS/user] PONG TIMEOUT for {user_id} "
-                        f"({elapsed_since_pong:.1f}s > {PONG_TIMEOUT_SECONDS}s), closing connection"
-                    )
-                    await websocket.close(code=1001, reason="Pong timeout")
-                    break
-                    
+
             except asyncio.TimeoutError:
+                silent_intervals += 1
+                if silent_intervals >= MAX_SILENT_INTERVALS:
+                    logger.warning(
+                        f"[WS/user] no frame from {user_id} for {silent_intervals} "
+                        f"consecutive 30s intervals, closing connection"
+                    )
+                    await websocket.close(code=1001, reason="Heartbeat timeout")
+                    break
+
                 # Send ping to check connection
                 if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_text('{"type":"ping"}')
@@ -1037,7 +1106,7 @@ async def ws_pnl(
     try:
         while True:
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                await _receive_answering_pings(websocket, 30)
             except asyncio.TimeoutError:
                 if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_text('{"type":"ping"}')
@@ -1048,7 +1117,35 @@ async def ws_pnl(
         await manager.unsubscribe("pnl", user_id, websocket)
 
 
+#: How often a connected /ws/pnl client is sent a fresh P&L frame.
+#:
+#: THIS LOOP USED TO HAVE NO SLEEP AT ALL. Every iteration calls
+#: TelemetryEngine.get_live_pnl, which issues a QuestDB REST query
+#: ("SELECT * FROM live_user_pnl WHERE user_id = ..."), so an unpaced loop
+#: re-queried QuestDB and re-broadcast to the socket as fast as a loopback HTTP
+#: round-trip completes -- on the order of hundreds of queries per second, PER
+#: CONNECTED CLIENT, against a QuestDB that runs as a sidecar container inside
+#: the same 1-vCPU API task (cpu 1024, WORKERS=2). One authenticated user
+#: opening this socket was therefore enough to saturate the query path and the
+#: event loop for every other request the API was serving.
+#:
+#: 2 seconds keeps a P&L figure looking continuous to a human while sitting
+#: well inside the cadences this file already treats as live (the same handler
+#: pings on a 30s receive timeout). Env-overridable so an operator can slow it
+#: down under load without a deploy.
+_PNL_PUSH_INTERVAL_SECONDS = float(os.getenv("WS_PNL_PUSH_INTERVAL_SECONDS", "2"))
+
+
 async def _push_pnl(telemetry, user_id, manager):
+    """Send one subscriber a live P&L frame every _PNL_PUSH_INTERVAL_SECONDS.
+
+    Fail-soft as well as paced. Nothing ever awaits this task -- ws_pnl only
+    cancels it in its finally block -- so before this change ANY exception out
+    of get_live_pnl (QuestDB unreachable, a malformed row) ended P&L for that
+    connection permanently and surfaced only as a never-retrieved task
+    exception at garbage-collection time. A transient failure is now logged and
+    retried on the next tick.
+    """
     while True:
         try:
             result = await telemetry.get_live_pnl(user_id)
@@ -1061,6 +1158,22 @@ async def _push_pnl(telemetry, user_id, manager):
                         **{c["name"]: v for c, v in zip(cols, rows[0])},
                     }
                     await manager.broadcast_pnl(user_id, pnl_data)
+        except asyncio.CancelledError:
+            break
+        except ValueError:
+            # get_live_pnl's _safe_uuid rejected user_id. Permanent for this
+            # connection, so retrying every tick would only log forever. The
+            # id is not interpolated into the message.
+            logger.warning("[ws_pnl] malformed user_id; stopping P&L poll for this connection")
+            break
+        except Exception:
+            logger.exception("[ws_pnl] live P&L poll failed; retrying after the next interval")
+
+        # Paced on EVERY path, the error path included, so a persistent
+        # telemetry failure cannot reintroduce the same hot loop by way of the
+        # exception handler.
+        try:
+            await asyncio.sleep(_PNL_PUSH_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             break
 
@@ -1123,7 +1236,7 @@ async def ws_dashboard(
         while True:
             try:
                 # Wait for client messages (ping/pong, subscription updates)
-                message_raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                message_raw = await _receive_answering_pings(websocket, 30)
                 
                 # Update activity on any message
                 if last_activity and not last_activity.done():
@@ -1371,7 +1484,7 @@ async def ws_signal_trace(
     try:
         while True:
             try:
-                message_raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                message_raw = await _receive_answering_pings(websocket, 30)
                 
                 if last_activity and not last_activity.done():
                     last_activity.cancel()

@@ -318,7 +318,7 @@ def test_every_problem_is_reported_not_just_the_first(deployment):
         SUPABASE_SERVICE_ROLE_KEY="YOUR_SUPABASE_SERVICE_ROLE_KEY",
         MASTER_ENCRYPTION_KEYS=None,
         SUPABASE_JWT_SECRET="",
-        STRIPE_SECRET_KEY="sk_live_your-stripe-secret-key",
+        RAZORPAY_KEY_ID="rzp_live_your-key-id",
     )
     problems = s.credential_problems()
     assert len(problems) == 4, problems
@@ -326,18 +326,33 @@ def test_every_problem_is_reported_not_just_the_first(deployment):
         "SUPABASE_SERVICE_ROLE_KEY",
         "MASTER_ENCRYPTION_KEYS",
         "SUPABASE_JWT_SECRET",
-        "STRIPE_SECRET_KEY",
+        # Was STRIPE_SECRET_KEY. Stripe is removed from the product, so it is no longer in
+        # `PLACEHOLDER_REJECTED_CREDENTIALS` and setting it reports nothing -- which is the
+        # point: a variable for a gateway that does not exist must not be validated as
+        # though it mattered. RAZORPAY_KEY_ID is the gateway credential that does.
+        "RAZORPAY_KEY_ID",
     ):
         assert any(name in p for p in problems), name
 
 
-def test_the_stripe_live_prefix_does_not_make_a_placeholder_a_credential(deployment):
-    """``billing._validate_keys`` accepts only ``sk_live_``, and the template placeholder
-    starts with ``sk_live_``. The prefix check and this check answer different questions,
-    and only one of them can tell a key from a template."""
-    assert "sk_live_your-stripe-secret-key".startswith("sk_live_")
-    s = deployment(env="production", STRIPE_SECRET_KEY="sk_live_your-stripe-secret-key")
-    assert s.credential_verdicts()["STRIPE_SECRET_KEY"] is SecretVerdict.PLACEHOLDER
+def test_the_razorpay_live_prefix_does_not_make_a_placeholder_a_credential(deployment):
+    """A live-looking PREFIX is not a credential, and only one of these checks can tell.
+
+    This was test_the_stripe_live_prefix_does_not_make_a_placeholder_a_credential, built on
+    ``.env.example``'s ``STRIPE_SECRET_KEY=sk_live_your-stripe-secret-key``: ``_validate_keys``
+    accepted a Stripe key on the strength of its ``sk_live_`` prefix, and the template
+    placeholder had exactly that prefix.
+
+    The property is unchanged by the removal of Stripe, because Razorpay is checked the same
+    way -- ``_validate_keys`` refuses anything not starting with ``rzp_live_``
+    (``billing.py``: "Razorpay key ID is invalid: it must begin with 'rzp_live_'") and
+    ``.env.example`` ships ``rzp_live_your-key-id``, which satisfies that prefix and is still
+    a template. So the prefix check and this check continue to answer different questions on
+    the gateway the platform actually bills through.
+    """
+    assert "rzp_live_your-key-id".startswith("rzp_live_")
+    s = deployment(env="production", RAZORPAY_KEY_ID="rzp_live_your-key-id")
+    assert s.credential_verdicts()["RAZORPAY_KEY_ID"] is SecretVerdict.PLACEHOLDER
     with pytest.raises(RuntimeError):
         s.assert_credentials_are_production_grade()
 

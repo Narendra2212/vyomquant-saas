@@ -91,7 +91,6 @@ databases==0.9.0
 redis==5.0.8
 
 # --- Payment Gateways ----------------------------------------------------
-stripe==10.8.0
 razorpay==2.0.1
 # DEP-01, RESOLVED. This pin and the setuptools one below were deadlocked, and the
 # deadlock is gone. Recording why, because the previous comment argued at length

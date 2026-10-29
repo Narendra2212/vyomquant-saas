@@ -2,6 +2,8 @@
   "_baseline_note_entitlement_refusal": "RE-RECORDED, additively, by the change that made the fail-closed entitlement refusal distinguishable from a defect. GET /api/billing/entitlements gained a second raise - 503 BILLING_PLAN_UNVERIFIABLE - and a `request_id` member on the detail of both of its raises. Nothing was removed, renamed or retyped. `get_plan_context` fails CLOSED in production: when the profiles read does not answer it refuses rather than assuming Free, because assuming Free silently strips a paying account of the capacity it bought. That refusal used to be a bare RuntimeError caught by this handler's catch-all, so it produced the same 500 BILLING_ENTITLEMENTS_FAILED as a real bug - a live billing page reported exactly that for a transient read failure, and the code could not tell the two apart. The `request_id` addition is the other half of the same report: the browser's `req_<uuid4>` support reference was being discarded by CorrelationIdMiddleware's default uuid4 validator and replaced by a server-generated id, so the reference a customer could quote appeared in no log line. See the note in baseline/billing_entitlements.json for the full account.",
   "_baseline_note_payment_methods_dependency": "AUTHORISED RE-RECORD (TENANT-01): api_calls[3]'s db parameter now depends on get_payment_methods_db instead of get_db -- same change and same reason as billing_payment_methods.json's own note. See backend_app/migrations/047_tenant01_restricted_payment_methods_role.sql.",
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. POST /api/billing/checkout gained two ADDITIVE response members and lost none: `interval` (\"month\" | \"year\") and `price_source` (\"published\" | \"fx\"). WHY `interval`: annual billing did not exist before this change \u2014 Stripe's recurring interval was the hardcoded literal \"month\" \u2014 so a checkout could not state which cycle it was buying and the response had no cycle to report. WHY `price_source`: the amount is now charged from the catalogue's PUBLISHED price for a currency it publishes (INR, USD) and FX-converted only for one it does not. Those are different kinds of figure \u2014 a commitment versus a rate-dependent estimate \u2014 and a caller rendering a price is entitled to know which it has. Previously every amount was an FX conversion of the USD base, which is why GET /api/billing/plans answered ~Rs865 for the plan published at Rs999. Nothing was removed, renamed or retyped: `checkoutUrl`, `checkout_url`, `provider`, `currency`, `amount`, `order_id`, `key_id` and `razorpay_key` are unchanged in name, type and meaning, so every existing client keeps working.",
+  "_baseline_note_razorpay_only_checkout": "RAZORPAY-ONLY AUTHORISES this re-record: ONE of the two recorded `returns` variants is REMOVED and the surviving one is unchanged. POST /api/billing/checkout had two return statements, one per gateway. Stripe was removed from the product in full -- its webhook route, portal route, credential branch, cancel path and lifecycle layer are deleted, not disabled -- so its checkout branch went with it and the Razorpay variant (order_id, key_id, razorpay_key, amount, currency, interval, price_source, ...) is now the only one. NOTHING WAS REMOVED FROM A SURVIVING VARIANT: the diff reads 'key added' for order_id / key_id / razorpay_key only because the capture compares `returns` POSITIONALLY and the Razorpay entry has moved from index 1 to index 0. `currency` reads as 'computed -> str' for the same positional reason. A dormant second gateway is worse than no second gateway: it keeps a webhook route, a credential branch and an entitlement funnel alive that nobody exercises.",
+  "_baseline_note_razorpay_only_portal": "RAZORPAY-ONLY AUTHORISES this re-record: POST /api/billing/portal's single recorded return `{url: computed}` is REMOVED, because the handler no longer has a success path at all. THE ROUTE IS KEPT and still refuses with exactly the two coded errors recorded in `raises` (501 PROVIDER_HAS_NO_BILLING_PORTAL when a live provider has no hosted portal, 503 PAYMENT_PROVIDER_NOT_CONFIGURED when none holds live credentials). Keeping it is deliberate and was a correction: the route was deleted outright in the first pass of the Stripe removal, and Billing.jsx still presents two controls that call it -- the past_due alert's *Update payment method* and the current-plan panel's *Manage billing* -- and renders this handler's own sentence into ds/Alert verbatim. With the route gone both buttons received a bare 404, which carries no coded detail, so the page fell back to a generic \"Failed to open billing portal.\" and the user lost the explanation of where their card is actually changed. What is gone is only the Stripe branch that created a real stripe.billing_portal.Session. Razorpay publishes no hosted self-serve billing portal, so there is no URL left to return -- and none is invented, which is the property this entry now records.",
   "api_call_count": 11,
   "api_calls": [
     {
@@ -305,15 +307,6 @@
               "amount": "computed",
               "checkoutUrl": "computed",
               "checkout_url": "computed",
-              "currency": "computed",
-              "interval": "computed",
-              "price_source": "computed",
-              "provider": "str"
-            },
-            {
-              "amount": "computed",
-              "checkoutUrl": "computed",
-              "checkout_url": "computed",
               "currency": "str",
               "interval": "computed",
               "key_id": "computed",
@@ -424,11 +417,7 @@
               "status_code": 501
             }
           ],
-          "returns": [
-            {
-              "url": "computed"
-            }
-          ],
+          "returns": [],
           "route_path": "/api/billing/portal"
         }
       ],
