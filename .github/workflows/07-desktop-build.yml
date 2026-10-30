@@ -66,17 +66,28 @@
 
 name: 07 Desktop Build (native, unsigned)
 
+# The two `src/` entries are NOT a widening to the whole frontend. They are the two files
+# that decide what API base the packaged app dials -- `runtime/desktop.js` declares it and
+# `config.js` chooses it -- and the bundle check below exists precisely to catch them being
+# wrong. Without them that check could never fire on the change that broke it, which is how
+# the localhost API base reached a published installer. Everything else under `src/` is
+# still excluded on purpose: a full Rust build on three runners is expensive and
+# `01-pr-check.yml`'s frontend job catches ordinary source breakage first.
 on:
   workflow_dispatch:
   push:
     paths:
       - 'algo22-terminal/src-tauri/**'
+      - 'algo22-terminal/src/runtime/desktop.js'
+      - 'algo22-terminal/src/config.js'
       - 'algo22-terminal/package.json'
       - 'algo22-terminal/package-lock.json'
       - '.github/workflows/07-desktop-build.yml'
   pull_request:
     paths:
       - 'algo22-terminal/src-tauri/**'
+      - 'algo22-terminal/src/runtime/desktop.js'
+      - 'algo22-terminal/src/config.js'
       - 'algo22-terminal/package.json'
       - 'algo22-terminal/package-lock.json'
       - '.github/workflows/07-desktop-build.yml'
@@ -213,18 +224,36 @@ jobs:
       # enforced rather than merely preferred: a build that would need to resolve a
       # different dependency version fails instead of silently drifting.
       #
-      # The VITE_* values are passed through if configured. They are NOT required and the
+      # The Supabase values are passed through if configured. They are NOT required and the
       # build does not gate on them: `src/supabase.js` validates its configuration at
       # runtime and falls back to an unconfigured client, so an artifact built without
       # them compiles and launches but cannot authenticate. This workflow verifies the
       # BUILD, so a missing secret must not be reported as a broken toolchain. An artifact
       # intended for a human to actually use needs these set.
+      #
+      # NO API BASE IS PASSED, deliberately, and that is a FIX rather than an omission.
+      # This step used to set `VITE_API_BASE_URL` -- a name NOTHING under
+      # `algo22-terminal/src` reads. The only reader is
+      # `dev_tools/connection_missing_endpoints.js`, which is not part of the application.
+      # `src/config.js` reads `VITE_API_URL`, which this workflow never set, and
+      # `.env`/`.env.production` are gitignored so a checkout cannot supply one either.
+      #
+      # The consequence shipped in a published installer: the packaged app took neither the
+      # https branch (it runs on `tauri://localhost`) nor the env branch, fell through to
+      # `config.js`'s last-resort `http://localhost:8000`, and dialled a dead port on every
+      # user's machine. Not a CSP refusal -- `tauri.conf.json` permits `http://localhost:*`
+      # -- so the request left the webview and was refused by the network, which is why it
+      # looked like the web app's "No connection" while having a different cause.
+      #
+      # The desktop API base is now declared in `src/runtime/desktop.js`, in the source,
+      # where it is reviewable and tested. Nothing is left for a secret to get wrong here,
+      # and passing a dead one back would only re-create the illusion that this build is
+      # configured by it.
       - name: Build desktop application
         working-directory: ./algo22-terminal
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
@@ -232,6 +261,60 @@ jobs:
             npx tauri build --target "${{ matrix.target }}" -- --locked
           else
             npx tauri build -- --locked
+          fi
+
+      # ── Frontend bundle verification ───────────────────────────────────────────
+      # THE GATE THAT WOULD HAVE CAUGHT THE SHIPPED LOCALHOST API BASE.
+      #
+      # `06-frontend-deploy.yml` fails its build if `localhost:8000` survives into the web
+      # bundle. This workflow had no equivalent, so a desktop artifact whose only reachable
+      # API base was `http://localhost:8000` built green, uploaded, and was published.
+      #
+      # THE CHECK IS A POSITIVE ASSERTION, NOT 06's NEGATIVE ONE, and the difference is
+      # load-bearing. Since `config.js` became origin-first, the literal
+      # `"http://localhost:8000"` is a LIVE runtime fallback for `npm run dev` and survives
+      # minification in every build. 06's grep still passes there only because a set
+      # `VITE_API_URL` lets Vite fold that tail into dead code; here no API env var is set
+      # by design, so the string is always present and grepping for it would fail a correct
+      # build. What actually distinguishes a good desktop bundle is that the DECLARED
+      # desktop origin is in it.
+      #
+      # Parsed out of `src/runtime/desktop.js` rather than hardcoded, so the check follows
+      # the declaration instead of becoming a second place to update.
+      - name: Verify the desktop API base is present in the frontend bundle
+        working-directory: ./algo22-terminal
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DECLARED=$(sed -n "s/^export const DESKTOP_API_ORIGIN = '\([^']*\)';.*/\1/p" \
+                       src/runtime/desktop.js | head -n 1)
+          if [ -z "$DECLARED" ]; then
+            echo "FAIL: could not read DESKTOP_API_ORIGIN from src/runtime/desktop.js."
+            echo "      Either it was removed or its declaration shape changed; this check"
+            echo "      must be updated deliberately, not silently skipped."
+            exit 1
+          fi
+          HOST=${DECLARED#https://}
+          echo "Declared desktop API origin: $DECLARED (host: $HOST)"
+
+          if [ ! -d dist/assets ]; then
+            echo "FAIL: no dist/assets produced by the frontend build."
+            exit 1
+          fi
+
+          # Scoped to the JAVASCRIPT assets on purpose. A match anywhere under dist/ would
+          # also accept `index.html`'s CSP or a file copied from `public/`, none of which
+          # affect what the app dials -- so a bundle that had lost the constant entirely
+          # could still pass. The claim here is specifically that the SHIPPED CODE carries
+          # the host.
+          if grep -lF "$HOST" dist/assets/*.js >/dev/null 2>&1; then
+            echo "OK:   the declared desktop API host is present in the JS bundle."
+          else
+            echo "FAIL: '$HOST' does not appear in any dist/assets/*.js."
+            echo "      The packaged app would have no reachable API base and every panel"
+            echo "      would read 'No connection'. This is the defect that shipped once."
+            exit 1
           fi
 
       # ── Artifact verification ──────────────────────────────────────────────────

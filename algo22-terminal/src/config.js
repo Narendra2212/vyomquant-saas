@@ -66,12 +66,16 @@ const servedOverHttps = () =>
 // THE DESKTOP BRANCH, AND WHY IT IS SECOND RATHER THAN LAST.
 //
 // The packaged app has no served origin to read -- it runs on its own custom protocol -- so
-// it cannot take the branch above, and it must not fall through to `VITE_API_URL`. That
-// secret held the CDN distribution's own hostname, which `src-tauri/tauri.conf.json`'s
-// `connect-src` does not permit, so the installed application could not reach its own API at
-// all: every panel read "No connection", and nothing appeared in the server logs because a
-// CSP refusal never leaves the browser. The same failure as the web app had, by the same
-// mechanism, in a second policy.
+// it cannot take the branch above, and before this branch existed it fell all the way
+// through to the `http://localhost:8000` default below. That is what the published
+// installers actually dialled, on machines where nothing is listening on that port.
+//
+// It did NOT reach the env var: the desktop workflow passes `VITE_API_BASE_URL`, a name
+// nothing here reads, and never sets `VITE_API_URL` (`.env*` are gitignored, so a checkout
+// cannot supply it either). So this was a silent localhost fallback in a shipped artefact,
+// not a misconfigured value -- and unlike the web deploy, that workflow had no check that
+// `localhost:8000` had been substituted out of the bundle. See `runtime/desktop.js` for the
+// full measurement.
 //
 // The declared origin lives in `runtime/desktop.js` rather than here, because section 5 of
 // `tests/unit/pages/authRedirectOrigin.test.jsx` forbids a production host in this file --
