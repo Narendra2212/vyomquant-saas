@@ -7,24 +7,21 @@
 // THE API AND SOCKET BASE: THE SERVED ORIGIN WINS OVER THE BUILD-TIME ENV
 //
 // THE DEFECT THIS REMOVES, MEASURED AGAINST PRODUCTION
-// Both of these used to be env-FIRST. `VITE_API_URL` and `VITE_WS_URL` were set to the raw
-// CloudFront distribution domain, and because Vite inlines env vars at build time the
-// shipped bundle contained them as unconditional constants -- the origin fallback below was
-// dead-code-eliminated entirely:
+// Both of these used to be env-FIRST. `VITE_API_URL` and `VITE_WS_URL` were set to the CDN
+// DISTRIBUTION's own default hostname rather than to the app's custom domain, and because
+// Vite inlines env vars at build time the shipped bundle contained them as unconditional
+// constants -- the origin fallback below was dead-code-eliminated entirely, leaving the two
+// resolvers as arrow functions returning a bare string.
 //
-//     Af=()=>"https://d7d88qs4jmch.cloudfront.net"
-//     Of=()=>"wss://d7d88qs4jmch.cloudfront.net"
+// So every API call and the websocket ticket mint were addressed to the distribution
+// hostname while the page itself was served from the custom domain. And `index.html` ships
+// a `connect-src` that lists only `'self'`, the custom domain and its subdomains, the
+// Supabase project, and a short tail of analytics and payment origins -- with no `https:`
+// wildcard and no entry for the distribution hostname.
 //
-// So every API call and the websocket ticket mint were addressed to that host, while the
-// page was served from `app.vyomquant.in`. And `index.html`'s own CSP says:
-//
-//     connect-src 'self' https://*.vyomquant.in wss://*.vyomquant.in
-//                 https://*.supabase.co wss://*.supabase.co ... ;
-//
-// The distribution domain is NOT in that list and there is no `https:` wildcard, so the
-// BROWSER REFUSED EVERY ONE before it left. axios reports that as "Network Error" with no
-// response, which the UI renders as "No connection to VyomQuant" on every panel, and the
-// socket could never even fetch a ticket.
+// So the BROWSER REFUSED EVERY ONE before it left the page. axios reports a blocked request
+// as "Network Error" with no response, which the UI renders as "No connection" on every
+// panel, and the socket could never even fetch a ticket.
 //
 // It was invisible from the server side, which is why it survived: measured over five days
 // of production logs, same-origin relative calls (`/api/config`, `/api/release.json`)
@@ -37,9 +34,13 @@
 // ALB, so the origin the page came from is always able to answer them. Same-origin needs no
 // CSP entry (`'self'` covers it), no CORS preflight, and cannot be broken by whichever host
 // happened to be in a secret at build time -- which is the same "one bundle, two hosts"
-// defect class the `appOrigin` comment below already describes. Widening the CSP to a raw
-// `*.cloudfront.net` host would instead bless an origin that is also a common entry in
-// browser tracker blocklists.
+// defect class the `appOrigin` comment below already describes. Widening the CSP to admit
+// the distribution hostname would fix the symptom and leave the design wrong: ONE bundle is
+// served from three hosts, so any single baked host is wrong for the other two.
+//
+// (No host literal appears anywhere in this file, in code or in prose.
+// `tests/unit/pages/authRedirectOrigin.test.jsx` section 5 enforces that over the whole
+// source text, which is why the hosts above are described rather than quoted.)
 //
 // THE ENV VAR IS STILL HONOURED, and is still required, for the two contexts that have no
 // usable served origin:
