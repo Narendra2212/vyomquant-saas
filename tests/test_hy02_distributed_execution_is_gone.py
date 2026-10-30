@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 import pytest
 
@@ -170,6 +171,91 @@ class TestNothingImportsItAgain:
         assert not offenders, (
             "backend_app/main.py references the deleted distributed-execution router in "
             f"code: {offenders}. RT-11 removed its mount and HY-02 removed the module."
+        )
+
+
+class TestNoPathStringPointsAtTheDeletedCode:
+    """The check that was missing, and the one CI caught instead of me.
+
+    The deletion was gated on an AST import scan of every tracked module, which correctly
+    found the router to be the only non-test importer. But two test files referenced the
+    deleted modules as PATH STRINGS in a module-level list and parametrised over them:
+
+        tests/test_execution_engine_mode_matches_its_branch.py
+        tests/test_execution_engine_requires_real_capital_regression.py
+
+    No import, so no import scan could see them. They failed in CI with
+    FileNotFoundError, seven tests across two jobs, after the local runs passed -- because
+    the local string check had been applied only to the files already being edited, which
+    is a subset mistaken for the whole.
+
+    So the guard now asserts it repo-wide. A path string is how a source-reading test
+    reaches a module, and those tests are common in this repository.
+    """
+
+    #: A string whose ENTIRE value is one of these is a path being used as a path.
+    PATH_RE = re.compile(
+        r"^backend_app[/\\]backend[/\\]distributed_execution[/\\][A-Za-z0-9_]+\.py$"
+        r"|^backend_app[/\\]routers[/\\]distributed_execution\.py$"
+    )
+
+    def test_no_string_literal_resolves_to_a_deleted_module_path(self):
+        """Flags a string that IS a path, not prose that mentions one.
+
+        A first version of this matched the pattern anywhere on a non-``#`` line and
+        failed on two DOCSTRINGS -- including the FINDING 2 narrative deliberately kept in
+        test_execution_paths_that_claim_an_exchange.py, which is the record of why that
+        file exists. Policing prose would have meant deleting the explanation to satisfy
+        the guard, which is backwards.
+
+        The discriminator is exactness. A source-reading test holds the path as the whole
+        string -- ``"backend_app/backend/distributed_execution/execution_worker.py"`` in a
+        list it parametrises over -- while prose embeds it in a sentence. Both of the real
+        CI failures were the exact-string kind, so this catches them and leaves the
+        history alone.
+        """
+        offenders: list[str] = []
+
+        for sub in ("backend_app", "tests", "scripts"):
+            base = ROOT / sub
+            if not base.is_dir():
+                continue
+            for path in sorted(base.rglob("*.py")):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(ROOT).as_posix()
+                try:
+                    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"),
+                                     filename=rel)
+                except (OSError, SyntaxError):
+                    continue
+
+                # Docstrings are prose by definition, so they are excluded by identity
+                # rather than by heuristic.
+                docstrings = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                         ast.AsyncFunctionDef)):
+                        body = getattr(node, "body", None)
+                        if (body and isinstance(body[0], ast.Expr)
+                                and isinstance(body[0].value, ast.Constant)
+                                and isinstance(body[0].value.value, str)):
+                            docstrings.add(id(body[0].value))
+
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Constant):
+                        continue
+                    if not isinstance(node.value, str) or id(node) in docstrings:
+                        continue
+                    if self.PATH_RE.match(node.value.strip()):
+                        offenders.append(
+                            f"{rel}:{getattr(node, 'lineno', 0)} -> {node.value.strip()}"
+                        )
+
+        assert not offenders, (
+            "these hold a deleted distributed-execution module path as a string literal, "
+            "so they fail at runtime with FileNotFoundError rather than at import -- which "
+            f"is how this escaped local runs and only broke in CI: {offenders}"
         )
 
 
