@@ -48,38 +48,49 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force || true
 
-      # CI-02: this step authenticated with a long-lived IAM user access key
-      # (secrets.AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY) -- a standing credential with
-      # no expiry, not scoped to GitHub Actions. It now assumes a role over GitHub's OIDC
-      # provider instead, so the credential this job holds is minted per run and expires
-      # with it.
+      # CI-02: THIS STEP STILL USES A LONG-LIVED IAM USER KEY, AND AN ATTEMPT TO MOVE IT
+      # TO OIDC WAS REVERTED. Recorded here because the next person to try will otherwise
+      # repeat it.
       #
-      # WHY THIS WORKFLOW IS SAFE TO SWITCH AND THE OTHERS ARE NOT YET. The role's trust
-      # policy admits exactly two subjects:
-      #     repo:Narendra2212/vyomquant-saas:ref:refs/heads/main
-      #     repo:Narendra2212/vyomquant-saas:ref:refs/heads/master
-      # This workflow's only live trigger is `push: branches: [main, master]`, so every run
-      # of it presents one of those two. Its `workflow_call` trigger is declared but
-      # UNUSED -- grepped, nothing in .github/workflows invokes it -- which matters because
-      # a call from a pull-request context would present `repo:...:pull/<n>/merge` and be
-      # refused. The job already declares `id-token: write` above.
+      # The attempt replaced this with:
+      #     role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
+      # It was pre-checked more carefully than most changes and still failed. Run
+      # 41145549134 on main, step "Configure AWS Credentials":
       #
-      # The role's inline policy covers what this job does: ecr:GetAuthorizationToken, the
-      # eight ECR layer/push actions on repository/vyomquant-*, and the ECS describe/
-      # register/update calls, with iam:PassRole scoped to the role the REAL task
-      # definition runs under (ecsTaskExecutionRole, confirmed via DescribeTaskDefinition
-      # -- not the terraform-only names that were never applied).
+      #     audience: sts.amazonaws.com
+      #     Assuming role with OIDC
+      #     ##[error]Could not assume role with OIDC:
+      #              Not authorized to perform sts:AssumeRoleWithWebIdentity
       #
-      # 03-deploy.yml is deliberately NOT switched in the same change. It has two
-      # credential steps and no `id-token: write`, and it is the workflow that actually
-      # deploys, so a mistake there is worse than a failed build. This workflow going green
-      # against the role is what proves the provider, the trust condition and the policy
-      # work at all; that evidence should exist before the deploy path moves.
+      # EVERYTHING CHECKABLE BEFOREHAND CHECKED OUT, which is the useful part of this note:
+      #   - the role exists; the ARN in the workflow matched iam:GetRole's ARN exactly
+      #   - its trust policy allows sts:AssumeRoleWithWebIdentity from
+      #     arn:aws:iam::273709947018:oidc-provider/token.actions.githubusercontent.com
+      #     with aud = sts.amazonaws.com and sub StringLike
+      #     repo:Narendra2212/vyomquant-saas:ref:refs/heads/{main,master}
+      #   - a push to main sends exactly that sub, and this workflow only runs on push to
+      #     main/master (its workflow_call trigger is declared but unused)
+      #   - the provider's Url is token.actions.githubusercontent.com and its ClientIDList
+      #     does contain sts.amazonaws.com
+      #   - the role has no permissions boundary
+      #
+      # So the cause is NOT any of those. The leading unverified candidate is the
+      # provider's ThumbprintList, which holds a single old GitHub thumbprint
+      # (ab9d0263244dd0326eb67015705a667e79cfe998) -- and note the provider is tagged
+      # Project=deeptech-outreach, i.e. it belongs to a different project sharing this AWS
+      # account, so changing it is not this project's call to make unilaterally.
+      #
+      # THE REAL LESSON, for whoever picks this up: an OIDC trust relationship cannot be
+      # verified without a real workflow run on a trusted ref. There is no dry run. This
+      # workflow runs on push to main, so the first test is a merge, and a failed test
+      # means main's build is broken until it is reverted. Do the next attempt with that
+      # understood -- ideally against a throwaway workflow that is allowed to fail, not
+      # against the build everything else gates on.
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
-          role-session-name: gha-02-build-${{ github.run_id }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
