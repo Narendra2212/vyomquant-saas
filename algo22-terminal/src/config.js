@@ -3,15 +3,68 @@
  * Uses Vite's import.meta.env for environment variables with safe browser origin fallbacks
  */
 
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// THE API AND SOCKET BASE: THE SERVED ORIGIN WINS OVER THE BUILD-TIME ENV
+//
+// THE DEFECT THIS REMOVES, MEASURED AGAINST PRODUCTION
+// Both of these used to be env-FIRST. `VITE_API_URL` and `VITE_WS_URL` were set to the CDN
+// DISTRIBUTION's own default hostname rather than to the app's custom domain, and because
+// Vite inlines env vars at build time the shipped bundle contained them as unconditional
+// constants -- the origin fallback below was dead-code-eliminated entirely, leaving the two
+// resolvers as arrow functions returning a bare string.
+//
+// So every API call and the websocket ticket mint were addressed to the distribution
+// hostname while the page itself was served from the custom domain. And `index.html` ships
+// a `connect-src` that lists only `'self'`, the custom domain and its subdomains, the
+// Supabase project, and a short tail of analytics and payment origins -- with no `https:`
+// wildcard and no entry for the distribution hostname.
+//
+// So the BROWSER REFUSED EVERY ONE before it left the page. axios reports a blocked request
+// as "Network Error" with no response, which the UI renders as "No connection" on every
+// panel, and the socket could never even fetch a ticket.
+//
+// It was invisible from the server side, which is why it survived: measured over five days
+// of production logs, same-origin relative calls (`/api/config`, `/api/release.json`)
+// arrived normally while NOT ONE cross-origin API call or websocket handshake appeared at
+// all. Sign-in kept working the whole time, because `https://*.supabase.co` IS in the
+// policy -- so the app looked authenticated and completely disconnected at once.
+//
+// WHY ORIGIN-FIRST IS THE FIX RATHER THAN WIDENING THE CSP
+// One CloudFront distribution serves the bundle AND proxies `/api/*` and `/ws/*` to the
+// ALB, so the origin the page came from is always able to answer them. Same-origin needs no
+// CSP entry (`'self'` covers it), no CORS preflight, and cannot be broken by whichever host
+// happened to be in a secret at build time -- which is the same "one bundle, two hosts"
+// defect class the `appOrigin` comment below already describes. Widening the CSP to admit
+// the distribution hostname would fix the symptom and leave the design wrong: ONE bundle is
+// served from three hosts, so any single baked host is wrong for the other two.
+//
+// (No host literal appears anywhere in this file, in code or in prose.
+// `tests/unit/pages/authRedirectOrigin.test.jsx` section 5 enforces that over the whole
+// source text, which is why the hosts above are described rather than quoted.)
+//
+// THE ENV VAR IS STILL HONOURED, and is still required, for the two contexts that have no
+// usable served origin:
+//   * the Tauri desktop build, where `window.location` is `tauri://localhost`;
+//   * `npm run dev`, served on `http://localhost:1420` with the API on another port and no
+//     vite proxy (`vite.config.js` sets only `port`/`strictPort`).
+// Both are non-https, which is exactly the condition that falls through to the env var. A
+// production web deployment is always https, so it always takes its own origin.
+// ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** Is this a page served over TLS, i.e. a real deployed web origin? */
+const servedOverHttps = () =>
+  typeof window !== 'undefined'
+  && window.location?.protocol === 'https:'
+  && Boolean(window.location.host);
+
 const getBrowserApiBase = () => {
+  if (servedOverHttps()) return window.location.origin;
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
-  if (typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null') {
-    return window.location.origin;
-  }
   return "http://localhost:8000";
 };
 
 const getBrowserWsBase = () => {
+  if (servedOverHttps()) return `wss://${window.location.host}`;
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
   if (typeof window !== 'undefined' && window.location.host) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
