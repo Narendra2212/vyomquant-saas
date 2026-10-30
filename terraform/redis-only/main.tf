@@ -1,5 +1,33 @@
 # Redis-only Terraform configuration for existing production VPC
 # This deploys ElastiCache Redis into the existing VyomQuant production environment
+#
+# ─────────────────────────────────────────────────────────────────────────────────────
+# DO NOT `terraform apply` THIS MODULE WITHOUT READING THIS FIRST (INF-02)
+# ─────────────────────────────────────────────────────────────────────────────────────
+# This module and the ROOT module at terraform/ now BOTH declare the same live security
+# group. `aws_security_group.redis` below describes sg-00c4bac4f05c9922b, and the root
+# module's own `aws_security_group.redis` was IMPORTED against that exact id -- it is in
+# terraform state at s3://vyomquant-terraform-state/prod/terraform.tfstate today.
+#
+# Two root modules claiming one resource is a conflict, not a duplication: whichever
+# applies last wins, and because `name` and `description` are ForceNew on a security
+# group, "winning" can mean DESTROY AND RECREATE the group attached to six live
+# ElastiCache nodes. This module's own state is not in that bucket (it was applied from a
+# separate working directory, per INF-02), so neither side can see the other.
+#
+# The conflict is recorded rather than resolved here, deliberately. Changing
+# `resource "aws_security_group" "redis"` below into a `data` lookup would be the obvious
+# tidy-up and is the WRONG move blind: if this module's state exists anywhere, removing
+# the resource from its configuration makes the next apply plan a DESTROY of the live
+# group. Resolving it safely needs that state located first, which is part of INF-06's
+# consolidation step.
+#
+# What this module still uniquely records, and why it is therefore not deleted: the
+# `aws_elasticache_subnet_group` and the DEPRECATED cluster-mode-enabled replication group
+# `vyomquant-redis-production`. The root module's redis.tf carries a data source for
+# `vyomquant-redis-production-cmd` only -- the one REDIS_URL actually points at -- so
+# deleting this file would lose the only description of the other two.
+# ─────────────────────────────────────────────────────────────────────────────────────
 
 terraform {
   required_version = ">= 1.5.0"
