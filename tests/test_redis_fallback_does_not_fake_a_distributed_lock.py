@@ -215,27 +215,6 @@ def test_a_lock_is_refused_rather_than_granted_when_redis_is_gone(rm, monkeypatc
     )
 
 
-def test_an_idempotency_claim_is_refused_rather_than_granted_when_redis_is_gone(rm, monkeypatch):
-    """The same property through the submission claim, which is the control that
-    decides whether an order is sent at all."""
-    from backend_app.backend.distributed_execution.idempotent_exchange_submission import \
-        IdempotentExchangeSubmission
-
-    module, manager = rm
-    monkeypatch.setenv("ENV", "production")
-    monkeypatch.setenv("DEV_MODE", "false")
-
-    sub = IdempotentExchangeSubmission()
-    sub.redis = manager
-
-    claimed = asyncio.run(sub.claim_submission("client_abc", "tenant-1"))
-
-    assert claimed is False, (
-        "a submission claim was granted while Redis was unavailable, so two pods would "
-        "each believe they held the sole right to submit"
-    )
-
-
 def test_the_mock_store_is_per_instance_which_is_why_it_cannot_be_a_lock(rm):
     """States the reason the substitution is unsafe, so the test survives a refactor
     that keeps the mock but changes where it is returned."""

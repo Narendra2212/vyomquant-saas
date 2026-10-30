@@ -699,7 +699,13 @@ class SharedRedisManager:
 
           * ``master_executor``'s execution lock —
             ``set(f"execution:{user}:{symbol}:{execution_id}", nx=True, ex=30)``
-          * ``IdempotentExchangeSubmission.claim_submission``'s ``SET NX`` claim
+          * ``DistributedIdempotency._atomic_check_and_set``'s Lua check-and-set claim
+            (FIN-CRITICAL-004). This example previously named
+            ``IdempotentExchangeSubmission.claim_submission``, which lived in
+            ``backend/distributed_execution/`` and was deleted under HY-02 as unreachable
+            code. The argument below is unchanged by the substitution — it was always
+            about the manager, not about which caller holds the claim — but the live
+            claim is the one in ``core/distributed_idempotency.py``.
 
         ``MockRedisClient`` is backed by a plain ``dict`` on a module-global instance, so
         it is **per process**. Every pod therefore wins its own ``NX`` and both controls

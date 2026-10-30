@@ -1100,18 +1100,29 @@ app.include_router(billing.router, prefix="/api/billing", tags=["Billing"])
 app.include_router(security.router, prefix="/api/security", tags=["Security"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 #  RT-11: distributed_execution.router WAS mounted here. Removed: `execution_orchestrator`
-#  is never initialized or started anywhere in this codebase (confirmed by
-#  tests/test_execution_paths_that_claim_an_exchange.py's own measurement --
-#  `exchange_gateways == {}` and `worker_pool is None` always), so every submission already
-#  refused with 400 before this fix. That refusal closed the dangerous failure mode (a job
+#  was never initialized or started anywhere in this codebase, so every submission already
+#  refused with 400 before that fix. That refusal closed the dangerous failure mode (a job
 #  silently accepted and never processed), but left a fully-documented, "institutional-grade
 #  reliability" HTTP surface mounted for a queue nothing drains -- confusing to any caller
-#  and, per this finding, worth removing rather than leaving reachable-but-useless. No
-#  frontend caller exists (grepped algo22-terminal/src/). The router module and the
-#  `backend/distributed_execution/` package are intentionally left in place, not deleted:
-#  several tests import them directly by path to pin the orchestrator's unstarted state,
-#  and `backend/distributed_execution/exchange_reconciliation_engine.py`'s reconciliation
-#  loops are a separate, not-yet-evaluated concern this change does not touch.
+#  and worth removing rather than leaving reachable-but-useless. No frontend caller ever
+#  existed (grepped algo22-terminal/src/).
+#
+#  HY-02 then DELETED the subsystem outright. This comment previously said the router and
+#  the `backend/distributed_execution/` package were "intentionally left in place, not
+#  deleted", because several tests imported them by path to pin the orchestrator's
+#  unstarted state. That is no longer true and the reasoning no longer applies: an AST walk
+#  of every tracked .py found the router itself to be the ONLY non-test importer of the
+#  package, and the router was already unmounted here -- so all 40 modules plus the router
+#  went, 1.02 MB, and the tests that pinned "it exists but is inert" were replaced by
+#  tests/test_hy02_distributed_execution_is_gone.py, which asserts it is ABSENT. That is a
+#  stronger guarantee: an unmounted router can be re-mounted by one line, a deleted one
+#  cannot. Measured: reachability went from 107 dead files to 65 with `reachable` unchanged
+#  at 248, and nothing newly flagged, so no live import chain was touched.
+#
+#  The reconciliation loops in the old `exchange_reconciliation_engine.py` went with it.
+#  They were never wired to anything; HY-02's entry records exchange_reconciliation.py and
+#  fee_engine.py (different, still-present modules) as the revive-or-delete decision that
+#  remains open.
 app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(health_websocket.router, prefix="/health", tags=["Health"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])

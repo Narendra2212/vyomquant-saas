@@ -137,12 +137,21 @@ KNOWN_FALSE_POSITIVES_NOW_FIXED = {
     "backend_app/backend/exchange_simulator.py",
 }
 
-# Files that are correctly STILL flagged: RT-11 deliberately unmounted
-# backend_app.routers.distributed_execution (not imported anywhere in
-# main.py's router list; kept only for tests pinning its unstarted state,
-# which is not the same thing as production reachability).
+# Files that are correctly STILL flagged. This is the negative control for the
+# whole file: without it, every assertion above would pass vacuously the moment
+# the walk started marking everything reachable.
+#
+# It used to be backend_app/routers/distributed_execution.py, which HY-02 has now
+# DELETED along with the 40-module package behind it -- so a control asserting it
+# is still flagged would fail for the wrong reason, and worse, would have to be
+# deleted rather than replaced, leaving the file with no control at all.
+#
+# quota_scheduler.py is the right replacement precisely because it is not going
+# anywhere: QUOTA-01 measured it as dead and harmless and then DELIBERATELY left
+# it in place rather than removing it. A control wants a file whose dead status is
+# a recorded decision, not an accident waiting to be tidied up.
 KNOWN_STILL_UNREACHABLE = {
-    "backend_app/routers/distributed_execution.py",
+    "backend_app/core/quota_scheduler.py",
 }
 
 
@@ -164,15 +173,29 @@ class TestKnownFalsePositivesAreFixed:
             f"they are not (the fix may have over-widened reachability): {sorted(missing)}"
         )
 
-    def test_unreachable_count_did_not_regress_above_pre_fix_baseline(self, audit_results):
-        # Pre-fix baseline measured this session: 167 flagged (416 files
-        # analyzed). The fix must only ever REDUCE false positives relative
-        # to that baseline, never silently grow past it -- a growth would
-        # mean either a new entry point stopped resolving or a real import
-        # stopped being traced.
-        assert len(audit_results) <= 167, (
-            f"Unreachable count ({len(audit_results)}) exceeds the documented "
-            f"pre-fix baseline of 167 -- investigate before trusting this run."
+    def test_unreachable_count_did_not_regress_above_the_current_baseline(self, audit_results):
+        # A RATCHET, not a ceiling with slack in it.
+        #
+        # This started at 167, which was the pre-fix false-positive baseline, and stayed
+        # there while three separate passes drove the real number down -- so for most of
+        # its life it could not have failed. A bound that cannot be reached does not
+        # protect anything.
+        #
+        # 65 is measured, on this tree, with the tree in this state: 333 files analyzed,
+        # 248 reachable, 65 unreachable. The before/after was taken on the SAME tree by
+        # stashing, so the number is attributable to the deletions rather than to drift --
+        # 107 before, 65 after, 0 newly flagged, and `reachable` unchanged at 248, which is
+        # what proves nothing live was disconnected.
+        #
+        # Adding genuinely-unreachable code is now a test failure. That is deliberate: this
+        # finding exists because 168 modules accumulated without anyone noticing, and the
+        # only thing that stops that recurring is a number that has to be argued with.
+        # Raising this bound is a legitimate move -- it just has to be a decision.
+        assert len(audit_results) <= 65, (
+            f"Unreachable count ({len(audit_results)}) exceeds the measured baseline of "
+            f"65. Either new unreachable code was added, or an entry point stopped "
+            f"resolving and real code is being reported as dead. Both are worth knowing; "
+            f"neither should be fixed by raising this number without saying why."
         )
 
     def test_entry_point_files_all_exist_on_disk(self, audit_module):

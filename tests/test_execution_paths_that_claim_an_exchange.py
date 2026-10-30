@@ -1,6 +1,24 @@
 """
 tests/test_execution_paths_that_claim_an_exchange.py
 
+TWO OF THE THREE PATHS NO LONGER EXIST (HY-02)
+    The history below is kept because it is the record of why these defects were found and
+    what was decided, and that reasoning still explains the surviving path. But FINDING 2
+    (``idempotent_exchange_submission``) and FINDING 3 (``ExchangeGateway`` /
+    ``ExecutionWorker``) both lived in ``backend_app/backend/distributed_execution/``, and
+    that whole subsystem -- 40 modules plus its unmounted router -- was DELETED under
+    HY-02. RT-11 had already removed the router's ``include_router`` from main.py, and the
+    only non-test importer of the package was that router, so nothing reachable was lost.
+
+    The classes that pinned those two paths went with it, which is why this file now holds
+    8 tests rather than 25. That is not reduced coverage of a live risk: those tests
+    asserted that a dangerous-looking subsystem was inert, and the subsystem is now absent.
+    The guarantee is enforced more strongly, and in one place, by
+    ``tests/test_hy02_distributed_execution_is_gone.py``, which fails if any part of it
+    returns -- package, router, import or mounted route.
+
+    FINDING 1, the ``POST /api/execution/signal`` path, is untouched and still covered here.
+
 Three execution paths construct an ``ExecutionEngine`` without an exchange executor and
 then describe the result as though an exchange had been reached. Found while deciding what
 ``execution_environment`` the four unstated construction sites should declare: the answer
@@ -270,62 +288,6 @@ class TestNoneOfTheThreePathsIsReachable:
     is urgent -- so the measurement is pinned rather than asserted once in a docstring.
     """
 
-    def test_nothing_initialises_or_starts_the_distributed_execution_orchestrator(self):
-        """``initialize()`` is what creates the gateways and the worker pool.
-
-        Without it ``exchange_gateways`` stays empty and ``worker_pool`` stays ``None``,
-        so no job can be submitted and none can be processed.
-        """
-        initialised = _call_sites("initialize", receiver="execution_orchestrator")
-        started = _call_sites("start", receiver="execution_orchestrator")
-
-        assert initialised == [], (
-            f"the orchestrator is now initialised at {initialised}; the gateway's "
-            f"execution path becomes reachable and these findings need re-rating"
-        )
-        assert started == [], f"the orchestrator is now started at {started}"
-
-    def test_the_orchestrator_singleton_has_no_gateways(self):
-        """Imported, not constructed by the test, so this is the real process state."""
-        from backend_app.backend.distributed_execution import execution_orchestrator
-
-        assert execution_orchestrator.exchange_gateways == {}
-        assert execution_orchestrator.worker_pool is None
-
-    @pytest.mark.asyncio
-    async def test_submitting_a_job_is_refused_before_it_is_queued(self):
-        """So ``POST /api/distributed-execution/submit-job`` is a 400 on every request.
-
-        The handler catches ``ValueError`` and returns
-        ``400 Invalid input: Exchange not supported: ...``. Run rather than reasoned
-        about: the guard precedes every persistence and queue call, so this needs no
-        Redis or database.
-        """
-        from backend_app.backend.distributed_execution import execution_orchestrator
-
-        with pytest.raises(ValueError) as caught:
-            await execution_orchestrator.submit_execution_job(
-                tenant_id="t",
-                strategy_id="s",
-                bot_id="b",
-                signal_id="sig",
-                exchange="binance",
-                symbol="BTC/USDT",
-                side="buy",
-                order_type="market",
-                quantity=Decimal("0.01"),
-            )
-
-        assert "Exchange not supported" in str(caught.value)
-
-    def test_the_handler_turns_that_into_a_400(self):
-        from backend_app.routers import distributed_execution as router_module
-
-        source = inspect.getsource(router_module)
-
-        assert "except ValueError as e:" in source
-        assert "status_code=400" in source
-
     def test_nothing_calls_the_idempotent_exchange_submission(self):
         """Its only entry point, and its singleton accessor, have no callers.
 
@@ -338,36 +300,6 @@ class TestNoneOfTheThreePathsIsReachable:
         """
         assert _call_sites("submit_order_idempotent", production_only=True) == []
         assert _call_sites("get_idempotent_exchange_submission", production_only=True) == []
-
-    def test_the_idempotent_submission_path_refuses_live_orders_outright(self):
-        """And now it does not merely lack callers -- it refuses.
-
-        "Nothing calls it" is a fact about today's wiring that the next commit can
-        change. The path builds an engine declared LIVE and calls ``execute_trade``,
-        which hardcodes ``source="bot_runner"``, so it would inherit the bot runner's
-        authorisation to place real orders while performing no risk evaluation of its
-        own. It is sealed at the point of submission, which is a property of the code
-        rather than of the call graph.
-        """
-        refusal = _function(
-            "backend_app/backend/distributed_execution/idempotent_exchange_submission.py",
-            "submit_order_idempotent",
-        )
-
-        returned_errors = {
-            value_node.value
-            for node in ast.walk(refusal)
-            if isinstance(node, ast.Dict)
-            for key_node, value_node in zip(node.keys, node.values)
-            if isinstance(key_node, ast.Constant)
-            and key_node.value == "error"
-            and isinstance(value_node, ast.Constant)
-        }
-
-        assert "RISK_EVALUATION_REQUIRED" in returned_errors, (
-            "submit_order_idempotent no longer refuses live orders; it would place an "
-            "unrisk-checked order with bot_runner authorisation"
-        )
 
     def test_the_signal_endpoint_is_mounted_but_cannot_succeed(self):
         """Finding 1's reachability: mounted, reachable, and a 500 every time."""
@@ -456,278 +388,9 @@ class TestTheSignalEndpointCannotSucceed:
 # ---------------------------------------------------------------------------
 
 
-class TestNoExchangeOrderIdIsMintedForAnOrderNoExchangeSaw:
-    RELATIVE = (
-        "backend_app/backend/distributed_execution/idempotent_exchange_submission.py"
-    )
-
-    def test_the_engine_is_built_without_an_exchange_executor(self):
-        """Unchanged, and now harmless: with LIVE stated the engine refuses instead."""
-        constructions = _engine_constructions(self.RELATIVE)
-
-        assert constructions, "the construction is gone; re-check this finding"
-        for lineno, kwargs in constructions:
-            assert "exchange_executor" not in kwargs, (
-                f"{self.RELATIVE}:{lineno} now supplies an exchange_executor, so this "
-                f"path may genuinely reach an exchange -- re-check the finding"
-            )
-
-    def test_it_states_that_it_is_a_live_path(self):
-        """The label the module's own name and return field settle.
-
-        With no executor, ``LIVE`` makes ``_execute_trade_internal`` refuse at the branch
-        point rather than simulate and report success -- see
-        ``tests/test_execution_engine_mode_matches_its_branch.py``.
-        """
-        constructions = _engine_constructions(self.RELATIVE)
-
-        for lineno, kwargs in constructions:
-            assert _stated_environment(kwargs.get("execution_environment")) == "LIVE", (
-                f"{self.RELATIVE}:{lineno} does not state LIVE, so an executor-less "
-                f"engine simulates the fill and the result is reported as an exchange "
-                f"submission"
-            )
-
-    def test_a_synthetic_exchange_id_is_no_longer_generated(self):
-        """No id is minted inside the submission path, by any route."""
-        submit = _function(self.RELATIVE, "submit_order_idempotent")
-
-        assert "uuid4" not in _callees(submit), (
-            "an order id is still generated inside the submission path, so a caller can "
-            "receive an exchange_order_id that no exchange issued"
-        )
-
-    def test_the_internal_execution_id_is_not_passed_off_as_an_exchange_id(self):
-        """``execution_id`` is this system's idempotency key, not a venue id.
-
-        Asserted as a property of the assignment rather than of the source text: the
-        value bound to the name must come from the fill, not from ``res`` directly.
-        """
-        submit = _function(self.RELATIVE, "submit_order_idempotent")
-
-        offenders = []
-        for node in ast.walk(submit):
-            if not isinstance(node, ast.Assign):
-                continue
-            targets = {
-                target.id for target in node.targets if isinstance(target, ast.Name)
-            }
-            if not targets & {"exchange_order_id", "venue_order_id"}:
-                continue
-            rendered = ast.dump(node.value)
-            if "'execution_id'" in rendered:
-                offenders.append(ast.dump(node))
-
-        assert not offenders, (
-            f"the internal execution id is still bound to the exchange order id: "
-            f"{offenders}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_an_executorless_engine_really_does_simulate_when_it_says_nothing(self):
-        """The measurement the finding rests on, taken from the real engine.
-
-        Kept because it is the reason the label matters: an UNSTATED executor-less engine
-        still returns a successful ``paper_`` fill, which is what this path used to
-        report as an exchange submission.
-        """
-        from backend_app.core.execution_engine import ExecutionEngine
-
-        engine = ExecutionEngine(
-            fee_rate=0.001,
-            slippage=0.0,
-            portfolio_state={
-                "total_equity": "100000",
-                "available_balance": "100000",
-                "total_exposure": "0",
-            },
-        )
-
-        success, detail = await engine._execute_trade_internal(
-            execution_id="probe",
-            symbol="BTC/USDT",
-            side="buy",
-            size=Decimal("0.01"),
-            price=Decimal("50000"),
-        )
-
-        assert success is True
-        assert str(detail["order_id"]).startswith("paper_"), (
-            f"an executor-less engine no longer returns a paper_ order id: {detail!r}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # 3. The worker that recorded a refusal as a completed job
 # ---------------------------------------------------------------------------
-
-
-class TestTheWorkerDoesNotRecordARefusalAsAnExecution:
-    RELATIVE = "backend_app/backend/distributed_execution/execution_worker.py"
-
-    def test_the_job_type_has_no_portfolio_state_so_the_gateway_always_refuses(self):
-        """Why this gateway has never reached the engine.
-
-        Asserted against the dataclass rather than the source text, so a field added in
-        any of the three places that matter (class, ``to_dict``, ``from_dict``) is
-        noticed.
-        """
-        import dataclasses
-
-        from backend_app.backend.distributed_execution.queue_manager import \
-            ExecutionJob
-
-        fields = {field.name for field in dataclasses.fields(ExecutionJob)}
-        assert "portfolio_state" not in fields, (
-            "ExecutionJob now carries a portfolio_state, so the gateway can reach the "
-            "engine -- re-read this finding, the refusal is no longer unconditional"
-        )
-        assert "portfolio_state" not in ExecutionJob().to_dict()
-
-    @pytest.mark.asyncio
-    async def test_the_gateway_refuses_rather_than_sizing_against_invented_capital(self):
-        """Run end to end. No Redis, database or exchange is involved in a refusal."""
-        from backend_app.backend.distributed_execution.execution_worker import \
-            ExchangeGateway
-        from backend_app.backend.distributed_execution.queue_manager import \
-            ExecutionJob
-
-        job = ExecutionJob()
-        job.tenant_id = str(uuid4())  # parsed as a UUID before the capital check
-        job.exchange, job.symbol, job.side = "binance", "BTC/USDT", "buy"
-        job.quantity = Decimal("0.01")
-
-        result = await ExchangeGateway("binance").execute_order(job)
-
-        assert result["status"] != "filled", (
-            f"the gateway reported a fill for a job with no capital to size against: "
-            f"{result!r}"
-        )
-        assert result.get("error") == "PORTFOLIO_STATE_REQUIRED"
-
-    def test_it_states_that_it_is_a_live_path(self):
-        constructions = _engine_constructions(self.RELATIVE)
-
-        assert constructions, "the engine construction is gone; re-check"
-        for lineno, kwargs in constructions:
-            assert _stated_environment(kwargs.get("execution_environment")) == "LIVE", (
-                f"{self.RELATIVE}:{lineno} does not state LIVE, so an executor-less "
-                f"engine simulates the fill and the worker records it as executed"
-            )
-
-    def test_no_order_id_is_invented_when_none_came_back(self):
-        execute = _function(self.RELATIVE, "execute_order")
-
-        assert "uuid4" not in _callees(execute), (
-            "an order id is still generated at the point of reporting, so a job can be "
-            "recorded against an id no venue issued"
-        )
-
-    def test_no_execution_price_is_invented_when_the_job_carried_none(self):
-        """The ``Decimal("50000")`` placeholder, asked about as a literal.
-
-        A text search for it matches the docstring that explains its removal, which is
-        how this test first failed on the fix it was asking for.
-        """
-        execute = _function(self.RELATIVE, "execute_order")
-
-        assert "50000" not in _literal_arguments(execute, "Decimal"), (
-            "the 50000 placeholder execution price is still reported as a fill price"
-        )
-
-    @pytest.mark.asyncio
-    async def test_a_result_that_did_not_fill_is_failed_and_not_completed(self, monkeypatch):
-        """The defect, asserted on the consumer that caused it.
-
-        ``_complete_job_with_result`` set ``JobStatus.COMPLETED`` and emitted
-        ``on_order_execution`` without ever reading ``result["status"]``, so the
-        gateway's own refusal was recorded as an executed order with a null id and zeroed
-        price, quantity and fees.
-        """
-        from backend_app.backend.distributed_execution import execution_worker as ew
-        from backend_app.backend.distributed_execution.queue_manager import (
-            ExecutionJob, JobStatus)
-
-        acknowledged, rejected, telemetry = [], [], []
-
-        class _Queue:
-            async def acknowledge_job(self, job):
-                acknowledged.append(job)
-                return True
-
-            async def reject_job(self, job, error):
-                rejected.append((job, error))
-                return True
-
-        class _Telemetry:
-            async def on_order_execution(self, **kwargs):
-                telemetry.append(kwargs)
-
-        monkeypatch.setattr(ew, "queue_manager", _Queue())
-        monkeypatch.setattr(ew, "exchange_telemetry", _Telemetry())
-
-        worker = ew.ExecutionWorker(worker_id="w-1", exchange_gateways={})
-        job = ExecutionJob()
-        job.exchange, job.symbol, job.side = "binance", "BTC/USDT", "buy"
-        job.quantity = Decimal("0.01")
-
-        await worker._complete_job_with_result(
-            job,
-            {"order_id": None, "status": "refused", "error": "PORTFOLIO_STATE_REQUIRED"},
-        )
-
-        assert job.status is not JobStatus.COMPLETED, (
-            "a refused order was recorded as a COMPLETED job"
-        )
-        assert telemetry == [], (
-            f"on_order_execution was emitted for an order that was refused: {telemetry!r}"
-        )
-        assert rejected, "the refusal was not routed to the retry/dead-letter path"
-
-    @pytest.mark.asyncio
-    async def test_a_real_fill_is_still_completed_and_still_emits_telemetry(self, monkeypatch):
-        """The bound. The guard above must not break the path it is guarding."""
-        from backend_app.backend.distributed_execution import execution_worker as ew
-        from backend_app.backend.distributed_execution.queue_manager import (
-            ExecutionJob, JobStatus)
-
-        acknowledged, telemetry = [], []
-
-        class _Queue:
-            async def acknowledge_job(self, job):
-                acknowledged.append(job)
-                return True
-
-            async def reject_job(self, job, error):  # pragma: no cover - must not run
-                raise AssertionError(f"a filled order was rejected: {error}")
-
-        class _Telemetry:
-            async def on_order_execution(self, **kwargs):
-                telemetry.append(kwargs)
-
-        monkeypatch.setattr(ew, "queue_manager", _Queue())
-        monkeypatch.setattr(ew, "exchange_telemetry", _Telemetry())
-
-        worker = ew.ExecutionWorker(worker_id="w-2", exchange_gateways={})
-        job = ExecutionJob()
-        job.exchange, job.symbol, job.side = "binance", "BTC/USDT", "buy"
-        job.quantity = Decimal("0.01")
-
-        await worker._complete_job_with_result(
-            job,
-            {
-                "order_id": "venue-123",
-                "status": "filled",
-                "filled_quantity": "0.01",
-                "execution_price": "50000",
-                "fees": "0.5",
-            },
-        )
-
-        assert job.status is JobStatus.COMPLETED
-        assert job.order_id == "venue-123"
-        assert job.execution_price == Decimal("50000")
-        assert acknowledged and telemetry
 
 
 # ---------------------------------------------------------------------------
