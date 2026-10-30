@@ -339,18 +339,26 @@ EXPECTED_SITES = {
     # `apply_slippage` for determinism. BACKTEST is readable from the code, which is why
     # it could be declared first.
     "backend_app/validate_financials.py": {"BACKTEST"},
-    # LIVE, decided after measuring who can reach them: nobody. Both construct an engine
-    # with no exchange executor on a path whose own name claims one -- a module called
-    # `idempotent_exchange_submission` returning an `exchange_order_id`, and a class
-    # called `ExchangeGateway` -- so the simulated fill was being reported as an exchange
-    # result. The label was held back while it looked like a product decision; it is not,
-    # because the behaviour it decides is unreachable (`submit_order_idempotent` has no
-    # callers, and the gateway only exists if `ExecutionOrchestrator.initialize()` is
-    # called, which nothing does). Stating LIVE turns a latent trap into a refusal for
-    # whoever wires them up, with no live path to break.
-    # Measured in tests/test_execution_paths_that_claim_an_exchange.py.
-    "backend_app/backend/distributed_execution/execution_worker.py": {"LIVE"},
-    "backend_app/backend/distributed_execution/idempotent_exchange_submission.py": {"LIVE"},
+    # TWO ENTRIES REMOVED HERE UNDER HY-02, and the reasoning is kept because it is the
+    # reason they were ever labelled.
+    #
+    # They were distributed_execution/execution_worker.py and
+    # distributed_execution/idempotent_exchange_submission.py, both marked {"LIVE"} after
+    # measuring who could reach them: nobody. Each constructed an engine with no exchange
+    # executor on a path whose own name claimed one -- a module called
+    # `idempotent_exchange_submission` returning an `exchange_order_id`, and a class called
+    # `ExchangeGateway` -- so a simulated fill was being reported as an exchange result.
+    # Stating LIVE turned that latent trap into a refusal for whoever wired them up.
+    #
+    # HY-02 then deleted the whole backend_app/backend/distributed_execution/ package: 40
+    # modules whose only non-test importer was its own already-unmounted router. A trap
+    # that no longer exists needs no label, so the entries go. This is the stronger
+    # outcome the LIVE label was a stand-in for -- it made an unreachable path refuse;
+    # deletion removes the path.
+    #
+    # The absence is itself enforced, so this cannot quietly come back unlabelled:
+    # tests/test_hy02_distributed_execution_is_gone.py fails if any part of the subsystem
+    # returns.
 }
 
 #: Construction sites that do NOT state their environment, so are unenforced.
