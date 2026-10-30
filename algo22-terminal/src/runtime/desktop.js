@@ -35,6 +35,36 @@
  */
 
 /**
+ * The origin the DESKTOP app talks to, and the only place in `src/` that needs a production
+ * host written down.
+ *
+ * WHY A LITERAL IS CORRECT HERE, WHERE IT IS WRONG IN `config.js`
+ * -------------------------------------------------------------
+ * `config.js` resolves the web app's API base from `window.location.origin`, because ONE
+ * bundle is served from three hosts and any baked host is wrong for two of them.
+ * `tests/unit/pages/authRedirectOrigin.test.jsx` section 5 enforces that no production host
+ * appears in `config.js`, and that rule is right for the web.
+ *
+ * The desktop shell has NO served origin to read. It runs on its own custom protocol --
+ * `tauri://localhost`, or `http://tauri.localhost` on Windows -- so an absolute URL is
+ * unavoidable, and the only question is where it lives. Until now it lived in the
+ * `VITE_API_URL` CI secret, which is strictly worse: invisible in review, unversioned, and
+ * it was set to the CDN distribution's own hostname -- which
+ * `src-tauri/tauri.conf.json`'s `connect-src` does not permit. The packaged app therefore
+ * could not reach its own API at all, and failed exactly the way the web app did before the
+ * same-origin fix: every panel reading "No connection", with nothing in the server logs
+ * because a CSP refusal never leaves the browser.
+ *
+ * This host IS in that `connect-src` (as `https://*.vyomquant.in`), so declaring it here is
+ * what makes the desktop build work. One constant, in the module about the desktop runtime,
+ * next to the detection that decides when it applies.
+ */
+export const DESKTOP_API_ORIGIN = 'https://app.vyomquant.in';
+
+/** The socket origin for the desktop app. Same host, `wss:`; see DESKTOP_API_ORIGIN. */
+export const DESKTOP_WS_ORIGIN = 'wss://app.vyomquant.in';
+
+/**
  * True when running inside the packaged desktop application.
  *
  * Safe to call before mount, in node, and under jsdom: every access is guarded, so a

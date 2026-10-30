@@ -131,6 +131,99 @@ describe('a context with no deployed https origin falls through to the env var',
 });
 
 // ---------------------------------------------------------------------------
+// 2b. The desktop app, which has no served origin to read
+// ---------------------------------------------------------------------------
+
+describe('the packaged desktop app', () => {
+  afterEach(() => {
+    delete window.__TAURI_INTERNALS__;
+    delete window.__TAURI__;
+  });
+
+  it.each([
+    ['http://tauri.localhost/', 'the Windows custom protocol host'],
+    ['tauri://localhost/', 'the macOS/Linux custom protocol'],
+  ])('addresses its declared origin on %s (%s)', async (href) => {
+    const { CONFIG } = await withLocation(href);
+    const { DESKTOP_API_ORIGIN, DESKTOP_WS_ORIGIN } = await import('../../src/runtime/desktop.js');
+
+    expect(CONFIG.apiBaseUrl).toBe(DESKTOP_API_ORIGIN);
+    expect(CONFIG.wsBaseUrl).toBe(DESKTOP_WS_ORIGIN);
+  });
+
+  it('is detected by the injected IPC global even on an http-looking origin', async () => {
+    vi.resetModules();
+    Object.defineProperty(window, 'location', {
+      value: { href: 'http://localhost/', origin: 'http://localhost', protocol: 'http:', host: 'localhost', hostname: 'localhost' },
+      writable: true,
+      configurable: true,
+    });
+    window.__TAURI_INTERNALS__ = { invoke: () => {} };
+
+    const { CONFIG } = await import('../../src/config.js');
+    const { DESKTOP_API_ORIGIN } = await import('../../src/runtime/desktop.js');
+
+    expect(CONFIG.apiBaseUrl).toBe(DESKTOP_API_ORIGIN);
+  });
+
+  it('never addresses the CDN distribution host', async () => {
+    const { CONFIG } = await withLocation('tauri://localhost/');
+    expect(CONFIG.apiBaseUrl).not.toContain('cloudfront.net');
+    expect(CONFIG.wsBaseUrl).not.toContain('cloudfront.net');
+  });
+});
+
+describe("src-tauri's own CSP permits the origin the desktop app is told to use", () => {
+  // The whole reason the packaged app could not reach its API: the base it was given was
+  // not in its own `connect-src`. This ties the two together so they cannot drift again.
+  const connectSrc = (() => {
+    const conf = JSON.parse(readFileSync(join(ROOT, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+    const csp = conf?.app?.security?.csp;
+    if (!csp) throw new Error('tauri.conf.json declares no app.security.csp');
+    const directive = csp
+      .split(';')
+      .map((d) => d.trim())
+      .find((d) => d.toLowerCase().startsWith('connect-src'));
+    if (!directive) throw new Error('the desktop CSP declares no connect-src');
+    return directive.split(/\s+/).slice(1);
+  })();
+
+  /** Does any source in the policy admit this absolute origin? */
+  const permits = (origin) => {
+    const url = new URL(origin);
+    return connectSrc.some((src) => {
+      if (src === '*') return true;
+      if (src === `${url.protocol}`) return true; // a bare scheme source, e.g. `wss:`
+      if (src === origin) return true;
+      const m = /^([a-z]+:)\/\/\*\.(.+)$/.exec(src);
+      if (m) return m[1] === url.protocol && url.hostname.endsWith('.' + m[2]);
+      return false;
+    });
+  };
+
+  it('permits the declared desktop API origin', async () => {
+    const { DESKTOP_API_ORIGIN } = await import('../../src/runtime/desktop.js');
+    expect(
+      permits(DESKTOP_API_ORIGIN),
+      `${DESKTOP_API_ORIGIN} is not admitted by the desktop connect-src: ${connectSrc.join(' ')}`,
+    ).toBe(true);
+  });
+
+  it('permits the declared desktop socket origin', async () => {
+    const { DESKTOP_WS_ORIGIN } = await import('../../src/runtime/desktop.js');
+    expect(
+      permits(DESKTOP_WS_ORIGIN),
+      `${DESKTOP_WS_ORIGIN} is not admitted by the desktop connect-src: ${connectSrc.join(' ')}`,
+    ).toBe(true);
+  });
+
+  it('does NOT permit the CDN distribution host, which is why the old base failed', () => {
+    // Non-vacuity: proves `permits` can say no, and records the actual defect.
+    expect(permits('https://d7d88qs4jmch.cloudfront.net')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 3. The CSP property the fix depends on
 // ---------------------------------------------------------------------------
 
