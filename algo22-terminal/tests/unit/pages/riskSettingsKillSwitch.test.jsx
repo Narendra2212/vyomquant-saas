@@ -162,27 +162,43 @@ const checkedState = (name) =>
   screen.getByRole('switch', { name }).getAttribute('aria-checked');
 
 /**
- * The page mounted and its three reads settled, so nothing below races the load.
+ * The page mounted and its three reads APPLIED, so nothing below races the load.
  *
- * The two switches waited on are `blackswan` and `streak`, and they are chosen rather than
- * convenient: the fixture puts each of them on the OPPOSITE side of the page's own default
- * (`blackswan` defaults on and the fixture turns it off; `streak` defaults off and the fixture
- * turns it on). So this cannot report ready on a page that rendered its constructor defaults
- * and never applied the server's answer — which is the exact failure the four switches looked
- * like before the migration, when `Promise.allSettled` swallowed a failed read.
+ * THE PREDICATE THIS REPLACES DID NOT DISCRIMINATE, AND THAT WAS A REAL FLAKE. It waited on
+ * `checkedState('Daily Loss Limit') === 'true'` plus the presence of
+ * `guard-unenforced-streak`, and neither distinguishes a loaded page from an unloaded one:
  *
- * The explicit timeout is for the first mount in the file only. The page now renders five
- * `ds/*` primitive trees and the first render evaluates all of them, which can exceed
- * `waitFor`'s 1s default on a cold worker; every later mount lands in well under it.
+ *   * `loss` is ON in the page's own constructor switch positions as well as in the fixture,
+ *     so that assertion is already satisfied by the defaults;
+ *   * the "Not enforced yet" label renders for every unenforced guard whenever the page
+ *     renders at all — `RiskSettings.jsx` gates it on `unenforced`, not on the read.
+ *
+ * So `mountLoaded` could return BEFORE the `config.state === READY` effect applied the
+ * server's answer, and a toggle fired in that window submitted `CONTROL_START` — 500 / 10 / 3
+ * — instead of the fixture's 1200 / 7 / 5. Block 3 compares two mounts' request bodies, so
+ * one early mount failed it with `max_daily_loss: 500` against `1200`. It failed
+ * intermittently in CI, under load, and it blocked a frontend deploy by failing the
+ * `01 PR Check` gate that `03 Deploy`/`06 Frontend Deploy` require.
+ *
+ * THE THREE LIMIT READOUTS ARE THE DISCRIMINATOR. Every fixture number is deliberately not
+ * the page's default (1200≠500, 7≠10, 5≠3 — see the fixture comment), so waiting for all
+ * three to be on screen proves the server's answer reached state. They are range inputs
+ * driven by `value={maxLoss}` etc., so the rendered value is read rather than the formatted
+ * label, which keeps this independent of `formatLimit`'s spelling.
+ *
+ * The explicit timeout is for the first mount in the file only. The page renders five `ds/*`
+ * primitive trees and the first render evaluates all of them, which can exceed `waitFor`'s
+ * 1s default on a cold worker; every later mount lands well inside it.
  */
 const mountLoaded = async () => {
   const utils = mountPage();
   await waitFor(
     () => {
-      // `loss` is the one operable switch and the fixture turns it on; the label on the
-      // unenforced guards only renders once the page has applied the server's answer.
+      expect(screen.getByDisplayValue(String(RISK_CONFIG.max_daily_loss))).toBeTruthy();
+      expect(screen.getByDisplayValue(String(RISK_CONFIG.max_positions))).toBeTruthy();
+      expect(screen.getByDisplayValue(String(RISK_CONFIG.max_leverage))).toBeTruthy();
+      // Kept: the one operable switch must also show the server's position, not a default.
       expect(checkedState(KILL_SWITCHES[0][1])).toBe('true');
-      expect(screen.queryByTestId('guard-unenforced-streak')).not.toBeNull();
     },
     { timeout: 5000 },
   );
