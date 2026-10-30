@@ -6,6 +6,7 @@ import wsClient from './websocketClient';
 import { Lock } from "lucide-react";
 import { supabase } from './supabase';
 import { carriesLiveSession } from './auth/sessionEvents';
+import { isDesktopApp } from './runtime/desktop';
 import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
@@ -806,6 +807,37 @@ function ShellGrid({ toasts, removeToast }) {
   );
 }
 
+/**
+ * What `/` serves — which is deliberately NOT the same in a browser and in the desktop app.
+ *
+ * The two are one bundle, built once, and they do not share a front door. A visitor who
+ * types the domain has not been told what the product is, so the browser gets the marketing
+ * landing page. Someone running the DOWNLOADED application has already been told: they
+ * found it, downloaded it and installed it. Opening to a page that pitches the product and
+ * offers four installers is a dead end — the desktop app would be advertising itself to a
+ * user who is already inside it.
+ *
+ * So the desktop app opens at sign-in. `replace` rather than a push, so the landing page
+ * never enters the desktop history stack: a Back press from the sign-in form must not land
+ * on a marketing page with a "Download for Windows" button on it.
+ *
+ * A RETURNING DESKTOP USER DOES NOT SEE THE FORM. `/signin` sits behind `GuestGuard`, which
+ * sends an already-authenticated session to `AUTH_REDIRECT_PATH`, so a session restored on
+ * launch goes straight through to the dashboard. That is one redirect, before first paint,
+ * and it is why this does not need to read the session itself.
+ *
+ * Exported for `tests/unit/desktopStartsAtSignIn.test.jsx`, which drives both platforms.
+ */
+export function RootRoute() {
+  if (isDesktopApp()) return <Navigate to="/signin" replace />;
+
+  return (
+    <Suspense fallback={PUBLIC_FALLBACK}>
+      <LandingPage />
+    </Suspense>
+  );
+}
+
 // ROOT ROUTING WRAPPER
 export default function AppWrapper() {
   return (
@@ -822,7 +854,8 @@ export default function AppWrapper() {
         <Routes>
           {/* Public landing. Every route from here to `/wizard` renders OUTSIDE the shell,
               so all of them take `PUBLIC_FALLBACK` — no page header, no route title. */}
-          <Route path="/" element={<Suspense fallback={PUBLIC_FALLBACK}><LandingPage /></Suspense>} />
+          {/* Browser: the landing page. Desktop app: straight to sign-in. See `RootRoute`. */}
+          <Route path="/" element={<RootRoute />} />
           <Route path="/download" element={<Suspense fallback={PUBLIC_FALLBACK}><DownloadPage /></Suspense>} />
           {/* Legal.
               LEGAL-01: `/legal` used to render a SECOND, different set of legal

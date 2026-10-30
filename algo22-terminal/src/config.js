@@ -3,6 +3,12 @@
  * Uses Vite's import.meta.env for environment variables with safe browser origin fallbacks
  */
 
+import {
+  DESKTOP_API_ORIGIN,
+  DESKTOP_WS_ORIGIN,
+  isDesktopApp,
+} from './runtime/desktop';
+
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // THE API AND SOCKET BASE: THE SERVED ORIGIN WINS OVER THE BUILD-TIME ENV
 //
@@ -57,14 +63,36 @@ const servedOverHttps = () =>
   && window.location?.protocol === 'https:'
   && Boolean(window.location.host);
 
+// THE DESKTOP BRANCH, AND WHY IT IS SECOND RATHER THAN LAST.
+//
+// The packaged app has no served origin to read -- it runs on its own custom protocol -- so
+// it cannot take the branch above, and it must not fall through to `VITE_API_URL`. That
+// secret held the CDN distribution's own hostname, which `src-tauri/tauri.conf.json`'s
+// `connect-src` does not permit, so the installed application could not reach its own API at
+// all: every panel read "No connection", and nothing appeared in the server logs because a
+// CSP refusal never leaves the browser. The same failure as the web app had, by the same
+// mechanism, in a second policy.
+//
+// The declared origin lives in `runtime/desktop.js` rather than here, because section 5 of
+// `tests/unit/pages/authRedirectOrigin.test.jsx` forbids a production host in this file --
+// correctly, for the web: one bundle is served from three hosts and any baked host is wrong
+// for two of them. That reasoning does not reach the desktop shell, which has no host to
+// read; see the constant's own comment for why a literal is right there and was worse as a
+// CI secret.
+//
+// `VITE_API_URL` is still honoured, and is still needed, for `npm run dev`: not https,
+// not desktop, API on another port, and `vite.config.js` declares no proxy.
+
 const getBrowserApiBase = () => {
   if (servedOverHttps()) return window.location.origin;
+  if (isDesktopApp()) return DESKTOP_API_ORIGIN;
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
   return "http://localhost:8000";
 };
 
 const getBrowserWsBase = () => {
   if (servedOverHttps()) return `wss://${window.location.host}`;
+  if (isDesktopApp()) return DESKTOP_WS_ORIGIN;
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
   if (typeof window !== 'undefined' && window.location.host) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
