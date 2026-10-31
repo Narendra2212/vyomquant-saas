@@ -47,17 +47,40 @@
  *
  * The desktop shell has NO served origin to read. It runs on its own custom protocol --
  * `tauri://localhost`, or `http://tauri.localhost` on Windows -- so an absolute URL is
- * unavoidable, and the only question is where it lives. Until now it lived in the
- * `VITE_API_URL` CI secret, which is strictly worse: invisible in review, unversioned, and
- * it was set to the CDN distribution's own hostname -- which
- * `src-tauri/tauri.conf.json`'s `connect-src` does not permit. The packaged app therefore
- * could not reach its own API at all, and failed exactly the way the web app did before the
- * same-origin fix: every panel reading "No connection", with nothing in the server logs
- * because a CSP refusal never leaves the browser.
+ * unavoidable, and the only question is where it lives.
  *
- * This host IS in that `connect-src` (as `https://*.vyomquant.in`), so declaring it here is
- * what makes the desktop build work. One constant, in the module about the desktop runtime,
- * next to the detection that decides when it applies.
+ * WHAT THE PACKAGED APP ACTUALLY DID BEFORE THIS, MEASURED
+ * ------------------------------------------------------
+ * It dialled `http://localhost:8000` -- `config.js`'s last-resort fallback -- on every
+ * user's machine, where nothing is listening. Not the CDN host, and NOT a CSP refusal:
+ * `src-tauri/tauri.conf.json` permits `http://localhost:*`, so the request left the webview
+ * and failed as a refused connection.
+ *
+ * The reason is a NAME MISMATCH, not a wrong value. `.github/workflows/07-desktop-build.yml`
+ * passes `VITE_API_BASE_URL`; nothing under `src/` reads that name (only
+ * `dev_tools/connection_missing_endpoints.js`, which is not part of the application).
+ * `config.js` reads `VITE_API_URL`, and workflow 07 never set it -- so the env branch was
+ * not merely wrong, it was never reached. `.env` and `.env.production` could not supply it
+ * either: both are gitignored, so `actions/checkout` never creates them.
+ *
+ * That also explains why the web app failed differently for the same question.
+ * `06-frontend-deploy.yml` DOES pass `VITE_API_URL`, set to the CDN distribution hostname,
+ * which `index.html`'s `connect-src` does not list -- so the web app was refused by CSP
+ * before the request left the page, while the desktop app was refused by the network after
+ * it did. Two failures, one cause: an API base that is nobody's actual origin.
+ *
+ * Workflow 06 fails its own build if `localhost:8000` survives into the bundle. Workflow 07
+ * had no such check, which is why this shipped in a published installer unnoticed; the
+ * check is now mirrored there.
+ *
+ * WHY A DECLARED CONSTANT RATHER THAN A SECRET
+ * ------------------------------------------
+ * A CI secret is invisible in review and unversioned, and this is the failure that follows:
+ * a name typo in a workflow silently produced a localhost fallback in a shipped artefact,
+ * and nothing could catch it because there was nothing to compare against. A constant in
+ * the source can be read, reviewed and tested -- `tests/unit/apiBaseOrigin.test.js` asserts
+ * this exact value is admitted by `tauri.conf.json`'s own `connect-src` (it is, as
+ * `https://*.vyomquant.in`), so the declaration and the policy cannot drift apart.
  */
 export const DESKTOP_API_ORIGIN = 'https://app.vyomquant.in';
 

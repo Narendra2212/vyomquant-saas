@@ -132,6 +132,17 @@ describe('a context with no deployed https origin falls through to the env var',
 
 // ---------------------------------------------------------------------------
 // 2b. The desktop app, which has no served origin to read
+//
+// THE DEFECT THIS PINS, MEASURED FROM THE SHIPPED WORKFLOW
+// The packaged app took neither the https branch (it runs on `tauri://localhost`, or
+// `http://tauri.localhost` on Windows) nor the env branch -- `07-desktop-build.yml` passes
+// `VITE_API_BASE_URL`, which nothing under `src/` reads, and never sets `VITE_API_URL`,
+// while `.env*` are gitignored so a checkout cannot supply it. So it fell through to
+// `http://localhost:8000` and dialled a port with nothing behind it on every user's machine.
+//
+// Not a CSP refusal: `tauri.conf.json` permits `http://localhost:*`. The request left the
+// webview and was refused by the network, which is why it looked like the web app's failure
+// while having a different cause.
 // ---------------------------------------------------------------------------
 
 describe('the packaged desktop app', () => {
@@ -171,11 +182,30 @@ describe('the packaged desktop app', () => {
     expect(CONFIG.apiBaseUrl).not.toContain('cloudfront.net');
     expect(CONFIG.wsBaseUrl).not.toContain('cloudfront.net');
   });
+
+  // THE ACTUAL REGRESSION. This is what the published installers did, and what nothing
+  // caught: `localhost` is a perfectly legal API base for `npm run dev`, and the desktop
+  // shell reaches the same code path, so the fallback applied silently to a shipped binary.
+  it.each([
+    ['http://tauri.localhost/', 'Windows'],
+    ['tauri://localhost/', 'macOS/Linux'],
+  ])('never falls back to a localhost API on %s (%s)', async (href) => {
+    const { CONFIG } = await withLocation(href);
+    expect(CONFIG.apiBaseUrl).not.toMatch(/localhost|127\.0\.0\.1/);
+    expect(CONFIG.wsBaseUrl).not.toMatch(/localhost|127\.0\.0\.1/);
+  });
+
+  it('resolves an absolute https/wss base, since there is no origin to inherit', async () => {
+    const { CONFIG } = await withLocation('tauri://localhost/');
+    expect(CONFIG.apiBaseUrl).toMatch(/^https:\/\//);
+    expect(CONFIG.wsBaseUrl).toMatch(/^wss:\/\//);
+  });
 });
 
 describe("src-tauri's own CSP permits the origin the desktop app is told to use", () => {
-  // The whole reason the packaged app could not reach its API: the base it was given was
-  // not in its own `connect-src`. This ties the two together so they cannot drift again.
+  // NOT the cause of the desktop failure -- that was a localhost fallback, see section 2b.
+  // This is the guard that keeps the declared origin and the shipped policy from drifting
+  // apart, which is the way a future edit to either one could reintroduce a dead API base.
   const connectSrc = (() => {
     const conf = JSON.parse(readFileSync(join(ROOT, 'src-tauri', 'tauri.conf.json'), 'utf8'));
     const csp = conf?.app?.security?.csp;
