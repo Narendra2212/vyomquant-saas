@@ -184,16 +184,51 @@ def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
         container = task_def["containerDefinitions"][0]
 
     env_vars = {env["name"]: env["value"] for env in container.get("environment", [])}
+    secret_names = {secret["name"] for secret in container.get("secrets", [])}
+    secret_sources = {s["name"]: s.get("valueFrom", "") for s in container.get("secrets", [])}
 
-    # Validate REDIS_URL is production ElastiCache, not localhost
-    redis_url = env_vars.get("REDIS_URL", "")
-    expected_redis = "rediss://master.vyomquant-redis-production-cmd.4lf97k.apse1.cache.amazonaws.com:6379"
+    # SEC-18: REDIS_URL MOVED FROM `environment` TO `secrets`, AND THIS CHECK MOVED WITH IT.
+    #
+    # It used to read REDIS_URL out of `environment` and compare it to the literal
+    # production endpoint. That was right while the URL was plaintext. It is wrong now
+    # and would have FAILED EVERY DEPLOY: the ElastiCache replication group now requires
+    # an AUTH token, the token is embedded in the URL, and a token sitting in
+    # `environment` is readable by anything holding ecs:DescribeTaskDefinition -- so the
+    # URL is delivered from Secrets Manager instead and `env_vars.get("REDIS_URL")`
+    # returns "" by design.
+    #
+    # The replacement is a STRONGER check, not a weaker one, because it asserts the two
+    # things that actually matter and the old one could not:
+    #   * the URL arrives from the expected Secrets Manager secret (so the deploy cannot
+    #     silently point at some other secret), and
+    #   * REDIS_URL is ABSENT from `environment` -- a plaintext value reappearing means
+    #     the auth token is back in the task definition, which is the regression this
+    #     whole change exists to prevent.
+    # The endpoint host itself can no longer be asserted from here, deliberately: it is
+    # inside the secret's value, which this script must not read. The secret's identity
+    # is the proxy for its contents.
+    for leaky in ("REDIS_URL", "REDIS_REPLICA_URL"):
+        if leaky in env_vars:
+            return False, (
+                f"CRITICAL: {leaky} is present in plaintext `environment` "
+                f"('{env_vars[leaky][:40]}...'). Since SEC-18 the Redis URL carries the "
+                f"AUTH token and must be delivered via `secrets` from Secrets Manager, "
+                f"not `environment`."
+            )
 
-    if redis_url != expected_redis:
-        return False, f"CRITICAL: REDIS_URL is '{redis_url}', expected '{expected_redis}'"
+    expected_redis_secret = "vyomquant/production/redis_url"
+    if "REDIS_URL" not in secret_names:
+        return False, (
+            "CRITICAL: REDIS_URL is in neither `environment` nor `secrets`. It must be a "
+            f"`secrets` entry sourced from {expected_redis_secret}."
+        )
+    if expected_redis_secret not in secret_sources.get("REDIS_URL", ""):
+        return False, (
+            f"CRITICAL: REDIS_URL is sourced from '{secret_sources.get('REDIS_URL')}', "
+            f"expected a secret named {expected_redis_secret}"
+        )
 
     # Validate secret names are present
-    secret_names = {secret["name"] for secret in container.get("secrets", [])}
     required_secrets = {
         "SUPABASE_SERVICE_ROLE_KEY",
         "SUPABASE_ANON_KEY",
@@ -201,7 +236,10 @@ def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
         "DATABASE_URL",
         "MASTER_ENCRYPTION_KEYS",
         "CREDENTIAL_VAULT_SALT",
-        "JWT_SECRET"
+        "JWT_SECRET",
+        # SEC-18: the Redis URL now carries the AUTH token, so it is a credential and
+        # belongs in this list rather than in `environment`.
+        "REDIS_URL",
     }
 
     missing_secrets = required_secrets - secret_names

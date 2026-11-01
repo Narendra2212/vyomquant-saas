@@ -124,6 +124,39 @@ resource "aws_elasticache_replication_group" "redis_cluster_mode" {
   at_rest_encryption_enabled = true
   transit_encryption_enabled = true
 
+  # SEC-18: AUTH IS NOW ENABLED AND REQUIRED ON THIS GROUP IN THE REAL ACCOUNT, and
+  # `auth_token` is deliberately NOT expressed here. Reasons, in order:
+  #
+  #   1. `ignore_changes = all` below means terraform would ignore the attribute anyway,
+  #      so adding it would describe nothing and read as if it did.
+  #   2. The value is a live credential. It lives in Secrets Manager
+  #      (vyomquant/production/redis_url, embedded in the rediss:// URL's userinfo) and
+  #      must never appear in source or in terraform state as a literal.
+  #   3. No `terraform plan` can be run against this module from the environment that did
+  #      the rollout, and no resource in this account has ever been imported into state
+  #      (INF-02/INF-06). Adding an unverifiable attribute to a replication group carrying
+  #      live kill-switch and idempotency state is how a future `apply` surprises someone.
+  #
+  # What was actually applied, 2026-11-01, so this is reproducible:
+  #   aws elasticache modify-replication-group --replication-group-id \
+  #       vyomquant-redis-production --auth-token <from secret> \
+  #       --auth-token-update-strategy ROTATE --apply-immediately     # ~56s
+  #   ...then the same with --auth-token-update-strategy SET          # ~17s
+  #
+  # ROTATE FIRST IS MANDATORY, not a preference: AWS only permits SET after a ROTATE, and
+  # ROTATE is the non-disruptive half -- after it the group accepts the new token AND
+  # still accepts unauthenticated connections, which is what lets clients be migrated
+  # before access is actually withdrawn. SET is the step that withdraws it.
+  #
+  # THIS GROUP WENT FIRST ON PURPOSE. It is the "deprecated" one, and CloudWatch showed
+  # zero GetTypeCmds and zero SetTypeCmds datapoints across seven days while the `-cmd`
+  # group below recorded 403,737 gets and 1,592,937 sets. Every task definition points at
+  # `-cmd`. So this group could be taken all the way through the DISRUPTIVE step with no
+  # application exposure, proving the mechanism before it was aimed at the live one.
+  #
+  # FOLLOW-UP WORTH TAKING: this group has no identified consumer and is still billing for
+  # three cache.t4g.micro nodes. Deleting it is a separate, reversible-only-by-restore
+  # decision and was not taken here.
   lifecycle {
     prevent_destroy = true
     ignore_changes  = all
@@ -148,6 +181,36 @@ resource "aws_elasticache_replication_group" "redis_cluster_mode_disabled" {
 
   at_rest_encryption_enabled = true
   transit_encryption_enabled = true
+
+  # SEC-18: AUTH IS NOW ENABLED AND REQUIRED ON THIS GROUP TOO -- this is the live one,
+  # the group every task definition's REDIS_URL/REDIS_REPLICA_URL points at. Same two
+  # commands as the deprecated group above (ROTATE then SET), same reasons for not
+  # expressing `auth_token` here, with one addition: unlike that group this resource has
+  # NO `ignore_changes`, so an `auth_token` added here really would be planned, and a
+  # plan that cannot be run first is exactly the risk not worth taking against the
+  # replication group holding kill-switch latch state and order-idempotency locks.
+  #
+  # THE CLIENT MIGRATION IS THE PART WORTH RECORDING, because the SET step is only safe
+  # once it is complete. Between ROTATE and SET, all seven ECS services were moved from a
+  # PLAINTEXT `environment` REDIS_URL to a `secrets` entry sourced from
+  # vyomquant/production/redis_url: api, mds, and the dag/command/backtest/exchange_fills/
+  # marketplace_expiry workers. Secrets Manager rather than a plaintext env var because
+  # the URL now carries a credential, and `environment` is readable by anything holding
+  # ecs:DescribeTaskDefinition. No application code changed -- core's get_redis_url()
+  # preserves the URL's netloc when it appends ?db=N, so an embedded token survives.
+  #
+  # Two things this rollout broke and then fixed, both worth knowing about:
+  #   * scripts/ecs_deploy_and_diagnose.py's validate_critical_config() read REDIS_URL out
+  #     of `environment` and compared it to the literal endpoint. Once the value moved to
+  #     `secrets` that read returned "" and would have failed EVERY deploy. It now asserts
+  #     the secret's identity instead, and rejects a plaintext REDIS_URL as the
+  #     regression it would be.
+  #   * startup.sh printed the connection URL on every container start -- which, once the
+  #     token was in the URL, wrote a live Redis password into CloudWatch Logs. It now
+  #     prints scheme/host/port only.
+  #
+  # Verified after SET: all seven services 1/1 and steady, /api/health reporting
+  # redis_primary and redis_replica healthy, and AuthenticationFailures flat at zero.
 }
 
 output "redis_endpoint" {

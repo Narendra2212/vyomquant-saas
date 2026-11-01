@@ -57,14 +57,17 @@ concurrency:
 #  one symptom.
 #
 #  Set explicitly rather than widened: `contents: read` for `actions/checkout`, `actions:
-#  read` for that one query. Nothing here needs more -- AWS auth uses static access keys
-#  rather than OIDC, so no `id-token: write`, and `actions/upload-artifact@v4` needs no
-#  token scope of its own. Declaring the block REPLACES the default for every job in this
-#  workflow, which is why both are named instead of just the new one.
+#  read` for that one query, and `id-token: write` so both jobs can assume the deploy role
+#  via OIDC. That last one is new -- this comment used to end "AWS auth uses static access
+#  keys rather than OIDC, so no `id-token: write`", which was true until CI-02's third
+#  sub-issue was closed and is now the opposite of what this workflow does.
+#  `actions/upload-artifact@v4` still needs no token scope of its own. Declaring the block
+#  REPLACES the default for every job in this workflow, which is why all three are named.
 # ══════════════════════════════════════════════════════════════════════════════════════
 permissions:
   contents: read
   actions: read
+  id-token: write
 
 env:
   AWS_REGION: ap-southeast-1
@@ -128,11 +131,21 @@ jobs:
           cache: 'pip'
           cache-dependency-path: 'requirements-cpu.txt'
 
+      # CI-02: short-lived OIDC credentials. See 02-build.yml's comment on this step for
+      # why the first attempt at this failed (immutable subject claims, not the shared
+      # provider's thumbprint) and how both trust and permissions were verified before
+      # this one.
+      #
+      # This job's AWS use is indirect and easy to miss: pre_deployment_validation.py
+      # shells out to scripts/aws_validation.py, which calls sts:GetCallerIdentity,
+      # ecr:DescribeRepositories across three repos, secretsmanager:DescribeSecret +
+      # ListSecretVersionIds, ecs:DescribeClusters + DescribeServices and
+      # logs:DescribeLogGroups. All of those were simulated against this role.
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
+          role-session-name: GitHubActions-03-validate
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install dependencies
@@ -167,11 +180,18 @@ jobs:
           cache: 'pip'
           cache-dependency-path: 'requirements-cpu.txt'
 
+      # CI-02: short-lived OIDC credentials. This is the job that actually deploys, so it
+      # is the one whose permission surface had to be enumerated most carefully:
+      # ecs_deploy_and_diagnose.py makes fifteen AWS calls, including
+      # ecs:RegisterTaskDefinition (which needs iam:PassRole on ecsTaskExecutionRole,
+      # conditioned on iam:PassedToService=ecs-tasks.amazonaws.com) and ecs:UpdateService
+      # fanned out across every vyomquant-worker-* service plus the mds sidecar -- not
+      # just the api service the env block names.
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
+          role-session-name: GitHubActions-03-deploy
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR

@@ -55,14 +55,42 @@ echo "[startup] All required environment variables are present."
 echo "[startup] Checking Redis connectivity (non-fatal)..."
 python3 -c "
 import os
+from urllib.parse import urlsplit
+
+# SEC-18: NEVER PRINT THE URL ITSELF. This line used to be
+#     print('[startup] Redis: CONNECTED (' + redis_url + ')')
+# which was harmless only while Redis had no credential. The ElastiCache
+# replication group now requires an AUTH token and the token is embedded in
+# REDIS_URL's userinfo, so printing the URL wrote a live Redis password into
+# CloudWatch Logs on every single container start -- readable by any principal
+# with logs:GetLogEvents, which defeats the point of sourcing it from Secrets
+# Manager in the first place. Observed happening before this fix.
+#
+# Only scheme/host/port are emitted, which is all the message was ever for:
+# confirming the container is pointed at production ElastiCache rather than a
+# localhost fallback. The exception branch is redacted the same way, because
+# redis-py's connection errors embed the connection's repr.
+def safe(url):
+    try:
+        p = urlsplit(url)
+        port = ':%d' % p.port if p.port else ''
+        creds = ' (with auth token)' if p.password else ' (NO AUTH TOKEN)'
+        return '%s://%s%s%s' % (p.scheme, p.hostname or '?', port, creds)
+    except Exception:
+        return '<unparseable REDIS_URL>'
+
+redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
 try:
     import redis
-    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
     r = redis.from_url(redis_url, socket_connect_timeout=3)
     r.ping()
-    print('[startup] Redis: CONNECTED (' + redis_url + ')')
+    print('[startup] Redis: CONNECTED (' + safe(redis_url) + ')')
 except Exception as e:
-    print('[startup] Redis: UNAVAILABLE (' + str(e) + ') — app will start in fallback mode')
+    msg = str(e)
+    pwd = urlsplit(redis_url).password
+    if pwd:
+        msg = msg.replace(pwd, '***REDACTED***')
+    print('[startup] Redis: UNAVAILABLE (' + msg + ') — app will start in fallback mode')
 " || true
 
 # ── 3. Optional: Supabase reachability check (non-fatal) ──────────────────
