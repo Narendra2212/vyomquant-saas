@@ -25,13 +25,37 @@
  * returned 403. Three of the four files it described were 64-69 byte text placeholders.
  * That is why the numbers here carry their provenance:
  *
- *   source run  : `07 Desktop Build (native, unsigned)` run 40833892696
- *   built from  : b6c1a01f (the PR merge commit for #146)
+ *   source run  : `07 Desktop Build (native, unsigned)` run 41273898545
+ *   built from  : 5250fb4c (main, the merge commit for #169)
  *   verified by : magic-byte identification of every file before publication -- PE `MZ`,
  *                 OLE compound file, UDIF `koly` trailer, ELF + AppImage type-2 magic,
  *                 `!<arch>`, RPM lead -- plus a 1 MiB floor, plus a check that no digest
  *                 equals the empty-string hash, plus an ANONYMOUS re-fetch of every
- *                 published URL confirming HTTP 200 and a byte-exact `Content-Length`.
+ *                 published URL confirming HTTP 200, a byte-exact `Content-Length`, AND
+ *                 that the bytes actually served hash to the digest written down here.
+ *
+ * WHY 0.1.1 REPLACED 0.1.0, which matters more than the version number
+ * -------------------------------------------------------------------
+ * The 0.1.0 bundles could not reach the API AT ALL. They were built before the packaged app
+ * had a declared API base, and the desktop shell takes neither of `config.js`'s other two
+ * branches -- it has no https origin to read, and `07-desktop-build.yml` passed
+ * `VITE_API_BASE_URL`, a name nothing under `src/` reads, while never setting the
+ * `VITE_API_URL` that `config.js` does read. So they fell through to
+ * `http://localhost:8000` and dialled a dead port on every user's machine, with every panel
+ * reading "No connection". Seventeen people downloaded them.
+ *
+ * It was not a CSP refusal -- `src-tauri/tauri.conf.json` permits `http://localhost:*` --
+ * so the request left the webview and was refused by the network, which is why it LOOKED
+ * like the web app's failure while having a different cause.
+ *
+ * A NEW VERSION rather than new bytes under the old tag, because `tauri build` names its
+ * output from the configured version: a corrected build produces the same FILENAMES. Serving
+ * those over `desktop-v0.1.0` would make one tag, one filename and one advertised digest
+ * mean two different binaries depending on when you fetched them -- which is precisely the
+ * promise the `sha256` field below exists to keep.
+ *
+ * The 0.1.0 release is deliberately left in place and still resolves, so nobody mid-download
+ * is broken; it is simply no longer what this module points at.
  *
  * `bytes` is the exact byte count, so the rendered size is derived rather than typed and
  * cannot drift from the file. `sha256` is what a user's `shasum -a 256` will print.
@@ -47,17 +71,17 @@
 
 /** The published release. One version is offered at a time. */
 export const DESKTOP_RELEASE = Object.freeze({
-  version: '0.1.0',
-  tag: 'desktop-v0.1.0',
-  publishedOn: '2026-10-29',
+  version: '0.1.1',
+  tag: 'desktop-v0.1.1',
+  publishedOn: '2026-11-01',
   publisher: 'Aerora Dynamics Private Limited',
-  notesUrl: 'https://github.com/Narendra2212/vyomquant-saas/releases/tag/desktop-v0.1.0',
+  notesUrl: 'https://github.com/Narendra2212/vyomquant-saas/releases/tag/desktop-v0.1.1',
   /** No certificate is configured on any platform. Read by the UI; never hardcoded there. */
   signed: false,
 });
 
 const ASSET_BASE =
-  'https://github.com/Narendra2212/vyomquant-saas/releases/download/desktop-v0.1.0';
+  'https://github.com/Narendra2212/vyomquant-saas/releases/download/desktop-v0.1.1';
 
 /**
  * Keyed by the SAME platform ids `DownloadPage.jsx` uses for its tabs and `pageFields.js`
@@ -67,10 +91,10 @@ const ASSET_BASE =
 export const DESKTOP_ARTIFACTS = Object.freeze({
   windows: Object.freeze({
     platform: 'windows',
-    filename: 'VyomQuant_0.1.0_x64-setup.exe',
-    url: `${ASSET_BASE}/VyomQuant_0.1.0_x64-setup.exe`,
-    bytes: 2563716,
-    sha256: 'b238475123f07efb88296a42dd62512a5d2f65e35a7102fd2bc3284c4cb1870d',
+    filename: 'VyomQuant_0.1.1_x64-setup.exe',
+    url: `${ASSET_BASE}/VyomQuant_0.1.1_x64-setup.exe`,
+    bytes: 2565100,
+    sha256: 'c4d18aeb006d22f7be9066e5b842ad41c99fa7cf3375aa1d37ec336653af5832',
     requires: 'Windows 10 or 11, 64-bit',
     firstRun:
       'Unsigned build: SmartScreen will say "Windows protected your PC". '
@@ -78,10 +102,10 @@ export const DESKTOP_ARTIFACTS = Object.freeze({
   }),
   macos: Object.freeze({
     platform: 'macos',
-    filename: 'VyomQuant_0.1.0_universal.dmg',
-    url: `${ASSET_BASE}/VyomQuant_0.1.0_universal.dmg`,
-    bytes: 6993988,
-    sha256: '779ea5988720a6f600d22134d3c61a791c189eb9b647b19eca163bf7190a68b3',
+    filename: 'VyomQuant_0.1.1_universal.dmg',
+    url: `${ASSET_BASE}/VyomQuant_0.1.1_universal.dmg`,
+    bytes: 6996603,
+    sha256: '9b07baddd3946fe205567376acf65dc98f9abe0e87f339e1fd0ebd1e1c7eecd2',
     requires: 'macOS 12 or later — universal (Apple silicon and Intel)',
     // The strongest warning of the four, because macOS does not merely warn: Gatekeeper
     // refuses an unnotarized app outright, and a user with no instruction concludes the
@@ -93,21 +117,21 @@ export const DESKTOP_ARTIFACTS = Object.freeze({
   }),
   linuxAppImage: Object.freeze({
     platform: 'linuxAppImage',
-    filename: 'VyomQuant_0.1.0_amd64.AppImage',
-    url: `${ASSET_BASE}/VyomQuant_0.1.0_amd64.AppImage`,
-    bytes: 82614776,
-    sha256: '77646dd18855cdc78b56928af2991021544d2eeb256d4bab60077a13476e666e',
+    filename: 'VyomQuant_0.1.1_amd64.AppImage',
+    url: `${ASSET_BASE}/VyomQuant_0.1.1_amd64.AppImage`,
+    bytes: 82622968,
+    sha256: '5789c2c578bc621abf4dc9db3c31f9fe72090f1e3cbf155fa31f8db5a54b994f',
     requires: 'Any x86_64 desktop with glibc 2.35 or newer — built on Ubuntu 22.04',
-    firstRun: 'Make it executable first: chmod +x VyomQuant_0.1.0_amd64.AppImage',
+    firstRun: 'Make it executable first: chmod +x VyomQuant_0.1.1_amd64.AppImage',
   }),
   linuxDeb: Object.freeze({
     platform: 'linuxDeb',
-    filename: 'VyomQuant_0.1.0_amd64.deb',
-    url: `${ASSET_BASE}/VyomQuant_0.1.0_amd64.deb`,
-    bytes: 4521556,
-    sha256: '04ac8c15f4183f57f339364580c82e0c74368489aa201ec2cef04271780fa054',
+    filename: 'VyomQuant_0.1.1_amd64.deb',
+    url: `${ASSET_BASE}/VyomQuant_0.1.1_amd64.deb`,
+    bytes: 4523886,
+    sha256: 'dd6b503d9684407967dbcecb7a2b0366d761678eac9b8332372b98ae7913c018',
     requires: 'Debian 12, Ubuntu 22.04 or newer',
-    firstRun: 'Install with: sudo apt install ./VyomQuant_0.1.0_amd64.deb',
+    firstRun: 'Install with: sudo apt install ./VyomQuant_0.1.1_amd64.deb',
   }),
 });
 
