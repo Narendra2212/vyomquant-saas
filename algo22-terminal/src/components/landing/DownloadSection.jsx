@@ -11,7 +11,7 @@
  * For two years all four `/releases/…` URLs returned 403 — CI's `dist/` carried no `releases/`
  * directory and `aws s3 sync dist/ --delete` removed that prefix on every deploy — so task 4.3
  * withdrew the links rather than relabel them. The artifacts are now built by
- * `07-desktop-build.yml` and published as GitHub release `desktop-v0.1.0`, whose assets were
+ * `07-desktop-build.yml` and published as GitHub release `desktop-v0.1.1`, whose assets were
  * each magic-byte identified and then re-fetched anonymously to confirm HTTP 200 with a
  * byte-exact length before a single URL was written down.
  *

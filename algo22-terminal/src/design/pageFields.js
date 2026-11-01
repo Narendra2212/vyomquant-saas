@@ -1842,7 +1842,7 @@ const SIGNAL_TRACE_FIELDS = [
  *
  * THE FOUR ARTIFACTS ARE NOW PUBLISHED, AND NOT THROUGH THIS TABLE. Hosting them in the
  * frontend bucket was rejected for the reason above — the `--delete` sync is hostile to any
- * prefix `dist/` does not contain — so they are published as GitHub release `desktop-v0.1.0`,
+ * prefix `dist/` does not contain — so they are published as GitHub release `desktop-v0.1.1`,
  * built by `07-desktop-build.yml` on all three runners. The published url, exact byte count
  * and SHA-256 of each live in `design/desktopReleases.js`, NOT here, because `entry()`'s own
  * contract makes this table the wrong home: `path` must be non-null exactly when the verdict
@@ -1884,7 +1884,7 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No Windows installer is published for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'PUBLISHED as `VyomQuant_0.1.0_x64-setup.exe` in release `desktop-v0.1.0`; the live '
+    note: 'PUBLISHED as `VyomQuant_0.1.1_x64-setup.exe` in release `desktop-v0.1.1`; the live '
       + 'url, byte count and SHA-256 are in `design/desktopReleases.js` and this reason is now '
       + 'only the fallback. History: a 112,117,309-byte `releases/windows/'
       + 'VyomQuant-Setup-0.1.0.exe` sat in the tree as a sibling of `public/`, so Vite never '
@@ -1903,8 +1903,8 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No macOS build has been produced for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'PUBLISHED as `VyomQuant_0.1.0_universal.dmg` (arm64 + x86_64) in release '
-      + '`desktop-v0.1.0`; url, byte count and SHA-256 in `design/desktopReleases.js`. It is '
+    note: 'PUBLISHED as `VyomQuant_0.1.1_universal.dmg` (arm64 + x86_64) in release '
+      + '`desktop-v0.1.1`; url, byte count and SHA-256 in `design/desktopReleases.js`. It is '
       + 'UNNOTARIZED, which is a harder problem than unsigned: Gatekeeper refuses the first '
       + 'launch outright, so the card carries the right-click-Open step. History: no DMG '
       + 'existed anywhere in the tree and the page advertised one at 78.5 MB with a SHA-256 '
@@ -1921,7 +1921,7 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No Linux AppImage has been produced for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'PUBLISHED as `VyomQuant_0.1.0_amd64.AppImage` in release `desktop-v0.1.0`; url, '
+    note: 'PUBLISHED as `VyomQuant_0.1.1_amd64.AppImage` in release `desktop-v0.1.1`; url, '
       + 'byte count and SHA-256 in `design/desktopReleases.js`. Built on ubuntu-22.04 on '
       + 'purpose, so it does not demand a newer glibc than older desktops carry. At 78.8 MiB '
       + 'it is much larger than the other bundles because an AppImage carries its own GTK and '
@@ -1941,7 +1941,7 @@ const DOWNLOAD_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     reason: 'No Debian package has been produced for this release, so there is nothing to '
       + 'download here.' + RUN_IN_BROWSER,
-    note: 'PUBLISHED as `VyomQuant_0.1.0_amd64.deb` in release `desktop-v0.1.0`; url, byte '
+    note: 'PUBLISHED as `VyomQuant_0.1.1_amd64.deb` in release `desktop-v0.1.1`; url, byte '
       + 'count and SHA-256 in `design/desktopReleases.js`. An `.rpm` is published in the same '
       + 'release but has no card here, because this table declares the four platforms the two '
       + 'surfaces render and adding a fifth is a surface decision rather than a packaging one. '
