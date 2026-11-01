@@ -1,0 +1,128 @@
+# 99-oidc-probe.yml — THROWAWAY. Delete once CI-02 is closed.
+#
+# WHY THIS EXISTS, AND WHY IT IS A SEPARATE FILE.
+#
+# An OIDC trust relationship cannot be dry-run. `iam:SimulatePrincipalPolicy`
+# does not evaluate web-identity trust, and the only trusted refs are
+# main/master — so the first real test of any trust-policy change is a push to
+# main. CI-02 learned that the expensive way: the switch was applied directly to
+# `02-build.yml`, failed with "Not authorized to perform
+# sts:AssumeRoleWithWebIdentity", and took main's build and the whole deploy
+# path down with it until it was reverted. "Revertable" is not "safe" when the
+# thing being risked is the build every deploy depends on.
+#
+# So this workflow is the test instead. Nothing depends on it, every step is
+# `continue-on-error`, and the job is allowed to fail. It answers two questions
+# that pre-flight inspection provably cannot:
+#
+#   1. WHAT `sub` DOES GITHUB ACTUALLY SEND? This is the question that mattered.
+#      The reverted attempt's trust policy matched on
+#      `repo:Narendra2212/vyomquant-saas:ref:refs/heads/main`, every component of
+#      which was verified correct — and it still failed, because this repository
+#      has immutable subject claims enabled. GitHub's own API reports
+#      `use_immutable_subject: true` with
+#      `sub_claim_prefix: repo:Narendra2212@126683513/vyomquant-saas@1306233497`,
+#      i.e. the owner and repo names carry their immutable numeric IDs, so the
+#      real `sub` never matched any pattern in the policy. The role's trust
+#      policy now lists both shapes. This step puts the actual value in a log
+#      rather than leaving it inferred from a doc page.
+#   2. DOES THE ASSUMPTION SUCCEED? Only a real run can say.
+#
+# ON PRINTING CLAIMS: the decoded `sub`/`aud`/`ref` claims are identity
+# metadata, not credentials, and they are the whole point of the probe. The RAW
+# TOKEN IS NEVER PRINTED — it is a bearer credential, and the step below decodes
+# the payload and emits an explicit allowlist of fields, so adding a claim to
+# the output is a deliberate edit rather than an accident.
+
+name: 99 OIDC Probe (throwaway)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - '.github/workflows/99-oidc-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    name: Probe the GitHub OIDC subject and role assumption
+    runs-on: ubuntu-latest
+    # Belt and braces: the job itself may fail without failing the workflow for
+    # anything that might later look at this workflow's conclusion.
+    continue-on-error: true
+
+    steps:
+      - name: Report the subject claim GitHub actually issues
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, urllib.request
+
+          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=sts.amazonaws.com"
+          req = urllib.request.Request(
+              url,
+              headers={"Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]},
+          )
+          raw = json.loads(urllib.request.urlopen(req, timeout=30).read())["value"]
+
+          # Payload only, and only these fields. The token is a bearer credential;
+          # the signature and every claim not named here stay unprinted.
+          payload = raw.split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+
+          ALLOW = ("sub", "aud", "iss", "repository", "repository_owner",
+                   "repository_id", "repository_owner_id", "ref", "event_name",
+                   "workflow", "job_workflow_ref")
+          print("=== OIDC claims (allowlisted) ===")
+          for k in ALLOW:
+              if k in claims:
+                  print("  %-22s %s" % (k, claims[k]))
+
+          print()
+          print("=== does it match the role's trust policy? ===")
+          expected = [
+              "repo:Narendra2212@126683513/vyomquant-saas@1306233497:ref:refs/heads/main",
+              "repo:Narendra2212@126683513/vyomquant-saas@1306233497:ref:refs/heads/master",
+              "repo:Narendra2212/vyomquant-saas:ref:refs/heads/main",
+              "repo:Narendra2212/vyomquant-saas:ref:refs/heads/master",
+          ]
+          sub = claims.get("sub", "")
+          for e in expected:
+              print("  %-5s %s" % ("MATCH" if sub == e else "no", e))
+          print()
+          print("VERDICT: %s" % ("a pattern matches" if sub in expected
+                                 else "NO pattern matches -- the assumption will be refused"))
+          PY
+
+      - name: Attempt the role assumption
+        id: assume
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
+          aws-region: ap-southeast-1
+
+      - name: Report who we became
+        continue-on-error: true
+        run: |
+          echo "assume step outcome: ${{ steps.assume.outcome }}"
+          if [ "${{ steps.assume.outcome }}" != "success" ]; then
+            echo "Role assumption FAILED. CI-02 stays open; read the step above for the sub claim."
+            exit 0
+          fi
+          echo "=== sts:GetCallerIdentity ==="
+          aws sts get-caller-identity
+          echo
+          echo "=== can this identity do what 02-build needs? ==="
+          aws ecr get-authorization-token --query 'authorizationData[0].expiresAt' --output text \
+            && echo "ecr:GetAuthorizationToken OK" || echo "ecr:GetAuthorizationToken FAILED"
+          aws ecs describe-services \
+            --cluster vyomquant-cluster \
+            --services vyomquant-api-service-cjema2sl \
+            --query 'services[0].status' --output text \
+            && echo "ecs:DescribeServices OK" || echo "ecs:DescribeServices FAILED"
