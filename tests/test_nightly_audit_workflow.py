@@ -124,15 +124,56 @@ def test_the_sweep_is_blocking_rather_than_continue_on_error():
 
 def test_the_sweep_has_aws_credentials_and_the_right_region():
     """The sweep's whole value is comparing history against the LIVE secret values; with
-    no credentials it degrades to a scan that can only report coverage 0."""
+    no credentials it degrades to a scan that can only report coverage 0.
+
+    CI-02 REWROTE THE MECHANISM, SO THIS GUARD HAD TO MOVE WITH IT. It used to assert
+    ``aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}``, which was the right
+    assertion while the job authenticated with a long-lived IAM user key. The job now
+    assumes a role via OIDC, so that assertion started failing with
+    ``assert 'AWS_ACCESS_KEY_ID' in 'None'`` -- the guard reporting the very change it
+    was asked to protect against as a regression.
+
+    What this asserts instead is the same PROPERTY -- the sweep reaches AWS with a real
+    credential -- expressed against the mechanism that now delivers it, plus two things
+    the old version could not check:
+
+      * the role is the READ-ONLY AUDIT role, not the deploy role. That distinction is
+        load-bearing rather than cosmetic: this workflow's sibling
+        (08-secret-history-audit) runs on ``pull_request``, so the audit role is trusted
+        for pull-request subjects, and pointing this job at the deploy role would quietly
+        widen what a PR-assumable principal can do.
+      * the job declares ``id-token: write``. Without it the assumption fails at runtime
+        with no static signal at all, which is exactly the failure mode that took main's
+        build down the first time CI-02's switch was attempted.
+    """
     job = _sweep_job()
     creds = next(
         s for s in job["steps"]
         if "configure-aws-credentials" in str(s.get("uses", ""))
     )
     with_block = creds["with"]
-    assert "AWS_ACCESS_KEY_ID" in str(with_block.get("aws-access-key-id"))
-    assert "AWS_SECRET_ACCESS_KEY" in str(with_block.get("aws-secret-access-key"))
+
+    role = str(with_block.get("role-to-assume", ""))
+    assert role, (
+        "the sweep's credential step declares no role-to-assume. Since CI-02 this job "
+        "authenticates by assuming a role via OIDC; with neither a role nor a static key "
+        "the sweep runs with no credential and reports coverage 0, which looks green."
+    )
+    assert "VyomQuantGithubActionsAudit" in role, (
+        f"the sweep assumes {role!r}, expected the read-only audit role. The deploy role "
+        f"must not be used here: the audit role is trusted for pull_request subjects "
+        f"(08-secret-history-audit runs on PRs), and the deploy role holds ecr:PutImage "
+        f"and ecs:UpdateService."
+    )
+    assert "aws-access-key-id" not in with_block, (
+        "the sweep is back on a long-lived IAM user key, which is the defect CI-02 closed"
+    )
+
+    permissions = {**(_workflow().get("permissions") or {}), **(job.get("permissions") or {})}
+    assert permissions.get("id-token") == "write", (
+        "the sweep job does not declare id-token: write, so the OIDC role assumption "
+        "cannot mint a token and the step fails at runtime with no static warning"
+    )
     assert job["env"]["AWS_REGION"] == "ap-southeast-1", (
         "the region must match where the secrets actually live. Measured this session: a "
         "default of us-east-1 made list-secrets return an unrelated account's secrets and "
