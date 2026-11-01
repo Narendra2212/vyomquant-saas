@@ -190,6 +190,23 @@ jobs:
       # Keyed on `Cargo.lock`, so the cache is invalidated by a real dependency change and
       # not by a source edit. `src-tauri/target` is included because a cold Tauri build
       # compiles several hundred crates.
+      #
+      # THE BUNDLE DIRECTORY IS EXCLUDED, AND THAT EXCLUSION IS A BUG FIX.
+      # `target/**/release/bundle` is where the bundler writes the finished installers.
+      # Caching it meant every run restored the PREVIOUS VERSION'S installers into the
+      # directory the next run reads, and `Cargo.lock` does not change when the app version
+      # does, so the cache key did not rotate them out. Measured on run 41273898545, which
+      # built 0.1.1: the uploaded artifacts contained FOUR STALE 0.1.0 BUNDLES alongside the
+      # six real ones, because the verify and upload globs match on extension and cannot
+      # tell a fresh file from a restored one. A release cut from that artifact without
+      # checking filenames would have published an old binary under a new tag.
+      #
+      # It was also pure waste: the AppImage alone is ~79 MiB, so the cache was carrying
+      # about 100 MiB of build output that nothing ever reads back.
+      #
+      # Belt and braces, because a cache poisoned by an earlier run still exists: the next
+      # step deletes the directory anyway, and the verify step rejects any artifact whose
+      # name does not carry the configured version.
       - name: Cache cargo registry and target
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -197,6 +214,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             algo22-terminal/src-tauri/target
+            !algo22-terminal/src-tauri/target/**/bundle
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('algo22-terminal/src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
@@ -214,6 +232,45 @@ jobs:
       - name: Verify generated design tokens are current
         working-directory: ./algo22-terminal
         run: node scripts/gen-tokens.mjs --check
+
+      # Makes the bundle directory EMPTY before the bundler runs, so every file found
+      # afterwards was necessarily produced by THIS build. The cache exclusion above stops
+      # new caches carrying installers, but caches saved by earlier runs still contain
+      # them, and `restore-keys` will happily restore one of those. This step is what makes
+      # the job correct on a cache that is already poisoned, rather than only on caches
+      # created from now on.
+      #
+      # Safe for build speed: only the bundler's OUTPUT lives here. The compiled crates
+      # that make the cache worth having are in `target/release/deps`, `build/` and
+      # `.fingerprint/`, none of which this touches. Verified by the step's own listing.
+      - name: Clear stale bundle output before building
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="${{ matrix.bundle_dir }}"
+          if [ ! -d "$BUNDLE_DIR" ]; then
+            echo "No bundle directory present; nothing to clear."
+            exit 0
+          fi
+
+          # `wc -c` and a `while read` loop rather than `find -printf`: `-printf` is a GNU
+          # extension and `macos-latest` ships BSD find, so the GNU form would fail on
+          # exactly one of the three runners.
+          LIST="$(mktemp)"
+          find "$BUNDLE_DIR" -type f \
+            \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' \
+               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+            | sort > "$LIST"
+
+          COUNT=$(wc -l < "$LIST" | tr -d '[:space:]')
+          echo "Installers restored from the cache into the output directory: $COUNT"
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            echo "  stale $f ($(wc -c < "$f" | tr -d '[:space:]') bytes)"
+          done < "$LIST"
+
+          rm -rf "$BUNDLE_DIR"
+          echo "Removed $BUNDLE_DIR"
 
       # ── The native build ───────────────────────────────────────────────────────
       # NO `continue-on-error`. A bundler failure must fail the job — that is the whole
@@ -323,20 +380,45 @@ jobs:
       # `bash` on all three runners (Git Bash on Windows) so this is one script rather
       # than a PowerShell copy that can drift from the POSIX one.
       #
-      # Two assertions, and the second is the one that matters:
+      # Three assertions now:
       #   1. at least one bundle was produced;
-      #   2. EVERY bundle produced is at least MIN_BYTES.
+      #   2. EVERY bundle produced is at least MIN_BYTES;
+      #   3. EVERY bundle produced carries the version in `tauri.conf.json`.
       #
       # 1 MiB is far below a real Tauri bundle (the genuine Windows installer in the repo
       # is ~107 MiB) and far above a text placeholder (64–69 bytes). It is deliberately
       # not tuned tighter: the purpose is to catch a file that is not a binary at all, not
       # to police bundle size.
+      #
+      # ASSERTION 3 IS THE FAIL-CLOSED HALF OF THE STALE-BUNDLE FIX. The cache no longer
+      # stores installers and the pre-build step clears the directory, but both of those
+      # are things that have to KEEP working; this is the check that notices if they stop.
+      # It is what turns "an old binary was uploaded" from a silent event into a red build.
+      #
+      # Measured: on run 41273898545, which built 0.1.1 and uploaded four 0.1.0 bundles
+      # alongside the six correct ones, assertions 1 and 2 both PASSED -- a stale installer
+      # is a real binary well over 1 MiB, so neither could see anything wrong. The version
+      # is read from `tauri.conf.json`, the same file the bundler names its output from, so
+      # the check cannot disagree with the build about what the version is.
       - name: Verify bundle artifacts
         shell: bash
         run: |
           set -euo pipefail
           BUNDLE_DIR="${{ matrix.bundle_dir }}"
           MIN_BYTES=$((1024 * 1024))
+
+          # The version the bundler names its output from. Read with `sed` rather than a
+          # JSON parser because `jq` is not guaranteed on every runner image, and the field
+          # is a flat top-level string.
+          VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                      algo22-terminal/src-tauri/tauri.conf.json | head -n 1)
+          if [ -z "$VERSION" ]; then
+            echo "FAIL: could not read \"version\" from tauri.conf.json."
+            echo "      The stale-artifact check cannot run without it, and silently"
+            echo "      skipping it is how an old binary gets published under a new tag."
+            exit 1
+          fi
+          echo "Configured version: $VERSION"
 
           if [ ! -d "$BUNDLE_DIR" ]; then
             echo "FAIL: no bundle directory at $BUNDLE_DIR"
@@ -369,16 +451,36 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             SIZE=$(wc -c < "$f" | tr -d '[:space:]')
+            BASE=$(basename "$f")
+
             if [ "$SIZE" -lt "$MIN_BYTES" ]; then
               echo "FAIL: $f is $SIZE bytes, below the ${MIN_BYTES}-byte floor."
               echo "      A file this small is a placeholder, not an installer."
               STATUS=1
-            else
-              echo "OK:   $f ($SIZE bytes)"
+              continue
             fi
+
+            # Tauri writes the version into every bundle name, in one of two shapes:
+            # `VyomQuant_0.1.1_x64-setup.exe` (NSIS/MSI/DMG/AppImage/DEB) and
+            # `VyomQuant-0.1.1-1.x86_64.rpm` (RPM). Accept either separator rather than
+            # guessing, and reject anything carrying neither.
+            case "$BASE" in
+              *_"$VERSION"_*|*-"$VERSION"-*)
+                echo "OK:   $f ($SIZE bytes)"
+                ;;
+              *)
+                echo "FAIL: $f does not carry version $VERSION."
+                echo "      This is a STALE ARTIFACT, not a build failure: the bundler"
+                echo "      names output from tauri.conf.json, so a file with a different"
+                echo "      version was not produced by this build. It would be uploaded"
+                echo "      by the glob below and could be published under this version's"
+                echo "      tag. Run 41273898545 did exactly that with four 0.1.0 files."
+                STATUS=1
+                ;;
+            esac
           done < "$LIST"
 
-          echo "Verified $COUNT artifact(s) on ${{ matrix.label }}."
+          echo "Verified $COUNT artifact(s) on ${{ matrix.label }} against version $VERSION."
           exit "$STATUS"
 
       # ── Upload ─────────────────────────────────────────────────────────────────
