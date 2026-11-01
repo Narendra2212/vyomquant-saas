@@ -292,13 +292,23 @@ function isDemonstrablyExpiredJwt(token) {
   }
 }
 
-// FE-01: the paths a legitimate Supabase auth redirect can actually land on.
-// `getAuthRedirectUrl` (config.js) hands Supabase this exact path for every OTP/sign-up/
-// resend/OAuth call site, so neither a PKCE `?code=` nor a legacy `#access_token=` has any
-// legitimate reason to arrive anywhere else. `/signin`/`/signup`/`/` stay in the allowlist
-// because `PasswordRecoveryHandler` below forwards a `code` landing on any of those three
-// toward the dashboard too, once it resolves (the same thing it used to do for a stray
-// implicit hash).
+// FE-01: the paths where an arriving PKCE `?code=` should be WAITED FOR AND THEN FORWARDED
+// to the dashboard. `getAuthRedirectUrl` (config.js) hands Supabase this exact path for
+// every OTP/sign-up/resend/OAuth call site; `/signin`/`/signup`/`/` are here because
+// `PasswordRecoveryHandler` below forwards a `code` landing on any of those three toward
+// the dashboard once it resolves (the same thing it used to do for a stray implicit hash).
+//
+// `/reset-password` IS NOW A LEGITIMATE `?code=` LANDING PATH AND IS STILL DELIBERATELY
+// ABSENT FROM THIS LIST -- read as "sign-in redirects", not "all auth redirects". The
+// *Forgot password?* control (`pages/AuthPage.jsx`) passes
+// `redirectTo: getAuthRedirectUrl("/reset-password")`, so recovery codes do arrive there.
+// Adding it here would be actively wrong twice over: `hasPendingAuthCodeExchange` would
+// start returning true on that route, and the forwarding branch below would then bounce
+// the user to the dashboard the moment the exchange resolved -- i.e. straight off the form
+// they came to use, with their password unchanged. Keeping it out is also why that route
+// needs no guard-level pending state: it sits outside `AuthGuard`/`GuestGuard` entirely
+// (see its `<Route>`), so nothing bounces an arriving user while supabase-js's own
+// `detectSessionInUrl` completes the exchange that `updateUser` then depends on.
 const _AUTH_REDIRECT_LANDING_PATHS = [AUTH_REDIRECT_PATH, "/signin", "/signup", "/"];
 
 // Exported for tests (FE-01) -- not used by any other module. Renamed from
@@ -487,23 +497,31 @@ function PasswordRecoveryHandler() {
   useEffect(() => {
     const hash = window.location.hash;
     if (hash && hash.includes("type=recovery")) {
-      // NOT path-scoped, and NOT routed through supabase-js's own PKCE exchange: nothing
-      // in src/ calls `resetPasswordForEmail` with an explicit `redirectTo`, so this app
-      // does not control -- and cannot assert -- which path a legitimate recovery email
-      // actually lands on, or what flow type generated it. Still rejects a demonstrably
-      // expired token; the login-CSRF exposure this branch carries is recorded as a known,
-      // UNCHANGED FE-01 residual (see docs/launch_readiness/REMEDIATION_LEDGER.json),
-      // not narrowed on a guess and not touched by the `flowType: 'pkce'` switch below --
-      // switching this app's own client's flow type cannot make a link some OTHER,
-      // uncontrolled sender generates any safer. One real behaviour change IS worth
-      // flagging here even though this branch itself is unchanged: with `flowType: 'pkce'`
-      // now configured (src/supabase.js), supabase-js's OWN internal session detection
-      // will REJECT this same implicit-shaped hash as a flow-type mismatch rather than
-      // quietly adopting it into its real internal session the way it used to -- so if the
-      // out-of-band recovery email is still implicit-shaped, the `updateUser` auth call
-      // on `/reset-password` (which needs THAT internal session, not just the
-      // `sessionStorage` bookkeeping this branch does by hand) could now fail where it
-      // previously, insecurely, succeeded. Needs a live project to confirm either way.
+      // THIS BRANCH IS NOW A FALLBACK FOR OLD LINKS, NOT THE WHOLE OF RECOVERY. It used to
+      // say "nothing in src/ calls `resetPasswordForEmail` with an explicit `redirectTo`,
+      // so this app does not control -- and cannot assert -- which path a legitimate
+      // recovery email actually lands on, or what flow type generated it". True when
+      // written, false now: the *Forgot password?* control on `pages/AuthPage.jsx` calls
+      // `resetPasswordForEmail` with `redirectTo: getAuthRedirectUrl("/reset-password")`,
+      // so a reset STARTED FROM THE PRODUCT is PKCE-shaped (`?code=`), lands on a path this
+      // app chose, and is exchanged by supabase-js's own `detectSessionInUrl` against the
+      // verifier the requesting browser stored -- never reaching this hash branch at all.
+      //
+      // What still reaches it is an implicit-shaped `#access_token=...&type=recovery` link
+      // sent out of band, i.e. by an operator from the Supabase dashboard, which is how
+      // every recovery email before 2026-10-28 was sent. Those DO now fail to complete:
+      // with `flowType: 'pkce'` configured (src/supabase.js) supabase-js rejects that hash
+      // as a flow-type mismatch instead of adopting it internally, so the `updateUser` call
+      // on `/reset-password` -- which needs THAT internal session, not the `sessionStorage`
+      // bookkeeping this branch does by hand -- has nothing to act on. Measured rather than
+      // assumed: production holds four such dispatches, all 2026-09-27..09-29, and the one
+      // still-outstanding `recovery_token` among them was sent 2026-09-29 10:25Z, so it is
+      // ~32 days past any GoTrue recovery lifetime and cannot be redeemed by anyone.
+      // The branch is kept because it costs nothing and an operator may send another; the
+      // route to recommend is the product's own control. Tracked under FE-01 in
+      // docs/launch_readiness/REMEDIATION_LEDGER.json. Still rejects a demonstrably
+      // expired token, and the login-CSRF exposure it carries is unchanged -- switching
+      // this client's flow type cannot make a link some other sender generates any safer.
       const params = new URLSearchParams(hash.startsWith("#") ? hash.substring(1) : hash);
       const token = params.get("access_token");
       if (token && !isDemonstrablyExpiredJwt(token)) {
