@@ -127,6 +127,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # CI-02: declared on THIS job rather than on the workflow, because the other job
+    # (nightly-audit) touches no AWS at all -- every one of its checks is local -- and a
+    # workflow-level `id-token: write` would hand it a credential-minting scope it has no
+    # use for. `contents: read` is named because declaring the block replaces the default.
+    permissions:
+      contents: read
+      id-token: write
+
     env:
       AWS_REGION: ap-southeast-1
 
@@ -151,11 +159,20 @@ jobs:
           fi
           echo "full history: $(git rev-list --count HEAD) commits"
 
+      # CI-02: short-lived OIDC credentials, and a DIFFERENT role from the deploy one.
+      #
+      # This job runs the secret-history sweep, which needs Secrets Manager reads and two
+      # ECS describes -- all read-only. It uses the audit role rather than the deploy role
+      # because the audit role is also trusted for `pull_request` (08-secret-history-audit
+      # runs on PRs and needs the same credential), and a PR-trusted principal must not be
+      # able to push an image or call ecs:UpdateService. Verified by negative simulation:
+      # against this role, ecs:UpdateService, ecr:PutImage, s3:PutObject and iam:PassRole
+      # all come back implicitDeny.
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsAudit-production
+          role-session-name: GitHubActions-04-secret-sweep
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Sweep git history against every live secret

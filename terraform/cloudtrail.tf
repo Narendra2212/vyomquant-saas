@@ -126,7 +126,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "cloudtrail" {
 # `depends_on` on the trail enforces the ordering that the removed reference used to imply.
 locals {
   cloudtrail_name = "vyomquant-trail-${var.environment}"
-  cloudtrail_arn = "arn:aws:cloudtrail:${var.aws_region}:${data.aws_caller_identity.current.account_id}:trail/${local.cloudtrail_name}"
+  cloudtrail_arn  = "arn:aws:cloudtrail:${var.aws_region}:${data.aws_caller_identity.current.account_id}:trail/${local.cloudtrail_name}"
 }
 
 resource "aws_s3_bucket_policy" "cloudtrail" {

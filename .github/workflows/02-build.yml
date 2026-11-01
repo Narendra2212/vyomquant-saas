@@ -48,49 +48,50 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force || true
 
-      # CI-02: THIS STEP STILL USES A LONG-LIVED IAM USER KEY, AND AN ATTEMPT TO MOVE IT
-      # TO OIDC WAS REVERTED. Recorded here because the next person to try will otherwise
-      # repeat it.
+      # CI-02: SHORT-LIVED OIDC CREDENTIALS. No long-lived IAM user key.
       #
-      # The attempt replaced this with:
-      #     role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
-      # It was pre-checked more carefully than most changes and still failed. Run
-      # 41145549134 on main, step "Configure AWS Credentials":
+      # A previous attempt at exactly this change failed and was reverted, and the cause
+      # is worth keeping because the diagnosis went wrong before it went right. Run
+      # 41145549134 on main died at this step with:
       #
-      #     audience: sts.amazonaws.com
-      #     Assuming role with OIDC
       #     ##[error]Could not assume role with OIDC:
       #              Not authorized to perform sts:AssumeRoleWithWebIdentity
       #
-      # EVERYTHING CHECKABLE BEFOREHAND CHECKED OUT, which is the useful part of this note:
-      #   - the role exists; the ARN in the workflow matched iam:GetRole's ARN exactly
-      #   - its trust policy allows sts:AssumeRoleWithWebIdentity from
-      #     arn:aws:iam::273709947018:oidc-provider/token.actions.githubusercontent.com
-      #     with aud = sts.amazonaws.com and sub StringLike
-      #     repo:Narendra2212/vyomquant-saas:ref:refs/heads/{main,master}
-      #   - a push to main sends exactly that sub, and this workflow only runs on push to
-      #     main/master (its workflow_call trigger is declared but unused)
-      #   - the provider's Url is token.actions.githubusercontent.com and its ClientIDList
-      #     does contain sts.amazonaws.com
-      #   - the role has no permissions boundary
+      # The note left behind blamed the shared OIDC provider's stale ThumbprintList and
+      # concluded that fixing it needed another project's agreement, because the provider
+      # is tagged Project=deeptech-outreach. THAT WAS WRONG, and wrong in a way that
+      # turned a five-minute fix into a "blocked on coordination" entry for days.
+      # "Not authorized to perform sts:AssumeRoleWithWebIdentity" means the token
+      # VALIDATED and the TRUST POLICY did not match. A bad thumbprint cannot produce it
+      # -- that fails earlier, as a TLS/InvalidIdentityToken error -- and AWS has not
+      # required a correct thumbprint for token.actions.githubusercontent.com since 2023.
       #
-      # So the cause is NOT any of those. The leading unverified candidate is the
-      # provider's ThumbprintList, which holds a single old GitHub thumbprint
-      # (ab9d0263244dd0326eb67015705a667e79cfe998) -- and note the provider is tagged
-      # Project=deeptech-outreach, i.e. it belongs to a different project sharing this AWS
-      # account, so changing it is not this project's call to make unilaterally.
+      # THE ACTUAL CAUSE: this repository has GitHub's immutable subject claims enabled.
+      # GitHub's own API reports use_immutable_subject=true with
+      #     sub_claim_prefix: repo:Narendra2212@126683513/vyomquant-saas@1306233497
+      # so the `sub` carries the numeric owner and repository IDs, and the trust policy's
+      # name-shaped patterns could never match it. Confirmed empirically rather than from
+      # a doc page: a throwaway probe workflow on main printed
+      #     sub  repo:Narendra2212@126683513/vyomquant-saas@1306233497:ref:refs/heads/main
+      # The role's trust policy now lists both shapes, and nothing about the shared
+      # provider was touched.
       #
-      # THE REAL LESSON, for whoever picks this up: an OIDC trust relationship cannot be
-      # verified without a real workflow run on a trusted ref. There is no dry run. This
-      # workflow runs on push to main, so the first test is a merge, and a failed test
-      # means main's build is broken until it is reverted. Do the next attempt with that
-      # understood -- ideally against a throwaway workflow that is allowed to fail, not
-      # against the build everything else gates on.
+      # WHY THIS ATTEMPT IS NOT ANOTHER EXPERIMENT. Both halves are verified in advance,
+      # which the first attempt could only do for one:
+      #   * TRUST -- proven by that probe run actually assuming the role on main and
+      #     calling sts:GetCallerIdentity. This genuinely cannot be dry-run;
+      #     iam:SimulatePrincipalPolicy does not evaluate web-identity trust.
+      #   * PERMISSIONS -- which CAN be simulated, and were. Every AWS action this
+      #     workflow and every script it calls makes was enumerated and run through
+      #     iam:SimulatePrincipalPolicy against this exact role. That caught two real
+      #     problems before they reached a run: iam:PassRole needed its
+      #     iam:PassedToService context key, and the role's logs grants were scoped to a
+      #     log-group ARN that does not satisfy DescribeLogGroups or GetLogEvents.
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
+          role-session-name: GitHubActions-02-build
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR

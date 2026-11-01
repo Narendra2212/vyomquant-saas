@@ -119,21 +119,140 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
 # tried to register a task definition against the role that's actually in use -- fixed to
 # reference the real ARN directly.
 #
-# Remaining, deliberately NOT done yet, each needing its own verification gate:
-#   1. Point both workflows' `configure-aws-credentials@v4` step at
-#      `role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production`
-#      instead of `aws-access-key-id`/`aws-secret-access-key`, and add
-#      `permissions: id-token: write` to 03-deploy.yml's jobs (02-build.yml already declares
-#      it, unused until now).
-#   2. Watch both workflows go green against the role at least once -- a real CI run, not
-#      something to simulate.
-#   3. ONLY once step 2 is confirmed green, delete the long-lived IAM user access key from
-#      AWS IAM and from the repo's `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` GitHub
-#      secrets. That access key is also what every AWS call in this remediation effort has
-#      been authenticating with -- deleting it before step 2 is confirmed would cut off the
-#      very credential being used to verify the switch, with no way to undo it from here.
+# STATUS: the switch is DONE. All five key-using workflows (02-build, 03-deploy,
+# 04-nightly-audit, 06-frontend-deploy, 08-secret-history-audit) now assume a role via
+# OIDC and no non-comment line in any of them references the static key.
+#
+# WHAT THE FIRST ATTEMPT GOT WRONG, because the note it left sent the next attempt in the
+# wrong direction for days. It failed with "Not authorized to perform
+# sts:AssumeRoleWithWebIdentity" and concluded the cause was the shared provider's stale
+# ThumbprintList, which would need the owning project's agreement to change. That reading
+# was wrong twice: AWS has not validated that thumbprint for
+# token.actions.githubusercontent.com since 2023, and a certificate problem cannot produce
+# an AUTHORIZATION error anyway -- that message means the token validated and the TRUST
+# POLICY did not match. Nothing about the shared provider needed changing.
+#
+# The real cause: this repository has GitHub's immutable subject claims enabled, so the
+# `sub` carries the numeric owner and repository IDs
+# (repo:Narendra2212@126683513/vyomquant-saas@1306233497:ref:refs/heads/main) and the
+# name-shaped patterns below could never match. Both shapes are now listed -- see the
+# comment on the `sub` condition.
+#
+# THERE ARE NOW TWO ROLES, and the split is load-bearing rather than tidiness. See
+# `aws_iam_role.github_actions_audit` below: 08-secret-history-audit runs on
+# `pull_request`, whose subject this deploy role deliberately does not trust, because a
+# PR-assumable principal that can push images and call ecs:UpdateService means anyone who
+# can open a pull request can ship one.
+#
+# STILL OUTSTANDING, and it is the last piece: the `AWS_ACCESS_KEY_ID` /
+# `AWS_SECRET_ACCESS_KEY` GitHub repository secrets should be DELETED now that nothing
+# reads them. Deliberately sequenced after watching the switched workflows go green,
+# because that same access key is what every AWS call in this remediation effort
+# authenticates with. Deleting the repo secrets does not touch the IAM key itself, so
+# local tooling keeps working and re-adding them is the rollback.
 data "aws_iam_openid_connect_provider" "github_actions" {
   url = "https://token.actions.githubusercontent.com"
+}
+
+# CI-02: the read-only role for the secret-history sweep (04-nightly-audit's
+# secret-history-sweep job and all of 08-secret-history-audit).
+#
+# WHY A SECOND ROLE EXISTS AT ALL. 08 runs on `pull_request` and its credential step
+# hard-fails without a credential -- by design, because an audit that silently skips its
+# own comparison reports clean. A pull-request run's OIDC subject is `...:pull_request`,
+# which means sharing the deploy role would have required trusting that subject on a
+# principal holding ecr:PutImage and ecs:UpdateService. Someone could then open a pull
+# request, edit the workflow in it, and deploy. That is a worse posture than the static
+# key this whole change removes, so the wider trust goes on a role that can only read.
+#
+# Verified by NEGATIVE simulation rather than by inspection: against this role,
+# ecs:UpdateService, ecr:PutImage, s3:PutObject and iam:PassRole all evaluate to
+# implicitDeny.
+resource "aws_iam_role" "github_actions_audit" {
+  name                 = "VyomQuantGithubActionsAudit-${var.environment}"
+  max_session_duration = 3600
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = data.aws_iam_openid_connect_provider.github_actions.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            # Branches AND pull_request. Both subject shapes, same reason as the deploy
+            # role's: immutable subject claims are a repository toggle.
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${var.github_repository_immutable}:ref:refs/heads/main",
+              "repo:${var.github_repository_immutable}:ref:refs/heads/master",
+              "repo:${var.github_repository_immutable}:pull_request",
+              "repo:${var.github_repository}:ref:refs/heads/main",
+              "repo:${var.github_repository}:ref:refs/heads/master",
+              "repo:${var.github_repository}:pull_request",
+            ]
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "github_actions_audit" {
+  name = "github-actions-secret-history-audit"
+  role = aws_iam_role.github_actions_audit.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # ListSecrets does not support resource-level permissions. Read-only metadata.
+        Sid      = "ListEverySecretName"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:ListSecrets"]
+        Resource = "*"
+      },
+      {
+        # The sweep compares live secret VALUES against git history, so GetSecretValue is
+        # the point of it. Confined to this project's prefix: the script starts from
+        # list-secrets and would otherwise read other projects' secrets in this account.
+        Sid    = "ReadOwnSecrets"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:ListSecretVersionIds",
+        ]
+        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/production/*"
+      },
+      {
+        # Covers CMK-encrypted secrets; a no-op for aws/secretsmanager-encrypted ones.
+        # ViaService stops this being a general decrypt grant.
+        Sid      = "DecryptSecretsOnly"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
+          }
+        }
+      },
+      {
+        # audit_secrets_in_git_history.py resolves which secrets the LIVE task definition
+        # references, so it can tell a secret that is in use from one that is orphaned.
+        Sid      = "ResolveLiveTaskDefinition"
+        Effect   = "Allow"
+        Action   = ["ecs:DescribeServices", "ecs:DescribeTaskDefinition"]
+        Resource = "*"
+      },
+    ]
+  })
 }
 
 resource "aws_iam_role" "github_actions_deploy" {
@@ -153,10 +272,25 @@ resource "aws_iam_role" "github_actions_deploy" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            # Scoped to the branches 02-build.yml (push: [main, master]) and 03-deploy.yml
-            # (workflow_run off 02 Build, plus its own workflow_dispatch) actually run on --
-            # not every ref in the repository.
+            # Scoped to the branches 02-build.yml (push: [main, master]), 03-deploy.yml
+            # (workflow_run off 02 Build, plus workflow_dispatch) and 06-frontend-deploy
+            # actually run on -- not every ref, and deliberately NOT `pull_request`, which
+            # is why the separate audit role above exists.
+            #
+            # BOTH SUBJECT SHAPES ARE LISTED, and the first four lines are the fix for the
+            # failure this file's header describes. GitHub issues immutable subject claims
+            # for this repository, so the live `sub` is
+            #   repo:Narendra2212@126683513/vyomquant-saas@1306233497:ref:refs/heads/main
+            # with the owner and repository IDs embedded. Proven by a probe workflow on
+            # main printing the claim, not inferred from documentation.
+            #
+            # The name-shaped patterns stay even though they cannot currently match.
+            # Immutable subjects are a repository-level toggle, and a build that breaks
+            # because someone flipped it back would be a self-inflicted repeat of the
+            # outage this replaced. Two inert lines are cheaper than that.
             "token.actions.githubusercontent.com:sub" = [
+              "repo:${var.github_repository_immutable}:ref:refs/heads/main",
+              "repo:${var.github_repository_immutable}:ref:refs/heads/master",
               "repo:${var.github_repository}:ref:refs/heads/main",
               "repo:${var.github_repository}:ref:refs/heads/master",
             ]
@@ -198,6 +332,14 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
         ]
       },
       {
+        Sid    = "EcrDescribeRepositories"
+        Effect = "Allow"
+        # 03-deploy -> pre_deployment_validation.py -> aws_validation.py checks that
+        # vyomquant-api / vyomquant-tee / vyomquant-mds all exist before deploying.
+        Action   = ["ecr:DescribeRepositories"]
+        Resource = ["arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/vyomquant-*"]
+      },
+      {
         Sid    = "EcsDeploy"
         Effect = "Allow"
         Action = [
@@ -207,8 +349,14 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
           "ecs:UpdateService",
           "ecs:ListTasks",
           "ecs:DescribeTasks",
+          # Added with the workflow switch. ecs_deploy_and_diagnose.py discovers which
+          # workers to redeploy with ecs:ListServices rather than from a hardcoded list
+          # (WORKER_SERVICE_PREFIX = "vyomquant-worker-" plus the mds sidecar), and
+          # aws_validation.py calls ecs:DescribeClusters as a pre-deploy existence check.
+          "ecs:ListServices",
+          "ecs:DescribeClusters",
         ]
-        Resource = "*" # none of these six actions support resource-level restriction
+        Resource = "*" # none of these actions support resource-level restriction
       },
       {
         Sid    = "EcsPassRole"
@@ -220,16 +368,79 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
           # terraform has never actually applied.
           "arn:aws:iam::273709947018:role/ecsTaskExecutionRole",
         ]
+        # Narrows the grant to passing that role TO ECS, so it cannot be used to hand the
+        # role to some other service. Note when verifying this with
+        # iam:SimulatePrincipalPolicy: the simulator evaluates conditions against the
+        # context it is GIVEN, so without --context-entries for iam:PassedToService this
+        # statement can only ever return implicitDeny. That is a simulator artefact, not a
+        # missing grant -- it returns `allowed` once the key is supplied, and ECS sets it
+        # on the real RegisterTaskDefinition call.
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
       },
       {
         Sid    = "DeployLogReading"
         Effect = "Allow"
         Action = [
+          "logs:DescribeLogGroups",
           "logs:DescribeLogStreams",
           "logs:GetLogEvents",
         ]
-        Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:*"
-      }
+        # RESOURCE "*", and this is a correction. This was scoped to
+        # `...:log-group:*`, which satisfies DescribeLogStreams but NOT DescribeLogGroups
+        # or GetLogEvents -- measured with iam:SimulatePrincipalPolicy against an
+        # unchanged policy while varying only the resource argument. DescribeLogGroups
+        # enumerates groups and takes no specific group; GetLogEvents' resource is
+        # stream-qualified. The bug was latent because the workflows authenticated as an
+        # IAM user holding CloudWatchLogsFullAccess, so this role's log grants were never
+        # exercised until the OIDC switch.
+        #
+        # All three are read-only, and what they read is deploy diagnostics -- the log
+        # tail 03-deploy prints when a rollout fails. Scoping this wrong fails closed
+        # exactly when someone is trying to find out why production did not come up.
+        Resource = "*"
+      },
+      {
+        Sid    = "PreDeploySecretExistenceChecks"
+        Effect = "Allow"
+        # aws_validation.py asserts every secret the task definition references exists
+        # and has a current version. Metadata only -- NOT GetSecretValue, which the
+        # deploy path never needs and which the audit role holds separately.
+        Action = [
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:ListSecretVersionIds",
+        ]
+        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:vyomquant/production/*"
+      },
+      {
+        Sid    = "FrontendBucket"
+        Effect = "Allow"
+        # 06-frontend-deploy's three `aws s3 sync --delete` passes and its `s3 ls`.
+        Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
+        Resource = "arn:aws:s3:::vyomquant-frontend"
+      },
+      {
+        Sid      = "FrontendObjects"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:GetObjectAttributes", "s3:PutObject", "s3:DeleteObject"]
+        Resource = "arn:aws:s3:::vyomquant-frontend/*"
+      },
+      {
+        Sid    = "FrontendCdn"
+        Effect = "Allow"
+        Action = [
+          "cloudfront:CreateInvalidation",
+          # GetInvalidation is NOT redundant: `aws cloudfront wait
+          # invalidation-completed` polls it. Granting only CreateInvalidation produces a
+          # deploy that publishes the assets and then fails on the wait.
+          "cloudfront:GetInvalidation",
+          "cloudfront:GetDistribution",
+        ]
+        Resource = "arn:aws:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/EEOXECPHQ8SR0"
+      },
     ]
   })
 }

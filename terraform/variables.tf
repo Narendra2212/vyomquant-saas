@@ -110,9 +110,36 @@ variable "alert_email" {
 }
 
 variable "github_repository" {
-  description = "CI-02: GitHub \"owner/repo\" slug trusted by the GitHub Actions OIDC deploy role (see iam.tf's github_actions_deploy) to assume it. Must match this repository exactly -- a wrong value either trusts no workflow (safe but broken) or, in the worst case, trusts the wrong repository."
+  description = "CI-02: GitHub \"owner/repo\" slug trusted by the GitHub Actions OIDC deploy role (see iam.tf's github_actions_deploy) to assume it. Must match this repository exactly -- a wrong value either trusts no workflow (safe but broken) or, in the worst case, trusts the wrong repository. NOTE: this name-shaped form no longer matches what GitHub sends for this repository -- see github_repository_immutable."
   type        = string
   default     = "Narendra2212/vyomquant-saas"
+}
+
+variable "github_repository_immutable" {
+  description = <<-EOT
+    CI-02: the same repository in GitHub's IMMUTABLE subject-claim form,
+    "<owner>@<owner_id>/<repo>@<repo_id>". This is what the OIDC token's `sub`
+    claim actually carries for this repository, and trusting only the
+    name-shaped `github_repository` form is what made the first OIDC attempt
+    fail with "Not authorized to perform sts:AssumeRoleWithWebIdentity" after
+    every pre-flight check passed.
+
+    Derive it, do not guess it:
+      gh api /repos/<owner>/<repo>/actions/oidc/customization/sub
+    returns `sub_claim_prefix` verbatim when `use_immutable_subject` is true.
+    The IDs are also in `GET /repos/<owner>/<repo>` as `owner.id` and `id`.
+    The whole point of the format is that these survive renames and transfers,
+    so unlike the slug above this value does not drift.
+  EOT
+  type        = string
+  default     = "Narendra2212@126683513/vyomquant-saas@1306233497"
+
+  validation {
+    # A slug without both @<id> parts means someone copied github_repository
+    # here, which reintroduces exactly the failure this variable exists to fix.
+    condition     = length(regexall("^[^@/]+@[0-9]+/[^@/]+@[0-9]+$", var.github_repository_immutable)) == 1
+    error_message = "Must be the immutable form <owner>@<owner_id>/<repo>@<repo_id>, e.g. Narendra2212@126683513/vyomquant-saas@1306233497. Read it from the repository's actions/oidc/customization/sub endpoint."
+  }
 }
 
 variable "metrics_scrape_token" {
