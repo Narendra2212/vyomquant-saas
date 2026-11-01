@@ -209,21 +209,36 @@ try {
       // `#access_token=` hash as a flow-type mismatch rather than adopting it (see
       // `@supabase/auth-js`'s `_getSessionFromURL`), rather than silently trusting it.
       //
-      // WHAT THIS DOES NOT COVER: the password-RECOVERY email. This app has no call site
-      // for `resetPasswordForEmail` (grep `src/` -- there isn't one), so it has never
-      // controlled, and still does not control, what generates that email or what flow
-      // type that generator uses. If it still produces an implicit-style
-      // `#access_token=...&type=recovery` link, this switch does not make that link any
-      // safer -- `PasswordRecoveryHandler`'s `type=recovery` branch in App.jsx reads that
-      // hash directly and has never gone through this library's own session validation
-      // either way. It also means this library's OWN internal session will now refuse that
-      // same implicit recovery hash (the mismatch above), which is a real behaviour change
-      // worth flagging: the `updateUser` auth call on `/reset-password` needs the
-      // library's OWN internal session, not just this app's own `sessionStorage` bookkeeping,
-      // so if the out-of-band recovery email is still implicit-shaped, completing a password
-      // reset could now fail where it previously (insecurely) succeeded. Tracked under FE-01
-      // in docs/launch_readiness/REMEDIATION_LEDGER.json as something that needs a live
-      // Supabase project -- and whoever/whatever actually generates that email -- to confirm.
+      // THE PASSWORD-RECOVERY EMAIL IS NOW COVERED TOO -- this paragraph used to say the
+      // opposite and was correct when written. It read "this app has no call site for
+      // `resetPasswordForEmail` (grep `src/` -- there isn't one), so it has never
+      // controlled, and still does not control, what generates that email", and warned
+      // that `updateUser` on `/reset-password` might therefore start failing under PKCE.
+      // The *Forgot password?* control on `pages/AuthPage.jsx` (`handlePasswordReset`)
+      // closed that gap: the product now calls `resetPasswordForEmail` from THIS client,
+      // so the recovery email is minted with a `code_challenge` this browser generated and
+      // arrives as `?code=` -- and the browser that asked for the reset is the one holding
+      // the verifier that completes it. `detectSessionInUrl` above exchanges that code on
+      // arrival, which gives `updateUser` the library's own internal session it needs.
+      // `/reset-password` is also deliberately outside both route guards and outside
+      // `_AUTH_REDIRECT_LANDING_PATHS`, so nothing forwards the user off the reset form
+      // mid-exchange (see `hasPendingAuthCodeExchange` in App.jsx).
+      //
+      // WHAT IS STILL NOT COVERED, AND IT IS INHERENT TO PKCE, NOT A BUG HERE: the reset
+      // must be COMPLETED IN THE BROWSER THAT REQUESTED IT. Request on a desktop, open the
+      // mail on a phone, and that phone holds no verifier -- the exchange fails, so
+      // `updateUser` reports a missing session. Same constraint as a PKCE magic link,
+      // but it bites harder for recovery because reading mail on a different device is
+      // ordinary behaviour. A cross-device reset needs a server-side exchange, not a
+      // client flow-type change. Tracked under FE-01 in
+      // docs/launch_readiness/REMEDIATION_LEDGER.json.
+      //
+      // The `type=recovery` hash branch in `App.jsx` is now a FALLBACK FOR OLD LINKS only
+      // -- implicit-shaped mail sent from the Supabase dashboard before 2026-10-28. Those
+      // links do fail under PKCE, as this paragraph originally warned; production has four
+      // such dispatches, all 2026-09-27..09-29, and the single still-outstanding
+      // `recovery_token` among them was sent 2026-09-29 10:25Z, far past any GoTrue
+      // recovery lifetime. So the regression has no reachable victim left.
       flowType: 'pkce',
     }
   });
