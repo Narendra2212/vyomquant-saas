@@ -230,9 +230,35 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     // and the count is a `ds/Metric` beside the table, which is the field that renders the
     // marker when the read failed.
     expect(await screen.findByText('Open positions')).toBeDefined();
-    expect(
-      document.querySelector('[data-region="openPositionsCount"]').textContent,
-    ).toContain('2');
+
+    /*
+     * WAITED ON THE COUNT ITSELF, NOT ON THE TITLE ABOVE IT, and that distinction is the
+     * whole fix. `Open positions` is `labelOf("openPositions")` — the PANEL TITLE — while
+     * the count is `labelOf("openPositionsCount")` ("Open position count") on a `ds/Metric`
+     * among the panel's CHILDREN. `ds/Panel` renders its title in the loading state and its
+     * children only once `state` is loaded, so the title appearing says nothing about
+     * whether the metric exists: `findByText` could resolve a commit before the children
+     * mounted, the synchronous `querySelector` returned `null`, and the read died with
+     * "Cannot read properties of null (reading 'textContent')". It passed whenever the
+     * effect happened to land first, which is why it failed intermittently rather than
+     * always — it blocked a deploy on 61a2e0d0 while passing on the commits either side.
+     *
+     * This is the rule the latency test below already states for the same reason: wait on
+     * the CONTENT, never on the region, because the region is in the DOM while it is still
+     * a skeleton. Asserting through `waitFor` also turns the remaining failure mode into
+     * "the count never rendered", which names the problem, instead of a `TypeError` on
+     * `null` that names only the line that tripped over it.
+     *
+     * Everything below this point reads the panel's children, so this is also what makes
+     * those reads safe: `positions` and `risk.open_positions_count` are set in the same
+     * effect, so the metric and the table arrive in one commit.
+     */
+    const openPositionsCount = await waitFor(() => {
+      const el = document.querySelector('[data-region="openPositionsCount"]');
+      expect(el, 'the openPositionsCount metric has not rendered yet').not.toBeNull();
+      return el;
+    });
+    expect(openPositionsCount.textContent).toContain('2');
 
     /*
      * Scoped to the positions region rather than to the document. `BTC/USDT` is now on the
