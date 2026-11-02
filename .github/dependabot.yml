@@ -1,0 +1,136 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  DEPENDABOT — VERSION UPDATES
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  WHY THIS FILE EXISTS
+#  --------------------
+#  Dependabot was already finding real problems and could do nothing about any of them.
+#  Alerts are on by default for a public repository, and there were EIGHT open, including
+#  the repository's only CRITICAL. But there was no `.github/dependabot.yml` and zero
+#  Dependabot pull requests, so every one of those alerts sat in the Security tab waiting
+#  for somebody to read it.
+#
+#  That matters most for the Rust tree, which is the one case the CI gates CANNOT cover:
+#
+#    tauri 2.10.3   CVE-2026-42184   GHSA-7gmj-67g7-phm9   patched in 2.11.1
+#      "Origin Confusion Issue that Allows Remote Pages to Invoke Local-Only IPC Commands"
+#
+#  That is a RUNTIME advisory in the shipped desktop application, and `cargo audit` cannot
+#  see it: cargo-audit reads the RustSec database, which carries exactly two tauri
+#  advisories, RUSTSEC-2022-0088 and RUSTSEC-2022-0091, both from 2022 and neither this
+#  one. Dependabot reads GHSA, so it does. The blocking Rust gate in `05-security.yml` is
+#  not misconfigured -- it is reading a database that does not contain the finding.
+#
+#  So the two are COMPLEMENTARY rather than redundant, and this file is how the half that
+#  sees GHSA gets to act: Dependabot resolves the lockfile itself, which for a cross-minor
+#  Cargo bump is the only safe way to do it. `tauri = { version = "2" }` already admits
+#  2.11.1, so this needs no manifest edit -- only a resolver run.
+#
+#  EVERY ECOSYSTEM IN THE REPOSITORY IS LISTED, because the gap this closes was caused by
+#  assuming there was one npm manifest when there are three.
+#
+#  NOTE ON WHAT THIS FILE DOES NOT CONTROL. Dependabot has three separate features:
+#  ALERTS (on by default here), SECURITY UPDATES (a repository setting, enabled via the
+#  `automated-security-fixes` API or the Settings UI -- not configurable from this file),
+#  and VERSION UPDATES (this file). A config here is necessary but not sufficient; the
+#  security-updates setting is what makes an ALERT turn into a pull request promptly.
+version: 2
+
+updates:
+  # ── The frontend, and the tree the blocking npm gate already watches ──────────
+  - package-ecosystem: npm
+    directory: /algo22-terminal
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # Grouped so a quiet week is one reviewable PR rather than nine. Security updates are
+    # deliberately NOT grouped: they should arrive alone and be mergeable on their own.
+    groups:
+      frontend-dev:
+        dependency-type: development
+        patterns: ['*']
+      frontend-prod:
+        dependency-type: production
+        patterns: ['*']
+    # `vite` is the bundler that produces the shipped artefact and `vitest` must stay
+    # compatible with it, so their majors are reviewed deliberately rather than proposed
+    # automatically. Patch and minor still flow -- which is what cleared the 7.3.6
+    # advisories.
+    ignore:
+      - dependency-name: vite
+        update-types: ['version-update:semver-major']
+      - dependency-name: vitest
+        update-types: ['version-update:semver-major']
+
+  # ── The Tauri desktop app's Rust tree: the one cargo-audit cannot fully cover ──
+  - package-ecosystem: cargo
+    directory: /algo22-terminal/src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+
+  # ── docs/: where the CRITICAL was, now gated in 05-security.yml ───────────────
+  # `concurrently` is capped below 10 on purpose, and this is not caution for its own
+  # sake: concurrently@10 declares `engines: { node: '>=22' }` while every workflow here
+  # pins Node 20. Proposing it would produce an EBADENGINE build rather than an upgrade.
+  # The advisories were cleared inside the 9.x line (9.2.5 carries shell-quote 1.12.0).
+  - package-ecosystem: npm
+    directory: /docs
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: concurrently
+        update-types: ['version-update:semver-major']
+
+  # ── The repository root, the third npm manifest ───────────────────────────────
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+
+  # ── Python: the backend's requirements, which pip-audit gates on every PR ─────
+  # Listed anyway, because pip-audit tells you a pin is vulnerable and this opens the PR
+  # that moves it. `torch` is excluded from automatic proposals: `.trivyignore` records
+  # that its bump is a four-site change (three requirements files plus a hardcoded
+  # Dockerfile pin) which a single-manifest PR would leave half-applied.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: torch
+
+  - package-ecosystem: pip
+    directory: /backend_app
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: torch
+
+  # ── GitHub Actions: every `uses:` in this repository is SHA-pinned ────────────
+  # Which is the right posture, and also means a pinned action never updates by itself.
+  # Dependabot is the mechanism that moves a SHA pin when the action publishes a fix.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+
+  # ── Docker base images across the five Dockerfiles ────────────────────────────
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3

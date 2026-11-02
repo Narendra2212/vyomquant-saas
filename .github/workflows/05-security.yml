@@ -366,6 +366,64 @@ jobs:
           cd algo22-terminal
           npm audit --audit-level=high --omit=dev
 
+      # ── THE OTHER TWO npm MANIFESTS, WHICH NOTHING AUDITED ───────────────────────
+      # THIS GAP HELD THE REPOSITORY'S ONLY CRITICAL. The step above audits
+      # `algo22-terminal` and the Rust gate below audits `src-tauri`. But there are THREE
+      # tracked `package-lock.json` files, not one, and the other two had no gate at all:
+      #
+      #   docs/package-lock.json   the `concurrently` + `@playwright/test` script runner
+      #   package-lock.json        the repo root (`lucide-react`, `@playwright/test`)
+      #
+      # Dependabot reported what the gates could not see, in `docs/`:
+      #
+      #   shell-quote 1.8.3   CRITICAL  GHSA-w7jw-789q-3m8p / CVE-2026-9277
+      #   shell-quote 1.8.3   HIGH      GHSA-395f-4hp3-45gv / CVE-2026-13311
+      #
+      # THE FLAGS DIFFER FROM THE STEP ABOVE, deliberately and on measured grounds rather
+      # than by oversight. Everything in both of these manifests is a devDependency (the
+      # root has one runtime entry that pulls nothing vulnerable), so `--omit=dev` empties
+      # the tree and the audit passes vacuously. Run against the PRE-FIX `docs` lockfile in
+      # a scratch checkout:
+      #
+      #   npm audit --audit-level=high --omit=dev  ->  "found 0 vulnerabilities", exit 0
+      #   npm audit --audit-level=high             ->  2 critical,                exit 1
+      #
+      # So copying the frontend gate's flags here would have reported this manifest CLEAN
+      # while it carried a CRITICAL. A gate that cannot fail is worse than no gate, because
+      # it also removes the suspicion that something is unwatched. The dev tree is what
+      # there is to audit here, so the dev tree is what is audited.
+      #
+      # `--package-lock-only` rather than `npm ci`: nothing in CI runs these scripts, so
+      # installing them to read a lockfile already in the repository buys nothing. It also
+      # keeps this step independent of the `cache-dependency-path` above, which is keyed on
+      # the frontend lockfile.
+      #
+      # A MISSING LOCKFILE FAILS rather than skips. If one of these is moved or deleted,
+      # the loop must say so: silently auditing nothing is precisely the state this step
+      # exists to end.
+      - name: Run npm audit on the remaining manifests (blocking, HIGH and above)
+        shell: bash
+        run: |
+          set -uo pipefail
+          STATUS=0
+          for dir in docs .; do
+            echo "── $dir ─────────────────────────────────────────────"
+            if [ ! -f "$dir/package-lock.json" ]; then
+              echo "FAIL: $dir/package-lock.json is missing."
+              echo "      This step audits it by name; a moved or deleted manifest must"
+              echo "      fail here rather than quietly reduce what CI covers."
+              STATUS=1
+              continue
+            fi
+            if (cd "$dir" && npm audit --package-lock-only --audit-level=high); then
+              echo "OK:   $dir has no HIGH or CRITICAL advisory."
+            else
+              echo "FAIL: $dir carries a HIGH or CRITICAL advisory (see above)."
+              STATUS=1
+            fi
+          done
+          exit "$STATUS"
+
   # ─────────────────────────────────────────────────────────────────────────────────────
   #  DEP-03: the Tauri desktop app's Rust dependency tree, held by a BLOCKING gate.
   #
