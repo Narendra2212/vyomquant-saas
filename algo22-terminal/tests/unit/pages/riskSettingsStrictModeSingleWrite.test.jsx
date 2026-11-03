@@ -100,7 +100,8 @@ const MARGIN_HEALTH = Object.freeze({
   risk_score: 17,
 });
 
-/** The one operable switch; the other three are unenforced and render disabled (RISK-02). */
+/** The switch this file operates. RISK-05 made two of the other three real too; this file
+ * is unaffected either way, since it only ever toggles this one. */
 const LOSS_SWITCH = 'Daily Loss Limit';
 
 /** How the real application renders: StrictMode on. */

@@ -295,6 +295,14 @@ describe('Phase 3 — Trading Platform Operational Completion Tests', () => {
         free_margin: 75,
         risk_score: 20
       });
+      // RISK-05: a mocked double, not the real unmocked `GET /api/risk/guard-status` --
+      // this suite otherwise would make a real network call from jsdom on every mount.
+      vi.spyOn(riskModule.riskApi, 'getGuardStatus').mockResolvedValue({
+        consecutive_losses: 0,
+        consecutive_loss_limit: 3,
+        capital_utilization_pct: 0.1,
+        capital_utilization_limit_pct: 0.8,
+      });
 
       render(
         <MemoryRouter>

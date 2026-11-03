@@ -171,6 +171,34 @@
  * One thing is NOT retokened and is recorded instead of guessed: nothing here paints a
  * profit or a loss, so `pnlToken` is not reached on this page at all. The only semantic
  * question was armed-versus-unarmed, and it is answered above.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * RISK-05 — TWO OF THE THREE "NOT ENFORCED YET" GUARDS ARE NOW REAL; ONE STAYS AS IT WAS
+ * ═══════════════════════════════════════════════════════════════════════════
+ * RISK-02 found three guards declared and rendered, disabled, with no backend code ever
+ * evaluating them. RISK-05 built real enforcement for two:
+ *
+ *   - "Consecutive Loss Protection" halts new position opens once the account's most
+ *     recent realizing fills have lost money three times in a row.
+ *   - "Capital Utilization Limit" halts new position opens once open-position notional
+ *     passes 80% of total equity.
+ *
+ * Both are checked on the automated bot path (`master_executor.BotRunner`) and the manual
+ * order path (`PaperTradingService.place_order`) alike, from a durable PAPER-account
+ * trade/position history — the same scope restriction RISK-04 recorded for the drawdown
+ * guard, and for the identical reason: no equivalent history is persisted for a LIVE
+ * account anywhere in this codebase.
+ *
+ * "Black Swan Protection" is DELIBERATELY LEFT AS IT WAS. The dormant backend check it
+ * would arm (`InstitutionalRiskManager.validate_trade_request`'s flash-crash/SMA-deviation
+ * check) can be fed real data on the automated bot path at no new cost — the bot already
+ * buffers its own recent OHLCV bars for its indicators — but the MANUAL order path has no
+ * equivalent persisted short-window price series, and the only way to get one would be a
+ * new, retry-prone external exchange fetch added to every manual order's hot path. Arming
+ * the bot path only, while the manual path stayed unprotected, would reproduce the exact
+ * bypass RISK-04 found for drawdown ("could not open a position via a bot, but could
+ * still open one by hand") under this guard's own name — so this toggle stays disabled
+ * and honestly labelled rather than claim a protection a trader could sidestep by hand.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -261,13 +289,23 @@ const DEFAULT_KILL_SWITCHES = Object.freeze([
     icon: AlertTriangle,
   },
   {
+    // RISK-05. Real: a count of this PAPER account's most recent fills that lost money in
+    // a row, read via `GET /api/risk/guard-status` and checked by
+    // `PaperTradingService.get_consecutive_loss_count` on both the automated bot path
+    // (`master_executor.BotRunner`) and the manual order path
+    // (`PaperTradingService.place_order`). Default position flips to `true` with it: the
+    // enforcement is unconditional, same as "Daily Loss Limit"'s, so "off" would be a
+    // display this page cannot honour.
     key: 'streak',
     label: 'Consecutive Loss Protection',
     description: 'Pause on 3 consecutive losing trades',
-    active: false,
+    active: true,
     icon: Activity,
   },
   {
+    // RISK-05. Real: this PAPER account's open-position notional as a fraction of its
+    // total equity, read the same way and checked by
+    // `PaperTradingService.get_capital_utilization_pct` on both order paths.
     key: 'capital',
     label: 'Capital Utilization Limit',
     description: 'Stop at 80% capital utilization',
@@ -277,13 +315,16 @@ const DEFAULT_KILL_SWITCHES = Object.freeze([
 ]);
 
 /**
- * RISK-02 (as narrowed by RISK-04): these three guards are stored and shown but NO runtime
- * code evaluates them. The daily loss limit and the max-drawdown limit are both consulted for
- * real, on the automated bot path and the manual order path alike. A switch that reads "on"
- * while nothing watches the condition is a false safety claim, so the three below render
- * disabled and labelled until the runtime risk gate implements them with tests.
+ * RISK-02 (as narrowed by RISK-04, then again by RISK-05): "Black Swan Protection" is
+ * stored and shown but NO runtime code evaluates it on the order path a trader can reach
+ * by hand -- see this page's own file header for exactly what RISK-05 built for it and why
+ * it stops short of enforcing it. The daily loss limit, the max-drawdown limit, the
+ * consecutive-loss limit and the capital utilization limit are all consulted for real, on
+ * the automated bot path and the manual order path alike. A switch that reads "on" while
+ * nothing watches the condition is a false safety claim, so "Black Swan Protection" renders
+ * disabled and labelled until its manual-path gap is closed.
  */
-const UNENFORCED_GUARDS = Object.freeze(['blackswan', 'streak', 'capital']);
+const UNENFORCED_GUARDS = Object.freeze(['blackswan']);
 
 /**
  * What the per-strategy list IS, stated rather than implied.
@@ -408,6 +449,39 @@ export default function RiskSettings() {
   const config = usePanelState(readConfig, { deps: [] });
   const margin = usePanelState(readMargin, { deps: [] });
   const limits = usePanelState(readLimits, { deps: [] });
+
+  /*
+   * RISK-05. The real figures "Consecutive Loss Protection" and "Capital Utilization
+   * Limit" now evaluate, read once on mount from `GET /api/risk/guard-status`.
+   *
+   * Deliberately NOT a fourth `usePanelState` read: this is two supplementary numbers
+   * shown beside guards that already render (via the three reads above) whether or not
+   * this one succeeds, not a region with its own loading/empty/error states of its own.
+   * A failure here leaves `guardStatus` at `null` and each figure falls back to "Not yet
+   * measured" text rather than blocking or erroring the page -- the guard this read
+   * describes still enforces regardless of whether this display read succeeds.
+   *
+   * `typeof ... === 'function'` guards callers (and the many existing tests) that mock
+   * only part of `api.risk`: an older or partial double without `getGuardStatus` gets
+   * `null` here instead of a thrown `TypeError`, which would otherwise crash the whole
+   * page for a figure this page has always been able to render without.
+   */
+  const [guardStatus, setGuardStatus] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const reader = api.risk.getGuardStatus;
+    if (typeof reader !== 'function') return undefined;
+    reader()
+      .then((res) => {
+        if (alive) setGuardStatus(res?.data ?? res ?? null);
+      })
+      .catch(() => {
+        if (alive) setGuardStatus(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // The envelope both shapes the old code accepted: `res.data ?? res`. Kept, because the
   // shape a deployment answers with is not this commit's question.
@@ -551,8 +625,12 @@ export default function RiskSettings() {
     setLeverage(CONTROL_START.leverage);
     setKillSwitches((prev) =>
       prev.map((ks) => ({
+        // RISK-05: 'streak' joins 'loss' and 'capital' here now that its enforcement is
+        // unconditional too; 'blackswan' stays listed because the unenforced render
+        // forces its display to "off" regardless of this value (see UNENFORCED_GUARDS).
         ...ks,
-        active: ks.key === 'loss' || ks.key === 'blackswan' || ks.key === 'capital',
+        active: ks.key === 'loss' || ks.key === 'blackswan' || ks.key === 'streak'
+          || ks.key === 'capital',
       })),
     );
     setHasUnsavedChanges(true);
@@ -820,6 +898,26 @@ export default function RiskSettings() {
                     {unenforced && (
                       <div className="mt-1 text-body font-semibold text-content-secondary" data-testid={`guard-unenforced-${ks.key}`}>
                         Not enforced yet — this guard is not active and will not halt trading.
+                      </div>
+                    )}
+                    {/* RISK-05: the real figure this guard evaluates, not just the on/off
+                        switch -- same as RISK-04 made the real drawdown figure visible.
+                        `guardStatus` is `null` until the read settles (or if it never
+                        existed for this double), so each line falls back to "Not yet
+                        measured" rather than rendering nothing. */}
+                    {ks.key === 'streak' && (
+                      <div className="mt-1 text-body text-content-secondary" data-testid="guard-figure-streak">
+                        {guardStatus?.consecutive_losses != null
+                          ? `Current streak: ${guardStatus.consecutive_losses} consecutive `
+                            + `losing trade${guardStatus.consecutive_losses === 1 ? '' : 's'}`
+                          : 'Current streak: not yet measured'}
+                      </div>
+                    )}
+                    {ks.key === 'capital' && (
+                      <div className="mt-1 text-body text-content-secondary" data-testid="guard-figure-capital">
+                        {guardStatus?.capital_utilization_pct != null
+                          ? `Current utilization: ${(guardStatus.capital_utilization_pct * 100).toFixed(1)}%`
+                          : 'Current utilization: not yet measured'}
                       </div>
                     )}
                   </div>

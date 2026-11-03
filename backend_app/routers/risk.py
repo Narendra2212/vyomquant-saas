@@ -54,11 +54,18 @@ def get_user_risk_settings_store(user_id: str) -> Dict[str, Any]:
             "max_leverage": 3,
             "circuit_breaker_armed": True,
             "circuit_breaker_breaches": 0,
+            # RISK-05: "streak" defaults to `True` now that it is actually enforced
+            # (`PaperTradingService.get_consecutive_loss_count`, wired into both order
+            # paths) -- consistent with "loss" and "capital", whose real enforcement is
+            # likewise unconditional on this flag. "blackswan" stays `True` here too: the
+            # value is cosmetic for an unenforced guard either way, and changing it would
+            # not change what the frontend renders (`UNENFORCED_GUARDS` forces its
+            # display to "off" regardless of this stored value).
             "kill_switches": {
                 "loss": True,
                 "drawdown": True,
                 "blackswan": True,
-                "streak": False,
+                "streak": True,
                 "capital": True
             },
             "updated_at": datetime.now(timezone.utc).isoformat()
@@ -571,6 +578,47 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
         "drawdown_pct": drawdown_pct,
         "circuit_breaker_armed": settings.get("circuit_breaker_armed", True),
         "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.get("/guard-status")
+async def get_guard_status(user: dict = Depends(get_current_user)):
+    """RISK-05: the real figures the "Consecutive Loss Protection" and "Capital
+    Utilization Limit" kill switches evaluate, for display alongside the switches that
+    now actually enforce them (`RiskSettings.jsx`).
+
+    A NEW endpoint rather than new fields on `GET /status` or `GET /settings` on purpose:
+    both of those already have frozen shape baselines
+    (`tests/regression/baseline/risk_utilisation.json`,
+    `tests/regression/baseline/surface_risk_settings.json`) that assert their exact key
+    set, and growing either would mean rewriting a baseline this task has no reason to
+    touch. This endpoint carries no such baseline and is free to grow.
+
+    PAPER accounts only - see `PaperTradingService.get_consecutive_loss_count` and
+    `.get_capital_utilization_pct` for exactly why (no equivalent trade/position history
+    is persisted for a LIVE account anywhere in this codebase; the identical restriction
+    RISK-04 recorded for `drawdown_pct` above). Either figure is `None` - never a
+    fabricated `0` - when it cannot yet be measured (a brand-new account, or a read
+    failure): the same honesty `drawdown_pct` already practises on this same router.
+    """
+    uid = str(user.get("id") or user.get("sub"))
+    from backend_app.backend.paper_trading_service import (
+        CAPITAL_UTILIZATION_LIMIT_PCT,
+        CONSECUTIVE_LOSS_LIMIT,
+        get_paper_trading_service,
+    )
+
+    paper_svc = get_paper_trading_service()
+    token = user.get("access_token")
+    return {
+        "consecutive_losses": paper_svc.get_consecutive_loss_count(
+            uid, access_token=token
+        ),
+        "consecutive_loss_limit": CONSECUTIVE_LOSS_LIMIT,
+        "capital_utilization_pct": paper_svc.get_capital_utilization_pct(
+            uid, access_token=token
+        ),
+        "capital_utilization_limit_pct": CAPITAL_UTILIZATION_LIMIT_PCT,
     }
 
 

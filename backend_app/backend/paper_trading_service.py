@@ -246,6 +246,27 @@ ON_DEMAND_QUOTE_TIMEOUT_SECONDS = float(
 )
 
 
+#: RISK-05. Platform-wide, not user-configurable -- the same precedent `max_drawdown`
+#: already set (``core/risk_manager.py``'s own ``RiskThresholds``, and RISK-03's comment
+#: there on why that one figure is deliberately NOT clamped from ``risk_settings`` the way
+#: ``max_daily_loss``/``max_positions``/``max_leverage`` are). Matches the wording
+#: `RiskSettings.jsx`'s "Consecutive Loss Protection" guard has always shown ("Pause on 3
+#: consecutive losing trades") -- the number was already promised, it was simply never
+#: wired to anything that measured it.
+CONSECUTIVE_LOSS_LIMIT = 3
+
+#: How many of the account's most recent FILLS (not closed round-trips -- see
+#: :meth:`PaperTradingService.get_consecutive_loss_count` for why) to read back while
+#: counting a streak. Comfortably above :data:`CONSECUTIVE_LOSS_LIMIT` so a real streak is
+#: never truncated, bounded so one query never fetches a whole account's history.
+CONSECUTIVE_LOSS_LOOKBACK_FILLS = 50
+
+#: RISK-05. Platform-wide, not user-configurable, same reasoning as
+#: :data:`CONSECUTIVE_LOSS_LIMIT` above. Matches the wording `RiskSettings.jsx`'s "Capital
+#: Utilization Limit" guard has always shown ("Stop at 80% capital utilization").
+CAPITAL_UTILIZATION_LIMIT_PCT = 0.80
+
+
 def _last_price_key(exchange_id: str, symbol: str) -> str:
     """Spelled identically to ``mds/main.py::last_price_key`` - a literal, not a shared import,
     the same choice this codebase already made for ``TRANSPORT_WEBSOCKET``/``TRANSPORT_REST``
@@ -1308,6 +1329,155 @@ class PaperTradingService:
             )
         return realized
 
+    def get_consecutive_loss_count(
+        self,
+        user_id: str,
+        *,
+        access_token: Optional[str] = None,
+    ) -> Optional[int]:
+        """How many of this PAPER account's most recent realizing fills, in a row ending at
+        the most recent, lost money -- never a fabricated ``0``.
+
+        RISK-05. ``RiskSettings.jsx``'s "Consecutive Loss Protection" guard has always
+        promised to "Pause on 3 consecutive losing trades"; nothing ever counted them.
+
+        READS FILLS, NOT ``paper_trades``
+        ----------------------------------
+        ``paper_trades`` holds one row per CLOSED ROUND-TRIP (Requirement 18.10) and has no
+        row at all for a partial close -- its own repository docstring says so. A streak
+        computed from it would silently skip every partial close, understating a real losing
+        streak. ``get_performance_summary`` (this same module, just above) already treats a
+        fill's ``realized_delta`` ``FILL`` balance event as the one true win/loss record --
+        "realizing" there means exactly "this fill's ``realized_delta`` is nonzero" -- and
+        this method counts the identical set the identical way, so the two can never
+        disagree about what a win or a loss is. A fill whose delta is exactly zero (an
+        opening fill that closed nothing) is neither a win nor a loss and is skipped rather
+        than treated as either -- it does not count toward the streak and does not break it.
+
+        Walks the account's fills NEWEST-FIRST (:func:`paper_repository.get_fills`'s own
+        order) counting negative-delta realizing fills until the first non-negative one, so
+        the count is always "how many in a row, ending right now" rather than a lifetime
+        total.
+
+        Returns ``0`` for an account with no realizing fill at all (a brand-new account has
+        no streak, winning or losing). Returns ``None`` -- never a fabricated ``0`` -- when
+        the account or its fills could not be read: an unmeasurable streak is not the same
+        claim as a measured streak of zero, the same distinction
+        :meth:`get_current_drawdown_pct`-shaped methods in this codebase draw elsewhere.
+        Every caller decides for itself what ``None`` means for whether to allow the trade
+        (both existing callers fail OPEN on it).
+
+        Not wired for LIVE (non-paper) accounts: this reads PAPER-only tables
+        (``paper_fills``, ``paper_accounts``'s balance events) and no equivalent exists for a
+        real-exchange account anywhere in this codebase today -- the identical gap RISK-04
+        recorded for drawdown, tracked here rather than silently claimed solved.
+        """
+        uid = str(user_id)
+        sb = self._client(access_token)
+        try:
+            account_row, _ = self._account_and_positions(sb, uid)
+            fills = repo.get_fills(sb, uid, limit=CONSECUTIVE_LOSS_LOOKBACK_FILLS)
+            realized = self._realized_by_fill(
+                repo.get_balance_events(sb, uid, account_id=account_row["id"], cause="FILL")
+            )
+        except Exception as exc:  # noqa: BLE001 - an unreadable account/fill history is
+            # "unmeasurable", never a reason to raise out of a risk check or report a
+            # fabricated zero. Broad on purpose, for the same reason
+            # `get_current_drawdown_pct` is broad: a test or dev-mode Persistence_Layer
+            # double can fail in shapes narrower exception classes do not cover.
+            logger.warning(
+                f"[PAPER CONSECUTIVE LOSS] could not read fill history for {uid}: {exc}"
+            )
+            return None
+
+        count = 0
+        for fill in fills:  # newest `filled_at` first
+            delta = realized.get(str(fill.get("id")))
+            if delta is None or delta == Decimal("0"):
+                continue  # not a realizing fill -- neither a win nor a loss
+            if delta < Decimal("0"):
+                count += 1
+            else:
+                break
+        return count
+
+    def get_capital_utilization_pct(
+        self,
+        user_id: str,
+        *,
+        access_token: Optional[str] = None,
+    ) -> Optional[float]:
+        """This PAPER account's open-position notional as a FRACTION of its total equity
+        (0.42 = 42%) -- never a fabricated ``0``.
+
+        RISK-05. ``RiskSettings.jsx``'s "Capital Utilization Limit" guard has always
+        promised to "Stop at 80% capital utilization"; nothing ever measured it. (The one
+        utilization figure ``GET /api/risk/status`` already computes,
+        ``positions.utilization_pct``, is a COUNT ratio -- open position count over
+        ``max_positions`` -- not a capital figure; the two answer different questions and
+        this is deliberately a new one rather than a repoint of that one.)
+
+        WHAT "NOTIONAL" MEANS HERE, AND WHY
+        ------------------------------------
+        For each OPEN position, ``size`` (always ``>= 0``; direction lives in ``side``, not
+        in the sign -- Requirement 18.5) times its most recently validated price
+        (``current_price``, falling back to ``entry_price`` for a position that has not yet
+        been revalued since it opened). Summed across every open position and divided by
+        ``total_equity``. A short position's notional counts exactly like a long one's: both
+        tie up the same capital against this limit, and ``size`` is never negative to begin
+        with.
+
+        THIS IS THE ACCOUNT'S CURRENT STATE, NOT A PROJECTION OF THE ORDER ABOUT TO BE
+        PLACED
+        ------------------------------------------------------------------------------
+        Matches the framing ``RiskSettings.jsx``'s own copy already used ("Stop AT 80%
+        utilization") and the drawdown guard's own precedent ("Lock new position opens IF
+        drawdown exceeds limit"): this halts further opens once the account is ALREADY over
+        the line, the same way an already-breached drawdown locks new opens. It does not
+        model the incremental notional the order about to be placed would add before
+        deciding whether to allow it -- that would be a different, more conservative guard,
+        and is recorded here as a stated scope decision rather than quietly assumed.
+
+        Returns ``None`` -- never a fabricated ``0`` -- when ``total_equity`` is zero or
+        negative (no honest denominator to divide by) or the account/positions could not be
+        read. Every caller decides for itself what ``None`` means for whether to allow the
+        trade (both existing callers fail OPEN on it).
+
+        Not wired for LIVE (non-paper) accounts: the identical gap RISK-04 recorded for
+        drawdown, for the identical reason -- no persisted position/equity table exists for
+        a real-exchange account anywhere in this codebase today.
+        """
+        uid = str(user_id)
+        sb = self._client(access_token)
+        try:
+            account_row, position_rows = self._account_and_positions(sb, uid)
+            account = self._account_of(account_row)
+            positions, _ = self._positions_of(position_rows)
+        except Exception as exc:  # noqa: BLE001 - see get_consecutive_loss_count's note.
+            logger.warning(
+                f"[PAPER CAPITAL UTILIZATION] could not read account/positions for {uid}: "
+                f"{exc}"
+            )
+            return None
+
+        if account.total_equity <= Decimal("0"):
+            return None
+
+        notional = Decimal("0")
+        for position in positions.values():
+            if not position.is_open:
+                continue
+            mark = (
+                position.current_price
+                if position.current_price is not None
+                else position.entry_price
+            )
+            if mark is None:
+                continue
+            notional += position.size * mark
+
+        return float(notional / account.total_equity)
+
     def get_current_drawdown_pct(
         self,
         user_id: str,
@@ -1763,6 +1933,57 @@ class PaperTradingService:
                 raise ValueError(
                     f"Risk limit exceeded: Max open positions reached "
                     f"({cur_positions_count} >= {max_positions})"
+                )
+
+            # ── RISK-05: CONSECUTIVE-LOSS KILL SWITCH, MANUAL ORDER PATH ──────────
+            # `RiskSettings.jsx`'s "Consecutive Loss Protection" guard has always promised
+            # to "Pause on 3 consecutive losing trades"; before this, nothing on either
+            # order path counted them -- the switch was declared and rendered but RISK-02
+            # found no runtime code evaluated it. See `get_consecutive_loss_count`'s own
+            # docstring for exactly what counts as a loss and why. `None` means
+            # "unmeasurable" (a brand-new account, or a read failure) and this call site,
+            # like the bot path, fails OPEN on it -- an account too new to have a
+            # measurable streak is not blocked from its first trade.
+            consecutive_losses = self.get_consecutive_loss_count(uid)
+            if (
+                consecutive_losses is not None
+                and consecutive_losses >= CONSECUTIVE_LOSS_LIMIT
+            ):
+                record_risk_violation(
+                    uid,
+                    "CONSECUTIVE_LOSS_LIMIT_EXCEEDED",
+                    f"{consecutive_losses} consecutive losing trades reached the "
+                    f"platform limit of {CONSECUTIVE_LOSS_LIMIT}",
+                )
+                raise ValueError(
+                    f"Risk limit exceeded: {consecutive_losses} consecutive losing "
+                    f"trades (limit {CONSECUTIVE_LOSS_LIMIT}). New position opens are "
+                    f"locked until a winning trade breaks the streak."
+                )
+
+            # ── RISK-05: CAPITAL-UTILIZATION KILL SWITCH, MANUAL ORDER PATH ───────
+            # Same history as the check above -- "Stop at 80% capital utilization" was
+            # promised and never measured. See `get_capital_utilization_pct`'s own
+            # docstring for what "utilization" means here and why this checks the
+            # account's CURRENT state rather than projecting this order's own notional
+            # into it. `None` means "unmeasurable" and this fails OPEN on it, same as
+            # every other guard in this method.
+            utilization_pct = self.get_capital_utilization_pct(uid)
+            if (
+                utilization_pct is not None
+                and utilization_pct > CAPITAL_UTILIZATION_LIMIT_PCT
+            ):
+                record_risk_violation(
+                    uid,
+                    "CAPITAL_UTILIZATION_LIMIT_EXCEEDED",
+                    f"Capital utilization {utilization_pct:.2%} exceeds the platform "
+                    f"limit of {CAPITAL_UTILIZATION_LIMIT_PCT:.2%}",
+                )
+                raise ValueError(
+                    f"Risk limit exceeded: capital utilization {utilization_pct:.2%} "
+                    f"exceeds the platform limit of "
+                    f"{CAPITAL_UTILIZATION_LIMIT_PCT:.2%}. New position opens are "
+                    f"locked."
                 )
 
             avail_bal = accounting.to_decimal(

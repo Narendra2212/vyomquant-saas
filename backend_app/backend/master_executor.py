@@ -78,6 +78,23 @@ TF_SEC = {
 # Maximum seconds to wait for ML inference before skipping
 ML_INFERENCE_TIMEOUT = float(os.getenv("ML_INFERENCE_TIMEOUT", 2.0))
 
+#: RISK-05. `InstitutionalRiskManager.validate_trade_request`'s flash-crash check (3. in
+#: that method's own numbered comments, `core/risk_manager.py`) compares `current_price`
+#: against the simple average of `TradeRequest.recent_prices` and rejects at
+#: `RiskThresholds.flash_crash_price_deviation_pct` (10%) deviation -- real, enforcing code
+#: that no caller anywhere in this codebase ever populated `recent_prices` for, so the
+#: check could never fire. The same shape of bug RISK-04 found for `current_drawdown_pct`.
+#:
+#: This bot already maintains a per-tick OHLCV circular buffer for its own (symbol,
+#: timeframe) in `self.data_processor` (warmed from history at boot, appended to on every
+#: completed bar -- see `_warm_up_from_history`/`process_live_tick`), so feeding it real
+#: closes costs no new fetch, no new credentials and no new latency: the data already
+#: exists in the process for the strategy's own indicators. 20 completed bars is the
+#: window; at this bot's own timeframe that is 20 minutes on a 1m symbol, 100 minutes on a
+#: 5m one, and so on -- the SMA window scales with how the bot itself ticks, same as every
+#: other indicator this engine computes from `self.data_processor`.
+BLACK_SWAN_SMA_WINDOW_BARS = 20
+
 # Maximum reconnection attempts before giving up
 MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", 5))
 
@@ -968,6 +985,62 @@ class BotRunner:
                     )
                     continue
 
+                # ── RISK-05: consecutive-loss & capital-utilization kill switches ──
+                # `RiskSettings.jsx`'s "Consecutive Loss Protection" and "Capital
+                # Utilization Limit" guards have always promised real thresholds; RISK-02
+                # found no runtime code evaluated either. Both read PAPER-only tables
+                # (`paper_fills`, `paper_accounts`, `paper_positions`) -- the identical
+                # scope restriction RISK-04 recorded for `current_drawdown_pct`, for the
+                # identical reason: no equivalent persisted history exists for a LIVE
+                # account anywhere in this codebase. Skipped for a reduce-only signal: a
+                # position-REDUCING order lowers both figures, so blocking one here would
+                # trap an account that most needs to be able to close risk.
+                if self.paper_trading and not is_reduce:
+                    try:
+                        from backend_app.backend.paper_trading_service import (
+                            CAPITAL_UTILIZATION_LIMIT_PCT,
+                            CONSECUTIVE_LOSS_LIMIT,
+                            get_paper_trading_service,
+                        )
+
+                        paper_svc = get_paper_trading_service()
+
+                        consecutive_losses = paper_svc.get_consecutive_loss_count(
+                            self.user_id
+                        )
+                        if (
+                            consecutive_losses is not None
+                            and consecutive_losses >= CONSECUTIVE_LOSS_LIMIT
+                        ):
+                            logger.warning(
+                                f"Bot {self.user_id}/{self.symbol}: order refused -- "
+                                f"{consecutive_losses} consecutive losing trades reached "
+                                f"the platform limit of {CONSECUTIVE_LOSS_LIMIT}"
+                            )
+                            continue
+
+                        utilization_pct = paper_svc.get_capital_utilization_pct(
+                            self.user_id
+                        )
+                        if (
+                            utilization_pct is not None
+                            and utilization_pct > CAPITAL_UTILIZATION_LIMIT_PCT
+                        ):
+                            logger.warning(
+                                f"Bot {self.user_id}/{self.symbol}: order refused -- "
+                                f"capital utilization {utilization_pct:.2%} exceeds the "
+                                f"platform limit of {CAPITAL_UTILIZATION_LIMIT_PCT:.2%}"
+                            )
+                            continue
+                    except Exception as exc:  # noqa: BLE001 - never let a measurement
+                        # failure block the loop; fail open, same as every other
+                        # "unmeasurable" case in this engine.
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not evaluate the "
+                            f"consecutive-loss or capital-utilization guards ({exc}); "
+                            f"failing open."
+                        )
+
                 # ── Risk check ────────────────────────────────────────────
                 # Get real-time risk metrics from telemetry
                 account_health = await self.telemetry.get_account_health(self.user_id)
@@ -1009,6 +1082,47 @@ class BotRunner:
                             f"telemetry's figure."
                         )
 
+                # RISK-05 (Black Swan): `validate_trade_request`'s flash-crash check
+                # reads `TradeRequest.recent_prices`, which no caller ever populated --
+                # see `BLACK_SWAN_SMA_WINDOW_BARS`'s own comment above for why this bot
+                # can feed it real, already-buffered closes at no new cost (the buffer is
+                # warmed and ticked identically for PAPER and LIVE bots). Left `None`
+                # (a no-op for that check, same as an empty list) when fewer than
+                # `BLACK_SWAN_SMA_WINDOW_BARS` completed bars are buffered yet, or on any
+                # read failure -- "not enough history to judge" is not "no deviation".
+                #
+                # RESTRICTED TO PAPER HERE, DELIBERATELY, DESPITE THE DATA BEING EQUALLY
+                # REAL FOR A LIVE BOT: `RiskSettings.jsx`'s "Black Swan Protection" guard
+                # still reads "Not enforced yet" for every account, on both paths (see
+                # the file header's own note on why the manual order path could not
+                # safely be given the same feed). Turning this on for LIVE bots only --
+                # silently, while the UI still tells every trader it is inactive -- would
+                # make the UI's claim wrong in the opposite direction RISK-02 fixed, and
+                # would change what a running LIVE bot does with real capital without any
+                # visible change in what the trader was told. That is a bigger, separate
+                # decision than this fix makes on its own; wiring the LIVE bot path too is
+                # recorded as the natural next step once the manual-path gap is closed and
+                # the toggle can honestly go live for everyone it affects.
+                recent_prices = None
+                if self.paper_trading:
+                    try:
+                        bar_matrix = self.data_processor.get_historical_matrix_for_ml(
+                            self.symbol, self.timeframe_sec
+                        )
+                        if len(bar_matrix) >= BLACK_SWAN_SMA_WINDOW_BARS:
+                            recent_prices = (
+                                bar_matrix[-BLACK_SWAN_SMA_WINDOW_BARS:, 4]
+                                .astype(float)
+                                .tolist()
+                            )
+                    except Exception as exc:  # noqa: BLE001 - fail open; a flash-crash
+                        # read failure must not itself become a reason to skip the tick.
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not read recent "
+                            f"bar closes for the flash-crash check ({exc}); leaving it "
+                            f"unmeasured for this tick."
+                        )
+
                 verdict, reason = await self.risk_manager.validate_trade_request(
                     TradeRequest(
                         user_id=self.user_id,
@@ -1021,6 +1135,7 @@ class BotRunner:
                         current_drawdown_pct=current_drawdown_pct,
                         daily_pnl_pct=daily_pnl_pct,
                         is_reduce_only=is_reduce,
+                        recent_prices=recent_prices,
                     )
                 )
 

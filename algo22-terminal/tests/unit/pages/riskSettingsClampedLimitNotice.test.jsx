@@ -112,7 +112,8 @@ const UNCHANGED_RESPONSE = Object.freeze({
   data: RISK_CONFIG,
 });
 
-/** The one operable switch; the other three render disabled (RISK-02). */
+/** The switch this file operates. RISK-05 made two of the other three real too; this file
+ * is unaffected either way, since it only ever toggles this one. */
 const LOSS_SWITCH = 'Daily Loss Limit';
 
 /** The page renders five `ds/*` trees; 1s is not always enough on a cold worker. */
