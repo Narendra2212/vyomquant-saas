@@ -130,10 +130,11 @@ import {
   AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronRight, Lock, Maximize,
   PanelLeft, PanelRight, RefreshCw, Redo, Rocket, Save, Search, Trash2, Undo, ZoomIn, ZoomOut,
 } from 'lucide-react';
-import { Inp, Tag2, PanelTitle } from '../components/common/primitives';
+import { Inp, Tag2 } from '../components/common/primitives';
 import { Button } from '../components/ui/Button';
 import { CommandButton } from '../components/ds/CommandButton';
 import { Field } from '../components/ds/Field';
+import { SectionHeader } from '../components/ds/SectionHeader';
 /*
   §11.6's bottom drawer for task 24.7's review-mode inspector. `placement="bottom"` is one of
   the two placements `ds/Drawer` exists for, and this page is the consumer its header names.
@@ -4665,7 +4666,7 @@ function StrategyBuilderCanvas({
           {selectedNode && inspectorTrackShown && (
             <>
               <div style={{ padding: '12px', borderBottom: `1px solid ${token.line.default}` }}>
-                <PanelTitle title="Inspector" sub={selectedNode.data.label} />
+                <SectionHeader title="Inspector" subtitle={selectedNode.data.label} level={3} />
               </div>
 
               <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>

@@ -21,6 +21,8 @@ import { Card } from "../components/ui/Card";
 // dependency in its import graph. Same reason `pages/Strategies.jsx` gives.
 import { Alert } from "../components/ds/Alert";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
+import { EmptyState } from "../components/ds/EmptyState";
+import { LoadingState } from "../components/ds/LoadingState";
 import { NotAvailableMarker } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
 import { pnlToken } from "../design/semantic";
@@ -414,8 +416,8 @@ export default function StrategyDetail() {
 
   if (isLoading) {
     return (
-      <div style={{ padding: 20, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: token.content.muted }}>
-        Loading strategy detail...
+      <div style={{ padding: 20, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
+        <LoadingState kind="page" label="Loading strategy detail" />
       </div>
     );
   }
@@ -423,10 +425,11 @@ export default function StrategyDetail() {
   if (!strategy) {
     return (
       <div style={{ padding: 20 }}>
-        <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={() => navigate("/app/strategies")}>
-          Back to Strategies
-        </Button>
-        <div style={{ marginTop: 20, color: token.content.muted }}>Strategy not found</div>
+        <EmptyState
+          headline="Strategy not found"
+          body="This strategy could not be loaded. It may have been deleted, or the read failed."
+          action={{ label: "Back to Strategies", onClick: () => navigate("/app/strategies") }}
+        />
       </div>
     );
   }
@@ -2088,10 +2091,12 @@ function AnalyticsFigure({ label, value, reason, tone = null }) {
 /** The shared loading / failed arms, so both tabs report a broken read the same way. */
 function AnalyticsReadState({ state }) {
   if (state === "loading") {
-    // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1.
+    // Presentation only — the affordance now goes through `ds/LoadingState` rather than
+    // static Card text with no spinner; the copy itself ("Reading your creator ledger…")
+    // is unchanged, and `state` still drives the same two-branch dispatch it always did.
     return (
-      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
-        Reading your creator ledger…
+      <Card className="p-8" style={{ textAlign: "center" }}>
+        <LoadingState kind="inline" label="Reading your creator ledger…" />
       </Card>
     );
   }
