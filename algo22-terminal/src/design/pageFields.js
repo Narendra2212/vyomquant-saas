@@ -1479,11 +1479,22 @@ const TRADE_HISTORY_FIELDS = [
     endpoint: HISTORY_ENDPOINT,
     verdict: VERDICT.UNAVAILABLE,
     absence: ABSENCE.UNREPORTED,
-    reason: 'Fees are not recorded for live executions.',
+    reason: 'This execution predates fee recording, or nothing filled, so no fee is '
+      + 'available for this row.',
     documentedIn: ORDERS_MODULE,
-    note: 'Same seven-column row. Today\'s `toNumber(row.fees ?? row.fee ?? 0)` renders `$0` '
-      + 'for every live trade, which is a claim that the venue charged nothing — the exact '
-      + 'fabricated zero Requirement 14.5 is about. Paper rows carry `fee`.',
+    note: 'TRADE-13. `log_execution` (`backend_app/backend/telemetry_engine.py`) now writes '
+      + 'the venue\'s own fee onto the `executions` row — `master_executor.py` reads it off '
+      + '`trade_result.fee`, which `execution_engine._execute_trade_internal` already '
+      + 'extracted from the CCXT fill response — so every execution recorded AFTER that '
+      + 'change carries a real `fee`. An execution recorded before it has no `fee` key at '
+      + 'all (QuestDB is schema-on-write: the column did not exist yet), which is why the '
+      + '`verdict` here stays ❌ — this field is declared unavailable BY DEFAULT and the page '
+      + 'builder\'s own `LIVE_REPORTED_FIELDS` (`pages/tradeHistoryFilters.js`) is what turns '
+      + 'the LIVE column back on, the same way `PAPER_REPORTED_FIELDS` already does for the '
+      + 'paper read. `toNumber(row.fees ?? row.fee ?? 0)` — today\'s pre-fix code — rendered '
+      + '`$0` for every live trade regardless, which is a claim that the venue charged '
+      + 'nothing; the fix is to render the row-level not-available marker instead, never a '
+      + 'fabricated zero. Paper rows carry `fee` too, unchanged.',
   }),
   entry({
     page: PAGES.TRADE_HISTORY,
@@ -1494,11 +1505,18 @@ const TRADE_HISTORY_FIELDS = [
     endpoint: HISTORY_ENDPOINT,
     verdict: VERDICT.UNAVAILABLE,
     absence: ABSENCE.UNREPORTED,
-    reason: 'Slippage is not recorded — it needs an intended price to compare the fill '
-      + 'against, and no read reports one.',
+    reason: 'This execution predates slippage recording, or nothing filled, so no '
+      + 'slippage is available for this row.',
     documentedIn: ORDERS_MODULE,
-    note: 'Neither the telemetry row nor a paper trade row carries `slippage` or `slip`, and '
-      + 'the fill price alone cannot produce it. `0%` reads as a perfect fill.',
+    note: 'TRADE-13. `master_executor.py`\'s telemetry write now computes '
+      + '`|executed_price - decision_price| x filled_qty` — the same absolute-cost '
+      + 'definition `paper_simulator.slippage_amount` already uses for the paper path — and '
+      + '`log_execution` persists it as a new `slippage` field. An execution recorded before '
+      + 'this change has no `slippage` key, so it renders the row-level not-available '
+      + 'marker rather than `0%`, which would read as a perfect fill. UNLIKE `fees`, this '
+      + 'stays unreported on PAPER: no paper fill row carries an intended price to compare '
+      + 'against, so `pages/tradeHistoryFilters.js`\'s `LIVE_REPORTED_FIELDS` turns this '
+      + 'column on for LIVE only.',
   }),
   entry({
     page: PAGES.TRADE_HISTORY,

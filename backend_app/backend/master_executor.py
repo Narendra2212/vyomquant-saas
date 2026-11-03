@@ -157,6 +157,62 @@ def settle_exposure(*, side: str, qty: Decimal, previous_exposure: Decimal, resu
     return filled_qty, new_exposure
 
 
+def telemetry_fee_and_slippage(
+    *,
+    result: Optional[dict],
+    decision_price,
+    filled_qty,
+) -> tuple:
+    """TRADE-13: `(fee, fee_currency, slippage)` for `telemetry.log_execution`'s new fields.
+
+    A pure, synchronous read of the SAME `execute_with_idempotency` result `settle_exposure`
+    above already reads — nothing here calls the exchange, the execution-record repository,
+    or anything on the hot completion path; it only extracts fields `_execute_trade_internal`
+    already computed (`trade_result.fee`, `.fee_currency`, `.executed_price`) so the
+    fire-and-forget telemetry write can carry them.
+
+    `fee` is the venue's own fee, read from the live branch's `actual_fee`
+    (`execution_engine._execute_trade_internal`, itself read off the CCXT fill response).
+
+    `slippage` is `|executed_price - decision_price| x filled_qty` — the same absolute-cost
+    definition `paper_simulator.slippage_amount` already uses for the paper path, applied
+    here to a LIVE fill's own `decision_price` (the price the order was sized and submitted
+    at — `execute_with_idempotency`'s `price` argument) and `executed_price` (the venue's).
+
+    Every return is `None`, never a fabricated `0.0`, when the input needed to compute it is
+    absent or unreadable — a fee or slippage of exactly zero is a claim the venue made, not
+    a default this function is entitled to invent.
+
+    Returns ``(fee, fee_currency, slippage)``.
+    """
+    trade_result = (
+        result.get("result", {}).get("trade_result")
+        if isinstance(result, dict) and isinstance(result.get("result"), dict)
+        else None
+    )
+    if not isinstance(trade_result, dict):
+        return None, None, None
+
+    fee = None
+    try:
+        raw_fee = trade_result.get("fee")
+        fee = float(raw_fee) if raw_fee is not None else None
+    except (TypeError, ValueError):
+        fee = None
+
+    fee_currency = trade_result.get("fee_currency") or None
+
+    slippage = None
+    try:
+        executed_price = trade_result.get("executed_price")
+        if executed_price is not None and decision_price is not None and filled_qty:
+            slippage = abs(float(executed_price) - float(decision_price)) * float(filled_qty)
+    except (TypeError, ValueError):
+        slippage = None
+
+    return fee, fee_currency, slippage
+
+
 def _coerce_authorized_until(raw: Any) -> Optional[datetime]:
     """Read ``authorized_until`` off a blueprint, whatever shape it arrived in.
 
@@ -1253,6 +1309,19 @@ class BotRunner:
                         v_result=result
                     ))
 
+                    # TRADE-13. Computed OUTSIDE `safe_log` below (a pure, synchronous read
+                    # of the same `result` `settle_exposure` already read above), so a bad
+                    # value cannot raise inside the fire-and-forget task and is instead just
+                    # absent from the telemetry line — the same "degrade to missing, never
+                    # fabricate" rule `classify_venue_fill` already applies to `filled_qty`.
+                    # ADDITIVE AND READ-ONLY ON THE HOT PATH: `telemetry_fee_and_slippage`
+                    # calls nothing and changes nothing; `safe_log` was already a decoupled
+                    # `asyncio.create_task` fire-and-forget write before this change, and this
+                    # only widens what that one write carries.
+                    _tel_fee, _tel_fee_currency, _tel_slippage = telemetry_fee_and_slippage(
+                        result=result, decision_price=price, filled_qty=filled_qty,
+                    )
+
                     # Fire-and-forget telemetry log with error handling
                     async def safe_log():
                         try:
@@ -1262,6 +1331,9 @@ class BotRunner:
                                 side=side,
                                 amount=float(filled_qty),
                                 price=price,
+                                fee=_tel_fee,
+                                fee_currency=_tel_fee_currency,
+                                slippage=_tel_slippage,
                             )
                         except Exception as e:
                             logger.error(f"Telemetry failed: {e}")

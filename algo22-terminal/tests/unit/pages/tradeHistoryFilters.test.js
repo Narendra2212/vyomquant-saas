@@ -28,6 +28,7 @@ import {
   EMPTY_VARIANT,
   ENVIRONMENTS,
   FILTER_IDS,
+  LIVE_REPORTED_FIELDS,
   OUTCOME_FILTER_VALUES,
   PAPER_REPORTED_FIELDS,
   SIDE_FILTER_VALUES,
@@ -104,9 +105,27 @@ describe('the declaration this module reads from pageFields', () => {
     expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(false);
     expect(isFieldReported('pnl', ENVIRONMENTS.PAPER)).toBe(true);
     expect(isFieldReported('strategy', ENVIRONMENTS.LIVE)).toBe(false);
-    // Slippage is unreported on BOTH reads, which is why it is not in the paper set.
+    // Slippage is unreported on the PAPER read specifically — no paper fill records one —
+    // which is why it is not in the paper set, even though TRADE-13 now reports it on LIVE.
     expect(PAPER_REPORTED_FIELDS).not.toContain('slippage');
     expect(isFieldReported('slippage', ENVIRONMENTS.PAPER)).toBe(false);
+  });
+
+  // TRADE-13: `log_execution` now persists `fee` and `slippage` per live execution (fee from
+  // the venue's own CCXT fill response, slippage from the decision price vs. the fill price),
+  // so the LIVE read reports both — for every execution WRITTEN AFTER this change. An older
+  // row simply has no value for either key, which `readFee`/`readSlippage` already resolve to
+  // `null` and the cells already render as the not-available marker, per row — this ledger-level
+  // flag only says the column itself is no longer declared wholesale unavailable on LIVE.
+  it('TRADE-13: reports fees and slippage on LIVE now that log_execution persists them', () => {
+    expect(isFieldReported('fees', ENVIRONMENTS.LIVE)).toBe(true);
+    expect(isFieldReported('slippage', ENVIRONMENTS.LIVE)).toBe(true);
+    expect(LIVE_REPORTED_FIELDS).toContain('fees');
+    expect(LIVE_REPORTED_FIELDS).toContain('slippage');
+    // Realized P&L is NOT part of this: no cost-basis tracking sits on the live completion
+    // path, so a per-trade P&L figure would have to be guessed. It stays unavailable on LIVE.
+    expect(LIVE_REPORTED_FIELDS).not.toContain('pnl');
+    expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(false);
   });
 
   it('carries a reason for every field it will not offer a control for', () => {
