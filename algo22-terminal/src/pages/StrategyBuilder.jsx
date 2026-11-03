@@ -209,6 +209,7 @@ import { AssetSelector } from '../components/builder/AssetSelector';
 import { TimeframeSelector } from '../components/builder/TimeframeSelector';
 import { NodePreview } from '../components/builder/NodePreview';
 import { NodeTrace } from '../components/builder/NodeTrace';
+import { ModelPerformance } from '../components/builder/ModelPerformance';
 import {
   initialPreviewState,
   previewAvailability,
@@ -1190,6 +1191,27 @@ const DynamicNode = React.memo(function DynamicNode({ id, data, selected }) {
       </div>
       <div className="text-body" style={{ fontWeight: 900 }}>{data.label || data.block_id}</div>
       <div className="text-micro" style={{ color: token.content.muted }}>{data.block_id}</div>
+
+      {/*
+        ML-01. A trained model is not a deterministic indicator: its output was learned
+        from historical data, and the checksum/schema/performance gates in
+        `model_readiness.py` only prove it is intact and above a minimum quality bar —
+        never that it will keep working. The badge is persistent (every ML_DL node,
+        always visible on the canvas, not only in the inspector) and in words, mirroring
+        `RiskSettings.jsx`'s "Not enforced yet" disclosures rather than a colour alone.
+      */}
+      {category === 'ML_DL' && (
+        <div
+          data-testid="node-trained-model-badge"
+          data-node-id={id}
+          aria-label={`Block ${id} is a trained model: past performance does not guarantee future results`}
+          title="This block's output is learned from historical data, not a fixed formula. Past performance does not guarantee future results."
+          className="text-micro font-semibold"
+          style={{ marginTop: '3px', color: token.content.secondary, whiteSpace: 'normal' }}
+        >
+          Trained model — past performance does not guarantee future results
+        </div>
+      )}
 
       {/*
         The node marker (Requirement 8.10). Severity *and* count are text, and the badge
@@ -3127,6 +3149,26 @@ function StrategyBuilderCanvas({
     [nodes, selectedNodeId],
   );
 
+  /**
+   * ML-01. The model version bound to the selected node, if any — read straight off
+   * `trainingJob`, which already carries `model_versioning.public_model_version()`
+   * under `model_version` (`training_status.public_training_job`, task 6.6). No second
+   * fetch: `trainingJob` is the one report of "what came out of training this canvas
+   * holds", the same report the training progress UI reads, so a second request here
+   * could disagree with it about which job's model is current.
+   *
+   * `null` when there is no training job prop, when it names a different node (one
+   * canvas can hold several ML_DL nodes; only the job for the selected one applies), or
+   * when that job completed with no bound model (`model_bound: false` — a failed or
+   * cancelled run). `ModelPerformance` renders that absence honestly rather than
+   * inventing a figure for it.
+   */
+  const selectedNodeModelVersion = useMemo(() => {
+    if (!selectedNode || !trainingJob) return null;
+    if (String(trainingJob.node_id || '') !== String(selectedNode.id)) return null;
+    return trainingJob.model_version || null;
+  }, [selectedNode, trainingJob]);
+
   /*
     Requirement 5.3: the inspector track exists for a selected node and for nothing else. With
     no selection it is `display: none` at width `0`, so the canvas track takes the room back
@@ -3818,6 +3860,17 @@ function StrategyBuilderCanvas({
           The registry publishes no descriptor for “{selectedNode.data.block_id}”, so its
           parameters cannot be shown.
         </p>
+      )}
+
+      {/*
+        ML-01. A trained model's real quality, in the backend's own numbers, for a
+        trader deciding whether to deploy it — not just whether training finished.
+        Shown for every ML_DL node, whether or not a model happens to be bound yet,
+        because "no model bound" is itself a fact this inspector should state rather
+        than silently omit the whole section for.
+      */}
+      {selectedNode.data.category === 'ML_DL' && (
+        <ModelPerformance modelVersion={selectedNodeModelVersion} />
       )}
 
       {/*
