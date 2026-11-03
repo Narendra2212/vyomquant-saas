@@ -37,7 +37,7 @@ from backend_app.backend.strategy_compiler import (
     plan_to_engine_graph,
 )
 from backend_app.backend.dag_engine import DAGEngine
-from backend_app.backend.backtesting_engine import BacktestEngine
+from backend_app.backend.backtesting_engine import BacktestEngine, annualization_factor
 from backend_app.core.risk_engine import RiskEngine
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.backend.backtest_service import BacktestService
@@ -793,7 +793,7 @@ class BacktestRuntime:
 
             # PHASE G: Performance Analytics
             performance_metrics = self._calculate_performance_metrics(
-                stats, equity_curve, df
+                stats, equity_curve, df, timeframe=timeframe
             )
             
             # PHASE H: Generate charts
@@ -902,16 +902,23 @@ class BacktestRuntime:
         self,
         stats: Dict,
         equity_curve: List,
-        price_data: pd.DataFrame
+        price_data: pd.DataFrame,
+        timeframe: str = "5m"
     ) -> Dict:
         """
         PHASE G: Calculate comprehensive performance analytics.
-        
+
         Args:
             stats: the ENGINE'S ``results`` payload, whose keys are snake_case. It is *not*
                 ``portfolio.stats()`` and it does not carry VectorBT's display names.
             equity_curve: Equity curve data
             price_data: Price data DataFrame
+            timeframe: the bar size the run actually executed on (e.g. ``"5m"``, ``"1h"``).
+                Feeds :func:`backtesting_engine.annualization_factor`, the SAME
+                timeframe-derived factor the Sharpe ratio uses, so Sortino and Sharpe are
+                annualized consistently instead of Sortino alone assuming a daily bar
+                regardless of what was actually simulated. Defaults to the platform's own
+                default timeframe, matching the engine's own default.
 
         Returns:
             Dictionary of performance metrics
@@ -977,16 +984,38 @@ class BacktestRuntime:
         # Calculate additional metrics
         metrics = {}
         
-        # Sortino Ratio (downside risk only)
+        # Sortino Ratio (downside risk only), annualized by the ACTUAL bar size.
+        #
+        # This used to be ``(returns.mean() / downside_returns.std()) * (252 ** 0.5)`` -
+        # the same hardcoded equities trading-day factor that was already found and fixed
+        # on the Sharpe ratio in ``backtesting_engine.py`` (see ``BARS_PER_YEAR`` /
+        # ``annualization_factor`` there). It was never applied here, so Sortino stayed
+        # wrong by the same multiplicative amount Sharpe used to be - about 20x on the
+        # platform's default 5-minute timeframe - even after Sharpe was corrected. This is
+        # the metric that actually wins the merge in ``_merge_contested_metrics``
+        # (``sortino_ratio`` is in ``RUNTIME_OWNED_METRICS``), so this is the value a
+        # trader sees.
+        # Regression: tests/test_sortino_annualization_matches_timeframe.py
         downside_returns = returns[returns < 0]
         if len(downside_returns) > 0 and downside_returns.std() > 0:
-            metrics["sortino_ratio"] = (returns.mean() / downside_returns.std()) * (252 ** 0.5)
+            metrics["sortino_ratio"] = (
+                returns.mean() / downside_returns.std()
+            ) * annualization_factor(timeframe)
         else:
             metrics["sortino_ratio"] = 0.0
-        
-        # Calmar Ratio (annual return / max drawdown)
+
+        # Calmar Ratio (annual return / max drawdown).
+        #
+        # Dead on arrival for the persisted column - ``calmar_ratio`` is in
+        # ``ENGINE_OWNED_METRICS`` and the engine's own (correct) VectorBT figure always
+        # wins the merge - but it had the identical hardcoded-252 defect and is fixed here
+        # too, so a future refactor that ever makes this value live again (e.g. dropping
+        # the merge precedence) does not silently resurrect the bug.
+        bars_per_year = annualization_factor(timeframe) ** 2
         if len(equity_series) > 0 and equity_series.iloc[0] != 0:
-            annual_return = (equity_series.iloc[-1] / equity_series.iloc[0] - 1) * (252 / len(equity_series))
+            annual_return = (equity_series.iloc[-1] / equity_series.iloc[0] - 1) * (
+                bars_per_year / len(equity_series)
+            )
         else:
             annual_return = 0.0
         # ``max_drawdown_pct``, not ``Max Drawdown [%]``.

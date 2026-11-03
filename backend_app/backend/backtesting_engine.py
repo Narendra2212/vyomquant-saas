@@ -204,17 +204,6 @@ class BacktestEngine:
         logger.info(f"📉 Slippage applied: {price:.4f} → {executed_price:.4f} ({(slippage_factor-1)*100:.4f}%)")
         return executed_price
     
-    def _apply_spread(self, price: float, side: str) -> float:
-        """
-        Apply spread to price (buy price higher, sell price lower).
-        """
-        if side == "buy":
-            adjusted_price = price * (1 + self.spread)
-        else:  # sell
-            adjusted_price = price * (1 - self.spread)
-        logger.info(f"📊 Spread applied ({side}): {price:.4f} → {adjusted_price:.4f}")
-        return adjusted_price
-    
     def _calculate_fee(self, trade_value: float) -> float:
         """
         Calculate fee based on trade value.
@@ -565,14 +554,27 @@ class BacktestEngine:
         # random.uniform(0.999, 1.001)" named `_apply_realistic_slippage`, which is defined
         # and never called — VectorBT applies the deterministic `slippage=` argument
         # instead. And "Spread applied: ..." named `_apply_spread`, likewise never called:
-        # `self.spread` reaches no simulation at all, so no spread is modelled. A log line
-        # asserting a cost model the run does not use is the same fabrication as an invented
-        # metric, in a different output stream.
-        # Regression: tests/test_backtest_engine_refuses_without_vectorbt.py
+        # `self.spread` reached no simulation at all, so no spread was modelled, though the
+        # UI's "Spread" control implied otherwise.
+        #
+        # FIX (see `effective_slippage` below): VectorBT's `from_signals` has one fill-cost
+        # knob, `slippage=`, which already widens the executed price the same direction a
+        # spread does (buys fill worse, sells fill worse). Rather than leave spread
+        # unmodelled, or silently rename the slippage dial, the spread rate is added to the
+        # slippage rate ON TOP of it before it reaches VectorBT - two independent inputs
+        # (`self.slippage`, `self.spread`), fully additive, collapsed into the one cost
+        # knob the simulator exposes. A trader can still reason about them as two separate
+        # dials; they just execute as one widened fill price internally.
+        # Regression: tests/test_backtest_spread_is_applied.py
+        effective_slippage = self.slippage + self.spread
         print(f"💰 Equity: ${initial_equity:.2f}")
         print(f"💸 Fee applied: {self.fees:.4f} ({self.fees*100:.2f}%)")
         print(f"📉 Slippage applied by VectorBT: {self.slippage:.4f} ({self.slippage*100:.2f}%)")
-        print("📊 Spread: NOT modelled on this path (self.spread reaches no simulation)")
+        print(
+            f"📊 Spread applied: {self.spread:.4f} ({self.spread*100:.2f}%) — folded "
+            f"additively into VectorBT's slippage knob (effective slippage: "
+            f"{effective_slippage:.4f} / {effective_slippage*100:.2f}%)"
+        )
         
         # Convert sizes to entry/exit signals for from_signals
         entries = sizes > 0
@@ -596,7 +598,7 @@ class BacktestEngine:
             sl_stop=sl_stop,
             tp_stop=tp_stop,
             fees=self.fees,
-            slippage=self.slippage,
+            slippage=effective_slippage,
             init_cash=self.initial_capital,
             size=trade_size_pct,
             size_type="percent",
