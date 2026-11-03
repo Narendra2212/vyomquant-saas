@@ -664,43 +664,25 @@ const sectionsIn = (container) => [
   ...container.querySelectorAll('section[data-environment]'),
 ];
 
-describe('BACKTEST / PAPER / LIVE sections (Requirements 6.6, 28.5)', () => {
-  it('renders only the environments the Listing carries figures for', async () => {
+describe('BACKTEST section, PAPER/LIVE removed (Requirements 6.6, 28.5, MKT-07)', () => {
+  it('renders only BACKTEST — the one environment backed by persisted data', async () => {
     signIn();
     const { container } = await openDetail(listingDetail());
 
-    // BACKTEST is measured; PAPER and LIVE are not carried by the projection at all.
     expect(container.querySelector('[data-environment="BACKTEST"]')).not.toBeNull();
     expect(container.querySelector('[data-environment="PAPER"]')).toBeNull();
     expect(container.querySelector('[data-environment="LIVE"]')).toBeNull();
     expect(sectionsIn(container).length).toBe(1);
-    // An omitted section is omitted, not zero-filled.
-    expect(container.textContent).not.toContain('PAPER Performance');
-    expect(container.textContent).not.toContain('LIVE Performance');
+    expect(container.textContent).not.toContain('PAPER performance');
+    expect(container.textContent).not.toContain('LIVE performance');
   });
 
-  it('omits a section whose figures are all unmeasured rather than rendering zeros', async () => {
-    signIn();
-    const { container } = await openDetail(
-      listingDetail({
-        // Present objects, no measured values. `(x || 0).toFixed(2)` — the shape this page used
-        // to use — would render six "0.00" cells here.
-        paper_performance_summary: {
-          total_return_pct: null, win_rate_pct: null, profit_factor: null, total_trades: null,
-        },
-        paper_risk_metrics: { sharpe_ratio: null, max_drawdown_pct: undefined },
-        live_performance_summary: { total_return_pct: '', win_rate_pct: 'n/a' },
-        live_risk_metrics: { sharpe_ratio: NaN },
-      }),
-    );
-
-    expect(container.querySelector('[data-environment="PAPER"]')).toBeNull();
-    expect(container.querySelector('[data-environment="LIVE"]')).toBeNull();
-    expect(sectionsIn(container).length).toBe(1);
-    expect(container.textContent).not.toContain('0.00');
-  });
-
-  it('renders all three as visually separated, disjoint sibling sections when all are measured', async () => {
+  it('never renders PAPER or LIVE even if the Listing payload carries those fields', async () => {
+    // MKT-07: the backend writes nothing to `paper_performance_summary` /
+    // `live_performance_summary` / `paper_risk_metrics` / `live_risk_metrics` on any Listing
+    // today, but this pins the FRONT END's half of the fix independently of that fact — a
+    // payload that somehow carried these fields (a stale cache, a future partial rollout)
+    // must not resurrect a section this page no longer declares a source for.
     signIn();
     const { container } = await openDetail(
       listingDetail({
@@ -712,70 +694,32 @@ describe('BACKTEST / PAPER / LIVE sections (Requirements 6.6, 28.5)', () => {
     );
 
     const sections = sectionsIn(container);
-    // The same selector that found nothing above now finds three — which is what makes the
-    // omission assertion above a fact about the data rather than about the selector.
-    expect(sections.map((s) => s.getAttribute('data-environment'))).toEqual([
-      'BACKTEST', 'PAPER', 'LIVE',
-    ]);
-    // Separated: three distinct elements, siblings of one another, none containing another.
-    expect(new Set(sections.map((s) => s.parentElement)).size).toBe(1);
-    for (const a of sections) {
-      for (const b of sections) {
-        if (a !== b) expect(a.contains(b)).toBe(false);
-      }
-    }
-    // Each figure inside a section carries that section's environment label (Req 6.6).
-    //
-    // Asserted per figure, not as a count of bare-text matches. The environment now rides
-    // INSIDE each figure's label — `Total return · BACKTEST` (`StrategyMarketplace.jsx:827`,
-    // "so the figure and the environment it was measured in cannot be separated") — so an
-    // exact-text query for the bare word reaches none of the figures at all. It finds only
-    // the `ds/TradingEnvironmentBadge` chip in the section header, and not even that for
-    // PAPER, whose chip reads `PAPER TRADING` (`design/semantic.js:213`).
-    //
-    // `[data-metric-tier]` is `ds/Metric`'s own published hook, one per rendered figure. The
-    // `> 1` count it replaces is kept, and the label check is now per figure rather than in
-    // aggregate: ONE figure that dropped its environment fails here, where before any two
-    // labelled elements in the section were enough to pass.
-    for (const section of sections) {
-      const env = section.getAttribute('data-environment');
-      const figures = [...section.querySelectorAll('[data-metric-tier]')];
-      expect(figures.length).toBeGreaterThan(1);
-      for (const figure of figures) {
-        expect(figure.textContent, `a figure in ${env} does not name its environment`)
-          .toContain(env);
-      }
-    }
-    // Nothing crosses over: the LIVE loss is in LIVE and nowhere else. `section[…]` for the
-    // same reason `sectionsIn` uses it — the bare attribute also matches the chip inside.
-    const live = container.querySelector('section[data-environment="LIVE"]');
-    expect(live.textContent).toContain('-1.25%');
-    expect(container.querySelector('section[data-environment="BACKTEST"]').textContent)
-      .not.toContain('-1.25%');
+    expect(sections.map((s) => s.getAttribute('data-environment'))).toEqual(['BACKTEST']);
+    expect(container.querySelector('[data-environment="PAPER"]')).toBeNull();
+    expect(container.querySelector('[data-environment="LIVE"]')).toBeNull();
+    expect(container.textContent).not.toContain('-1.25%');
   });
 
-  it('carries the historical-results statement in BACKTEST and in no other section', async () => {
+  it('omits the BACKTEST section whose figures are all unmeasured rather than rendering zeros', async () => {
     signIn();
     const { container } = await openDetail(
-      listingDetail({
-        paper_performance_summary: { total_return_pct: 3.5 },
-        paper_risk_metrics: { sharpe_ratio: 0.9 },
-        live_performance_summary: { total_return_pct: 1 },
-        live_risk_metrics: { sharpe_ratio: 0.4 },
-      }),
+      listingDetail({ performance_summary: null, risk_metrics: null }),
     );
 
-    // Exactly one, so both a missing statement and one leaking into PAPER/LIVE fail here.
+    expect(sectionsIn(container).length).toBe(0);
+    expect(container.textContent).not.toContain('0.00');
+  });
+
+  it('carries the historical-results statement in the BACKTEST section', async () => {
+    signIn();
+    const { container } = await openDetail(listingDetail());
+
     const statements = container.querySelectorAll('[data-testid="historical-results-statement"]');
     expect(statements.length).toBe(1);
 
     const backtest = container.querySelector('section[data-environment="BACKTEST"]');
     expect(within(backtest).getByTestId('historical-results-statement').textContent)
       .toMatch(/past performance does not indicate future results/i);
-    expect(within(container.querySelector('section[data-environment="PAPER"]'))
-      .queryByTestId('historical-results-statement')).toBeNull();
-    expect(within(container.querySelector('section[data-environment="LIVE"]'))
-      .queryByTestId('historical-results-statement')).toBeNull();
   });
 
   it('says so plainly when the Listing carries no figures at all, and states no statement', async () => {
