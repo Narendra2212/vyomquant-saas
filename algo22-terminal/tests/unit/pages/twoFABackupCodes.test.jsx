@@ -35,6 +35,10 @@ vi.mock('../../../src/api', () => ({
       verifyBackupCode: vi.fn(),
     },
   },
+  // This page is only reached post-login (MFA setup/challenge for an already-authenticated
+  // user), so `true` is the honest signed-in state -- same reasoning as
+  // riskSettingsStrictModeSingleWrite.test.jsx. See tests/test_api_mock_factories_declare_isauthenticated.py.
+  isAuthenticated: () => true,
 }));
 
 function renderTwoFA() {
