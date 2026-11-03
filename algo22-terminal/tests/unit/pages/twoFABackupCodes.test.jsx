@@ -1,11 +1,11 @@
 /**
- * tests/unit/pages/twoFABackupCodes.test.jsx — SEC-24 / FE-10
+ * tests/unit/pages/twoFABackupCodes.test.jsx — SEC-24 / FE-11
  *
  * SEC-24: `pages/TwoFA.jsx` offers backup codes right after a successful verify, and
  * the challenge screen offers a "lost your device" recovery path through
  * `api.security.verifyBackupCode`.
  *
- * FE-10: `handleResetFactor`'s native `window.confirm` is gone. The control opens
+ * FE-11: `handleResetFactor`'s native `window.confirm` is gone. The control opens
  * `ds/ConfirmDialog`; only its own explicit confirm can reach the unenroll/re-enroll
  * call.
  *
@@ -59,7 +59,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe('FE-10: Reset Authenticator no longer uses a native dialog', () => {
+describe('FE-11: Reset Authenticator no longer uses a native dialog', () => {
   function mockExistingFactorSession() {
     vi.spyOn(supabase.auth.mfa, 'listFactors').mockResolvedValue({
       data: { totp: [VERIFIED_FACTOR], all: [VERIFIED_FACTOR] },

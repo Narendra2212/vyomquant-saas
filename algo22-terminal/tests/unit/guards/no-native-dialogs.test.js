@@ -36,7 +36,7 @@
  * with no `window.` receiver. A guard written as a grep for `window.confirm`
  * would under-report how clean the tree is. It was three of five bare, then two
  * of four: retail-ui-simplification task 9.2 deleted the unmounted
- * `pages/Landing.jsx` and its bare `alert(`, and FE-10 migrated the other two
+ * `pages/Landing.jsx` and its bare `alert(`, and FE-11 migrated the other two
  * bare/receiver pairs (`pages/TwoFA.jsx`, `pages/ExchangeManager.jsx`) to
  * `ds/ConfirmDialog`, leaving one bare call live
  * (`components/admin/AdminDashboard.jsx`) and one receiver-form call live
@@ -185,7 +185,7 @@ const SCANNED_EXTENSIONS = Object.freeze(['.js', '.jsx', '.ts', '.tsx']);
  *
  * There were five, then four. `pages/Landing.jsx` and its bare `alert(` left with
  * the file when retail-ui-simplification task 9.2 deleted it — the page was routed
- * nowhere, so the dialog was unreachable. FE-10 then migrated the other two
+ * nowhere, so the dialog was unreachable. FE-11 then migrated the other two
  * remaining BARE calls — `pages/TwoFA.jsx` and `pages/ExchangeManager.jsx` — to
  * `ds/ConfirmDialog`, leaving the two below. Both are still receiver-form
  * (`window.confirm`) and bare (`confirm(`) respectively, so the claim this list
@@ -440,7 +440,7 @@ describe('no-native-dialogs: the guard is live, not vacuous', () => {
     // direction would object — so real files that MUST measure non-zero are what prove
     // the scan ran. One of the two is a bare call, so this also pins the claim that a
     // `window.`-only rule would miss it. It was five, then four, then two: task 9.2 deleted
-    // `pages/Landing.jsx` and its bare `alert(`, and FE-10 migrated `pages/TwoFA.jsx` and
+    // `pages/Landing.jsx` and its bare `alert(`, and FE-11 migrated `pages/TwoFA.jsx` and
     // `pages/ExchangeManager.jsx` to `ds/ConfirmDialog`.
     for (const { relative, texts } of KNOWN_DIALOGS) {
       const found = SCANNED.find((f) => f.relative === relative);
@@ -508,7 +508,7 @@ describe('no-native-dialogs: the guard is live, not vacuous', () => {
   });
 
   it('would report a cleaned file whose entry was left behind', () => {
-    // `pages/TwoFA.jsx` itself made exactly this transition under FE-10 — real rather than
+    // `pages/TwoFA.jsx` itself made exactly this transition under FE-11 — real rather than
     // synthetic, now — so this fixture uses `components/NotificationCenter.jsx`, which still
     // carries a budget of `1` and has not yet been migrated.
     const cleaned = measure(

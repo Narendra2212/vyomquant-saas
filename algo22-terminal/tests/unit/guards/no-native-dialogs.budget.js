@@ -75,7 +75,7 @@
  * found two of five and reported the tree 60% cleaner than it is. That is the
  * second reason the detector is shared rather than re-written per caller.
  *
- * UPDATE (FE-10): TWO OF THE FIVE ARE NOW MIGRATED
+ * UPDATE (FE-11): TWO OF THE FIVE ARE NOW MIGRATED
  * ---------------------------------------------------------------------------
  * `pages/TwoFA.jsx` and `pages/ExchangeManager.jsx` both now use
  * `ds/ConfirmDialog` — the same primitive `pages/StrategyDetail.jsx`'s own
@@ -189,7 +189,7 @@ export const IN_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
  */
 export const OUT_OF_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
   // -- Deferred pages (§17.2), migrated off the native dialog -------------
-  // FE-10 replaced both of these with `ds/ConfirmDialog`, so both now measure `0`.
+  // FE-11 replaced both of these with `ds/ConfirmDialog`, so both now measure `0`.
   // The entries STAY per this file's own rule (an out-of-scope entry lowered to 0
   // by a migration is kept, not deleted, so the file stays held there) rather than
   // reverting to "unlisted" and relying on the unbudgeted-file default.

@@ -306,7 +306,7 @@
  *      "which token means this state" on `semantic.js` and nowhere else. `clock_sync`'s three
  *      server values (`ok`, `synchronized`, `assumed_ok`) are not in the table either, so the
  *      probe result is quoted as the server's own word with no hue at all.
- *   4. **RESOLVED (FE-10).** The native `confirm()` on disconnect is gone. It is replaced by
+ *   4. **RESOLVED (FE-11).** The native `confirm()` on disconnect is gone. It is replaced by
  *      `ds/ConfirmDialog`, in the same opener/confirm split `pages/StrategyDetail.jsx`'s
  *      deploy/delete/restore-version dialogs already use: `handleDeleteSaved` now only opens
  *      `disconnectDialog` state, and only the dialog's own explicit confirm reaches
@@ -783,7 +783,7 @@ export default function ExchangeManager() {
   */
   const [removedIds, setRemovedIds] = useState([]);
 
-  // FE-10: the disconnect confirmation's data, or `null` while no dialog is open — the same
+  // FE-11: the disconnect confirmation's data, or `null` while no dialog is open — the same
   // opener/confirm split `pages/StrategyDetail.jsx`'s deploy/delete/restore-version dialogs
   // use. `handleDeleteSaved` only sets this; only `ds/ConfirmDialog`'s own explicit confirm
   // reaches `handleConfirmDisconnect`, which is what actually calls `api.exchange.delete`.
@@ -1033,7 +1033,7 @@ export default function ExchangeManager() {
     }
 
     /*
-      FE-10 (was Requirement 16.5 / 4.4 finding 4): the confirmation is still deliberate
+      FE-11 (was Requirement 16.5 / 4.4 finding 4): the confirmation is still deliberate
       friction on an irreversible action, now rendered as `ds/ConfirmDialog` instead of the
       native `confirm()` that used to guard this. This only opens the dialog; nothing below
       it can run before an explicit confirm — see `handleConfirmDisconnect`.
@@ -1458,7 +1458,7 @@ export default function ExchangeManager() {
         </Panel>
       </div>
 
-      {/* FE-10: replaces the native `confirm()` that used to guard this disconnect, in the
+      {/* FE-11: replaces the native `confirm()` that used to guard this disconnect, in the
           same pattern `pages/StrategyDetail.jsx`'s delete dialog already uses. */}
       <ConfirmDialog
         open={disconnectDialog !== null}

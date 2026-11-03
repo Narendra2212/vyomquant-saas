@@ -175,7 +175,7 @@ export default function TwoFA() {
 
   // ── SEC-24: backup codes (see the header note on why these exist) ──────
   // Dialog state for the reset-factor confirmation: `ds/ConfirmDialog`
-  // replaces the native `window.confirm` that used to guard it (FE-10).
+  // replaces the native `window.confirm` that used to guard it (FE-11).
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   // The "save your backup codes" screen offered right after any successful
   // verify (first enrolment or a later re-verification via "Manage MFA").
@@ -374,7 +374,7 @@ export default function TwoFA() {
     }
   };
 
-  // FE-10: the native `window.confirm` that used to guard this is gone — the
+  // FE-11: the native `window.confirm` that used to guard this is gone — the
   // control opens `ds/ConfirmDialog` (below, in the JSX) instead, and only
   // ITS explicit confirm reaches `handleConfirmResetFactor`. Same split
   // `pages/StrategyDetail.jsx`'s deploy/delete/restore-version flows already
@@ -861,7 +861,7 @@ export default function TwoFA() {
         )}
       </div>
 
-      {/* FE-10: the native `window.confirm` this used to be is gone. Same pattern
+      {/* FE-11: the native `window.confirm` this used to be is gone. Same pattern
           `pages/StrategyDetail.jsx`'s deploy/delete/restore-version dialogs already use:
           the control above only opens this; only an explicit confirm here reaches
           `handleConfirmResetFactor`. */}

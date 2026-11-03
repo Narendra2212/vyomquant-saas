@@ -238,7 +238,7 @@ describe('Phase 6B ExchangeManager Contract & Lifecycle Test Suite', () => {
     expect(api.exchange.delete).not.toHaveBeenCalled();
   });
 
-  it('FE-10: disconnect opens ds/ConfirmDialog rather than a native confirm()', async () => {
+  it('FE-11: disconnect opens ds/ConfirmDialog rather than a native confirm()', async () => {
     api.exchange.getSupported.mockResolvedValue(mockSupportedExchanges);
     api.exchange.list.mockResolvedValue(mockConnectedExchanges);
 
@@ -258,7 +258,7 @@ describe('Phase 6B ExchangeManager Contract & Lifecycle Test Suite', () => {
     confirmSpy.mockRestore();
   });
 
-  it('FE-10: cancelling the dialog never calls api.exchange.delete', async () => {
+  it('FE-11: cancelling the dialog never calls api.exchange.delete', async () => {
     api.exchange.getSupported.mockResolvedValue(mockSupportedExchanges);
     api.exchange.list.mockResolvedValue(mockConnectedExchanges);
 
@@ -275,7 +275,7 @@ describe('Phase 6B ExchangeManager Contract & Lifecycle Test Suite', () => {
     expect(api.exchange.delete).not.toHaveBeenCalled();
   });
 
-  it('FE-10: only the dialog\'s explicit confirm calls api.exchange.delete', async () => {
+  it('FE-11: only the dialog\'s explicit confirm calls api.exchange.delete', async () => {
     api.exchange.getSupported.mockResolvedValue(mockSupportedExchanges);
     api.exchange.list.mockResolvedValue(mockConnectedExchanges);
     api.exchange.delete.mockResolvedValue({ status: 'ok' });
