@@ -401,10 +401,13 @@ const DASHBOARD_FIELDS = [
     inputs: ['exchange.connected_exchanges', 'exchange.can_trade', 'exchange.total_exchanges'],
     documentedIn: DASHBOARD_MODULE,
     note: 'Each item is `{exchange_id, status, latency_ms, last_sync}` built from the caller\'s '
-      + '`exchange_keys` rows. TWO of those four are constants in the aggregation service — '
-      + '`status` is always "connected" and `latency_ms` is always 35 — so neither is a '
-      + 'measurement. Render the venue and `last_sync`; take latency from '
-      + '`health.exchange_api_latency_ms`, which is nullable and honest.',
+      + '`exchange_keys` rows. `status` and `latency_ms` used to be constants in the '
+      + 'aggregation service — `status` always "connected" and `latency_ms` always 35 — but '
+      + '`get_exchange_data` now derives both from a real per-venue Redis probe '
+      + '(`venue_status`, `measured_latency_ms`), so they render as readings: `status` is '
+      + '"unknown" rather than fabricated when nothing was probed, and `latency_ms` is `null` '
+      + 'rather than invented. The account-wide `health.exchange_api_latency_ms` is a separate, '
+      + 'independently-measured figure and remains nullable and honest.',
   }),
   entry({
     page: PAGES.DASHBOARD,
@@ -3758,11 +3761,12 @@ const BILLING_FIELDS = [
  *     "permissions": ["Spot Trading", "Read"]  (:239) likewise
  *
  * That is the same defect `production-launch-hardening` fixed in
- * `dashboard_aggregation_service` — where `get_exchange_health` hardcoded
- * `"status": "connected"` and `"latency_ms": 35`, and `can_trade` came off "does a row
- * exist" — and this endpoint was not part of that fix. So the rule the `dashboard`
- * `exchangeHealth` entry states ("TWO of those four are constants in the aggregation service
- * … so neither is a measurement") applies here to FOUR columns, and the entries below declare
+ * `dashboard_aggregation_service` — where `get_exchange_data` (then `get_exchange_health`)
+ * hardcoded `"status": "connected"` and `"latency_ms": 35`, and `can_trade` came off "does a
+ * row exist" — and this endpoint was not part of that fix; `get_exchange_data` now derives
+ * both from a real per-venue probe (see the `dashboard` `exchangeHealth` entry), but this
+ * endpoint still has not. So the same rule applies here to FOUR columns, and the entries below
+ * declare
  * `status`, `health` and `subscription_tier` UNAVAILABLE rather than pointing a page at a
  * literal. A constant rendered as a reading is worse on this page than on the dashboard,
  * because this is the page a trader opens to decide whether a venue can be trusted with an

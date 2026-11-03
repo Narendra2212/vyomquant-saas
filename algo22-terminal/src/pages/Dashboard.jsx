@@ -76,19 +76,18 @@
  * `positions.length` so the figure on screen is the one the server computed, and because
  * only the reported field makes the `null` case reachable at all.
  *
- * TWO OF THE FOUR PER-VENUE FIELDS ARE CONSTANTS, AND ARE NOT PRESENTED AS READINGS
+ * ALL FOUR PER-VENUE FIELDS ARE REAL MEASUREMENTS NOW, AND ARE PRESENTED AS SUCH
  * -------------------------------------------------------------------------------
  * `exchange.exchanges[]` is `{exchange_id, status, latency_ms, last_sync}` built from the
- * caller's `exchange_keys` rows, and `pageFields`' `exchangeHealth` note records that two
- * of those four are constants in the aggregation service: `status` is always `"connected"`
- * and `latency_ms` is always `35`, from no measurement. So neither is passed to
- * `ds/ExchangeStatus`: an omitted `connectionState` renders "Connection not reported" in the
- * neutral group rather than a green CONNECTED chip nothing checked, and an omitted
- * `latencyMs` renders the marker with that component's own reason rather than a fabricated
- * 35 ms. The venue and `last_sync` are real and are rendered. Measured latency is a
- * page-level figure — `health.exchange_api_latency_ms`, genuinely `null` when unmeasured,
- * with `health.exchange_api_latency_status` reading `"unavailable"` beside it — and it
- * renders as one `ds/Metric` that shows the marker, never `0 ms`.
+ * caller's `exchange_keys` rows. `status` and `latency_ms` used to be a fixed `"connected"`
+ * and a fixed `35` from no measurement at all; `dashboard_aggregation_service.get_exchange_data`
+ * now derives both from a real per-venue Redis probe (`venue_status`, `measured_latency_ms`),
+ * so they are passed to `ds/ExchangeStatus` as `connectionState` and `latencyMs` like any other
+ * reading. A venue nobody has probed yet still reports honestly: `status` reads `"unknown"`
+ * (never fabricated as `"connected"`) and `latency_ms` is `null`, which renders the
+ * not-available marker with `ds/ExchangeStatus`'s own reason rather than `0 ms`. The
+ * account-level `health.exchange_api_latency_ms` is a separate, independently-measured figure
+ * and continues to render as its own `ds/Metric`.
  *
  * TICK ISOLATION — SUBSCRIBE LOW, NOT HIGH (task 19.3, §13.1, §13.2b, Requirements 2.6, 7.5)
  * ------------------------------------------------------------------------------------------
@@ -818,19 +817,22 @@ const LiveStrategyState = memo(function LiveStrategyState({
 /**
  * ONE venue's health, live off `exchange_health` and filtered to its `exchange_id`.
  *
- * `last_sync` is the only field taken from the frame, and that is a decision rather than an
- * omission: the channel's payload is undeclared, so its `status` and `latency_ms` could no
- * more be presented as measurements than the REST constants they would replace
- * (`get_exchange_health` publishes a fixed `"connected"` and a fixed `35`). The page-root
- * handler this replaces had already been narrowed to that one field by task 19.1b; what
- * moves here is where it is read, not what.
+ * `last_sync` is the only field taken from the LIVE FRAME, and that is a decision rather
+ * than an omission: the channel's payload is undeclared, so its `status` and `latency_ms`
+ * could not be presented as measurements the way the REST read's can. `connectionState` and
+ * `latencyMs` instead come from the structural `GET /api/dashboard` read that built this
+ * row (`toVenueRow`), where `dashboard_aggregation_service.get_exchange_data` now derives
+ * both from a real per-venue Redis probe rather than a constant — see the module docblock.
  *
- * So `ds/ExchangeStatus` is passed neither `connectionState` nor `latencyMs` and reports
- * both as not reported — see the module docblock and `VENUE_CONSTANT_NOTE`.
+ * So `ds/ExchangeStatus` IS passed `connectionState` and `latencyMs`, and renders them as
+ * readings; it falls back to its own "not reported" markers only when the probe genuinely
+ * measured nothing for that venue.
  */
 const LiveVenueHealth = memo(function LiveVenueHealth({
   exchangeId,
   exchange,
+  connectionState,
+  latencyMs,
   environment,
   syncedAt,
   lastSync,
@@ -850,7 +852,11 @@ const LiveVenueHealth = memo(function LiveVenueHealth({
 
   return (
     <>
-      <ExchangeStatus exchange={exchange} />
+      <ExchangeStatus
+        exchange={exchange}
+        connectionState={connectionState ?? undefined}
+        latencyMs={latencyMs ?? undefined}
+      />
       <VenueLastSync lastSync={liveLastSync === undefined ? lastSync : liveLastSync} />
     </>
   );
@@ -1147,31 +1153,23 @@ const orderColumns = (currency) => Object.freeze([
 /**
  * One `exchange.exchanges[]` entry → one venue row.
  *
- * `status` and `latency_ms` are deliberately NOT read: both are constants in
- * `get_exchange_health` (`"connected"` and `35`), so neither is a measurement and neither
- * may be presented as one. See the module docblock. What is left is what the row really
- * knows — which venue it is, from `exchange_keys`, and when that record was last written.
+ * `status` and `latency_ms` are now read: `dashboard_aggregation_service.get_exchange_data`
+ * derives both from a real per-venue Redis probe (`venue_status`, `measured_latency_ms`)
+ * rather than publishing a constant — see the module docblock. `status` is a non-empty
+ * string on every row (`"unknown"` rather than absent, when nothing was measured), so
+ * `firstText` is not needed for it; `latency_ms` is `null` on a row the probe measured
+ * nothing for, and `firstNumber` carries that `null` through rather than inventing a figure.
  */
 const toVenueRow = (venue, index) => {
   const source = venue && typeof venue === "object" ? venue : {};
   return {
     id: firstText(source.exchange_id, source.id, source.name) ?? `venue-${index}`,
     exchange: firstText(source.exchange_id, source.name),
+    status: firstText(source.status),
+    latencyMs: firstNumber(source.latency_ms),
     lastSync: firstText(source.last_sync),
   };
 };
-
-/**
- * Why the two per-venue fields render as not reported. Stated on the panel, once.
- *
- * Requirement 19.3 asks for the reason beside the state, and this one is not a fact about
- * the account or the venue — it is a fact about the aggregation service, which a trader
- * reading an empty connection chip has no way to know.
- */
-const VENUE_CONSTANT_NOTE =
-  "Per-venue connection state and latency are not measured: the aggregation service "
-  + "publishes a fixed value for both, so neither is reported here. The measured figure is "
-  + "the account's exchange API latency above.";
 
 /** A venue row's `last_sync`, or the marker. Not a guessed time and not \"just now\". */
 function VenueLastSync({ lastSync }) {
@@ -2785,15 +2783,18 @@ export default function Dashboard() {
                       className="flex min-w-0 flex-col gap-1 rounded-sm border border-line-subtle bg-surface-inset px-3 py-2"
                     >
                       {/* The venue's own leaf, subscribing to `exchange_health` filtered to
-                          this `exchange_id` (task 19.3). Neither `connectionState` nor
-                          `latencyMs` is passed on: both are constants in the aggregation
-                          service (`"connected"` and `35`), so `ds/ExchangeStatus` reports
-                          each as not reported rather than as a measurement, and the pushed
-                          frame's copies of them are undeclared and no better. See the
-                          module docblock. */}
+                          this `exchange_id` (task 19.3) for `last_sync` only.
+                          `connectionState` and `latencyMs` come from the structural REST read
+                          (`toVenueRow`): `dashboard_aggregation_service.get_exchange_data`
+                          now measures both per venue, so `ds/ExchangeStatus` renders them as
+                          readings and falls back to its own "not reported" markers only
+                          where the probe genuinely measured nothing. See the module
+                          docblock. */}
                       <LiveVenueHealth
                         exchangeId={venue.id}
                         exchange={venue.exchange ?? venue.id}
+                        connectionState={venue.status}
+                        latencyMs={venue.latencyMs}
                         environment={environment}
                         syncedAt={syncedAt}
                         lastSync={venue.lastSync}
@@ -2801,7 +2802,6 @@ export default function Dashboard() {
                     </li>
                   ))}
                 </ul>
-                <p className="mt-3 text-micro text-content-secondary">{VENUE_CONSTANT_NOTE}</p>
               </>
             )}
           </Panel>

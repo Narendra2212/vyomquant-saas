@@ -293,8 +293,8 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
     });
   });
 
-  describe('2D.6: Unmeasured Latency Neutral Fallback', () => {
-    it('reports no per-venue latency, because neither venue field is measured', async () => {
+  describe('2D.6: per-venue latency is the real measurement, with an honest fallback (DASH-02)', () => {
+    it('reports binance\'s real measured latency, and bybit\'s honest not-reported marker', async () => {
       render(
         <MemoryRouter>
           <Dashboard />
@@ -302,13 +302,13 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
       );
 
       /*
-       * The old per-venue row read `latency_ms` and printed "Latency unavailable" only for
-       * the `null` one, which presented binance's 28 as a measurement. `pageFields`'
-       * `exchangeHealth` note records that `status` and `latency_ms` are both constants in
-       * the aggregation service, so task 19.1b stopped passing either to
-       * `ds/ExchangeStatus`: every row reports its latency as not measured, with that
-       * component's own reason, and the measured figure is the page-level
-       * `health.exchange_api_latency_ms`.
+       * `dashboard_aggregation_service.get_exchange_data` used to publish a constant
+       * `"connected"` / `35` for both venues, from no measurement, and this page refused
+       * to read either field even after the backend was fixed to derive both from a real
+       * per-venue Redis probe. binance's `28` is now rendered as its own real measurement;
+       * bybit's `null` means its probe measured nothing, so it renders `ds/ExchangeStatus`'s
+       * own not-reported marker instead of borrowing binance's figure or inventing `0 ms`.
+       * The account-wide `health.exchange_api_latency_ms` remains a separate figure.
        */
       // Waited on the venue ROWS, not on the panel: `data-region` is on the `ds/Panel`
       // section, which is in the DOM in its loading state too, so querying on the region
@@ -318,12 +318,15 @@ describe('Phase 2D — Trading Cockpit Polish & WebSocket Invariants', () => {
       });
 
       const health = document.querySelector('[data-region="exchangeHealth"]');
-      const venues = health.querySelectorAll('[data-exchange]');
-      expect(venues.length).toBe(2);
-      for (const venue of venues) {
-        expect(venue.getAttribute('data-latency-reported')).toBe('false');
-      }
-      expect(health.textContent).not.toContain('28 ms');
+      const binance = health.querySelector('[data-exchange="binance"]');
+      const bybit = health.querySelector('[data-exchange="bybit"]');
+
+      expect(binance.getAttribute('data-latency-reported')).toBe('true');
+      expect(binance.textContent).toContain('28 ms');
+
+      expect(bybit.getAttribute('data-latency-reported')).toBe('false');
+      expect(bybit.textContent).not.toContain('0 ms');
+
       // The one measured latency on the page, from `health`, with its unit.
       const latency = document.querySelector('[data-region="exchangeApiLatencyMs"]');
       expect(latency.getAttribute('data-metric-available')).toBe('true');
