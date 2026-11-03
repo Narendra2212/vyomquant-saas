@@ -135,14 +135,26 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ShieldCheck, Copy, Check, RefreshCw, ArrowLeft, Key } from 'lucide-react';
+import { ShieldCheck, Copy, Check, RefreshCw, ArrowLeft, Key, LifeBuoy } from 'lucide-react';
 
 import { Alert } from '../components/ds/Alert';
 import { CommandButton } from '../components/ds/CommandButton';
+import { ConfirmDialog } from '../components/ds/ConfirmDialog';
 import { LoadingState } from '../components/ds/LoadingState';
 import { token } from '../design/tokens';
 import { Button } from '../components/ui/Button';
+import { api } from '../api';
 import { supabase } from '../supabase';
+
+/**
+ * SEC-24 — backup codes, the self-service path back in for a trader who has
+ * lost their authenticator and holds no other logged-in session. Supabase's
+ * own MFA API has no recovery-code factor type, so this is a small custom
+ * mechanism on top of it: `routers/security.py`'s
+ * `/api/security/mfa/backup-codes/*`, backed by `backend/mfa_backup_codes.py`.
+ * It never touches `enroll`/`challenge`/`verify`/`unenroll`/`listFactors` —
+ * see those calls' own untouched block above.
+ */
 
 export default function TwoFA() {
   const navigate = useNavigate();
@@ -160,6 +172,28 @@ export default function TwoFA() {
   const [successMessage, setSuccessMessage] = useState("");
   const [hasExistingFactor, setHasExistingFactor] = useState(false);
   const refs = useRef([]);
+
+  // ── SEC-24: backup codes (see the header note on why these exist) ──────
+  // Dialog state for the reset-factor confirmation: `ds/ConfirmDialog`
+  // replaces the native `window.confirm` that used to guard it (FE-10).
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  // The "save your backup codes" screen offered right after any successful
+  // verify (first enrolment or a later re-verification via "Manage MFA").
+  // It replaces the unconditional 1.5s auto-redirect for that one case.
+  const [backupCodesOffer, setBackupCodesOffer] = useState(false);
+  const [backupCodes, setBackupCodes] = useState(null);
+  const [backupCodesBusy, setBackupCodesBusy] = useState(false);
+  const [backupCodesError, setBackupCodesError] = useState("");
+  const [backupCodesCopied, setBackupCodesCopied] = useState(false);
+  const pendingRedirectRef = useRef(null);
+
+  // The lost-device recovery form on the challenge step: "Use a backup code
+  // instead" of a TOTP code, reachable without ever reaching AAL2.
+  const [showBackupCodeEntry, setShowBackupCodeEntry] = useState(false);
+  const [backupCodeInput, setBackupCodeInput] = useState("");
+  const [backupCodeBusy, setBackupCodeBusy] = useState(false);
+  const [backupCodeError, setBackupCodeError] = useState("");
+  const [backupCodeRecovered, setBackupCodeRecovered] = useState(false);
 
   // 1. Initialize MFA lifecycle on mount
   useEffect(() => {
@@ -319,11 +353,14 @@ export default function TwoFA() {
 
       setSuccessMessage("Two-factor authentication verified successfully!");
 
-      // Transition session to next step / dashboard
-      setTimeout(() => {
-        const redirectPath = location.state?.from || "/app/dashboard";
-        navigate(redirectPath, { replace: true });
-      }, 1500);
+      // SEC-24: the redirect itself — not the `verify` call above, which is
+      // untouched — is deferred so a trader can save backup codes right at
+      // the one moment their session actually holds AAL2 (the generate
+      // endpoint requires it). `pendingRedirectRef` is what "Continue to
+      // dashboard" or "Skip" on that screen fires.
+      const redirectPath = location.state?.from || "/app/dashboard";
+      pendingRedirectRef.current = () => navigate(redirectPath, { replace: true });
+      setBackupCodesOffer(true);
 
     } catch (err) {
       console.error("MFA Verification error:", err);
@@ -337,11 +374,19 @@ export default function TwoFA() {
     }
   };
 
-  const handleResetFactor = async () => {
-    // The confirmation stays a native one. Requirement 16.5 keeps every confirmation's
-    // explicit action, and `no-native-dialogs.budget.js` holds this call site — moving it to
-    // `ds/ConfirmDialog` lowers that budget and belongs to the commit that does so.
-    if (!window.confirm("Are you sure you want to reset your MFA configuration?")) return;
+  // FE-10: the native `window.confirm` that used to guard this is gone — the
+  // control opens `ds/ConfirmDialog` (below, in the JSX) instead, and only
+  // ITS explicit confirm reaches `handleConfirmResetFactor`. Same split
+  // `pages/StrategyDetail.jsx`'s deploy/delete/restore-version flows already
+  // use: the button that starts the flow and the function that performs the
+  // irreversible action are two different functions, so nothing but an
+  // explicit confirm in the dialog can reach the second one.
+  const handleResetFactor = () => {
+    setResetDialogOpen(true);
+  };
+
+  const handleConfirmResetFactor = async () => {
+    setResetDialogOpen(false);
     setIsLoading(true);
     setErrorMessage("");
     try {
@@ -366,6 +411,88 @@ export default function TwoFA() {
       setErrorMessage(err.message || "Failed to reset MFA.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // ── SEC-24: generate / regenerate backup codes (requires AAL2) ─────────
+  // Called from the "save your backup codes" screen shown right after a
+  // successful verify, when the session's access token has just been
+  // reissued at AAL2 (`MFA_CHALLENGE_VERIFIED` — see `auth/sessionEvents.js`).
+  const handleGenerateBackupCodes = async () => {
+    setBackupCodesBusy(true);
+    setBackupCodesError("");
+    setBackupCodesCopied(false);
+    try {
+      const result = await api.security.generateBackupCodes();
+      setBackupCodes(Array.isArray(result?.codes) ? result.codes : []);
+    } catch (err) {
+      setBackupCodesError(
+        err?.response?.data?.detail
+          || err?.message
+          || "Could not generate backup codes right now. You can try again from this screen.",
+      );
+    } finally {
+      setBackupCodesBusy(false);
+    }
+  };
+
+  const handleCopyBackupCodes = () => {
+    if (!backupCodes || backupCodes.length === 0) return;
+    navigator.clipboard.writeText(backupCodes.join("\n"));
+    setBackupCodesCopied(true);
+    setTimeout(() => setBackupCodesCopied(false), 2000);
+  };
+
+  const handleContinueFromBackupCodes = () => {
+    setBackupCodesOffer(false);
+    setBackupCodes(null);
+    setBackupCodesError("");
+    const redirect = pendingRedirectRef.current;
+    pendingRedirectRef.current = null;
+    if (redirect) redirect();
+  };
+
+  // ── SEC-24: lost-device recovery on the challenge screen (AAL1 is enough) ──
+  const handleVerifyBackupCode = async (e) => {
+    if (e) e.preventDefault();
+    const trimmed = backupCodeInput.trim();
+    if (!trimmed) {
+      setBackupCodeError("Enter one of your backup codes.");
+      return;
+    }
+
+    setBackupCodeBusy(true);
+    setBackupCodeError("");
+    try {
+      await api.security.verifyBackupCode(trimmed);
+      // Success unenrolls the stale factor server-side and — per Supabase's
+      // own documented behaviour for deleting a verified factor — signs this
+      // account out of every session, including this one. There is nothing
+      // left to redirect to inside the app: the trader signs in again and
+      // `pages/TwoFA.jsx`'s own "no verified factor" path walks them through
+      // fresh enrolment, untouched by this feature.
+      setBackupCodeRecovered(true);
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // The server-side sign-out already happened; a client-side failure
+        // here changes nothing the trader needs to act on.
+      }
+      setTimeout(() => {
+        navigate("/signin", { replace: true });
+      }, 2500);
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 429) {
+        setBackupCodeError(
+          err?.response?.data?.detail
+            || "Too many attempts. Wait a while before trying another backup code.",
+        );
+      } else {
+        setBackupCodeError("Invalid or already-used backup code.");
+      }
+    } finally {
+      setBackupCodeBusy(false);
     }
   };
 
@@ -423,6 +550,82 @@ export default function TwoFA() {
              and it is announced once rather than not at all. */
           <div className="flex flex-col items-center justify-center py-10">
             <LoadingState kind="inline" label="Connecting to Supabase MFA..." />
+          </div>
+        ) : backupCodesOffer ? (
+          /* SEC-24 — shown right after a successful verify, in place of the
+             unconditional 1.5s auto-redirect: the one window this session
+             actually holds AAL2, which `generateBackupCodes` requires. */
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div
+              style={{
+                background: token.surface.inset,
+                border: `1px solid ${token.line.default}`,
+                borderRadius: 10,
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+              }}
+            >
+              <p className="text-body text-content-secondary">
+                Backup codes let you back into your account if you ever lose access to
+                your authenticator app. Each code works once.
+              </p>
+
+              {backupCodesError ? (
+                <Alert severity="error" title={backupCodesError} />
+              ) : null}
+
+              {backupCodes === null ? (
+                <Button
+                  variant="secondary"
+                  className="w-full justify-center"
+                  onClick={handleGenerateBackupCodes}
+                  disabled={backupCodesBusy}
+                >
+                  {backupCodesBusy ? "Generating…" : "Generate backup codes"}
+                </Button>
+              ) : (
+                <>
+                  {/* fontSize kept at the control's own monospace — ten identifiers, the
+                      same reasoning the TOTP secret above gets. */}
+                  <p className="text-micro font-semibold uppercase tracking-wide text-content-secondary">
+                    These will not be shown again — save them somewhere safe now.
+                  </p>
+                  <div
+                    style={{
+                      background: token.surface.panel,
+                      borderRadius: 6,
+                      padding: "10px 12px",
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 6,
+                    }}
+                  >
+                    {backupCodes.map((c) => (
+                      <code key={c} className="font-mono text-body tracking-wide text-brand">
+                        {c}
+                      </code>
+                    ))}
+                  </div>
+                  <CommandButton
+                    intent="secondary"
+                    icon={backupCodesCopied ? Check : Copy}
+                    onClick={handleCopyBackupCodes}
+                  >
+                    {backupCodesCopied ? "Copied" : "Copy all codes"}
+                  </CommandButton>
+                </>
+              )}
+            </div>
+
+            <Button
+              variant="primary"
+              className="w-full justify-center"
+              onClick={handleContinueFromBackupCodes}
+            >
+              {backupCodes === null ? "Skip for now" : "Continue to dashboard"}
+            </Button>
           </div>
         ) : step === 1 ? (
           /* STEP 1: Enrollment QR Code and Secret Key */
@@ -575,9 +778,103 @@ export default function TwoFA() {
                 Reset Authenticator
               </CommandButton>
             </div>
+
+            {/* SEC-24: lost-device recovery. Reachable from THIS screen specifically — an
+                AAL1 session, which is exactly the case where a trader with no device and no
+                other session has nowhere else to go. */}
+            {hasExistingFactor ? (
+              <div style={{ marginTop: 4 }}>
+                {backupCodeRecovered ? (
+                  <Alert
+                    severity="info"
+                    title="Your authenticator has been reset. Redirecting you to sign in again…"
+                  />
+                ) : showBackupCodeEntry ? (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                      padding: "12px 14px",
+                      background: token.surface.inset,
+                      border: `1px solid ${token.line.default}`,
+                      borderRadius: 10,
+                    }}
+                  >
+                    <p className="text-body text-content-secondary">
+                      Enter one of the backup codes you saved when you set up two-factor
+                      authentication. This resets your authenticator and signs you out
+                      everywhere; you will sign in again to set up a new one.
+                    </p>
+                    {backupCodeError ? <Alert severity="error" title={backupCodeError} /> : null}
+                    <input
+                      type="text"
+                      value={backupCodeInput}
+                      onChange={(e) => setBackupCodeInput(e.target.value)}
+                      placeholder="XXXXX-XXXXX"
+                      aria-label="Backup code"
+                      disabled={backupCodeBusy}
+                      className="font-mono text-body"
+                      style={{
+                        background: token.surface.panel,
+                        border: `1px solid ${token.line.default}`,
+                        borderRadius: 6,
+                        padding: "8px 10px",
+                        color: token.content.primary,
+                      }}
+                    />
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Button
+                        variant="secondary"
+                        className="flex-1 justify-center"
+                        disabled={backupCodeBusy}
+                        onClick={() => {
+                          setShowBackupCodeEntry(false);
+                          setBackupCodeError("");
+                          setBackupCodeInput("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="primary"
+                        className="flex-1 justify-center"
+                        disabled={backupCodeBusy || !backupCodeInput.trim()}
+                        onClick={handleVerifyBackupCode}
+                      >
+                        {backupCodeBusy ? "Checking…" : "Use backup code"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <CommandButton
+                    intent="ghost"
+                    icon={LifeBuoy}
+                    onClick={() => setShowBackupCodeEntry(true)}
+                  >
+                    Lost your device? Use a backup code
+                  </CommandButton>
+                )}
+              </div>
+            ) : null}
           </form>
         )}
       </div>
+
+      {/* FE-10: the native `window.confirm` this used to be is gone. Same pattern
+          `pages/StrategyDetail.jsx`'s deploy/delete/restore-version dialogs already use:
+          the control above only opens this; only an explicit confirm here reaches
+          `handleConfirmResetFactor`. */}
+      <ConfirmDialog
+        open={resetDialogOpen}
+        onCancel={() => setResetDialogOpen(false)}
+        onConfirm={handleConfirmResetFactor}
+        title="Reset Authenticator"
+        intent="destructive"
+        description="This removes your current authenticator and immediately starts enrolling a new one. You will need to scan a fresh QR code or re-enter a new secret key."
+        confirmLabel="Reset Authenticator"
+        cancelLabel="Cancel"
+      />
     </div>
   );
 }

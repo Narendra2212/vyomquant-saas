@@ -306,14 +306,15 @@
  *      "which token means this state" on `semantic.js` and nowhere else. `clock_sync`'s three
  *      server values (`ok`, `synchronized`, `assumed_ok`) are not in the table either, so the
  *      probe result is quoted as the server's own word with no hue at all.
- *   4. **The native `confirm()` on disconnect stays.** `ds/ConfirmDialog` and
- *      `ds/CommandButton`'s `confirm` prop are sitting right there and this is the most
- *      valuable thing on the page this commit is not taking: swapping the dialog changes what
- *      a destructive action DOES on the way to doing it, and task 7.3 made the same call for
- *      `TwoFA.jsx`'s *Reset Authenticator* so that `no-native-dialogs.budget.js` is not
- *      touched from a typography commit. The confirmation itself is deliberate friction on an
- *      irreversible action (Requirement 16.5) and is carried across with its wording intact,
- *      as is the bot-count pre-check that refuses the delete before asking.
+ *   4. **RESOLVED (FE-10).** The native `confirm()` on disconnect is gone. It is replaced by
+ *      `ds/ConfirmDialog`, in the same opener/confirm split `pages/StrategyDetail.jsx`'s
+ *      deploy/delete/restore-version dialogs already use: `handleDeleteSaved` now only opens
+ *      `disconnectDialog` state, and only the dialog's own explicit confirm reaches
+ *      `handleConfirmDisconnect`, which is what actually calls `api.exchange.delete`. The
+ *      confirmation itself is still the same deliberate friction on an irreversible action
+ *      (Requirement 16.5), its wording carried across into the dialog's `description`, and the
+ *      bot-count pre-check still refuses the delete before the dialog is ever opened. See
+ *      `tests/unit/guards/no-native-dialogs.budget.js`, whose entry for this file is now `0`.
  *   5. **Read failures and write failures translate differently, on purpose.** Every read
  *      goes through `ds/Panel`'s `error` arm and therefore through `design/errorCopy.js`'s
  *      `translateError`. Every WRITE keeps this page's own `sanitizeErrorMessage`, which is
@@ -367,6 +368,7 @@ import {
 
 import { Alert } from '../components/ds/Alert';
 import { CommandButton } from '../components/ds/CommandButton';
+import { ConfirmDialog } from '../components/ds/ConfirmDialog';
 import { ExchangeStatus } from '../components/ds/ExchangeStatus';
 import { Field } from '../components/ds/Field';
 import { Metric, NotAvailableMarker } from '../components/ds/Metric';
@@ -781,6 +783,12 @@ export default function ExchangeManager() {
   */
   const [removedIds, setRemovedIds] = useState([]);
 
+  // FE-10: the disconnect confirmation's data, or `null` while no dialog is open — the same
+  // opener/confirm split `pages/StrategyDetail.jsx`'s deploy/delete/restore-version dialogs
+  // use. `handleDeleteSaved` only sets this; only `ds/ConfirmDialog`'s own explicit confirm
+  // reaches `handleConfirmDisconnect`, which is what actually calls `api.exchange.delete`.
+  const [disconnectDialog, setDisconnectDialog] = useState(null);
+
   const selectedExchangeId = selectedExchange?.id ?? null;
   const venueListRef = useRef(null);
 
@@ -1012,7 +1020,7 @@ export default function ExchangeManager() {
     }
   };
 
-  const handleDeleteSaved = async (exchangeId, exchangeName) => {
+  const handleDeleteSaved = (exchangeId, exchangeName) => {
     if (processingById[exchangeId]) return;
 
     const exchange = connectionRows.find((e) => e.exchange_id === exchangeId);
@@ -1025,13 +1033,18 @@ export default function ExchangeManager() {
     }
 
     /*
-      Requirement 16.5 and 4.4 finding 4: the confirmation is deliberate friction on an
-      irreversible action and is carried across with its wording intact. It is still the
-      native dialog, which is what keeps `no-native-dialogs.budget.js` out of this commit.
+      FE-10 (was Requirement 16.5 / 4.4 finding 4): the confirmation is still deliberate
+      friction on an irreversible action, now rendered as `ds/ConfirmDialog` instead of the
+      native `confirm()` that used to guard this. This only opens the dialog; nothing below
+      it can run before an explicit confirm — see `handleConfirmDisconnect`.
     */
-    if (!confirm(`Are you sure you want to disconnect ${String(exchangeName ?? exchangeId).toUpperCase()}? This action cannot be undone.`)) {
-      return;
-    }
+    setDisconnectDialog({ exchangeId, exchangeName });
+  };
+
+  const handleConfirmDisconnect = async () => {
+    if (!disconnectDialog) return;
+    const { exchangeId } = disconnectDialog;
+    setDisconnectDialog(null);
 
     setProcessingById((p) => ({ ...p, [exchangeId]: true }));
     try {
@@ -1445,6 +1458,26 @@ export default function ExchangeManager() {
         </Panel>
       </div>
 
+      {/* FE-10: replaces the native `confirm()` that used to guard this disconnect, in the
+          same pattern `pages/StrategyDetail.jsx`'s delete dialog already uses. */}
+      <ConfirmDialog
+        open={disconnectDialog !== null}
+        onCancel={() => setDisconnectDialog(null)}
+        onConfirm={handleConfirmDisconnect}
+        title="Disconnect exchange"
+        intent="destructive"
+        description="This action cannot be undone."
+        review={[
+          {
+            label: "Exchange",
+            value: disconnectDialog
+              ? String(disconnectDialog.exchangeName ?? disconnectDialog.exchangeId).toUpperCase()
+              : null,
+          },
+        ]}
+        confirmLabel="Disconnect"
+        cancelLabel="Cancel"
+      />
     </div>
   );
 }

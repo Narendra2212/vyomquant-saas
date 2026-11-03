@@ -31,12 +31,16 @@
  * the rule is met, and the disagreement surfaces as a guard that reads clean
  * while a per-page suite fails, or the reverse.
  *
- * What that buys, in this tree, is measurable: two of the four files in the
- * allowlist call the **bare** global — `confirm(…)` with no `window.` receiver.
- * A guard written as a grep for `window.confirm` would find two of four and
- * report the tree 50% cleaner than it is. It was three of five, and the grep
- * would have read 60% clean, until retail-ui-simplification task 9.2 deleted the
- * unmounted `pages/Landing.jsx` and its bare `alert(` with it.
+ * What that buys, in this tree, is measurable: of the surfaces in the allowlist
+ * that still carry a live dialog, one calls the **bare** global — `confirm(…)`
+ * with no `window.` receiver. A guard written as a grep for `window.confirm`
+ * would under-report how clean the tree is. It was three of five bare, then two
+ * of four: retail-ui-simplification task 9.2 deleted the unmounted
+ * `pages/Landing.jsx` and its bare `alert(`, and FE-10 migrated the other two
+ * bare/receiver pairs (`pages/TwoFA.jsx`, `pages/ExchangeManager.jsx`) to
+ * `ds/ConfirmDialog`, leaving one bare call live
+ * (`components/admin/AdminDashboard.jsx`) and one receiver-form call live
+ * (`components/NotificationCenter.jsx`).
  *
  * ===========================================================================
  * COMMENTS ARE STRIPPED AND STRINGS ARE MASKED, AND THAT IS LOAD-BEARING
@@ -174,15 +178,19 @@ const REPLACEMENT_PRIMITIVES = Object.freeze([
 const SCANNED_EXTENSIONS = Object.freeze(['.js', '.jsx', '.ts', '.tsx']);
 
 /**
- * The four deferred surfaces that really hold one dialog each, with the form the
+ * The deferred surfaces that really hold one dialog each, with the form the
  * detector reports. Hard-coded rather than read from the budget: these are the
  * FIXED POINTS that prove the scan and the detector are both working, and a fixed
  * point taken from the thing under test proves nothing.
  *
- * There were five. `pages/Landing.jsx` and its bare `alert(` left with the file when
- * retail-ui-simplification task 9.2 deleted it — the page was routed nowhere, so the
- * dialog was unreachable. Two of the remaining four are bare calls rather than three,
- * which still carries the claim below: a `window.`-only rule would miss half of them.
+ * There were five, then four. `pages/Landing.jsx` and its bare `alert(` left with
+ * the file when retail-ui-simplification task 9.2 deleted it — the page was routed
+ * nowhere, so the dialog was unreachable. FE-10 then migrated the other two
+ * remaining BARE calls — `pages/TwoFA.jsx` and `pages/ExchangeManager.jsx` — to
+ * `ds/ConfirmDialog`, leaving the two below. Both are still receiver-form
+ * (`window.confirm`) and bare (`confirm(`) respectively, so the claim this list
+ * exists to pin — that a `window.`-only rule would miss some of these — still
+ * holds with one of each rather than two.
  *
  * `text` is the matched fragment with whitespace removed. The receiver form has no
  * trailing `(` because `NATIVE_DIALOG`'s first alternative also catches an alias
@@ -193,8 +201,6 @@ const SCANNED_EXTENSIONS = Object.freeze(['.js', '.jsx', '.ts', '.tsx']);
  * trusts. The budget records them in prose for the person doing the migration.
  */
 const KNOWN_DIALOGS = Object.freeze([
-  { relative: 'pages/TwoFA.jsx', texts: ['window.confirm'] },
-  { relative: 'pages/ExchangeManager.jsx', texts: ['confirm('] },
   { relative: 'components/NotificationCenter.jsx', texts: ['window.confirm'] },
   { relative: 'components/admin/AdminDashboard.jsx', texts: ['confirm('] },
 ]);
@@ -428,21 +434,22 @@ describe('no-native-dialogs: the guard is live, not vacuous', () => {
   });
 
   it('finds the dialogs that are really in the tree', () => {
-    // THE FIXED POINTS. Four deferred surfaces, one dialog each, asserted against
+    // THE FIXED POINTS. Two deferred surfaces, one dialog each, asserted against
     // hard-coded expectations rather than against the budget. If path resolution broke, or
     // the detector stopped matching, every count would be 0 and only the under-budget
     // direction would object — so real files that MUST measure non-zero are what prove
-    // the scan ran. Two of the four are bare calls, so this also pins the claim that
-    // a `window.`-only rule would miss half of them. It was three of five until
-    // retail-ui-simplification task 9.2 deleted `pages/Landing.jsx` and its bare `alert(`.
+    // the scan ran. One of the two is a bare call, so this also pins the claim that a
+    // `window.`-only rule would miss it. It was five, then four, then two: task 9.2 deleted
+    // `pages/Landing.jsx` and its bare `alert(`, and FE-10 migrated `pages/TwoFA.jsx` and
+    // `pages/ExchangeManager.jsx` to `ds/ConfirmDialog`.
     for (const { relative, texts } of KNOWN_DIALOGS) {
       const found = SCANNED.find((f) => f.relative === relative);
       expect(found, `${relative} was not reached by the scan`).toBeDefined();
       expect(found.count, `${relative} no longer measures a dialog`).toBe(1);
       expect(found.found.map((d) => d.text)).toEqual(texts);
     }
-    expect(KNOWN_DIALOGS).toHaveLength(4);
-    expect(KNOWN_DIALOGS.filter(({ texts }) => !texts[0].startsWith('window.'))).toHaveLength(2);
+    expect(KNOWN_DIALOGS).toHaveLength(2);
+    expect(KNOWN_DIALOGS.filter(({ texts }) => !texts[0].startsWith('window.'))).toHaveLength(1);
   });
 
   it('strips the prose that documents a removal', () => {
@@ -501,7 +508,13 @@ describe('no-native-dialogs: the guard is live, not vacuous', () => {
   });
 
   it('would report a cleaned file whose entry was left behind', () => {
-    const cleaned = measure('pages/TwoFA.jsx', '<ConfirmDialog onConfirm={resetFactor} />');
+    // `pages/TwoFA.jsx` itself made exactly this transition under FE-10 — real rather than
+    // synthetic, now — so this fixture uses `components/NotificationCenter.jsx`, which still
+    // carries a budget of `1` and has not yet been migrated.
+    const cleaned = measure(
+      'components/NotificationCenter.jsx',
+      '<ConfirmDialog onConfirm={clearAll} />',
+    );
 
     expect(cleaned.count).toBe(0);
     expect(underBudget([cleaned], NATIVE_DIALOG_BUDGET)).toHaveLength(1);
