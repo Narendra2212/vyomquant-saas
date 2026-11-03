@@ -137,15 +137,20 @@
  * rendered directly at `--text-section` and `--text-body`, and the mismatch is recorded
  * here for whoever owns `ds/SectionHeader` next.
  *
- * `handleSelectPlan` IS CARRIED ACROSS UNCHANGED, INCLUDING ITS FAILURE PATH
+ * `handleSelectPlan`'S FAILURE PATH NO LONGER NAVIGATES TO THE DASHBOARD (FE-10)
  * ------------------------------------------------------------------------
- * Same `{ tier, currency: "INR" }` body, same `window.location.href` handover, same
- * `navigate("/app/dashboard")` on both the no-URL and the thrown branch. That last part is
- * a write-path finding — a trader whose checkout could not be opened is sent to the
- * dashboard as though the plan had been chosen — and it is recorded rather than taken
- * here, the way task 7.2 recorded `handleToggleSwitch`'s antipattern: changing when and
- * where a billing action lands is a behavioural change to a payment flow inside a commit
- * whose subject is typography and colour.
+ * Same `{ tier, currency: "INR" }` body, same `window.location.href` handover on a real
+ * checkout URL. What changed is the other two branches: a response with no `checkoutUrl`
+ * and a thrown request both used to call `navigate("/app/dashboard")` — the exact same
+ * call the SUCCESS path never even makes, since success leaves the SPA entirely via
+ * `window.location.href`. A trader whose checkout failed to open was sent to the dashboard
+ * as though they had successfully selected and paid for a plan: a billing-trust defect,
+ * not a cosmetic one. Both failure branches now set `checkoutError` instead and stay on
+ * this step; the step renders it as a `ds/Alert` (`severity="error"`) with a `Retry`
+ * action that calls `handleSelectPlan` again for the same plan, the same inline-error-plus-
+ * retry shape `pages/Billing.jsx` already uses for its own checkout failures. Navigation to
+ * `/app/dashboard` — or to a real payment page via `window.location.href` — happens ONLY
+ * when a `checkoutUrl` was actually returned.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * THE 24 PIXEL SIZES, BY §2.4'S NINE QUESTIONS (Requirement 2.4)
@@ -213,6 +218,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, CheckCircle, Database, ExternalLink, Mail, ShieldCheck } from "lucide-react";
 
+import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
 import { Metric, NotAvailableMarker } from "../components/ds/Metric";
 import { Panel } from "../components/ds/Panel";
@@ -338,10 +344,26 @@ const planPrice = (plan) => {
     : unavailable(FIELD.planPrice.reason);
 };
 
+/**
+ * A checkout failure's sentence for a trader, read off the error the way
+ * `pages/Billing.jsx`'s `writeFailureMessage` does for the same request — the server's own
+ * `detail` string first, then its coded `{error, message}` envelope, then the fallback.
+ */
+const checkoutFailureMessage = (err, fallback) => {
+  const detail = err?.data?.detail ?? err?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim() !== "") return detail;
+  const coded = detail?.message;
+  if (typeof coded === "string" && coded.trim() !== "") return coded;
+  return fallback;
+};
+
 export default function Wizard() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState("");
+  // The checkout failure shown inline on step 4 — `null` when there is none. Set by either
+  // failure branch of `handleSelectPlan`; never by its success branch, which leaves the SPA.
+  const [checkoutError, setCheckoutError] = useState(null);
   // Whether the trader has asked for the demo run. `usePanelState`'s `enabled` gate, so
   // no request is issued before the button is pressed and the panel is `idle` until it is.
   const [backtestRequested, setBacktestRequested] = useState(false);
@@ -435,23 +457,37 @@ export default function Wizard() {
       ? PANEL_STATES.EMPTY
       : plans.state;
 
-  // ── The write path. Carried across unchanged — see the header ────────────
+  // ── The write path. FE-10: neither failure branch navigates anywhere; see the header ──
   const handleSelectPlan = async (planId) => {
     if (planId === "free") {
       navigate("/app/dashboard");
       return;
     }
+    setCheckoutError(null);
     setIsCheckoutLoading(planId);
     try {
       const data = await api.billing.createCheckout({ tier: planId, currency: "INR" });
       if (data && data.checkoutUrl) {
+        // The only branch that leaves this step. Nothing past this line can run on this
+        // page again, so a success is structurally never confused with a failure.
         window.location.href = data.checkoutUrl;
       } else {
-        navigate("/app/dashboard");
+        setCheckoutError({
+          planId,
+          message:
+            "The payment gateway returned no way to complete this checkout. Nothing has "
+            + "been charged.",
+        });
       }
     } catch (err) {
       console.error("Wizard checkout error:", err);
-      navigate("/app/dashboard");
+      setCheckoutError({
+        planId,
+        message: checkoutFailureMessage(
+          err,
+          "Checkout could not be started. Nothing has been charged.",
+        ),
+      });
     } finally {
       setIsCheckoutLoading("");
     }
@@ -762,6 +798,24 @@ export default function Wizard() {
             <p className="mb-6 text-center text-body text-content-secondary">
               Select a plan to unlock powerful features.
             </p>
+
+            {/* FE-10: a checkout that returned no URL, or threw, lands here instead of on
+                the dashboard — the trader stays mid-wizard and can retry the same plan. */}
+            {checkoutError ? (
+              <Alert
+                severity="error"
+                title="Checkout could not be opened"
+                action={{
+                  label: "Retry",
+                  onClick: () => handleSelectPlan(checkoutError.planId),
+                }}
+                onDismiss={() => setCheckoutError(null)}
+                dismissLabel="Dismiss this message"
+                className="mb-4"
+              >
+                {checkoutError.message}
+              </Alert>
+            ) : null}
 
             <Panel
               state={plansState}
