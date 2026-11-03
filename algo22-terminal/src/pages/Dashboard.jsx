@@ -1504,8 +1504,8 @@ const HALT_DESCRIPTION = Object.freeze({
   LIVE: "WARNING: Activating the Emergency Kill Switch will IMMEDIATELY halt all live "
     + "strategy execution loops and block all new order submissions on connected live "
     + "exchanges.",
-  PAPER: "Activating the Emergency Kill Switch will freeze all paper simulation bots and "
-    + "prevent new simulated trades.",
+  PAPER: "Activating the Emergency Kill Switch will freeze all paper strategy execution "
+    + "loops and prevent new simulated trades.",
 });
 
 const RECOVER_DESCRIPTION =
@@ -1530,8 +1530,8 @@ const HALT_ACKNOWLEDGEMENT = Object.freeze({
     control: "checkbox",
   }),
   PAPER: Object.freeze({
-    statement: "Confirming freezes every paper simulation bot on this account and blocks all "
-      + "new simulated order submissions.",
+    statement: "Confirming freezes every paper strategy execution loop on this account and "
+      + "blocks all new simulated order submissions.",
     label: HALT_ACKNOWLEDGEMENT_LABEL,
     control: "checkbox",
   }),

@@ -1724,7 +1724,7 @@ export default function Profile() {
                     }
                   />
                   <NotificationSwitch
-                    label="Bot Lifecycle State Changes"
+                    label="Strategy Lifecycle State Changes"
                     description="Strategy start, pause, runtime errors, and halts"
                     icon={Cpu}
                     checked={eventOn('bot_state_change', 'bot')}

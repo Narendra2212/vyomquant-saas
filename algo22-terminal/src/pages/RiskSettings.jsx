@@ -264,7 +264,7 @@ const DEFAULT_KILL_SWITCHES = Object.freeze([
   {
     key: 'loss',
     label: 'Daily Loss Limit',
-    description: 'Stop all bots if daily loss exceeds limit',
+    description: 'Stop all strategies if daily loss exceeds limit',
     active: true,
     icon: TrendingDown,
   },

@@ -1027,7 +1027,8 @@ export default function ExchangeManager() {
     if (exchange && exchange.bot_count > 0) {
       setNotice({
         severity: 'error',
-        message: `Cannot delete: ${exchange.bot_count} active bot(s) running. Stop bots first.`,
+        message: `Cannot delete: ${exchange.bot_count} active strategy deployment(s) running. `
+          + "Stop them first.",
       });
       return;
     }

@@ -234,7 +234,9 @@ describe('Phase 6B ExchangeManager Contract & Lifecycle Test Suite', () => {
     const deleteButtons = screen.getAllByTitle('Disconnect');
     fireEvent.click(deleteButtons[0]);
 
-    expect(await screen.findByText(/Cannot delete: 2 active bot\(s\) running/i)).toBeDefined();
+    expect(
+      await screen.findByText(/Cannot delete: 2 active strategy deployment\(s\) running/i),
+    ).toBeDefined();
     expect(api.exchange.delete).not.toHaveBeenCalled();
   });
 

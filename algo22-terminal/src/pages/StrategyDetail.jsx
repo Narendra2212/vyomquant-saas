@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft, Activity, BarChart2, Zap, Shield,
   Layers, Settings, Globe, Server, Play, Pause, Trash2,
@@ -204,8 +204,19 @@ const DEPLOY_ELSEWHERE_NOTE = "Choose Live or Backtest from the Strategies page"
 
 export default function StrategyDetail() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { strategyId } = useParams();
-  const [activeTab, setActiveTab] = useState("overview");
+  /*
+   * BT-04: `pages/Backtester.jsx`'s "Walk-forward optimization" link hands this page a
+   * `navigate` with `state: { activeTab: "research" }` so it lands directly on the tab
+   * that holds `components/ResearchConsole.jsx` rather than on Overview with the trader
+   * left to find Research themselves. Read once, at mount, the same way `location.state`
+   * already hands a strategy to `pages/Backtester.jsx` — a tab id this page does not
+   * recognise simply matches no entry below and `activeTab` behaves as it always has.
+   */
+  const [activeTab, setActiveTab] = useState(
+    () => (typeof location.state?.activeTab === "string" ? location.state.activeTab : "overview"),
+  );
   const [strategy, setStrategy] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState({});
