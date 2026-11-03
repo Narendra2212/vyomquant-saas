@@ -370,6 +370,9 @@ class TelemetryEngine:
         price: float,
         status: str = "FILLED",
         max_retries: int = 3,
+        fee: Optional[float] = None,
+        fee_currency: Optional[str] = None,
+        slippage: Optional[float] = None,
     ) -> bool:
         """
         Logs a trade execution to QuestDB using InfluxDB Line Protocol.
@@ -380,6 +383,30 @@ class TelemetryEngine:
                   Failures are logged but not re-raised so the trading loop
                   continues even if QuestDB is temporarily unreachable.
         FIX TB-11: 3 retries with exponential backoff (was: 1 retry, 0.5s flat).
+
+        TRADE-13: `fee`, `fee_currency` and `slippage` are NEW, OPTIONAL fields.
+        `GET /api/orders/history` (`routers/orders.py`) reads this `executions` table
+        with `SELECT *`, and QuestDB creates a column the first time a line protocol
+        write names it — so these appear on this and every later write, and every row
+        written before this change simply has no value for them (QuestDB's ILP tables
+        are schema-on-write, not schema-on-read: an older row is not missing a cell, the
+        column did not exist yet when it was written). `TradeHistory.jsx` already
+        renders a per-row "not available" marker for exactly that case; it is not
+        fabricating a number for a row that predates this change.
+
+        None of the four EXISTING fields/tags (`amount`, `price`, `side`, `status`) or
+        their order in the line changes — the new fields are only ever APPENDED, and
+        only when the caller actually has a value for them. A caller that omits them
+        (every call site before this one, and any mock in the test suite) writes the
+        exact same line as before.
+
+        Realized P&L is deliberately NOT a parameter here. Computing it correctly for a
+        position-closing trade needs the entry price of the position being closed, and
+        `PositionEngine` (`backend_app/backend/position_engine.py`) has no caller
+        anywhere on this live order-completion path (`master_executor.py` constructs no
+        `PositionEngine` of its own) — so there is no cost-basis to realize against for
+        a live fill today. Recording a guessed P&L would be worse than this page's
+        existing "not available" marker. See REMEDIATION_LEDGER TRADE-13.
         """
         timestamp_ns = int(time.time() * 1_000_000_000)  # nanosecond precision
 
@@ -391,21 +418,45 @@ class TelemetryEngine:
         clean_status = _ilp_escape_tag(status)
 
         # ILP format: measurement,tag1=val1,tag2=val2 field1=v1,field2=v2 timestamp
+        #
+        # TRADE-13: `fee_currency` is a TAG (like `symbol`/`side`), not a field — an ILP
+        # string FIELD must be double-quoted (`fee_currency="BTC"`) while a TAG value is
+        # bare and only needs the existing escaping, which `_ilp_escape_tag` already
+        # does. Put in the fields half unescaped it would corrupt the line the moment a
+        # venue returned a currency containing a space or comma, so it is appended to
+        # the tag set instead, conditionally — omitted entirely when the caller has
+        # none, exactly like `fee`/`slippage` below.
+        tags = (
+            ",user_id=" + clean_uid
+            + ",symbol=" + clean_symbol
+            + ",side=" + clean_side
+            + ",status=" + clean_status
+        )
+        if fee_currency:
+            tags += ",fee_currency=" + _ilp_escape_tag(str(fee_currency))
+
+        fields = "amount=" + str(float(amount)) + ",price=" + str(float(price))
+
+        # TRADE-13: appended only when the caller actually has a number for them, so an
+        # omitted value writes no field at all rather than a fabricated 0.0 — a 0.0 fee
+        # is a claim that the venue charged nothing, which is the exact fabrication this
+        # whole page was built to refuse (see TradeHistory.jsx's module docstring).
+        if fee is not None:
+            try:
+                fields += ",fee=" + str(float(fee))
+            except (TypeError, ValueError):
+                pass
+        if slippage is not None:
+            try:
+                fields += ",slippage=" + str(float(slippage))
+            except (TypeError, ValueError):
+                pass
+
         line = (
             "executions"
-            + ",user_id="
-            + clean_uid
-            + ",symbol="
-            + clean_symbol
-            + ",side="
-            + clean_side
-            + ",status="
-            + clean_status
+            + tags
             + " "
-            + "amount="
-            + str(float(amount))
-            + ",price="
-            + str(float(price))
+            + fields
             + " "
             + str(timestamp_ns)
         )

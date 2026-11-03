@@ -54,10 +54,18 @@ def get_user_risk_settings_store(user_id: str) -> Dict[str, Any]:
             "max_leverage": 3,
             "circuit_breaker_armed": True,
             "circuit_breaker_breaches": 0,
+            # RISK-05: "streak" defaults to `True` now that it is actually enforced
+            # (`PaperTradingService.get_consecutive_loss_count`, wired into both order
+            # paths) -- consistent with "loss" and "capital", whose real enforcement is
+            # likewise unconditional on this flag. "blackswan" stays `True` here too: the
+            # value is cosmetic for an unenforced guard either way, and changing it would
+            # not change what the frontend renders (`UNENFORCED_GUARDS` forces its
+            # display to "off" regardless of this stored value).
             "kill_switches": {
                 "loss": True,
+                "drawdown": True,
                 "blackswan": True,
-                "streak": False,
+                "streak": True,
                 "capital": True
             },
             "updated_at": datetime.now(timezone.utc).isoformat()
@@ -506,24 +514,36 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
     # zero is worse than no answer.
     #
     # Current drawdown is peak-to-trough and therefore needs an equity *series*. This endpoint
-    # reads the paper performance summary and the open positions, and neither carries one: the
-    # summary reports ``total_equity``, ``initial_capital`` and ``roi_pct``, all single figures.
-    # A peak cannot be reconstructed from them - an account that peaked at 150k and now sits at
-    # 90k on 100k of capital would report 10% against ``initial_capital`` instead of its real 40%,
-    # which is the same class of error BC-1 exists to remove. No series is fetched here on
-    # purpose: BC-1 is a read projection and adds no query, and this handler's reads are the ones
-    # whose refusals are already catalogued above.
+    # used to read only the paper performance summary and the open positions, neither of which
+    # carries one, and passed an empty series through on purpose so the honest answer was
+    # ``null``.
     #
-    # So the series in hand is empty and the honest answer is ``null``. It is routed through the
+    # RISK-04 gives it a series to read: ``paper_equity_snapshots``, the durable, per-fill
+    # equity history ``place_order`` and ``BotPaperLedger`` both write to, and the same series
+    # the live-order-path kill switch (``core/risk_manager.py``'s ``REJECT_DRAWDOWN``, fed via
+    # ``PaperTradingService.get_current_drawdown_pct``) now enforces against. Routed through the
     # dashboard projection's function rather than hardcoded, so there is one definition of this
-    # figure in the codebase: the day a series does reach this handler, only the argument changes.
-    # ``GET /status`` declares no ``response_model``, so the returned dict is serialised as-is and
-    # ``None`` reaches the client as JSON ``null``.
+    # figure in the codebase, and the number this endpoint SHOWS a trader is the number the
+    # order path actually ENFORCES against - not two independent readings of the same account.
+    # ``GET /status`` declares no ``response_model``, so the returned dict is serialised as-is
+    # and ``None`` still reaches the client as JSON ``null`` on a persistence failure or an
+    # account too new to have a measurable peak (fewer than two snapshots).
     from backend_app.backend.dashboard_aggregation_service import (
         current_drawdown_pct_from_equity_curve,
     )
+    from backend_app.backend.paper import paper_repository as _paper_repo
 
-    equity_curve_in_hand: List[Dict[str, Any]] = []
+    try:
+        equity_curve_in_hand: List[Dict[str, Any]] = [
+            {"equity": snap.get("total_equity")}
+            for snap in _paper_repo.get_equity_snapshots(
+                paper_svc.persistence_client(user.get("access_token")), uid
+            )
+        ]
+    except Exception:  # noqa: BLE001 - an unreadable series means "unmeasurable", the
+        # same honest ``null`` BC-1 already returns for an empty one; it must never turn
+        # a display read into a 500.
+        equity_curve_in_hand = []
     drawdown_pct: Optional[float] = current_drawdown_pct_from_equity_curve(equity_curve_in_hand)
 
     # Status calculation
@@ -558,6 +578,47 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
         "drawdown_pct": drawdown_pct,
         "circuit_breaker_armed": settings.get("circuit_breaker_armed", True),
         "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.get("/guard-status")
+async def get_guard_status(user: dict = Depends(get_current_user)):
+    """RISK-05: the real figures the "Consecutive Loss Protection" and "Capital
+    Utilization Limit" kill switches evaluate, for display alongside the switches that
+    now actually enforce them (`RiskSettings.jsx`).
+
+    A NEW endpoint rather than new fields on `GET /status` or `GET /settings` on purpose:
+    both of those already have frozen shape baselines
+    (`tests/regression/baseline/risk_utilisation.json`,
+    `tests/regression/baseline/surface_risk_settings.json`) that assert their exact key
+    set, and growing either would mean rewriting a baseline this task has no reason to
+    touch. This endpoint carries no such baseline and is free to grow.
+
+    PAPER accounts only - see `PaperTradingService.get_consecutive_loss_count` and
+    `.get_capital_utilization_pct` for exactly why (no equivalent trade/position history
+    is persisted for a LIVE account anywhere in this codebase; the identical restriction
+    RISK-04 recorded for `drawdown_pct` above). Either figure is `None` - never a
+    fabricated `0` - when it cannot yet be measured (a brand-new account, or a read
+    failure): the same honesty `drawdown_pct` already practises on this same router.
+    """
+    uid = str(user.get("id") or user.get("sub"))
+    from backend_app.backend.paper_trading_service import (
+        CAPITAL_UTILIZATION_LIMIT_PCT,
+        CONSECUTIVE_LOSS_LIMIT,
+        get_paper_trading_service,
+    )
+
+    paper_svc = get_paper_trading_service()
+    token = user.get("access_token")
+    return {
+        "consecutive_losses": paper_svc.get_consecutive_loss_count(
+            uid, access_token=token
+        ),
+        "consecutive_loss_limit": CONSECUTIVE_LOSS_LIMIT,
+        "capital_utilization_pct": paper_svc.get_capital_utilization_pct(
+            uid, access_token=token
+        ),
+        "capital_utilization_limit_pct": CAPITAL_UTILIZATION_LIMIT_PCT,
     }
 
 

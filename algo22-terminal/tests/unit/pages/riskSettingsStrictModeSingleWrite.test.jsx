@@ -84,6 +84,7 @@ const RISK_CONFIG = Object.freeze({
   circuit_breaker_armed: true,
   kill_switches: {
     loss: true,
+    drawdown: true,
     blackswan: false,
     streak: true,
     capital: false,
@@ -99,7 +100,8 @@ const MARGIN_HEALTH = Object.freeze({
   risk_score: 17,
 });
 
-/** The one operable switch; the other three are unenforced and render disabled (RISK-02). */
+/** The switch this file operates. RISK-05 made two of the other three real too; this file
+ * is unaffected either way, since it only ever toggles this one. */
 const LOSS_SWITCH = 'Daily Loss Limit';
 
 /** How the real application renders: StrictMode on. */
@@ -215,7 +217,7 @@ describe('RiskSettings under StrictMode: one toggle, one write', () => {
     /*
      * De-duplicating is only correct if the surviving call carries the user's intent. The
      * fixture has `loss: true`; one toggle must send `loss: false` and leave the other
-     * three guards exactly as the server reported them (RISK-02: the page must not
+     * four guards exactly as the server reported them (RISK-02: the page must not
      * rewrite what the server holds).
      */
     await mountLoaded();
@@ -226,6 +228,7 @@ describe('RiskSettings under StrictMode: one toggle, one write', () => {
     const [body] = risk.updateConfig.mock.calls[0];
     expect(body.kill_switches).toEqual({
       loss: false,
+      drawdown: true,
       blackswan: false,
       streak: true,
       capital: false,

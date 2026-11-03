@@ -24,7 +24,7 @@
  * alongside the rest, so the shared-client rule is unaffected.
  */
 
-import { get, post, patch, publicGet } from '../../apiClient';
+import { get, post, patch, put, publicGet } from '../../apiClient';
 
 /**
  * @typedef {Object} BrowseParams
@@ -547,6 +547,35 @@ export const libraryApi = {
    * @returns {Promise<Object>}
    */
   creatorAnalytics: () => get('/api/library/creator/analytics'),
+
+  /**
+   * The caller's OWN `marketplace_creator_payouts` rows (MKT-06/MKT-07), most recent first.
+   *
+   * `GET /api/library/creator/payouts` (`creator_payout_history`). These rows are created on
+   * a weekly, platform-initiated cadence — a creator never requests one, they only read what
+   * the platform already created and whether an operator has settled it. Each row carries
+   * `id`, `amount_minor` (integer Minor_Units, never a float), `currency`, `status`
+   * (`pending`|`completed`|`rejected`), `period_start`, `period_end`, `created_at`,
+   * `settled_at`, `reference` and `reason` — the last two `null` until an operator settles it.
+   *
+   * @returns {Promise<{payouts: Object[], count: number}>}
+   */
+  creatorPayouts: () => get('/api/library/creator/payouts'),
+
+  /**
+   * Operator-only: settle a pending creator payout as completed or rejected (MKT-06).
+   *
+   * `PUT /api/library/creator-payouts/{payout_id}/settle` (`settle_creator_payout_endpoint`).
+   * Admin-gated server-side (`get_admin_user`); a non-admin caller is refused there, not here.
+   * No page in this app calls this yet — there is no admin marketplace-moderation surface —
+   * but the binding is added so one can be wired to it without inventing the path again.
+   *
+   * @param {string} payoutId
+   * @param {{status: 'completed'|'rejected', reference?: string, reason?: string}} body
+   * @returns {Promise<{status: string, payout_id: string, settled_as: string}>}
+   */
+  settleCreatorPayout: (payoutId, body) =>
+    put(`/api/library/creator-payouts/${encodeURIComponent(payoutId)}/settle`, body),
 
   /**
    * The caller's own Subscriptions and what they are committed to paying, per currency.

@@ -1501,7 +1501,8 @@ async def assert_models_verified(
     registry: Any = None,
     store: Any = None,
 ) -> List[Dict[str, Any]]:
-    """Requirements 17.6 and 17.7, at deploy time. Returns any non-blocking warnings.
+    """Requirements 17.6, 17.7, and the ML-01 performance gate, at deploy time. Returns
+    any non-blocking warnings.
 
     17.6's second enforcer, verbatim: "THE Deployment_Service SHALL hold the deployment
     out of the running state". A deployment refused here never reaches ``DEPLOYING``, so
@@ -1572,6 +1573,24 @@ async def assert_models_verified(
                 "verdict": schema.code,
                 "expected_feature_columns": schema.expected,
                 "actual_feature_columns": schema.actual,
+            },
+            http_status=409,
+        )
+
+    # ML-01: a model that is intact and schema-matched can still be useless. Refused by
+    # name and value - "accuracy=0.31 below 0.35", never a generic "model not ready" -
+    # mirroring 17.6/17.7's own refusal shape. See model_readiness's "GATE 3" docstring
+    # for why these thresholds, and why a model bound before the gate existed is not
+    # refused for failing a bar it predates.
+    performance = report.first_performance_failure()
+    if performance is not None:
+        raise DeployRejected(
+            "MODEL_PERFORMANCE_BELOW_THRESHOLD",
+            performance.message,
+            {
+                **performance.details,
+                "version_id": version_id,
+                "verdict": performance.code,
             },
             http_status=409,
         )

@@ -38,6 +38,7 @@ export { paperApi } from './modules/paper';
 export { libraryApi } from './modules/library';
 export { notificationsApi } from './modules/notifications';
 export { legalApi } from './modules/legal';
+export { securityApi } from './modules/security';
 
 // Import all modules for consolidated export
 import { assetsApi } from './modules/assets';
@@ -59,6 +60,7 @@ import { paperApi } from './modules/paper';
 import { libraryApi } from './modules/library';
 import { notificationsApi } from './modules/notifications';
 import { legalApi } from './modules/legal';
+import { securityApi } from './modules/security';
 
 /**
  * Consolidated API object - single entry point for all API calls
@@ -87,6 +89,8 @@ export const api = {
   // a user accepted. The signup checkbox used to be React state that was never
   // sent anywhere, so the platform could not answer that for any account.
   legal: legalApi,
+  // SEC-23: lost-2FA-device recovery via backup codes.
+  security: securityApi,
 };
 
 /**

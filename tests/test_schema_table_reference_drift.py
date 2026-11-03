@@ -2602,7 +2602,38 @@ RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS = frozenset(
 #: guard now CHECKS the four columns that helper writes -- ``status``,
 #: ``updated_at``, ``started_at`` and ``error_message`` -- against the declared
 #: schema, where before it could only be told in a comment that they were fine.
-MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 183
+#:
+#: Raised 183 -> 189, measured by diffing the skip sets against ``2b00ec14``
+#: (the commit this file's own history above already uses as its reference
+#: point) rather than inferred. Two genuinely new sites are SEC-24's:
+#:
+#:     + backend_app/backend/mfa_backup_codes.py .insert :: payload is not a literal dict
+#:     + backend_app/backend/mfa_backup_codes.py .upsert :: payload is not a literal dict
+#:
+#: Both build their row from values resolved at call time (a generated code
+#: batch; an upsert-on-conflict row), so neither payload is a literal dict --
+#: the same shape as every other ``.insert``/``.upsert`` already pinned here.
+#:
+#: Six more are RISK-05's, all in ``paper_trading_service.py``, and all a
+#: different shape: ``body.update(self._paper_provenance(...))``,
+#: ``summary.update(...)`` and ``merged.update(supplied)`` in
+#: ``_account_body``/``_position_body``/``_order_body``/``_trade_body`` and the
+#: valuation helper. These are **not** database calls at all -- ``body``,
+#: ``summary`` and ``merged`` are plain local ``dict`` objects being assembled
+#: for an HTTP response, not a Supabase chain, so there is no table or column
+#: for this guard to check here even in principle. They were not flagged at
+#: ``2b00ec14`` because RISK-05's two new methods (``get_consecutive_loss_count``,
+#: ``get_capital_utilization_pct``) land between some of these helpers in the
+#: file, which is enough to move the parser's per-function boundary detection
+#: onto a different, equally-unresolvable read of the same dict-building code --
+#: not a regression in what these lines do, only in how many of them this
+#: parser's blind spot already counted as its own.
+#:
+#: The remaining four sites the raw diff shows (two in ``library.py``, two in
+#: ``billing_lifecycle.py``) are unrelated refactors already on this branch
+#: that each REMOVED one unresolvable site; they are why the net change across
+#: the eight real additions above is +6 rather than +8.
+MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 189
 
 #: Call sites that DID resolve, as observed. The other half of the ratchet: a
 #: parser that stops matching would otherwise satisfy every assertion above.

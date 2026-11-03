@@ -76,6 +76,17 @@ export const riskApi = {
   getMarginHealth: () => get('/api/risk/margin-health'),
 
   /**
+   * RISK-05: the real figures the "Consecutive Loss Protection" and "Capital
+   * Utilization Limit" guards evaluate (`{consecutive_losses, consecutive_loss_limit,
+   * capital_utilization_pct, capital_utilization_limit_pct}`), PAPER accounts only.
+   * Either figure is `null` when it is not yet measurable rather than a fabricated `0` —
+   * see `routers/risk.py`'s `GET /guard-status` docstring.
+   *
+   * @returns {Promise<{consecutive_losses: number|null, consecutive_loss_limit: number, capital_utilization_pct: number|null, capital_utilization_limit_pct: number}>}
+   */
+  getGuardStatus: () => get('/api/risk/guard-status'),
+
+  /**
    * Activate kill switch
    * @param {Object} [params]
    * @param {string} [params.reason]

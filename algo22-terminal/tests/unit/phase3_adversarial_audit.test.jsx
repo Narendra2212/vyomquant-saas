@@ -333,6 +333,13 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     });
     vi.spyOn(riskModule.riskApi, 'getStrategyLimits').mockResolvedValue([]);
     vi.spyOn(riskModule.riskApi, 'getMarginHealth').mockResolvedValue({ margin_ratio: 10, free_margin: 90, risk_score: 10 });
+    // RISK-05: a mocked double, not the real unmocked `GET /api/risk/guard-status`.
+    vi.spyOn(riskModule.riskApi, 'getGuardStatus').mockResolvedValue({
+      consecutive_losses: 0,
+      consecutive_loss_limit: 3,
+      capital_utilization_pct: 0.1,
+      capital_utilization_limit_pct: 0.8,
+    });
 
     const { unmount } = render(<MemoryRouter><RiskSettings /></MemoryRouter>);
 

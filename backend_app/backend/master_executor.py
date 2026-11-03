@@ -78,6 +78,23 @@ TF_SEC = {
 # Maximum seconds to wait for ML inference before skipping
 ML_INFERENCE_TIMEOUT = float(os.getenv("ML_INFERENCE_TIMEOUT", 2.0))
 
+#: RISK-05. `InstitutionalRiskManager.validate_trade_request`'s flash-crash check (3. in
+#: that method's own numbered comments, `core/risk_manager.py`) compares `current_price`
+#: against the simple average of `TradeRequest.recent_prices` and rejects at
+#: `RiskThresholds.flash_crash_price_deviation_pct` (10%) deviation -- real, enforcing code
+#: that no caller anywhere in this codebase ever populated `recent_prices` for, so the
+#: check could never fire. The same shape of bug RISK-04 found for `current_drawdown_pct`.
+#:
+#: This bot already maintains a per-tick OHLCV circular buffer for its own (symbol,
+#: timeframe) in `self.data_processor` (warmed from history at boot, appended to on every
+#: completed bar -- see `_warm_up_from_history`/`process_live_tick`), so feeding it real
+#: closes costs no new fetch, no new credentials and no new latency: the data already
+#: exists in the process for the strategy's own indicators. 20 completed bars is the
+#: window; at this bot's own timeframe that is 20 minutes on a 1m symbol, 100 minutes on a
+#: 5m one, and so on -- the SMA window scales with how the bot itself ticks, same as every
+#: other indicator this engine computes from `self.data_processor`.
+BLACK_SWAN_SMA_WINDOW_BARS = 20
+
 # Maximum reconnection attempts before giving up
 MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", 5))
 
@@ -155,6 +172,62 @@ def settle_exposure(*, side: str, qty: Decimal, previous_exposure: Decimal, resu
     else:
         new_exposure = max(Decimal("0"), (previous_exposure - filled_qty).quantize(Decimal("0.00000001")))
     return filled_qty, new_exposure
+
+
+def telemetry_fee_and_slippage(
+    *,
+    result: Optional[dict],
+    decision_price,
+    filled_qty,
+) -> tuple:
+    """TRADE-13: `(fee, fee_currency, slippage)` for `telemetry.log_execution`'s new fields.
+
+    A pure, synchronous read of the SAME `execute_with_idempotency` result `settle_exposure`
+    above already reads — nothing here calls the exchange, the execution-record repository,
+    or anything on the hot completion path; it only extracts fields `_execute_trade_internal`
+    already computed (`trade_result.fee`, `.fee_currency`, `.executed_price`) so the
+    fire-and-forget telemetry write can carry them.
+
+    `fee` is the venue's own fee, read from the live branch's `actual_fee`
+    (`execution_engine._execute_trade_internal`, itself read off the CCXT fill response).
+
+    `slippage` is `|executed_price - decision_price| x filled_qty` — the same absolute-cost
+    definition `paper_simulator.slippage_amount` already uses for the paper path, applied
+    here to a LIVE fill's own `decision_price` (the price the order was sized and submitted
+    at — `execute_with_idempotency`'s `price` argument) and `executed_price` (the venue's).
+
+    Every return is `None`, never a fabricated `0.0`, when the input needed to compute it is
+    absent or unreadable — a fee or slippage of exactly zero is a claim the venue made, not
+    a default this function is entitled to invent.
+
+    Returns ``(fee, fee_currency, slippage)``.
+    """
+    trade_result = (
+        result.get("result", {}).get("trade_result")
+        if isinstance(result, dict) and isinstance(result.get("result"), dict)
+        else None
+    )
+    if not isinstance(trade_result, dict):
+        return None, None, None
+
+    fee = None
+    try:
+        raw_fee = trade_result.get("fee")
+        fee = float(raw_fee) if raw_fee is not None else None
+    except (TypeError, ValueError):
+        fee = None
+
+    fee_currency = trade_result.get("fee_currency") or None
+
+    slippage = None
+    try:
+        executed_price = trade_result.get("executed_price")
+        if executed_price is not None and decision_price is not None and filled_qty:
+            slippage = abs(float(executed_price) - float(decision_price)) * float(filled_qty)
+    except (TypeError, ValueError):
+        slippage = None
+
+    return fee, fee_currency, slippage
 
 
 def _coerce_authorized_until(raw: Any) -> Optional[datetime]:
@@ -912,12 +985,144 @@ class BotRunner:
                     )
                     continue
 
+                # ── RISK-05: consecutive-loss & capital-utilization kill switches ──
+                # `RiskSettings.jsx`'s "Consecutive Loss Protection" and "Capital
+                # Utilization Limit" guards have always promised real thresholds; RISK-02
+                # found no runtime code evaluated either. Both read PAPER-only tables
+                # (`paper_fills`, `paper_accounts`, `paper_positions`) -- the identical
+                # scope restriction RISK-04 recorded for `current_drawdown_pct`, for the
+                # identical reason: no equivalent persisted history exists for a LIVE
+                # account anywhere in this codebase. Skipped for a reduce-only signal: a
+                # position-REDUCING order lowers both figures, so blocking one here would
+                # trap an account that most needs to be able to close risk.
+                if self.paper_trading and not is_reduce:
+                    try:
+                        from backend_app.backend.paper_trading_service import (
+                            CAPITAL_UTILIZATION_LIMIT_PCT,
+                            CONSECUTIVE_LOSS_LIMIT,
+                            get_paper_trading_service,
+                        )
+
+                        paper_svc = get_paper_trading_service()
+
+                        consecutive_losses = paper_svc.get_consecutive_loss_count(
+                            self.user_id
+                        )
+                        if (
+                            consecutive_losses is not None
+                            and consecutive_losses >= CONSECUTIVE_LOSS_LIMIT
+                        ):
+                            logger.warning(
+                                f"Bot {self.user_id}/{self.symbol}: order refused -- "
+                                f"{consecutive_losses} consecutive losing trades reached "
+                                f"the platform limit of {CONSECUTIVE_LOSS_LIMIT}"
+                            )
+                            continue
+
+                        utilization_pct = paper_svc.get_capital_utilization_pct(
+                            self.user_id
+                        )
+                        if (
+                            utilization_pct is not None
+                            and utilization_pct > CAPITAL_UTILIZATION_LIMIT_PCT
+                        ):
+                            logger.warning(
+                                f"Bot {self.user_id}/{self.symbol}: order refused -- "
+                                f"capital utilization {utilization_pct:.2%} exceeds the "
+                                f"platform limit of {CAPITAL_UTILIZATION_LIMIT_PCT:.2%}"
+                            )
+                            continue
+                    except Exception as exc:  # noqa: BLE001 - never let a measurement
+                        # failure block the loop; fail open, same as every other
+                        # "unmeasurable" case in this engine.
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not evaluate the "
+                            f"consecutive-loss or capital-utilization guards ({exc}); "
+                            f"failing open."
+                        )
+
                 # ── Risk check ────────────────────────────────────────────
                 # Get real-time risk metrics from telemetry
                 account_health = await self.telemetry.get_account_health(self.user_id)
                 current_drawdown_pct = account_health.get("current_drawdown_pct", 0.0)
                 daily_pnl_pct = account_health.get("daily_pnl_pct", 0.0)
-                
+
+                # RISK-04: `telemetry.get_account_health`'s `current_drawdown_pct` is always
+                # `0.0` -- see `dashboard_data_ingester._write_account_health`'s own comment
+                # ("For drawdown, we'd need historical data - for now use 0"), and separately
+                # that ingester is never invoked in this deployment at all. That made the
+                # `REJECT_DRAWDOWN` check below (`risk_manager.validate_trade_request`) real
+                # and enforcing but permanently fed a figure that could never trip it.
+                #
+                # For a PAPER bot a real, durable equity series already exists
+                # (`paper_equity_snapshots`, written on every fill by this same bot through
+                # `BotPaperLedger` -> `PaperTradingService.place_order`), so this overrides the
+                # telemetry figure with the real one wherever it is measurable.
+                # `get_current_drawdown_pct` returns `None` for an account too new to have a
+                # measured peak, and the telemetry fallback (effectively `0.0`, i.e. fail open)
+                # is kept for that case and for LIVE bots, which have no persisted equity
+                # history anywhere in this codebase today -- a remaining gap, tracked in
+                # `docs/launch_readiness/REMEDIATION_LEDGER.json`, not silently claimed fixed
+                # here.
+                if self.paper_trading:
+                    try:
+                        from backend_app.backend.paper_trading_service import (
+                            get_paper_trading_service,
+                        )
+
+                        real_drawdown_pct = get_paper_trading_service().get_current_drawdown_pct(
+                            self.user_id
+                        )
+                        if real_drawdown_pct is not None:
+                            current_drawdown_pct = real_drawdown_pct
+                    except Exception as exc:  # noqa: BLE001 - never let this block the loop
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not compute real "
+                            f"drawdown from paper_equity_snapshots ({exc}); falling back to "
+                            f"telemetry's figure."
+                        )
+
+                # RISK-05 (Black Swan): `validate_trade_request`'s flash-crash check
+                # reads `TradeRequest.recent_prices`, which no caller ever populated --
+                # see `BLACK_SWAN_SMA_WINDOW_BARS`'s own comment above for why this bot
+                # can feed it real, already-buffered closes at no new cost (the buffer is
+                # warmed and ticked identically for PAPER and LIVE bots). Left `None`
+                # (a no-op for that check, same as an empty list) when fewer than
+                # `BLACK_SWAN_SMA_WINDOW_BARS` completed bars are buffered yet, or on any
+                # read failure -- "not enough history to judge" is not "no deviation".
+                #
+                # RESTRICTED TO PAPER HERE, DELIBERATELY, DESPITE THE DATA BEING EQUALLY
+                # REAL FOR A LIVE BOT: `RiskSettings.jsx`'s "Black Swan Protection" guard
+                # still reads "Not enforced yet" for every account, on both paths (see
+                # the file header's own note on why the manual order path could not
+                # safely be given the same feed). Turning this on for LIVE bots only --
+                # silently, while the UI still tells every trader it is inactive -- would
+                # make the UI's claim wrong in the opposite direction RISK-02 fixed, and
+                # would change what a running LIVE bot does with real capital without any
+                # visible change in what the trader was told. That is a bigger, separate
+                # decision than this fix makes on its own; wiring the LIVE bot path too is
+                # recorded as the natural next step once the manual-path gap is closed and
+                # the toggle can honestly go live for everyone it affects.
+                recent_prices = None
+                if self.paper_trading:
+                    try:
+                        bar_matrix = self.data_processor.get_historical_matrix_for_ml(
+                            self.symbol, self.timeframe_sec
+                        )
+                        if len(bar_matrix) >= BLACK_SWAN_SMA_WINDOW_BARS:
+                            recent_prices = (
+                                bar_matrix[-BLACK_SWAN_SMA_WINDOW_BARS:, 4]
+                                .astype(float)
+                                .tolist()
+                            )
+                    except Exception as exc:  # noqa: BLE001 - fail open; a flash-crash
+                        # read failure must not itself become a reason to skip the tick.
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not read recent "
+                            f"bar closes for the flash-crash check ({exc}); leaving it "
+                            f"unmeasured for this tick."
+                        )
+
                 verdict, reason = await self.risk_manager.validate_trade_request(
                     TradeRequest(
                         user_id=self.user_id,
@@ -930,6 +1135,7 @@ class BotRunner:
                         current_drawdown_pct=current_drawdown_pct,
                         daily_pnl_pct=daily_pnl_pct,
                         is_reduce_only=is_reduce,
+                        recent_prices=recent_prices,
                     )
                 )
 
@@ -1218,6 +1424,19 @@ class BotRunner:
                         v_result=result
                     ))
 
+                    # TRADE-13. Computed OUTSIDE `safe_log` below (a pure, synchronous read
+                    # of the same `result` `settle_exposure` already read above), so a bad
+                    # value cannot raise inside the fire-and-forget task and is instead just
+                    # absent from the telemetry line — the same "degrade to missing, never
+                    # fabricate" rule `classify_venue_fill` already applies to `filled_qty`.
+                    # ADDITIVE AND READ-ONLY ON THE HOT PATH: `telemetry_fee_and_slippage`
+                    # calls nothing and changes nothing; `safe_log` was already a decoupled
+                    # `asyncio.create_task` fire-and-forget write before this change, and this
+                    # only widens what that one write carries.
+                    _tel_fee, _tel_fee_currency, _tel_slippage = telemetry_fee_and_slippage(
+                        result=result, decision_price=price, filled_qty=filled_qty,
+                    )
+
                     # Fire-and-forget telemetry log with error handling
                     async def safe_log():
                         try:
@@ -1227,6 +1446,9 @@ class BotRunner:
                                 side=side,
                                 amount=float(filled_qty),
                                 price=price,
+                                fee=_tel_fee,
+                                fee_currency=_tel_fee_currency,
+                                slippage=_tel_slippage,
                             )
                         except Exception as e:
                             logger.error(f"Telemetry failed: {e}")

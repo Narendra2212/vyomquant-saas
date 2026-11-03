@@ -75,6 +75,20 @@
  * found two of five and reported the tree 60% cleaner than it is. That is the
  * second reason the detector is shared rather than re-written per caller.
  *
+ * UPDATE (FE-11): TWO OF THE FIVE ARE NOW MIGRATED
+ * ---------------------------------------------------------------------------
+ * `pages/TwoFA.jsx` and `pages/ExchangeManager.jsx` both now use
+ * `ds/ConfirmDialog` — the same primitive `pages/StrategyDetail.jsx`'s own
+ * deploy/delete/restore-version dialogs use — in place of the native dialog
+ * this header above still narrates for the historical record. Both entries
+ * are held at `0` below rather than removed (see "HOW TO CHANGE IT"), and
+ * `tests/unit/guards/no-native-dialogs.test.js`'s `KNOWN_DIALOGS` fixed-point
+ * list was shortened to the two that remain:
+ * `components/NotificationCenter.jsx` and `components/admin/AdminDashboard.jsx`.
+ * The allowlist is still five files — `components/legal/CookieConsent.jsx` is
+ * the fifth, as the next section explains — but only three of them still carry
+ * a live dialog.
+ *
  * ---------------------------------------------------------------------------
  * THE TWO GROUPS
  * ---------------------------------------------------------------------------
@@ -174,19 +188,24 @@ export const IN_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
  * widened is a budget that no longer refuses anything.
  */
 export const OUT_OF_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
-  // -- Deferred pages (§17.2) ------------------------------------------------
-  // `window.confirm("Are you sure you want to reset your MFA configuration?")`
-  // at line 202, guarding `handleResetFactor`. Auth/2FA is deferred by §17.2, and
-  // this is the one file tasks.md's hazard note named correctly. Destructive and
-  // security-relevant, so it is the entry most worth migrating first if §17.2
-  // ever reopens — a reset that cannot be focus-trapped or read out is exactly
-  // Requirement 18.3's complaint.
-  'pages/TwoFA.jsx': 1,
-  // Bare `confirm(\`… disconnect ${exchangeName.toUpperCase()}? This action
-  // cannot be undone.\`)` at line 233. No `window.` receiver — this is one of the
-  // three the plan's `window.confirm` grep would have missed. Exchange Manager is
-  // deferred by §17.2.
-  'pages/ExchangeManager.jsx': 1,
+  // -- Deferred pages (§17.2), migrated off the native dialog -------------
+  // FE-11 replaced both of these with `ds/ConfirmDialog`, so both now measure `0`.
+  // The entries STAY per this file's own rule (an out-of-scope entry lowered to 0
+  // by a migration is kept, not deleted, so the file stays held there) rather than
+  // reverting to "unlisted" and relying on the unbudgeted-file default.
+  //
+  //   * `pages/TwoFA.jsx` — was `window.confirm("Are you sure you want to reset
+  //     your MFA configuration?")`, guarding `handleResetFactor`. Now opens
+  //     `ds/ConfirmDialog` from `handleResetFactor`; only the dialog's own
+  //     explicit confirm reaches `handleConfirmResetFactor`, which performs the
+  //     unenroll/re-enroll.
+  //   * `pages/ExchangeManager.jsx` — was the bare `confirm(\`… disconnect
+  //     ${exchangeName.toUpperCase()}? This action cannot be undone.\`)`, one of
+  //     the three the plan's `window.confirm` grep would have missed. Now opens
+  //     `ds/ConfirmDialog` from `handleDeleteSaved`; only the dialog's own
+  //     explicit confirm reaches `handleConfirmDisconnect`.
+  'pages/TwoFA.jsx': 0,
+  'pages/ExchangeManager.jsx': 0,
   // `pages/Landing.jsx` was here at 1 — a bare `alert("Demo request submitted! …")`
   // in the demo-modal submit handler, and one of the three bare forms a
   // `window.confirm` grep would have missed. **retail-ui-simplification task 9.2

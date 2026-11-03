@@ -295,7 +295,15 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import { PanelTitle, Spinner } from '../components/common/primitives';
+// Task UX-02: the two call sites that still read from `components/common/primitives.jsx`
+// (`ui-legacy`'s own home, despite the import path) now read their `ds/` replacements —
+// `SectionHeader` for `PanelTitle` (its own docblock: "the header of a `ui/Card` that has
+// not yet migrated", exactly this page's situation) and `LoadingState`'s `Spinner`. Neither
+// swap touches a byte of this page's own eight-state vocabulary in `PanelBody` above: that
+// vocabulary is this page's own and is additive to, not replaced by, `ds/Panel`'s four — see
+// TASK 25.2 in the module docblock for why `ds/Panel` itself is not the destination here.
+import { SectionHeader } from '../components/ds/SectionHeader';
+import { Spinner } from '../components/ds/LoadingState';
 // Task 10.8: every failure on this page is worded by `design/errorCopy.js` and nothing else.
 // `extractErrorMessage` used to fill these slots and fell through to `JSON.stringify(detail)`
 // and then `err.message`, so an axios message and a FastAPI dump reached the screen verbatim
@@ -1033,7 +1041,14 @@ const PanelBody = ({
           fontFamily: 'monospace',
         }}
       >
-        <Spinner size={14} />
+        {/* `ds/LoadingState`'s `Spinner` colours itself from `currentColor` rather than taking a
+            `color` prop (the one it replaces, `ui-legacy/primitives.jsx`'s `Spinner`, defaulted to
+            `token.brand.base` regardless of its surroundings) — so this span restates that same
+            colour rather than letting the spinner pick up the row's `token.content.secondary`,
+            which would be a colour change this migration does not make. */}
+        <span style={{ color: token.brand.base, display: 'inline-flex' }}>
+          <Spinner size={14} />
+        </span>
         <span>Loading…</span>
       </div>
     );
@@ -2638,7 +2653,13 @@ export default function PaperTrading() {
                 padding: '2px 7px',
               }}
             >
-              <Spinner size={11} />
+              {/* Same colour restatement as `PanelBody`'s loading row above: the old `Spinner`
+                  defaulted to `token.brand.base` regardless of the pill's own `warning` colour,
+                  and the `ds/` one takes `currentColor`, so the colour is pinned here rather than
+                  left to inherit the pill's amber. */}
+              <span style={{ color: token.brand.base, display: 'inline-flex' }}>
+                <Spinner size={11} />
+              </span>
               Reconnecting…
             </span>
           ) : (
@@ -2704,7 +2725,7 @@ export default function PaperTrading() {
               <>
                 {/* ── controls ───────────────────────────────────────────────────── */}
                 <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-        <PanelTitle title="Session controls" sub="Strategy, simulated capital, market, timeframe and the five session operations" />
+        <SectionHeader level={3} title="Session controls" subtitle="Strategy, simulated capital, market, timeframe and the five session operations" />
 
         <PanelBody
           state={selectionState}
@@ -2988,9 +3009,10 @@ export default function PaperTrading() {
       {/* ── the honest report of the last stop / reset ─────────────────── */}
       {stopReport ? (
         <Card className="mb-4" style={{ background: token.surface.raised, borderColor: stopReport.complete === true ? token.line.default : `${statusToken('warning').fg}66` }}>
-          <PanelTitle
+          <SectionHeader
+            level={3}
             title="Last stop"
-            sub="Read from the response's own `complete` flag — not inferred from the call returning"
+            subtitle="Read from the response's own `complete` flag — not inferred from the call returning"
           />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
             <StatusPill
@@ -3059,7 +3081,7 @@ export default function PaperTrading() {
 
       {resetReport ? (
         <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-          <PanelTitle title="Last reset" sub="Nothing was deleted — the pre-reset orders, fills, trades, metrics and equity snapshots stay readable" />
+          <SectionHeader level={3} title="Last reset" subtitle="Nothing was deleted — the pre-reset orders, fills, trades, metrics and equity snapshots stay readable" />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
             <StatusPill tone="muted" label={`Series ${formatCount(resetReport.previous_series_index) ?? '—'} → ${formatCount(resetReport.series_index) ?? '—'}`} />
             <SimulatedTag />
@@ -3415,9 +3437,10 @@ export default function PaperTrading() {
 
       {/* ── equity curve ───────────────────────────────────────────────── */}
       <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-        <PanelTitle
+        <SectionHeader
+          level={3}
           title="Equity curve"
-          sub="Drawn from the persisted equity snapshots — a reconnect or a remount redraws the same curve"
+          subtitle="Drawn from the persisted equity snapshots — a reconnect or a remount redraws the same curve"
           right={<SimulatedTag />}
         />
         <PanelBody
@@ -3505,9 +3528,10 @@ export default function PaperTrading() {
                      TASK 25.2 in the module docblock for the two requirements a conversion would
                      cost. */}
                 <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-                  <PanelTitle
+                  <SectionHeader
+                    level={3}
                     title={`Open positions (${formatCount(positions.length) ?? '0'})`}
-                    sub="Direction is an explicit side; a size is never negative"
+                    subtitle="Direction is an explicit side; a size is never negative"
                     right={<SimulatedTag />}
                   />
                   <PanelBody
@@ -3536,9 +3560,10 @@ export default function PaperTrading() {
 
                 {/* ── open orders ────────────────────────────────────────────────── */}
                 <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-                  <PanelTitle
+                  <SectionHeader
+                    level={3}
                     title={`Open orders (${formatCount(openOrders.length) ?? '0'})`}
-                    sub={`Non-terminal order states out of ${formatCount(allOrders.length) ?? '0'} order(s) recorded for this session`}
+                    subtitle={`Non-terminal order states out of ${formatCount(allOrders.length) ?? '0'} order(s) recorded for this session`}
                     right={<SimulatedTag />}
                   />
                   <PanelBody
@@ -3564,9 +3589,10 @@ export default function PaperTrading() {
 
                 {/* ── completed trades ───────────────────────────────────────────── */}
                 <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-                  <PanelTitle
+                  <SectionHeader
+                    level={3}
                     title={`Completed trades (${formatCount(trades.length) ?? '0'})`}
-                    sub="Closed round-trips — the set the win rate is computed over"
+                    subtitle="Closed round-trips — the set the win rate is computed over"
                     right={<SimulatedTag />}
                   />
                   <PanelBody
@@ -3602,7 +3628,7 @@ export default function PaperTrading() {
             `min-width: auto` floors the track at the item's min-content width, and a chart inside
             it would then keep the track — and the page — wider than the viewport. */}
         <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
-          <PanelTitle title="Profit and loss" sub="From the session's recorded paper_pnl_updated events" right={<SimulatedTag />} />
+          <SectionHeader level={3} title="Profit and loss" subtitle="From the session's recorded paper_pnl_updated events" right={<SimulatedTag />} />
           <PanelBody
             state={panelState('events', pnlChart.length === 0)}
             {...failureProps('events')}
@@ -3645,7 +3671,7 @@ export default function PaperTrading() {
         </Card>
 
         <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
-          <PanelTitle title="Drawdown" sub="From the session's recorded paper_drawdown_updated events" right={<SimulatedTag />} />
+          <SectionHeader level={3} title="Drawdown" subtitle="From the session's recorded paper_drawdown_updated events" right={<SimulatedTag />} />
           <PanelBody
             state={panelState('events', drawdownChart.length === 0)}
             {...failureProps('events')}
@@ -3686,9 +3712,10 @@ export default function PaperTrading() {
 
       {/* ── price series with trade markers ────────────────────────────── */}
       <Card className="mb-4" style={{ background: token.surface.raised, borderColor: token.line.default }}>
-        <PanelTitle
+        <SectionHeader
+          level={3}
           title="Price series and trade markers"
-          sub="Validated candles from the recorded market_tick events; markers are the fills those candles produced"
+          subtitle="Validated candles from the recorded market_tick events; markers are the fills those candles produced"
           right={<SimulatedTag />}
         />
         <PanelBody
@@ -3759,9 +3786,10 @@ export default function PaperTrading() {
               <>
                 {/* ── the live stream, its reconnection, and the bounds on what it retains ────────── */}
                 <Card className="mb-4" style={{ background: token.surface.raised, borderColor: channelRefusal ? `${statusToken('loss').fg}66` : token.line.default }}>
-                  <PanelTitle
+                  <SectionHeader
+                    level={3}
                     title="Live event stream"
-                    sub={`paper.${sessionId ?? '{session}'} — one subscription, released when this route unmounts`}
+                    subtitle={`paper.${sessionId ?? '{session}'} — one subscription, released when this route unmounts`}
                     right={<SimulatedTag />}
                   />
                   <PanelBody
@@ -3801,7 +3829,10 @@ export default function PaperTrading() {
                               padding: '2px 7px',
                             }}
                           >
-                            <Spinner size={11} />
+                            {/* Same colour restatement as the page-header reconnecting pill above. */}
+                            <span style={{ color: token.brand.base, display: 'inline-flex' }}>
+                              <Spinner size={11} />
+                            </span>
                             Reconnecting…
                           </span>
                         ) : (
@@ -3892,9 +3923,10 @@ export default function PaperTrading() {
                   style={{ display: 'grid', gridTemplateColumns: gridColumns(320), gap: token.space['3'], minWidth: 0 }}
                 >
                   <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
-                    <PanelTitle
+                    <SectionHeader
+                      level={3}
                       title={`Signal stream (${formatCount(derived.signals.length) ?? '0'})`}
-                      sub="The recorded signal_generated events — decision, side, quantity and price only"
+                      subtitle="The recorded signal_generated events — decision, side, quantity and price only"
                       right={<SimulatedTag />}
                     />
                     <PanelBody
@@ -3920,9 +3952,10 @@ export default function PaperTrading() {
                   </Card>
 
                   <Card style={{ background: token.surface.raised, borderColor: token.line.default, minWidth: 0 }}>
-                    <PanelTitle
+                    <SectionHeader
+                      level={3}
                       title={`Execution events (${formatCount(derived.executions.length) ?? '0'})`}
-                      sub="Order and session lifecycle frames, newest first"
+                      subtitle="Order and session lifecycle frames, newest first"
                       right={<SimulatedTag />}
                     />
                     <PanelBody

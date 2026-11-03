@@ -234,8 +234,65 @@ describe('Phase 6B ExchangeManager Contract & Lifecycle Test Suite', () => {
     const deleteButtons = screen.getAllByTitle('Disconnect');
     fireEvent.click(deleteButtons[0]);
 
-    expect(await screen.findByText(/Cannot delete: 2 active bot\(s\) running/i)).toBeDefined();
+    expect(
+      await screen.findByText(/Cannot delete: 2 active strategy deployment\(s\) running/i),
+    ).toBeDefined();
     expect(api.exchange.delete).not.toHaveBeenCalled();
+  });
+
+  it('FE-11: disconnect opens ds/ConfirmDialog rather than a native confirm()', async () => {
+    api.exchange.getSupported.mockResolvedValue(mockSupportedExchanges);
+    api.exchange.list.mockResolvedValue(mockConnectedExchanges);
+
+    const confirmSpy = vi.spyOn(window, 'confirm');
+
+    render(<ExchangeManager />);
+    expect(await screen.findByText('GATEIO')).toBeDefined();
+
+    // Gate.io has bot_count 0 — nothing blocks the dialog from opening.
+    const deleteButtons = screen.getAllByTitle('Disconnect');
+    fireEvent.click(deleteButtons[1]);
+
+    expect(await screen.findByRole('dialog')).toBeDefined();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(api.exchange.delete).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
+  });
+
+  it('FE-11: cancelling the dialog never calls api.exchange.delete', async () => {
+    api.exchange.getSupported.mockResolvedValue(mockSupportedExchanges);
+    api.exchange.list.mockResolvedValue(mockConnectedExchanges);
+
+    render(<ExchangeManager />);
+    expect(await screen.findByText('GATEIO')).toBeDefined();
+    fireEvent.click(screen.getAllByTitle('Disconnect')[1]);
+    await screen.findByRole('dialog');
+
+    fireEvent.click(document.querySelector('[data-ds="confirm-dialog-cancel"]'));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(api.exchange.delete).not.toHaveBeenCalled();
+  });
+
+  it('FE-11: only the dialog\'s explicit confirm calls api.exchange.delete', async () => {
+    api.exchange.getSupported.mockResolvedValue(mockSupportedExchanges);
+    api.exchange.list.mockResolvedValue(mockConnectedExchanges);
+    api.exchange.delete.mockResolvedValue({ status: 'ok' });
+
+    render(<ExchangeManager />);
+    expect(await screen.findByText('GATEIO')).toBeDefined();
+    fireEvent.click(screen.getAllByTitle('Disconnect')[1]);
+    await screen.findByRole('dialog');
+
+    fireEvent.click(document.querySelector('[data-ds="confirm-dialog-confirm"]'));
+
+    await waitFor(() => {
+      expect(api.exchange.delete).toHaveBeenCalledWith('gateio');
+    });
+    expect(await screen.findByText(/Exchange connection removed/i)).toBeDefined();
   });
 
   it('7. Sanitizes raw backend exceptions in toast notifications', async () => {

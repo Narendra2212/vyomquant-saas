@@ -68,6 +68,7 @@ const { risk, wsSubscribe } = vi.hoisted(() => ({
     getConfig: vi.fn(),
     getStrategyLimits: vi.fn(),
     getMarginHealth: vi.fn(),
+    getGuardStatus: vi.fn(),
     updateConfig: vi.fn(),
     updateStrategyLimit: vi.fn(),
   },
@@ -97,6 +98,7 @@ const RISK_CONFIG = Object.freeze({
   max_leverage: 5,
   kill_switches: Object.freeze({
     loss: true,
+    drawdown: true,
     blackswan: false,
     streak: true,
     capital: false,
@@ -123,7 +125,20 @@ const MARGIN_HEALTH = Object.freeze({
 });
 
 /**
- * The four switches, as `[key, accessible name, state the fixture puts them in]`.
+ * RISK-05. The real figures "Consecutive Loss Protection" and "Capital Utilization
+ * Limit" now evaluate, as `RiskSettings.jsx` reads them from `GET /api/risk/guard-status`.
+ * Deliberately not round numbers, for the same reason the risk-config fixture above is
+ * not the page's defaults: a hardcoded display would pass against any figure.
+ */
+const GUARD_STATUS = Object.freeze({
+  consecutive_losses: 2,
+  consecutive_loss_limit: 3,
+  capital_utilization_pct: 0.415,
+  capital_utilization_limit_pct: 0.8,
+});
+
+/**
+ * The five switches, as `[key, accessible name, state the fixture puts them in]`.
  *
  * The names are the page's own labels. They are listed here rather than read from the page
  * so that renaming one is a visible diff in this file: an accessible name is part of the
@@ -132,19 +147,24 @@ const MARGIN_HEALTH = Object.freeze({
  */
 const KILL_SWITCHES = Object.freeze([
   ['loss', 'Daily Loss Limit', true],
+  ['drawdown', 'Max Drawdown Protection', true],
   ['blackswan', 'Black Swan Protection', false],
   ['streak', 'Consecutive Loss Protection', true],
   ['capital', 'Capital Utilization Limit', false],
 ]);
 
 /*
- * RISK-02: only the daily loss limit is enforced by any runtime code. The other three guards
- * are stored and displayed but nothing evaluates them, so the page renders them disabled,
- * reading "off", and labelled "Not enforced yet". Their stored value still rides along in the
- * request body unchanged - the page must not rewrite what the server holds.
+ * RISK-02 (as narrowed by RISK-04, then RISK-05): "Black Swan Protection" is stored and
+ * displayed but nothing evaluates it on the manual order path (see `RiskSettings.jsx`'s
+ * own file header for why), so the page renders it disabled, reading "off", and labelled
+ * "Not enforced yet". Its stored value still rides along in the request body unchanged -
+ * the page must not rewrite what the server holds. The daily loss limit, the max-drawdown
+ * limit, the consecutive-loss limit and the capital utilization limit are all enforced by
+ * real runtime code now (`InstitutionalRiskManager.validate_trade_request`, on the
+ * automated bot path and the manual order path alike).
  */
-const ENFORCED = KILL_SWITCHES.filter(([key]) => key === 'loss');
-const UNENFORCED = KILL_SWITCHES.filter(([key]) => key !== 'loss');
+const ENFORCED = KILL_SWITCHES.filter(([key]) => key !== 'blackswan');
+const UNENFORCED = KILL_SWITCHES.filter(([key]) => key === 'blackswan');
 
 const mountPage = () =>
   render(
@@ -215,6 +235,7 @@ beforeEach(() => {
   risk.getConfig.mockResolvedValue(RISK_CONFIG);
   risk.getStrategyLimits.mockResolvedValue(STRATEGY_LIMITS);
   risk.getMarginHealth.mockResolvedValue(MARGIN_HEALTH);
+  risk.getGuardStatus.mockResolvedValue(GUARD_STATUS);
   risk.updateConfig.mockResolvedValue({ data: RISK_CONFIG });
   risk.updateStrategyLimit.mockResolvedValue({ status: 'ok' });
   // The page subscribes to two risk events and calls what `subscribe` returns on unmount.
@@ -231,7 +252,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('RiskSettings kill switches: every control is named and in the tab order', () => {
-  it('renders exactly four switches and no more', async () => {
+  it('renders exactly five switches and no more', async () => {
     await mountLoaded();
 
     // Non-vacuity for every `getByRole('switch', …)` below: if the page stopped rendering
@@ -250,7 +271,8 @@ describe('RiskSettings kill switches: every control is named and in the tab orde
 
       // The state is programmatic, not a colour. Requirement 20.5's rule applied to the one
       // control where "looks green" is not a substitute for "reports on".
-      if (_key === 'loss') {
+      if (_key !== 'blackswan') {
+        // Enforced (loss, drawdown, streak, capital): shows the server's own position.
         expect(control.getAttribute('aria-checked')).toBe(String(activeInFixture));
         expect(control.getAttribute('aria-checked')).toBe(String(RISK_CONFIG.kill_switches[_key]));
       } else {
@@ -293,14 +315,19 @@ describe('RiskSettings kill switches: the keyboard operates them', () => {
     expect(risk.updateConfig).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves the other three switches alone when one is operated', async () => {
+  it('leaves the other four switches alone when one is operated', async () => {
     await mountLoaded();
     fireEvent.keyDown(screen.getByRole('switch', { name: KILL_SWITCHES[0][1] }), { key: 'Enter' });
     await waitFor(() => expect(risk.updateConfig).toHaveBeenCalledTimes(1));
 
     for (const [key, name, activeInFixture] of KILL_SWITCHES.slice(1)) {
-      // Displayed off (not enforced), but the stored value is carried through untouched.
-      expect(checkedState(name)).toBe('false');
+      if (key === 'blackswan') {
+        // Displayed off (not enforced), but the stored value is carried through untouched.
+        expect(checkedState(name)).toBe('false');
+      } else {
+        // Enforced (drawdown, streak, capital): shows its own, unmoved fixture position.
+        expect(checkedState(name)).toBe(String(activeInFixture));
+      }
       expect(risk.updateConfig.mock.calls[0][0].kill_switches[key]).toBe(activeInFixture);
     }
   });
@@ -352,19 +379,20 @@ describe('RiskSettings kill switches: one request, two input devices', () => {
 // ---------------------------------------------------------------------------
 
 describe('RiskSettings: the request a kill switch issues', () => {
-  it('sends all four switch states, the three limits the server reported, and the breaker', async () => {
+  it('sends all five switch states, the three limits the server reported, and the breaker', async () => {
     await mountLoaded();
     fireEvent.keyDown(screen.getByRole('switch', { name: KILL_SWITCHES[0][1] }), { key: 'Enter' });
 
     const body = await soleUpdateBody();
 
-    // All four, every time. A payload carrying only the switch that moved would let the
-    // other three drift out of step with what the trader can see.
+    // All five, every time. A payload carrying only the switch that moved would let the
+    // other four drift out of step with what the trader can see.
     expect(Object.keys(body.kill_switches).sort()).toEqual(
       KILL_SWITCHES.map(([key]) => key).sort(),
     );
     expect(body.kill_switches).toEqual({
       loss: false, // the one that moved
+      drawdown: true,
       blackswan: false,
       streak: true,
       capital: false,
@@ -430,7 +458,7 @@ describe('RiskSettings: the controls around the switches survive', () => {
 
 
 // ---------------------------------------------------------------------------
-// 5. RISK-02: guards nothing evaluates must not look armed or be operable
+// 5. RISK-02/RISK-05: guards nothing evaluates must not look armed or be operable
 // ---------------------------------------------------------------------------
 
 describe('RiskSettings: unenforced guards are disabled and labelled', () => {
@@ -454,5 +482,75 @@ describe('RiskSettings: unenforced guards are disabled and labelled', () => {
   it('does not label the daily loss limit, which IS enforced', async () => {
     await mountLoaded();
     expect(screen.queryByTestId('guard-unenforced-loss')).toBeNull();
+  });
+
+  it('RISK-05: does not label consecutive-loss or capital-utilization, which are now enforced', async () => {
+    await mountLoaded();
+    expect(screen.queryByTestId('guard-unenforced-streak')).toBeNull();
+    expect(screen.queryByTestId('guard-unenforced-capital')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. RISK-05: the real figures the two newly-enforced guards evaluate are on screen
+// ---------------------------------------------------------------------------
+
+describe('RiskSettings: the real guard figures RISK-05 built are rendered', () => {
+  // `@testing-library/jest-dom` is not installed in this file (see the file header) --
+  // `.textContent` is read directly, the same way the rest of this file does.
+
+  it("shows the account's real consecutive-loss streak beside the switch", async () => {
+    await mountLoaded();
+    const figure = await screen.findByTestId('guard-figure-streak');
+    expect(figure.textContent).toMatch(
+      new RegExp(`${GUARD_STATUS.consecutive_losses} consecutive losing trades`),
+    );
+  });
+
+  it("shows the account's real capital utilization beside the switch", async () => {
+    await mountLoaded();
+    const figure = await screen.findByTestId('guard-figure-capital');
+    expect(figure.textContent).toMatch(/41\.5%/);
+  });
+
+  it('falls back to "not yet measured" rather than crash when the figure read fails', async () => {
+    risk.getGuardStatus.mockRejectedValue(new Error('network error'));
+    await mountLoaded();
+    expect((await screen.findByTestId('guard-figure-streak')).textContent).toMatch(
+      /not yet measured/i,
+    );
+    expect((await screen.findByTestId('guard-figure-capital')).textContent).toMatch(
+      /not yet measured/i,
+    );
+  });
+
+  it('falls back to "not yet measured" when either figure is null (unmeasurable)', async () => {
+    risk.getGuardStatus.mockResolvedValue({
+      consecutive_losses: null,
+      consecutive_loss_limit: 3,
+      capital_utilization_pct: null,
+      capital_utilization_limit_pct: 0.8,
+    });
+    await mountLoaded();
+    expect((await screen.findByTestId('guard-figure-streak')).textContent).toMatch(
+      /not yet measured/i,
+    );
+    expect((await screen.findByTestId('guard-figure-capital')).textContent).toMatch(
+      /not yet measured/i,
+    );
+  });
+
+  it('does not crash, and still reads the figure as "not yet measured", for a caller whose double has no getGuardStatus at all', async () => {
+    const savedReader = risk.getGuardStatus;
+    // `undefined`, not a `vi.fn()` -- the shape an older or partial test double has.
+    delete risk.getGuardStatus;
+    try {
+      await mountLoaded();
+      expect((await screen.findByTestId('guard-figure-streak')).textContent).toMatch(
+        /not yet measured/i,
+      );
+    } finally {
+      risk.getGuardStatus = savedReader;
+    }
   });
 });

@@ -345,7 +345,7 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     expect(screen.getByText(/RISK CIRCUIT BREAKER TRIGGERED/i)).toBeDefined();
   });
 
-  it('correctly handles unmeasured latency with neutral fallback', async () => {
+  it('renders each venue\'s real measured latency, and the honest marker for a venue with none', async () => {
     vi.spyOn(dashboardModule.dashboardApi, 'getDashboard').mockResolvedValue(mockLiveResponse);
 
     render(
@@ -355,15 +355,13 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     );
 
     /*
-     * The claim is unchanged — an unmeasured latency is never a number — but task 19.1b
-     * moved where it is decided, and made it stronger. The old row rendered
-     * `ex.latency_ms != null ? '${ex.latency_ms} ms' : 'Latency unavailable'` per venue, so
-     * bybit's `null` read as unavailable and binance's `42` read as a measurement. Neither
-     * per-venue field is a measurement: `pageFields`' `exchangeHealth` note records that
-     * `status` and `latency_ms` are constants in the aggregation service. So NO venue row
-     * reports latency now — `ds/ExchangeStatus` marks each one `data-latency-reported=false`
-     * with its own reason — and the measured figure is `health.exchange_api_latency_ms`,
-     * page-level and nullable, rendered as one `ds/Metric`.
+     * `dashboard_aggregation_service.get_exchange_data` used to publish a constant
+     * `"connected"` / `35` for every venue, and this page refused to read either field
+     * even after the backend was fixed to derive both from a real per-venue Redis probe
+     * (DASH-02). It is fixed now: binance's `42` is this venue's own measured latency and
+     * renders as one, and bybit's `null` means its probe measured nothing, so it renders
+     * `ds/ExchangeStatus`'s own "not reported" marker — never a fabricated number and
+     * never the OTHER venue's figure borrowed for it.
      */
     // Waited on the venue ROWS, not on the panel: `data-region` is on the `ds/Panel`
     // section, which is in the DOM in its loading state too, so querying on the region
@@ -373,14 +371,18 @@ describe('Dashboard Phase 2A Frontend Unit Tests', () => {
     });
 
     const health = document.querySelector('[data-region="exchangeHealth"]');
-    const venues = health.querySelectorAll('[data-exchange]');
-    expect(venues.length).toBe(2);
-    for (const venue of venues) {
-      expect(venue.getAttribute('data-latency-reported')).toBe('false');
-      expect(venue.getAttribute('data-connection-state')).toBe('unreported');
-    }
-    // Neither the venue that reported 42 nor the constant 35 is presented as a reading.
-    expect(health.textContent).not.toContain('42 ms');
+    const binance = health.querySelector('[data-exchange="binance"]');
+    const bybit = health.querySelector('[data-exchange="bybit"]');
+
+    expect(binance.getAttribute('data-latency-reported')).toBe('true');
+    expect(binance.getAttribute('data-connection-state')).toBe('connected');
+    expect(binance.textContent).toContain('42 ms');
+
+    expect(bybit.getAttribute('data-latency-reported')).toBe('false');
+    expect(bybit.getAttribute('data-connection-state')).toBe('connected');
+    expect(bybit.textContent).not.toContain('0 ms');
+
+    // The old fabricated constant appears nowhere on the panel.
     expect(health.textContent).not.toContain('35 ms');
     expect(screen.queryByText('38 ms')).toBeNull();
     expect(screen.queryByText('38ms')).toBeNull();

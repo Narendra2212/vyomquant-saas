@@ -204,7 +204,7 @@
 
 import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Download, FlaskConical } from "lucide-react";
 
 import { endpoints } from "../api";
 import { dataQualityApi } from "../api/modules/dataQuality";
@@ -1127,6 +1127,88 @@ const savedRunName = (run) => {
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * CSV EXPORT (BT-04) — the house convention `pages/TradeHistory.jsx` and
+ * `pages/SecurityLogs.jsx` already use: a `Blob` of comma-joined, quote-escaped lines,
+ * downloaded through a throwaway `<a>` and `URL.createObjectURL`. No new mechanism.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** One CSV cell, quoted and with its own quotes doubled — same rule `TradeHistory.jsx` uses. */
+const escapeCsv = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+/** `rows` of plain objects → one CSV string, header first, in `columns`' own order. */
+function rowsToCsv(columns, rows) {
+  const lines = [
+    columns.map((column) => column.header),
+    ...rows.map((row) => columns.map((column) => row[column.key])),
+  ];
+  return lines.map((cells) => cells.map(escapeCsv).join(",")).join("\n");
+}
+
+/** A CSV string, downloaded under `filename` — the one place this page touches the DOM for it. */
+function downloadCsv(filename, csv) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * The trade list's CSV columns — exactly {@link TRADE_COLUMNS}' keys and headers, so the
+ * export carries the same fields the Trades tab already shows and in the same order. One
+ * row per trade.
+ */
+const TRADE_CSV_COLUMNS = Object.freeze(
+  TRADE_COLUMNS.map(({ key, header }) => Object.freeze({ key, header })),
+);
+
+/**
+ * The trade list, as a CSV string — one row per trade, the fields the Trades tab renders.
+ *
+ * @param {Array<Object>} tradeRows {@link tradeDetailRows}'s answer — already projected,
+ *   so `durationText` reads the same "2m 03s" / not-available text the table shows rather
+ *   than the raw seconds.
+ * @returns {string}
+ */
+export function tradesCsv(tradeRows) {
+  return rowsToCsv(TRADE_CSV_COLUMNS, Array.isArray(tradeRows) ? tradeRows : []);
+}
+
+/** The equity curve's CSV columns: the point's own reported timestamp, and its equity. */
+const EQUITY_CSV_COLUMNS = Object.freeze([
+  Object.freeze({ key: "timestamp", header: "Timestamp" }),
+  Object.freeze({ key: "equity", header: "Equity" }),
+]);
+
+/**
+ * The equity curve, as a CSV string — one row per point, `timestamp` then `equity`.
+ *
+ * Reads `results.equity` directly (`equitySeriesFromBacktestResults`'s own answer, each
+ * point already carrying the timestamp the engine reported for it — nanoseconds, an ISO
+ * string, or a positional fallback, exactly as that mapping left it) rather than
+ * {@link resultCurves}'s `rows`, which drop the timestamp for a chart axis that cannot
+ * mix those three shapes (see the module docblock's "A DATED X AXIS" bullet). A CSV cell
+ * has no such constraint, so the point's own timestamp is exported as reported — never
+ * reconstructed or re-dated — and an unreadable equity exports as an empty cell, never a
+ * fabricated `0`.
+ *
+ * @param {unknown} results `mapBacktestExecutionToUI`'s answer, or anything at all.
+ * @returns {string}
+ */
+export function equityCurveCsv(results) {
+  const equity = Array.isArray(results?.equity) ? results.equity : [];
+  const rows = equity.map((point) => ({
+    timestamp: point?.timestamp ?? "",
+    equity: typeof point?.equity === "number" && Number.isFinite(point.equity)
+      ? point.equity
+      : "",
+  }));
+  return rowsToCsv(EQUITY_CSV_COLUMNS, rows);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * THE PAGE
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -1528,6 +1610,24 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
   const tradeRows = useMemo(() => tradeDetailRows(results?.trades), [results]);
   const tradesReported = Array.isArray(results?.trades);
 
+  /* ── CSV export (BT-04) ──────────────────────────────────────────────────── */
+
+  const exportTradesCsv = useCallback(() => {
+    if (tradeRows.length === 0) return;
+    downloadCsv(
+      `backtest-trades-${results?.backtest_id ?? "run"}.csv`,
+      tradesCsv(tradeRows),
+    );
+  }, [tradeRows, results]);
+
+  const exportEquityCurveCsv = useCallback(() => {
+    if (curves.readable === 0) return;
+    downloadCsv(
+      `backtest-equity-curve-${results?.backtest_id ?? "run"}.csv`,
+      equityCurveCsv(results),
+    );
+  }, [curves.readable, results]);
+
   /**
    * Tier 3's three tabs (Requirement 6.4).
    *
@@ -1752,6 +1852,29 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                     + "version the server marks current is used."}
                   data-region="pinnedVersion"
                 />
+
+                {/*
+                 * BT-04: a single backtest has no walk-forward engine of its own — that lives
+                 * in `components/ResearchConsole.jsx`, reached from a strategy's own
+                 * "Research" tab (`pages/StrategyDetail.jsx`), and OPT-02/OPT-03 are what made
+                 * that engine's per-window fit and its tenant isolation real. This is a link
+                 * to that existing page, not a second implementation of it. Placed inside the
+                 * Strategy panel — after `backtest-configuration`'s own `data-region`, the
+                 * `standing-prose` guard's anchor on this page — so a sentence that exists
+                 * nowhere today does not add to the budget that guard only allows to shrink.
+                 */}
+                <CommandButton
+                  intent="ghost"
+                  icon={FlaskConical}
+                  disabled={strategy === null}
+                  disabledReason="Choose a strategy above first."
+                  onClick={() => navigate(`/app/strategies/${strategy.id}`, {
+                    state: { activeTab: "research" },
+                  })}
+                  data-testid="backtester-open-walk-forward"
+                >
+                  Walk-forward optimization
+                </CommandButton>
 
                 {/* The listing failed but this strategy is known, so the panel is usable and
                     the only thing missing is the ability to switch. Said here rather than
@@ -2016,6 +2139,18 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                   level={3}
                   state={curveState}
                   empty={{ ...CURVE_EMPTY, action: { label: RETRY_LABEL, onClick: runBacktest } }}
+                  actions={(
+                    <CommandButton
+                      intent="secondary"
+                      icon={Download}
+                      onClick={exportEquityCurveCsv}
+                      disabled={curves.readable === 0}
+                      disabledReason="No readable equity point to export."
+                      data-testid="backtester-export-equity-csv"
+                    >
+                      Export CSV
+                    </CommandButton>
+                  )}
                   data-region="equityCurve"
                 >
                   <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading the equity curve" />}>
@@ -2085,6 +2220,18 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                   money
                   environment="BACKTEST"
                   level={3}
+                  actions={(
+                    <CommandButton
+                      intent="secondary"
+                      icon={Download}
+                      onClick={exportTradesCsv}
+                      disabled={tradeRows.length === 0}
+                      disabledReason="No trades in this run to export."
+                      data-testid="backtester-export-trades-csv"
+                    >
+                      Export trades CSV
+                    </CommandButton>
+                  )}
                   data-region="tier-3"
                 >
                   <Tabs

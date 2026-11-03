@@ -190,6 +190,19 @@ const EXPECTED = {
   },
 
   creatorAnalytics: { args: [], verb: 'get', call: ['/api/library/creator/analytics'] },
+
+  // MKT-07: the payout half of the creator ledger. `GET /creator/payouts` mirrors
+  // `creator_analytics` exactly — owner-scoped, no parameters.
+  creatorPayouts: { args: [], verb: 'get', call: ['/api/library/creator/payouts'] },
+
+  // MKT-06/MKT-07: admin-only settlement, a PUT (not a PATCH — the route is
+  // `@router.put("/creator-payouts/{payout_id}/settle")`).
+  settleCreatorPayout: {
+    args: [ID, { status: 'completed', reference: 'ref-1' }],
+    verb: 'put',
+    call: [`/api/library/creator-payouts/${ENC}/settle`, { status: 'completed', reference: 'ref-1' }],
+  },
+
   subscriberAnalytics: { args: [], verb: 'get', call: ['/api/library/subscriber/analytics'] },
 };
 

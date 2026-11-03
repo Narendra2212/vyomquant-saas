@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft, Activity, BarChart2, Zap, Shield,
   Layers, Settings, Globe, Server, Play, Pause, Trash2,
@@ -21,6 +21,8 @@ import { Card } from "../components/ui/Card";
 // dependency in its import graph. Same reason `pages/Strategies.jsx` gives.
 import { Alert } from "../components/ds/Alert";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
+import { EmptyState } from "../components/ds/EmptyState";
+import { LoadingState } from "../components/ds/LoadingState";
 import { NotAvailableMarker } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
 import { pnlToken } from "../design/semantic";
@@ -202,8 +204,19 @@ const DEPLOY_ELSEWHERE_NOTE = "Choose Live or Backtest from the Strategies page"
 
 export default function StrategyDetail() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { strategyId } = useParams();
-  const [activeTab, setActiveTab] = useState("overview");
+  /*
+   * BT-04: `pages/Backtester.jsx`'s "Walk-forward optimization" link hands this page a
+   * `navigate` with `state: { activeTab: "research" }` so it lands directly on the tab
+   * that holds `components/ResearchConsole.jsx` rather than on Overview with the trader
+   * left to find Research themselves. Read once, at mount, the same way `location.state`
+   * already hands a strategy to `pages/Backtester.jsx` — a tab id this page does not
+   * recognise simply matches no entry below and `activeTab` behaves as it always has.
+   */
+  const [activeTab, setActiveTab] = useState(
+    () => (typeof location.state?.activeTab === "string" ? location.state.activeTab : "overview"),
+  );
   const [strategy, setStrategy] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState({});
@@ -414,8 +427,8 @@ export default function StrategyDetail() {
 
   if (isLoading) {
     return (
-      <div style={{ padding: 20, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: token.content.muted }}>
-        Loading strategy detail...
+      <div style={{ padding: 20, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
+        <LoadingState kind="page" label="Loading strategy detail" />
       </div>
     );
   }
@@ -423,10 +436,11 @@ export default function StrategyDetail() {
   if (!strategy) {
     return (
       <div style={{ padding: 20 }}>
-        <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={() => navigate("/app/strategies")}>
-          Back to Strategies
-        </Button>
-        <div style={{ marginTop: 20, color: token.content.muted }}>Strategy not found</div>
+        <EmptyState
+          headline="Strategy not found"
+          body="This strategy could not be loaded. It may have been deleted, or the read failed."
+          action={{ label: "Back to Strategies", onClick: () => navigate("/app/strategies") }}
+        />
       </div>
     );
   }
@@ -1896,6 +1910,133 @@ function MarketplaceTab({ strategy }) {
  * and where the server reports nothing they render `ds/Metric`'s not-available marker
  * instead of a number (Requirement 19.3). The path is unchanged.
  */
+/**
+ * MKT-07: the payout HALF of the creator ledger, read the same way the earnings half is.
+ *
+ * `GET /api/library/creator/payouts` (`creator_payout_history`, `routers/library.py`) answers
+ * the caller's own `marketplace_creator_payouts` rows — created weekly by the platform, never
+ * by a creator request — most recent first. `RevenueTab` already read what a creator has
+ * EARNED (`creator_analytics`); it never read what has been PAID, which is the gap MKT-06's
+ * backend closed without a reader on this side. This hook is that reader, and it fails the
+ * same way `useCreatorAnalytics` does: a read that does not complete reports `"failed"`
+ * rather than an empty list, so "no payouts yet" and "could not read your payouts" stay two
+ * different states.
+ */
+export function useCreatorPayouts() {
+  const [payouts, setPayouts] = useState(null);
+  const [state, setState] = useState("loading");
+
+  useEffect(() => {
+    let live = true;
+    const read = async () => {
+      try {
+        const res = await get('/api/library/creator/payouts');
+        if (!live) return;
+        const body = res?.data ?? res ?? null;
+        const rows = Array.isArray(body?.payouts) ? body.payouts : [];
+        setPayouts(rows);
+        setState("ready");
+      } catch (err) {
+        console.error('Failed to read creator payout history:', err);
+        if (!live) return;
+        setState("failed");
+      }
+    };
+    read();
+    return () => { live = false; };
+  }, []);
+
+  return { payouts, state };
+}
+
+/** `pending` | `completed` | `rejected` → the tone `AnalyticsFigure`-style figures use. */
+const PAYOUT_STATUS_TONE = {
+  completed: () => token.status.profit.fg,
+  rejected: () => token.status.error.fg,
+  pending: () => token.content.secondary,
+};
+
+/**
+ * One payout row — status, amount, currency and period, exactly as
+ * `CreatorPayoutRecord` (`routers/library.py`) reports it. No field here is computed: a
+ * payout the server did not settle carries no `settled_at`/`reference`, and this renders
+ * that absence rather than inventing one.
+ */
+function PayoutRow({ payout }) {
+  const amount = formatMinorUnits(payout.amount_minor, payout.currency);
+  const tone = (PAYOUT_STATUS_TONE[payout.status] ?? (() => token.content.primary))();
+  return (
+    <div
+      style={{
+        display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16,
+        padding: "12px 16px", borderBottom: `1px solid ${token.line.default}`,
+      }}
+    >
+      <span style={{
+        fontFamily: "monospace", textTransform: "uppercase", letterSpacing: 1,
+        fontSize: token.text.micro, color: tone, minWidth: 90,
+      }}>
+        {payout.status}
+      </span>
+      <span style={{ fontWeight: 700, color: token.content.primary, minWidth: 120 }}>
+        {amount === null ? <NotAvailableMarker label="Amount" reason="The ledger did not report a readable amount for this currency." /> : amount}
+      </span>
+      <span style={{ color: token.content.secondary, fontSize: token.text.body }}>
+        {payout.period_start} → {payout.period_end}
+      </span>
+      {payout.status === "completed" && (
+        <span style={{ color: token.content.secondary, fontSize: token.text.body }}>
+          {payout.reference ? `Ref ${payout.reference}` : 'Settled, no reference recorded'}
+          {payout.settled_at ? ` · ${payout.settled_at}` : ''}
+        </span>
+      )}
+      {payout.status === "rejected" && payout.reason && (
+        <span style={{ color: token.status.error.fg, fontSize: token.text.body }}>
+          {payout.reason}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * MKT-07: the payout-history section inside `RevenueTab`. `RevenueTab` already shows what a
+ * creator has earned; this is what the platform has actually paid out of it, which is the
+ * half the audit found entirely absent from the product.
+ */
+export function PayoutsSection() {
+  const { payouts, state } = useCreatorPayouts();
+
+  if (state === "loading") {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
+        Reading your payout history…
+      </Card>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: token.status.error.fg, fontSize: token.text.body }}>
+        Your payout history could not be read. Nothing is shown rather than a record that is
+        not yours.
+      </Card>
+    );
+  }
+  if (payouts.length === 0) {
+    return (
+      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
+        No payouts have been created for you yet. Payouts are created weekly by the platform
+        from your settled earnings — there is nothing for you to request here.
+      </Card>
+    );
+  }
+  return (
+    <Card style={{ padding: 0, overflow: "hidden" }}>
+      {payouts.map((payout) => <PayoutRow key={payout.id} payout={payout} />)}
+    </Card>
+  );
+}
+
 function useCreatorAnalytics() {
   const [analytics, setAnalytics] = useState(null);
   const [state, setState] = useState("loading");
@@ -1961,10 +2102,12 @@ function AnalyticsFigure({ label, value, reason, tone = null }) {
 /** The shared loading / failed arms, so both tabs report a broken read the same way. */
 function AnalyticsReadState({ state }) {
   if (state === "loading") {
-    // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1.
+    // Presentation only — the affordance now goes through `ds/LoadingState` rather than
+    // static Card text with no spinner; the copy itself ("Reading your creator ledger…")
+    // is unchanged, and `state` still drives the same two-branch dispatch it always did.
     return (
-      <Card className="p-8" style={{ textAlign: "center", color: token.content.muted, fontSize: token.text.body }}>
-        Reading your creator ledger…
+      <Card className="p-8" style={{ textAlign: "center" }}>
+        <LoadingState kind="inline" label="Reading your creator ledger…" />
       </Card>
     );
   }
@@ -2099,6 +2242,12 @@ function RevenueTab() {
           })}
         </div>
       )}
+
+      {/* MKT-07: what the platform has actually PAID OUT of the earnings above. */}
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginTop: 24, marginBottom: 12 }}>
+        Payout History
+      </h3>
+      <PayoutsSection />
     </div>
   );
 }

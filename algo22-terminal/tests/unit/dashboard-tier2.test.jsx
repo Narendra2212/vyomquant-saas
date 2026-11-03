@@ -34,10 +34,12 @@
  *      too, so the absence is a distinction and not a page that never renders latency.
  *   5. **The top five, and a way to the rest** (§7.1). Five rows out of seven, and a real
  *      `<a href="/app/portfolio">` that names its destination.
- *   6. **The two constant per-venue fields are not presented as measurements.**
- *      `pageFields`' `exchangeHealth` note records that `status` is a hardcoded
- *      `"connected"` and `latency_ms` a hardcoded `35` in the aggregation service, so
- *      neither is passed to `ds/ExchangeStatus` and both render as not reported.
+ *   6. **The two per-venue fields render as the real measurements `get_exchange_data` now
+ *      produces, and only fall back to "not reported" where the probe genuinely measured
+ *      nothing.** `status` and `latency_ms` used to be a hardcoded `"connected"` and a
+ *      hardcoded `35` in the aggregation service; `pageFields`' `exchangeHealth` note now
+ *      records that both are read off a real per-venue Redis probe, so `ds/ExchangeStatus`
+ *      is passed `connectionState` and `latencyMs` and renders them as readings.
  *
  * The kill switch, its modal and the Requirement 3.3 alert strip are task 19.2's and are
  * not asserted here.
@@ -457,17 +459,18 @@ describe('Dashboard tier 2 — exchange health (Requirements 3.2, 14.5)', () => 
     expect(latency.textContent).toContain('ms');
   });
 
-  it('presents neither per-venue constant as a measurement', async () => {
-    // `exchange.exchanges[]` carries `status: "connected"` and `latency_ms: 35` for every
-    // row because `get_exchange_health` hardcodes both. Neither is passed to
-    // `ds/ExchangeStatus`, so the venue reports what it really knows — which venue it is,
-    // and when its connection record was last written.
+  it('presents each per-venue status and latency as the real measurement it now is', async () => {
+    // `exchange.exchanges[]` used to carry a constant `status: "connected"` and
+    // `latency_ms: 35` for every row because `get_exchange_health` hardcoded both.
+    // `get_exchange_data` now derives each from a real per-venue Redis probe, and the row
+    // reads both — this fixture gives the two venues genuinely different readings so a
+    // rewrite that quietly reintroduced a shared constant would be caught here.
     read().mockResolvedValue(body({
       exchange: {
         can_trade: true,
         exchanges: [
-          { exchange_id: 'binance', status: 'connected', latency_ms: 35, last_sync: '2026-08-26T12:00:00Z' },
-          { exchange_id: 'bybit', status: 'connected', latency_ms: 35, last_sync: null },
+          { exchange_id: 'binance', status: 'connected', latency_ms: 18, last_sync: '2026-08-26T12:00:00Z' },
+          { exchange_id: 'bybit', status: 'degraded', latency_ms: 310, last_sync: null },
         ],
       },
     }));
@@ -476,44 +479,59 @@ describe('Dashboard tier 2 — exchange health (Requirements 3.2, 14.5)', () => 
     await settled();
 
     const health = region('exchangeHealth');
-    for (const venue of ['binance', 'bybit']) {
-      const row = health.querySelector(`[data-exchange="${venue}"]`);
-      expect(row, `${venue} did not render`).not.toBeNull();
-      // The constant status is absent rather than rendered as a green CONNECTED chip
-      // nothing checked, and the constant latency is absent rather than a fabricated 35 ms.
-      expect(row.getAttribute('data-connection-state')).toBe('unreported');
-      expect(row.getAttribute('data-latency-reported')).toBe('false');
-      expect(row.textContent).toContain('Connection not reported');
-      /*
-       * SCOPED TO THE ROW, WHICH IS WHAT THIS ALWAYS MEANT.
-       *
-       * The claim is about `exchange.exchanges[].status` — a per-venue CONSTANT, hardcoded
-       * `"connected"` in `get_exchange_health` — not being dressed up as a reading. A venue
-       * row is where that constant would appear, and this is the element that would carry it.
-       *
-       * It was asserted on the whole panel until task 19.2b, when the diagnostics popover was
-       * folded in and the WebSocket stream reading moved here as the "Real-time stream"
-       * `ds/StatusBadge`. That badge renders "Connected" from `wsClient`'s own state word, and
-       * it is a genuine measurement of a genuinely different thing: the browser's live socket,
-       * observed by the client that holds it, which changes when the connection does. Read at
-       * panel scope the assertion caught it too, which would have made "no fabricated venue
-       * status" and "no honest stream status" the same rule.
-       */
-      expect(row.textContent).not.toContain('Connected');
+
+    const binance = health.querySelector('[data-exchange="binance"]');
+    expect(binance, 'binance did not render').not.toBeNull();
+    expect(binance.getAttribute('data-connection-state')).toBe('connected');
+    expect(binance.getAttribute('data-latency-reported')).toBe('true');
+    expect(binance.textContent).toContain('18 ms');
+
+    const bybit = health.querySelector('[data-exchange="bybit"]');
+    expect(bybit, 'bybit did not render').not.toBeNull();
+    expect(bybit.getAttribute('data-connection-state')).toBe('degraded');
+    expect(bybit.getAttribute('data-latency-reported')).toBe('true');
+    expect(bybit.textContent).toContain('310 ms');
+
+    /*
+     * THE WS STREAM BADGE IS A DIFFERENT, GENUINELY DIFFERENT, MEASUREMENT.
+     *
+     * The "Real-time stream" `ds/StatusBadge` reads `wsClient`'s own state word for the
+     * browser's live socket, observed by the client that holds it — unrelated to either
+     * venue row above. It is excluded from the `'Connected'` check below by construction
+     * (it is not inside `[data-exchange]`), so this stays a claim about the venue rows only.
+     */
+    for (const row of [binance]) {
+      expect(row.textContent).toContain('Connected');
     }
 
-    // Still panel-wide: `35` is the aggregation service's fixed latency and NOTHING on this
-    // panel may present it, the page-level `ds/Metric` included — it reads
-    // `health.exchange_api_latency_ms`, which is measured, and 35 is not that figure.
+    // Neither of the OLD fabricated constants appears anywhere on the panel.
     expect(health.textContent).not.toContain('35 ms');
-    // The reason the two are blank is a fact about the aggregation service, which a trader
-    // reading an empty connection chip has no other way to learn (Requirement 19.3).
-    expect(health.textContent).toContain('not measured');
 
     // `last_sync` is real and is rendered; the row that carries none says so rather than
     // reading "just now".
     expect(screen.getAllByText('Last sync').length).toBe(2);
     expect(screen.getByLabelText('Last sync: not available')).toBeDefined();
+  });
+
+  it('still falls back to "not reported" per-venue latency when a venue genuinely has none measured', async () => {
+    // A credential exists but no probe has run for it: the backend reports an honest
+    // `latency_ms: null` rather than inventing a figure, and the row renders the marker.
+    read().mockResolvedValue(body({
+      exchange: {
+        can_trade: false,
+        exchanges: [
+          { exchange_id: 'okx', status: 'unknown', latency_ms: null, last_sync: null },
+        ],
+      },
+    }));
+
+    mount();
+    await settled();
+
+    const row = region('exchangeHealth').querySelector('[data-exchange="okx"]');
+    expect(row.getAttribute('data-connection-state')).toBe('unknown');
+    expect(row.getAttribute('data-latency-reported')).toBe('false');
+    expect(row.textContent).not.toContain('0 ms');
   });
 });
 
@@ -552,74 +570,72 @@ describe('Dashboard tier 2 — the top five positions and the link to the rest (
 });
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
- * THE TWO ABSENCE ACCOUNTS — retail-ui-simplification task 12.5
+ * THE ABSENCE ACCOUNT — retail-ui-simplification task 12.5
  * Requirements 7.1, 7.2, 7.4, 7.5, 19.1, 19.2, 19.5, 19.6, 20.1, 20.2. design.md §6.1, §6.2.
  * ══════════════════════════════════════════════════════════════════════════════════════
  *
  * WHY THIS EXISTS, AND WHY IT IS NOT A BUDGET ASSERTION
  * ----------------------------------------------------
  * Task 12.5 asked for `pages/Dashboard.jsx`'s "1225 characters in 13 constants" to go
- * behind disclosure. Measured on the tree, the page declares 13 page-level string constants
- * holding 1162 characters (§1.7's seed is stale by 63, as it was by 45 on `LiveTrading` and
- * 75 on `SignalTrace`) and only FOUR of them are prose:
+ * behind disclosure. Measured on the tree, the page declares page-level string constants
+ * and only a handful are prose:
  *
- *   * `CHIP_CLASSES` 412 and `PANEL_LINK_CLASSES` 205 are Tailwind class lists — 617 of the
- *     1162 characters are not user-facing text at all.
+ *   * `CHIP_CLASSES` and `PANEL_LINK_CLASSES` are Tailwind class lists — not user-facing
+ *     text at all.
  *   * `DEFAULT_PERIOD` "1M", `PNL_CHANNEL`, `STRATEGY_STATUS_CHANNEL`,
  *     `EXCHANGE_HEALTH_CHANNEL`, `ALERT_CONDITION_REGION`, `CONDITION_SEVERITY` and
  *     `UNEVALUABLE_SEVERITY` are tokens — a period key, three channel names, a `pageFields`
- *     key and two `ds/Alert` severities, 60 characters between them.
- *   * `RECOVER_DESCRIPTION` 102 and `HALT_ACKNOWLEDGEMENT_LABEL` 51 are the kill switch's
+ *     key and two `ds/Alert` severities.
+ *   * `RECOVER_DESCRIPTION` and `HALT_ACKNOWLEDGEMENT_LABEL` are the kill switch's
  *     CONFIRMATION copy, which Requirement 16.5 puts out of reach of this pass entirely.
- *   * `NO_LIQUIDATION_DISTANCE_REASON` 124 and `VENUE_CONSTANT_NOTE` 208 are the only two
- *     left, and both are design.md §6.1 COLUMN 2 — each accounts for one specific absent
- *     figure and each renders beside the marker it explains, in the state it explains.
- *     §6.2's question — remove it, and can a trader still tell this absence from a different
- *     one and still tell why — is answered "no" for both. So nothing moved.
+ *   * `NO_LIQUIDATION_DISTANCE_REASON` is the one left that is design.md §6.1 COLUMN 2 — it
+ *     accounts for one specific absent figure and renders beside the marker it explains, in
+ *     the state it explains. §6.2's question — remove it, and can a trader still tell this
+ *     absence from a different one and still tell why — is answered "no". So nothing moved.
+ *
+ *     A second such account, `VENUE_CONSTANT_NOTE`, existed here for the per-venue `status`
+ *     and `latency_ms` fields while `dashboard_aggregation_service.get_exchange_data`
+ *     published a fixed value for both. It is now GONE: that function derives both fields
+ *     from a real per-venue Redis probe (`venue_status`, `measured_latency_ms`), so they are
+ *     genuine readings passed straight to `ds/ExchangeStatus`, which already carries its own
+ *     "not reported" marker and reason for the case a probe measured nothing — no page-level
+ *     account was needed on top of that. See the "PER-VENUE CONNECTION STATE AND LATENCY"
+ *     block below.
  *
  * The page has no page- or panel-level BACKGROUND prose to move, which is `SignalTrace`'s
  * result in task 12.4 for a different reason. `standing-prose.budget.js` keeps
  * `'pages/Dashboard.jsx': 168` untouched: design.md §5.5 counts the text before the FIRST
- * `data-region` node, which on this page is the alert band above tier 1, and both accounts
- * render inside a tier-2 `ds/Panel` far below it. Neither was ever in that number.
+ * `data-region` node, which on this page is the alert band above tier 1, and the liquidation
+ * account renders inside a tier-2 `ds/DataTable` far below it. It was never in that number.
  *
  * WHAT IS PINNED, IN TWO CLAUSES
  * -----------------------------
- *   1. **Each account renders character-for-character at EVERY site that must carry it.**
- *      The literals are retyped here on purpose: Requirement 19.6 forbids paraphrasing
+ *   1. **The account renders character-for-character at EVERY site that must carry it.**
+ *      The literal is retyped here on purpose: Requirement 19.6 forbids paraphrasing
  *      prose shorter, and a substring check passes a tightening. Asserted PER SITE —
- *      per position row for the liquidation reason — because task 12.4's own first attempt
- *      passed under the defect it was written against by checking page-wide `textContent`
- *      while a second render site still carried the string.
+ *      per position row — because task 12.4's own first attempt passed under the defect it
+ *      was written against by checking page-wide `textContent` while a second render site
+ *      still carried the string.
  *   2. **Behind no collapsed control, and inside no hidden subtree.** A `ds/Accordion`
- *      unmounts its closed body, so wrapping either of these would make it vanish and
- *      clause 1 would catch it. A disclosure that merely HIDES its body would not, so this
- *      walks every `aria-expanded="false"` control and fails if the region it names carries
- *      one of the two.
+ *      unmounts its closed body, so wrapping it would make it vanish and clause 1 would
+ *      catch it. A disclosure that merely HIDES its body would not, so this walks every
+ *      `aria-expanded="false"` control and fails if the region it names carries the account.
  *
- * Each account's MEASURED arm is asserted beside its absent one, so "renders the account"
- * is a distinction and not a page that never renders the figure: a futures position with a
- * real level and a real mark renders a distance and NO reason, and a panel with no venue at
- * all renders no venue note, because there is then no unreported per-venue field to explain.
+ * The account's MEASURED arm is asserted beside its absent one, so "renders the account" is
+ * a distinction and not a page that never renders the figure: a futures position with a
+ * real level and a real mark renders a distance and NO reason.
  */
 
-/** The two §6.1 column-2 accounts, verbatim from `pages/Dashboard.jsx`. */
+/** The one §6.1 column-2 account left, verbatim from `pages/Dashboard.jsx`. */
 const ABSENCE_ACCOUNTS = Object.freeze([
   Object.freeze({
     where: 'NO_LIQUIDATION_DISTANCE_REASON (Dashboard.jsx:938)',
     text: 'No liquidation distance can be computed — the position is spot, or the venue '
       + 'reported no liquidation price or no mark price.',
   }),
-  Object.freeze({
-    where: 'VENUE_CONSTANT_NOTE (Dashboard.jsx:1170)',
-    text: 'Per-venue connection state and latency are not measured: the aggregation service '
-      + 'publishes a fixed value for both, so neither is reported here. The measured figure '
-      + "is the account's exchange API latency above.",
-  }),
 ]);
 
 const LIQUIDATION_REASON = ABSENCE_ACCOUNTS[0].text;
-const VENUE_NOTE = ABSENCE_ACCOUNTS[1].text;
 
 /**
  * Clause 2, run over a settled render: no collapsed disclosure stands between a trader and
@@ -720,50 +736,106 @@ describe('Dashboard — the two absence accounts render beside the markers they 
     expectNotBehindADisclosure(container);
   });
 
-  it('states why the two per-venue fields are blank, on the panel that renders them blank', async () => {
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+ * PER-VENUE CONNECTION STATE AND LATENCY — now real measurements (DASH-02)
+ * ══════════════════════════════════════════════════════════════════════════════════════
+ *
+ * `dashboard_aggregation_service.get_exchange_data` used to publish a fixed `"connected"`
+ * and a fixed `35` for every venue, from no measurement at all, and `toVenueRow` /
+ * `LiveVenueHealth` on this page refused to read either field on that stale premise even
+ * after the backend was fixed to derive both from a real per-venue Redis probe
+ * (`venue_status`, `measured_latency_ms`). This block pins the corrected wiring: a real
+ * measurement renders as one, and a venue the probe genuinely measured nothing for still
+ * renders the honest "not reported" marker — never a fabricated value.
+ */
+describe('Dashboard — per-venue connection state and latency render the real measurement', () => {
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('renders each venue\'s real measured status and latency, not a constant', async () => {
     read().mockResolvedValue(body({
       exchange: {
         total_exchanges: 2,
-        connected_exchanges: 2,
+        connected_exchanges: 1,
         can_trade: true,
         exchanges: [
-          { exchange_id: 'binance', status: 'connected', latency_ms: 35, last_sync: '2026-08-26T12:00:00Z' },
-          { exchange_id: 'bybit', status: 'connected', latency_ms: 35, last_sync: null },
+          // A genuine measurement, including one that is NOT "connected" — proof the row
+          // reads the probe's own word rather than asserting a connected chip regardless.
+          { exchange_id: 'binance', status: 'connected', latency_ms: 18, last_sync: '2026-08-26T12:00:00Z' },
+          { exchange_id: 'bybit', status: 'degraded', latency_ms: 420, last_sync: null },
         ],
       },
-    }));
-
-    const { container } = mount();
-    await settled();
-
-    const health = region('exchangeHealth');
-    // Clause 1: the whole sentence, on the panel whose venue rows report both fields as
-    // unreported. `not measured` alone — which the task-19.1b assertion above checks —
-    // survives a rewrite that drops the reason WHY, which is the aggregation service's
-    // fixed value, and that is the half a trader cannot learn anywhere else.
-    expect(
-      health.textContent.includes(VENUE_NOTE),
-      `${ABSENCE_ACCOUNTS[1].where} — absent from, or reworded on, the exchangeHealth panel`,
-    ).toBe(true);
-
-    // It is beside the rows it explains, not somewhere else on the page.
-    for (const venue of ['binance', 'bybit']) {
-      expect(health.querySelector(`[data-exchange="${venue}"]`)).not.toBeNull();
-    }
-
-    expectNotBehindADisclosure(container);
-  });
-
-  it('renders no venue note when there is no venue, so the note is not standing prose', async () => {
-    // The measured arm of the second account: with no venue there is no unreported
-    // per-venue field to account for, so the sentence is absent rather than standing.
-    read().mockResolvedValue(body({
-      exchange: { total_exchanges: 0, connected_exchanges: 0, can_trade: false, exchanges: [] },
     }));
 
     mount();
     await settled();
 
-    expect(region('exchangeHealth').textContent).not.toContain(VENUE_NOTE);
+    const health = region('exchangeHealth');
+    const binance = health.querySelector('[data-exchange="binance"]');
+    const bybit = health.querySelector('[data-exchange="bybit"]');
+
+    expect(binance.getAttribute('data-connection-state')).toBe('connected');
+    expect(binance.getAttribute('data-latency-reported')).toBe('true');
+    expect(binance.textContent).toContain('18 ms');
+
+    expect(bybit.getAttribute('data-connection-state')).toBe('degraded');
+    expect(bybit.getAttribute('data-latency-reported')).toBe('true');
+    expect(bybit.textContent).toContain('420 ms');
+
+    // Neither the old fabricated figures appear anywhere on the panel.
+    expect(health.textContent).not.toContain('35 ms');
+  });
+
+  it('renders the honest "not reported" marker for a venue the probe measured nothing for, never a fabricated value', async () => {
+    read().mockResolvedValue(body({
+      exchange: {
+        total_exchanges: 1,
+        connected_exchanges: 0,
+        can_trade: false,
+        exchanges: [
+          // No probe has ever run for this venue: the backend reports `status: "unknown"`
+          // (never fabricated as `"connected"`) and `latency_ms: null` (never `0`).
+          { exchange_id: 'kraken', status: 'unknown', latency_ms: null, last_sync: null },
+        ],
+      },
+    }));
+
+    mount();
+    await settled();
+
+    const kraken = region('exchangeHealth').querySelector('[data-exchange="kraken"]');
+    expect(kraken.getAttribute('data-connection-state')).toBe('unknown');
+    expect(kraken.getAttribute('data-latency-reported')).toBe('false');
+    // `ds/ExchangeStatus`'s own marker, not an exact match: its accessible name carries the
+    // reason sentence after the name (`"Latency: not available. <reason>"`).
+    expect(screen.getByLabelText(/^Latency: not available/)).toBeDefined();
+
+    // Not "connected", and not `0 ms` — the two fabrications Requirement 14.5 forbids.
+    expect(kraken.textContent).not.toContain('0 ms');
+  });
+
+  it('renders a known-invalid credential as such, not as a connected venue', async () => {
+    // `venue_status` reports `invalid_credentials` ahead of anything a probe measured, for
+    // a venue whose row says the credential cannot trade.
+    read().mockResolvedValue(body({
+      exchange: {
+        total_exchanges: 1,
+        connected_exchanges: 0,
+        can_trade: false,
+        exchanges: [
+          { exchange_id: 'okx', status: 'invalid_credentials', latency_ms: null, last_sync: null },
+        ],
+      },
+    }));
+
+    mount();
+    await settled();
+
+    const okx = region('exchangeHealth').querySelector('[data-exchange="okx"]');
+    expect(okx.getAttribute('data-connection-state')).toBe('invalid_credentials');
   });
 });

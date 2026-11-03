@@ -328,29 +328,46 @@ const hasAuthToken = () => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The three Execution_Environments (Requirement 6.6)
+// The Execution_Environments this page renders a section for (Requirement 6.6,
+// MKT-07)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ENVIRONMENTS = ['BACKTEST', 'PAPER', 'LIVE'];
+/**
+ * BACKTEST ONLY. PAPER and LIVE were removed by MKT-07.
+ *
+ * `paper_performance_summary` / `live_performance_summary` / `paper_risk_metrics` /
+ * `live_risk_metrics` were read here for the PAPER and LIVE sections, but
+ * `backend_app/` never wrote to any of those four fields on any Listing — there is no
+ * aggregation job, no on-read computation and no column that populates them, for any
+ * Listing, ever. So PAPER and LIVE rendered "No performance figures have been recorded"
+ * on every single Listing, unconditionally, which does not read as "not yet measured"
+ * to a subscriber: a section titled "PAPER performance" / "LIVE performance" sitting
+ * beside a real BACKTEST one reads as "we checked, and there is nothing", implying a
+ * verification step that never ran.
+ *
+ * The honest fix is this one: stop claiming the two environments exist until real
+ * subscriber paper/live execution data is aggregated per Listing (MKT-05 live/paper
+ * marketplace deployments are too new and low-volume for that aggregation to be real
+ * today) and render only the environment this page can back with persisted data —
+ * the publish-time `backtest_*` aggregate. Reintroducing PAPER/LIVE belongs with
+ * whatever task builds that aggregation, not with a front-end section pointed at
+ * fields nothing writes.
+ */
+const ENVIRONMENTS = ['BACKTEST'];
 
 /**
  * Where each environment's figures live in the Listing response.
  *
  * `BACKTEST` reads the projection's `performance_summary` / `risk_metrics` — the publish-time
- * `backtest_*` aggregate, which is BACKTEST by construction. `PAPER` and `LIVE` read the same
- * two shapes under their own prefix. Nothing is inferred from one environment for another:
- * a group whose fields are absent produces no figures and therefore no section.
+ * `backtest_*` aggregate, which is BACKTEST by construction. A group whose fields are absent
+ * produces no figures and therefore no section.
  */
 const ENVIRONMENT_FIGURE_SOURCES = {
   BACKTEST: { summary: 'performance_summary', risk: 'risk_metrics' },
-  PAPER: { summary: 'paper_performance_summary', risk: 'paper_risk_metrics' },
-  LIVE: { summary: 'live_performance_summary', risk: 'live_risk_metrics' },
 };
 
 const ENVIRONMENT_DESCRIPTIONS = {
   BACKTEST: 'Simulated on historical data.',
-  PAPER: 'Simulated execution on live market data. No real order was placed.',
-  LIVE: 'Recorded from live execution.',
 };
 
 /** The historical-results statement Requirement 6.6 requires inside the BACKTEST section. */

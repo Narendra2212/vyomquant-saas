@@ -18,27 +18,41 @@
  *     the page renders its answer.
  *   * `design/pageFields.js` (13.3) — which columns the read actually reports, and the
  *     sentence a trader reads instead of a figure when it does not. Four of this page's
- *     columns are ❌ on the live read (`pnl`, `fees`, `slippage`, `strategy`) because the
- *     `executions` telemetry row has seven columns and carries none of them.
+ *     columns were ❌ on the live read (`pnl`, `fees`, `slippage`, `strategy`) because the
+ *     `executions` telemetry row had seven columns and carried none of them. TRADE-13
+ *     widened two of those four: `log_execution` now persists `fee` (read off the venue's
+ *     own CCXT fill response) and `slippage` (`|fill price - decision price| x filled_qty`,
+ *     paper's own definition) per live execution, so `fees` and `slippage` are reported on
+ *     LIVE for any row written after that change — `pages/tradeHistoryFilters.js`'s
+ *     `LIVE_REPORTED_FIELDS` says so, the same way `PAPER_REPORTED_FIELDS` already does for
+ *     the paper read. `pnl` and `strategy` are UNCHANGED and stay ❌ on live: a per-trade
+ *     realized P&L needs the entry price of the position being closed, and nothing on the
+ *     live order-completion path tracks a cost basis to realize against (see TRADE-13's
+ *     `REMEDIATION_LEDGER` entry for why that was not attempted here).
  *   * `components/ds/*` — `DataTable`, `FilterBar`, `EmptyState`, `Panel`, `Metric`,
  *     `PageHeader`, `TradingEnvironmentBadge`. Imported by path, not through the barrel,
  *     so `ds/Chart`'s recharts dependency stays out of this page's import graph.
  *
  * WHAT THE FOUR SUMMARY FIGURES SHOW, AND WHY (Requirement 14.5)
  * -------------------------------------------------------------
- * §7.7 asks for Trades / Win rate / Total P&L / Total fees, and three of those four derive
- * from fields the live read does not report. So on **Live**:
+ * §7.7 asks for Trades / Win rate / Total P&L / Total fees. On **Live**:
  *
  *   * **Trades** is real — it is the number of rows the read returned.
- *   * **Win rate**, **Total P&L** and **Total fees** render the not-available marker
- *     carrying `pageFields`' own reason. `log_execution` writes `(timestamp, user_id,
- *     symbol, side, status, amount, price)` and nothing else, so there is no per-trade P&L
- *     to sign and no fee to add up. The page this replaces rendered `$0.00` for total fees
- *     on every live account, which is a claim that the venue charged nothing.
+ *   * **Win rate** and **Total P&L** still render the not-available marker: `log_execution`
+ *     writes no per-trade P&L (TRADE-13 did not change this — see that finding's own note
+ *     on why a live realized-P&L figure is not safely computable yet), so there is nothing
+ *     to sign a win/loss from and nothing to total.
+ *   * **Total fees** is a figure IF every row in the ledger carries a `fee` — TRADE-13 made
+ *     `log_execution` persist the venue's own fee per execution, going forward. A ledger
+ *     that mixes rows written before and after that change has a knowable sum of the rows
+ *     that report a fee and an unknowable total, so it renders the not-available marker and
+ *     says how many rows are missing, exactly as it already did for the paper ledger below.
+ *     The page this replaced rendered `$0.00` for total fees on every live account
+ *     regardless, which is a claim that the venue charged nothing.
  *
- * On **Paper** all four are figures, because `api.paper.getTrades()` rows carry
- * `realized_pnl` and `fee` for real — and even then a total is only stated when EVERY row
- * in the ledger reports the field. A ledger where three of ten trades report a fee has a
+ * On **Paper** Trades, Win rate, Total P&L and Total fees are all figures (subject to the
+ * same "every row must report it" rule), because `api.paper.getTrades()` rows carry
+ * `realized_pnl` and `fee` for real. A ledger where three of ten trades report a fee has a
  * knowable sum of three fees and an unknowable total, so it renders the marker and says
  * how many rows are missing. Sums are computed on the digits ({@link sumDecimals}), never
  * by adding floats: `realized_pnl` is `NUMERIC(28,10)` on the wire.
@@ -195,6 +209,8 @@ const TIME_KEYS = Object.freeze(['timestamp', 'executed_at', 'datetime']);
 const QUANTITY_KEYS = Object.freeze(['amount', 'quantity']);
 const PRICE_KEYS = Object.freeze(['price']);
 const FEE_KEYS = Object.freeze(['fee']);
+/** TRADE-13: the live read's new column; no paper read carries one. */
+const SLIPPAGE_KEYS = Object.freeze(['slippage']);
 const STATUS_KEYS = Object.freeze(['status', 'order_lifecycle_state']);
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -223,8 +239,22 @@ function firstValue(row, keys) {
   return null;
 }
 
-/** The fee as recorded, or `null`. `fee` is the paper read's column; live records none. */
+/**
+ * The fee as recorded, or `null`.
+ *
+ * TRADE-13: `fee` is the paper read's column, and — for an execution the live read wrote
+ * after `log_execution` started persisting it — the live read's too. `null` here means
+ * either "this row predates that change" or "the venue reported no fee for this fill";
+ * `isFieldReported('fees', environment)` decides whether the COLUMN is offered at all, and
+ * this reads what any one ROW actually carries once it is.
+ */
 const readFee = (row) => firstValue(row, FEE_KEYS);
+
+/**
+ * The slippage as recorded, or `null`. TRADE-13: a live-only column — no paper fill row
+ * carries one. `null` means this row predates the change, or nothing filled.
+ */
+const readSlippage = (row) => firstValue(row, SLIPPAGE_KEYS);
 
 /**
  * One raw row as the ten cells the table reads.
@@ -248,9 +278,9 @@ function projectTrade(row, index) {
     price: firstValue(row, PRICE_KEYS),
     pnl: readPnl(row),
     fees: readFee(row),
-    // Nothing reports slippage in either environment: it needs an intended price to
-    // compare the fill against and no read carries one. The column renders its reason.
-    slippage: null,
+    // TRADE-13: read per row, same as `fees` — `null` for a row that predates the change
+    // or that filled nothing, a real figure for one the live read wrote after it.
+    slippage: readSlippage(row),
     strategy: readStrategy(row),
     status: firstValue(row, STATUS_KEYS),
   };
@@ -368,11 +398,26 @@ function StatusCell({ value }) {
   return <StatusBadge state={value} />;
 }
 
-/** A recorded fee. Reached only where the environment reports one. */
+/**
+ * A recorded fee. Reached whenever the environment's read reports the column — which, per
+ * TRADE-13, includes LIVE now — but not every ROW in it carries a value: an execution
+ * written before `log_execution` started persisting `fee` has none, and this renders the
+ * marker for exactly that row rather than for the whole column.
+ */
 function FeeCell({ value }) {
   const parts = splitDecimalText(value);
   return parts === null
-    ? <NotAvailableMarker label={labelFor('fees')} />
+    ? <NotAvailableMarker label={labelFor('fees')} reason={reasonFor('fees')} />
+    : renderDecimalParts(parts, 2);
+}
+
+/** TRADE-13: a recorded slippage, as an absolute cost in quote currency. Same per-row fallback
+ * as {@link FeeCell} — reached only where the environment's read reports the column (LIVE
+ * only; see `LIVE_REPORTED_FIELDS`), and still `null` for a row written before the change. */
+function SlippageCell({ value }) {
+  const parts = splitDecimalText(value);
+  return parts === null
+    ? <NotAvailableMarker label={labelFor('slippage')} reason={reasonFor('slippage')} />
     : renderDecimalParts(parts, 2);
 }
 
@@ -508,6 +553,7 @@ export default function TradeHistory() {
 
   const pnlReported = isFieldReported('pnl', environment);
   const feesReported = isFieldReported('fees', environment);
+  const slippageReported = isFieldReported('slippage', environment);
   const strategyReported = isFieldReported('strategy', environment);
 
   /* ── The summary (Requirement 14.5) ─────────────────────────────────── */
@@ -585,7 +631,9 @@ export default function TradeHistory() {
       key: 'slippage',
       header: labelFor('slippage'),
       align: 'numeric',
-      render: unreportedCell('slippage'),
+      format: 'currency',
+      sortable: slippageReported,
+      render: slippageReported ? SlippageCell : unreportedCell('slippage'),
       priority: 3,
     },
     {
@@ -595,7 +643,7 @@ export default function TradeHistory() {
       priority: 3,
     },
     { key: 'status', header: labelFor('status'), render: StatusCell, priority: 2 },
-  ], [pnlReported, feesReported, strategyReported]);
+  ], [pnlReported, feesReported, slippageReported, strategyReported]);
 
   /* ── Handlers. Every one that changes the row set returns to page 1, or a
    *    stale page number would render an empty table over rows that exist. ── */
@@ -630,7 +678,7 @@ export default function TradeHistory() {
       pnl: pnlReported,
       fees: feesReported,
       strategy: strategyReported,
-      slippage: false,
+      slippage: slippageReported,
     };
     const lines = [
       CSV_FIELDS.map((field) => labelFor(field)),
@@ -645,7 +693,7 @@ export default function TradeHistory() {
     anchor.download = `trade-history-${environment.toLowerCase()}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [displayRows, environment, pnlReported, feesReported, strategyReported]);
+  }, [displayRows, environment, pnlReported, feesReported, slippageReported, strategyReported]);
 
   /* ── Empty states (Requirement 11.5) ───────────────────────────────── */
 
