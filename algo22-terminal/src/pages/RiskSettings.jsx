@@ -241,7 +241,7 @@ const DEFAULT_KILL_SWITCHES = Object.freeze([
     icon: TrendingDown,
   },
   {
-    // RISK-24. Real peak-to-trough drawdown, computed from this account's persisted
+    // RISK-04. Real peak-to-trough drawdown, computed from this account's persisted
     // `paper_equity_snapshots` series and checked by `InstitutionalRiskManager
     // .validate_trade_request`'s `REJECT_DRAWDOWN` on both the automated bot path
     // (`master_executor.BotRunner`) and the manual order path (`PaperTradingService
@@ -277,7 +277,7 @@ const DEFAULT_KILL_SWITCHES = Object.freeze([
 ]);
 
 /**
- * RISK-02 (as narrowed by RISK-24): these three guards are stored and shown but NO runtime
+ * RISK-02 (as narrowed by RISK-04): these three guards are stored and shown but NO runtime
  * code evaluates them. The daily loss limit and the max-drawdown limit are both consulted for
  * real, on the automated bot path and the manual order path alike. A switch that reads "on"
  * while nothing watches the condition is a false safety claim, so the three below render

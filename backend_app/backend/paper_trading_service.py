@@ -1316,7 +1316,7 @@ class PaperTradingService:
     ) -> Optional[float]:
         """Current peak-to-trough drawdown for this PAPER account, as a FRACTION (0.08 = 8%).
 
-        RISK-24. Before this method existed, every caller of the max-drawdown kill switch --
+        RISK-04. Before this method existed, every caller of the max-drawdown kill switch --
         ``master_executor.BotRunner._inner_loop`` (the automated path) and this module's own
         ``place_order`` (the manual path, which had no drawdown check at all) -- either read
         ``telemetry_engine.get_account_health``'s ``current_drawdown_pct`` or nothing. That
@@ -1360,7 +1360,12 @@ class PaperTradingService:
         sb = self._client(access_token)
         try:
             snapshots = repo.get_equity_snapshots(sb, uid)
-        except repo.PaperPersistenceError as exc:
+        except Exception as exc:  # noqa: BLE001 - an unreadable series is "unmeasurable",
+            # never a reason to raise out of a risk check. Broad on purpose: a test or
+            # dev-mode double standing in for the Persistence_Layer can fail in shapes
+            # `PaperPersistenceError` does not cover (e.g. a bare sentinel with no
+            # `.table()`), and those must read as "can't measure it yet" too, not crash
+            # the order path that was trying to check the account's safety.
             logger.warning(
                 f"[PAPER DRAWDOWN] could not read equity snapshots for {uid}: {exc}"
             )
@@ -1689,7 +1694,7 @@ class PaperTradingService:
                 )
                 raise ValueError("Trading halted: Risk Kill Switch is active")
 
-            # RISK-24: MAX-DRAWDOWN KILL SWITCH, MANUAL ORDER PATH
+            # RISK-04: MAX-DRAWDOWN KILL SWITCH, MANUAL ORDER PATH
             # ------------------------------------------------------
             # `InstitutionalRiskManager.validate_trade_request`'s `REJECT_DRAWDOWN` check
             # (core/risk_manager.py) was, and remains, reachable only from the AUTOMATED bot

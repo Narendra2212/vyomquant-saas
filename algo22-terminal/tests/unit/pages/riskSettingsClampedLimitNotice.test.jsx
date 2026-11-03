@@ -80,7 +80,7 @@ const RISK_CONFIG = Object.freeze({
   max_leverage: 3,
   circuit_breaker_armed: true,
   kill_switches: {
-    loss: true, blackswan: false, streak: true, capital: false,
+    loss: true, drawdown: true, blackswan: false, streak: true, capital: false,
   },
 });
 

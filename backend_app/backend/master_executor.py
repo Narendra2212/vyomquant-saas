@@ -918,7 +918,7 @@ class BotRunner:
                 current_drawdown_pct = account_health.get("current_drawdown_pct", 0.0)
                 daily_pnl_pct = account_health.get("daily_pnl_pct", 0.0)
 
-                # RISK-24: `telemetry.get_account_health`'s `current_drawdown_pct` is always
+                # RISK-04: `telemetry.get_account_health`'s `current_drawdown_pct` is always
                 # `0.0` -- see `dashboard_data_ingester._write_account_health`'s own comment
                 # ("For drawdown, we'd need historical data - for now use 0"), and separately
                 # that ingester is never invoked in this deployment at all. That made the

@@ -97,6 +97,7 @@ const RISK_CONFIG = Object.freeze({
   max_leverage: 5,
   kill_switches: Object.freeze({
     loss: true,
+    drawdown: true,
     blackswan: false,
     streak: true,
     capital: false,
@@ -123,7 +124,7 @@ const MARGIN_HEALTH = Object.freeze({
 });
 
 /**
- * The four switches, as `[key, accessible name, state the fixture puts them in]`.
+ * The five switches, as `[key, accessible name, state the fixture puts them in]`.
  *
  * The names are the page's own labels. They are listed here rather than read from the page
  * so that renaming one is a visible diff in this file: an accessible name is part of the
@@ -132,19 +133,22 @@ const MARGIN_HEALTH = Object.freeze({
  */
 const KILL_SWITCHES = Object.freeze([
   ['loss', 'Daily Loss Limit', true],
+  ['drawdown', 'Max Drawdown Protection', true],
   ['blackswan', 'Black Swan Protection', false],
   ['streak', 'Consecutive Loss Protection', true],
   ['capital', 'Capital Utilization Limit', false],
 ]);
 
 /*
- * RISK-02: only the daily loss limit is enforced by any runtime code. The other three guards
- * are stored and displayed but nothing evaluates them, so the page renders them disabled,
- * reading "off", and labelled "Not enforced yet". Their stored value still rides along in the
- * request body unchanged - the page must not rewrite what the server holds.
+ * RISK-02 (as narrowed by RISK-04): the daily loss limit and the max-drawdown limit are both
+ * enforced by real runtime code (`InstitutionalRiskManager.validate_trade_request`, on the
+ * automated bot path and the manual order path alike). The other three guards are stored and
+ * displayed but nothing evaluates them, so the page renders them disabled, reading "off", and
+ * labelled "Not enforced yet". Their stored value still rides along in the request body
+ * unchanged - the page must not rewrite what the server holds.
  */
-const ENFORCED = KILL_SWITCHES.filter(([key]) => key === 'loss');
-const UNENFORCED = KILL_SWITCHES.filter(([key]) => key !== 'loss');
+const ENFORCED = KILL_SWITCHES.filter(([key]) => key === 'loss' || key === 'drawdown');
+const UNENFORCED = KILL_SWITCHES.filter(([key]) => key !== 'loss' && key !== 'drawdown');
 
 const mountPage = () =>
   render(
@@ -231,7 +235,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('RiskSettings kill switches: every control is named and in the tab order', () => {
-  it('renders exactly four switches and no more', async () => {
+  it('renders exactly five switches and no more', async () => {
     await mountLoaded();
 
     // Non-vacuity for every `getByRole('switch', …)` below: if the page stopped rendering
@@ -250,7 +254,7 @@ describe('RiskSettings kill switches: every control is named and in the tab orde
 
       // The state is programmatic, not a colour. Requirement 20.5's rule applied to the one
       // control where "looks green" is not a substitute for "reports on".
-      if (_key === 'loss') {
+      if (_key === 'loss' || _key === 'drawdown') {
         expect(control.getAttribute('aria-checked')).toBe(String(activeInFixture));
         expect(control.getAttribute('aria-checked')).toBe(String(RISK_CONFIG.kill_switches[_key]));
       } else {
@@ -293,14 +297,18 @@ describe('RiskSettings kill switches: the keyboard operates them', () => {
     expect(risk.updateConfig).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves the other three switches alone when one is operated', async () => {
+  it('leaves the other four switches alone when one is operated', async () => {
     await mountLoaded();
     fireEvent.keyDown(screen.getByRole('switch', { name: KILL_SWITCHES[0][1] }), { key: 'Enter' });
     await waitFor(() => expect(risk.updateConfig).toHaveBeenCalledTimes(1));
 
     for (const [key, name, activeInFixture] of KILL_SWITCHES.slice(1)) {
-      // Displayed off (not enforced), but the stored value is carried through untouched.
-      expect(checkedState(name)).toBe('false');
+      // An UNENFORCED guard displays off regardless of its stored value; an ENFORCED one
+      // (drawdown, same as loss) displays its own fixture state - toggling 'loss' must not
+      // move either kind.
+      const unenforced = UNENFORCED.some(([k]) => k === key);
+      expect(checkedState(name)).toBe(unenforced ? 'false' : String(activeInFixture));
+      // Displayed off or not, the stored value is carried through untouched either way.
       expect(risk.updateConfig.mock.calls[0][0].kill_switches[key]).toBe(activeInFixture);
     }
   });
@@ -352,19 +360,20 @@ describe('RiskSettings kill switches: one request, two input devices', () => {
 // ---------------------------------------------------------------------------
 
 describe('RiskSettings: the request a kill switch issues', () => {
-  it('sends all four switch states, the three limits the server reported, and the breaker', async () => {
+  it('sends all five switch states, the three limits the server reported, and the breaker', async () => {
     await mountLoaded();
     fireEvent.keyDown(screen.getByRole('switch', { name: KILL_SWITCHES[0][1] }), { key: 'Enter' });
 
     const body = await soleUpdateBody();
 
-    // All four, every time. A payload carrying only the switch that moved would let the
-    // other three drift out of step with what the trader can see.
+    // All five, every time. A payload carrying only the switch that moved would let the
+    // other four drift out of step with what the trader can see.
     expect(Object.keys(body.kill_switches).sort()).toEqual(
       KILL_SWITCHES.map(([key]) => key).sort(),
     );
     expect(body.kill_switches).toEqual({
       loss: false, // the one that moved
+      drawdown: true,
       blackswan: false,
       streak: true,
       capital: false,

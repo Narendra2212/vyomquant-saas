@@ -511,7 +511,7 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
     # carries one, and passed an empty series through on purpose so the honest answer was
     # ``null``.
     #
-    # RISK-24 gives it a series to read: ``paper_equity_snapshots``, the durable, per-fill
+    # RISK-04 gives it a series to read: ``paper_equity_snapshots``, the durable, per-fill
     # equity history ``place_order`` and ``BotPaperLedger`` both write to, and the same series
     # the live-order-path kill switch (``core/risk_manager.py``'s ``REJECT_DRAWDOWN``, fed via
     # ``PaperTradingService.get_current_drawdown_pct``) now enforces against. Routed through the
@@ -533,7 +533,9 @@ async def get_risk_status(user: dict = Depends(get_current_user)):
                 paper_svc.persistence_client(user.get("access_token")), uid
             )
         ]
-    except _paper_repo.PaperPersistenceError:
+    except Exception:  # noqa: BLE001 - an unreadable series means "unmeasurable", the
+        # same honest ``null`` BC-1 already returns for an empty one; it must never turn
+        # a display read into a 500.
         equity_curve_in_hand = []
     drawdown_pct: Optional[float] = current_drawdown_pct_from_equity_curve(equity_curve_in_hand)
 
