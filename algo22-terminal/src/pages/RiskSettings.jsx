@@ -231,12 +231,25 @@ const reportedItem = (item, field) =>
  */
 const CONTROL_START = Object.freeze({ maxLoss: 500, maxPos: 10, leverage: 3 });
 
-/** The four guards, with the wording and the default positions the page has always had. */
+/** The five guards, with the wording and the default positions the page has always had. */
 const DEFAULT_KILL_SWITCHES = Object.freeze([
   {
     key: 'loss',
     label: 'Daily Loss Limit',
     description: 'Stop all bots if daily loss exceeds limit',
+    active: true,
+    icon: TrendingDown,
+  },
+  {
+    // RISK-24. Real peak-to-trough drawdown, computed from this account's persisted
+    // `paper_equity_snapshots` series and checked by `InstitutionalRiskManager
+    // .validate_trade_request`'s `REJECT_DRAWDOWN` on both the automated bot path
+    // (`master_executor.BotRunner`) and the manual order path (`PaperTradingService
+    // .place_order`). Not in `UNENFORCED_GUARDS`: unlike the three below it, this one
+    // halts new position opens the moment the condition it names is met.
+    key: 'drawdown',
+    label: 'Max Drawdown Protection',
+    description: 'Lock new position opens if account drawdown exceeds limit',
     active: true,
     icon: TrendingDown,
   },
@@ -264,9 +277,10 @@ const DEFAULT_KILL_SWITCHES = Object.freeze([
 ]);
 
 /**
- * RISK-02: these three guards are stored and shown but NO runtime code evaluates them (only
- * the daily loss limit is consulted, and only on the manual paper-order path). A switch that
- * reads "on" while nothing watches the condition is a false safety claim, so they render
+ * RISK-02 (as narrowed by RISK-24): these three guards are stored and shown but NO runtime
+ * code evaluates them. The daily loss limit and the max-drawdown limit are both consulted for
+ * real, on the automated bot path and the manual order path alike. A switch that reads "on"
+ * while nothing watches the condition is a false safety claim, so the three below render
  * disabled and labelled until the runtime risk gate implements them with tests.
  */
 const UNENFORCED_GUARDS = Object.freeze(['blackswan', 'streak', 'capital']);
@@ -767,7 +781,7 @@ export default function RiskSettings() {
         <Panel
           title="Automated protection guards"
           state={config.state}
-          loading={{ kind: 'skeleton-cards', rows: 4, label: 'Loading your protection guards' }}
+          loading={{ kind: 'skeleton-cards', rows: 5, label: 'Loading your protection guards' }}
           empty={{
             headline: 'No protection guards are recorded yet',
             body: 'A guard halts trading on its own when the condition it watches is met, '

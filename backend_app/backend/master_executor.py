@@ -917,7 +917,42 @@ class BotRunner:
                 account_health = await self.telemetry.get_account_health(self.user_id)
                 current_drawdown_pct = account_health.get("current_drawdown_pct", 0.0)
                 daily_pnl_pct = account_health.get("daily_pnl_pct", 0.0)
-                
+
+                # RISK-24: `telemetry.get_account_health`'s `current_drawdown_pct` is always
+                # `0.0` -- see `dashboard_data_ingester._write_account_health`'s own comment
+                # ("For drawdown, we'd need historical data - for now use 0"), and separately
+                # that ingester is never invoked in this deployment at all. That made the
+                # `REJECT_DRAWDOWN` check below (`risk_manager.validate_trade_request`) real
+                # and enforcing but permanently fed a figure that could never trip it.
+                #
+                # For a PAPER bot a real, durable equity series already exists
+                # (`paper_equity_snapshots`, written on every fill by this same bot through
+                # `BotPaperLedger` -> `PaperTradingService.place_order`), so this overrides the
+                # telemetry figure with the real one wherever it is measurable.
+                # `get_current_drawdown_pct` returns `None` for an account too new to have a
+                # measured peak, and the telemetry fallback (effectively `0.0`, i.e. fail open)
+                # is kept for that case and for LIVE bots, which have no persisted equity
+                # history anywhere in this codebase today -- a remaining gap, tracked in
+                # `docs/launch_readiness/REMEDIATION_LEDGER.json`, not silently claimed fixed
+                # here.
+                if self.paper_trading:
+                    try:
+                        from backend_app.backend.paper_trading_service import (
+                            get_paper_trading_service,
+                        )
+
+                        real_drawdown_pct = get_paper_trading_service().get_current_drawdown_pct(
+                            self.user_id
+                        )
+                        if real_drawdown_pct is not None:
+                            current_drawdown_pct = real_drawdown_pct
+                    except Exception as exc:  # noqa: BLE001 - never let this block the loop
+                        logger.warning(
+                            f"Bot {self.user_id}/{self.symbol}: could not compute real "
+                            f"drawdown from paper_equity_snapshots ({exc}); falling back to "
+                            f"telemetry's figure."
+                        )
+
                 verdict, reason = await self.risk_manager.validate_trade_request(
                     TradeRequest(
                         user_id=self.user_id,

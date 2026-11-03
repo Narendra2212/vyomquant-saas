@@ -1308,6 +1308,69 @@ class PaperTradingService:
             )
         return realized
 
+    def get_current_drawdown_pct(
+        self,
+        user_id: str,
+        *,
+        access_token: Optional[str] = None,
+    ) -> Optional[float]:
+        """Current peak-to-trough drawdown for this PAPER account, as a FRACTION (0.08 = 8%).
+
+        RISK-24. Before this method existed, every caller of the max-drawdown kill switch --
+        ``master_executor.BotRunner._inner_loop`` (the automated path) and this module's own
+        ``place_order`` (the manual path, which had no drawdown check at all) -- either read
+        ``telemetry_engine.get_account_health``'s ``current_drawdown_pct`` or nothing. That
+        telemetry figure is written by ``dashboard_data_ingester._write_account_health``,
+        which hardcodes ``current_drawdown_pct = 0.0`` with the comment "For drawdown, we'd
+        need historical data - for now use 0" -- and separately, that ingester is never
+        invoked at all in this deployment (see its own module docstring: no caller ever
+        registers a user for portfolio updates). So the figure reaching
+        ``InstitutionalRiskManager.validate_trade_request``'s real, enforcing
+        ``REJECT_DRAWDOWN`` check (``core/risk_manager.py``) was ALWAYS ``0.0`` -- the gate
+        itself works, but nothing it ever received could trip it.
+
+        This computes the figure for real, from ``paper_equity_snapshots`` -- the durable,
+        per-fill series ``place_order`` and ``BotPaperLedger`` both already write to (the same
+        series ``paper_accounting.max_drawdown`` and ``GET /api/paper/equity-curve`` read) --
+        routed through ``dashboard_aggregation_service.current_drawdown_pct_from_equity_curve``,
+        the one definition of peak-to-trough current drawdown this codebase has (``routers/
+        risk.py``'s ``GET /status`` display projection uses the same function, so the enforced
+        figure and the displayed one can never disagree).
+
+        Returns ``None`` -- never a fabricated ``0.0`` -- when the series has fewer than two
+        points, an unreadable point, or could not be read at all: an account with one data
+        point or a transient read failure has not had its "no drawdown" measured, and treating
+        either as a measured zero is the same error this method exists to remove. Every caller
+        decides for itself what an unmeasurable reading means for whether to allow the trade;
+        the existing callers both choose not to block on it (fail open, consistent with the
+        platform's other "can't measure it yet" cases), which is a choice made at the CALL
+        SITE, not hidden here.
+
+        Not wired for LIVE (non-paper) accounts: no equity-history table is written for a
+        real-exchange account anywhere in this codebase today, so there is no series to read
+        and this would always return ``None`` for one. That remains an open gap, tracked in
+        ``docs/launch_readiness/REMEDIATION_LEDGER.json`` rather than silently claimed fixed
+        here.
+        """
+        from backend_app.backend.dashboard_aggregation_service import (
+            current_drawdown_pct_from_equity_curve,
+        )
+
+        uid = str(user_id)
+        sb = self._client(access_token)
+        try:
+            snapshots = repo.get_equity_snapshots(sb, uid)
+        except repo.PaperPersistenceError as exc:
+            logger.warning(
+                f"[PAPER DRAWDOWN] could not read equity snapshots for {uid}: {exc}"
+            )
+            return None
+
+        pct = current_drawdown_pct_from_equity_curve(
+            [{"equity": snap.get("total_equity")} for snap in snapshots]
+        )
+        return (pct / 100.0) if pct is not None else None
+
     def get_performance_summary(
         self,
         user_id: str,
@@ -1625,6 +1688,44 @@ class PaperTradingService:
                     "Trading halted: Emergency Risk Kill Switch is active",
                 )
                 raise ValueError("Trading halted: Risk Kill Switch is active")
+
+            # RISK-24: MAX-DRAWDOWN KILL SWITCH, MANUAL ORDER PATH
+            # ------------------------------------------------------
+            # `InstitutionalRiskManager.validate_trade_request`'s `REJECT_DRAWDOWN` check
+            # (core/risk_manager.py) was, and remains, reachable only from the AUTOMATED bot
+            # path (`master_executor.BotRunner._inner_loop`). This manual path -- the one
+            # `POST /api/paper/orders` and every other direct caller of `place_order` uses --
+            # never called into that gate at all, so a user whose account had breached the
+            # platform's max-drawdown threshold could not open a NEW bot position, but could
+            # still open one by hand. The threshold is read from the same global
+            # `InstitutionalRiskManager` instance the bot path enforces
+            # (`core.state.app_state.risk.thresholds.max_drawdown`) so the two paths can never
+            # disagree about what the limit is; it is platform-wide and not user-configurable,
+            # the same as on the bot path (see RISK-03's comment in `risk_manager.py` for why
+            # `max_drawdown` is not clamped from `risk_settings` the way `max_daily_loss` and
+            # `max_positions` are).
+            #
+            # `get_current_drawdown_pct` returns `None` -- not a fabricated `0.0` -- when the
+            # account's equity series cannot yet measure a drawdown (fewer than two snapshots,
+            # or an unreadable read); this call site, like the bot path, chooses to fail OPEN
+            # on that: an account too new to have a measurable peak is not blocked from its
+            # first trade.
+            from backend_app.core.state import app_state
+
+            drawdown_pct = self.get_current_drawdown_pct(uid)
+            max_drawdown = app_state.risk.thresholds.max_drawdown
+            if drawdown_pct is not None and drawdown_pct > max_drawdown:
+                record_risk_violation(
+                    uid,
+                    "MAX_DRAWDOWN_EXCEEDED",
+                    f"Account drawdown {drawdown_pct:.2%} exceeds limit of "
+                    f"{max_drawdown:.2%}",
+                )
+                raise ValueError(
+                    f"Risk limit exceeded: Max drawdown exceeded "
+                    f"({drawdown_pct:.2%} > {max_drawdown:.2%}). All new position opens "
+                    f"are locked."
+                )
 
             user_risk = get_user_risk_settings_store(uid)
             max_daily_loss = self._exact(
