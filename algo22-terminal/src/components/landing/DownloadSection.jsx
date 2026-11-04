@@ -11,9 +11,15 @@
  * For two years all four `/releases/…` URLs returned 403 — CI's `dist/` carried no `releases/`
  * directory and `aws s3 sync dist/ --delete` removed that prefix on every deploy — so task 4.3
  * withdrew the links rather than relabel them. The artifacts are now built by
- * `07-desktop-build.yml` and published as GitHub release `desktop-v0.1.1`, whose assets were
- * each magic-byte identified and then re-fetched anonymously to confirm HTTP 200 with a
- * byte-exact length before a single URL was written down.
+ * `07-desktop-build.yml` and served from `/downloads/desktop-v0.1.2/`, each one magic-byte
+ * identified and then re-fetched with no credentials to confirm HTTP 200, a byte-exact
+ * `Content-Length` and a matching SHA-256 before a single URL was written down.
+ *
+ * THEY WERE BRIEFLY ON GITHUB RELEASES, WHICH WAS WORSE. 0.1.0 and 0.1.1 were advertised at
+ * `github.com/Narendra2212/vyomquant-saas/releases/download/...`, and THAT REPOSITORY IS
+ * PRIVATE — so all four URLs returned 404 to every visitor for the whole time they were up.
+ * The move back to this origin is paired with the `--exclude "downloads/*"` that the original
+ * `/releases/` prefix never got, so the 403-on-every-deploy failure cannot return either.
  *
  * WHAT DID NOT CHANGE IS THE MECHANISM. `PlatformArtifact` still renders from a declaration and
  * still holds no URL, size or checksum of its own; the declarations simply now include published
