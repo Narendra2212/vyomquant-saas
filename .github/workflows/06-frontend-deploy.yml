@@ -333,12 +333,37 @@ jobs:
           echo "=== Syncing unhashed assets with a short revalidating cache ==="
           # 5 minutes of edge offload, then revalidate. Short enough that a corrected
           # robots.txt, sitemap.xml or icon reaches a returning visitor the same day.
+          #
+          # `downloads/*` is excluded because the desktop installers live there and are NOT
+          # produced by `npm run build`, so they are absent from `dist/` and `--delete` would
+          # remove them on every deploy. This is not hypothetical and it is not new: this site
+          # previously advertised same-origin `/releases/...` installers that returned 403, and
+          # `landingSections.test.jsx` records the reason as exactly this -- "CI's `dist/`
+          # carries no `releases/` directory, so `aws s3 sync dist/ --delete` removes that
+          # prefix from the bucket on every deploy". That was worked around by moving the
+          # artifacts to GitHub rather than by fixing the sync, and the sync was still unfixed.
+          #
+          # Measured against this bucket before the exclusion was added, with a one-byte probe
+          # object at `downloads/.kiro-write-probe.txt` and `--dryrun` so nothing was removed:
+          #
+          #   without --exclude "downloads/*":
+          #     (dryrun) delete: s3://vyomquant-frontend/downloads/.kiro-write-probe.txt
+          #   with it:
+          #     (no deletions reported)
+          #
+          # The other two passes cannot reach the prefix -- each uses `--exclude "*"` with a
+          # single `--include`, for `assets/*` and `*.html` respectively -- so this is the one
+          # pass that needs the exclusion. `deployPrefixProtection.test.js` asserts that every
+          # `--delete` pass in this file either excludes `downloads/*` or is narrowed by
+          # `--exclude "*"`, so removing this line fails CI instead of silently emptying the
+          # download page.
           aws s3 sync dist/ s3://${{ env.S3_BUCKET }}/ \
             --delete \
             --cache-control "public, max-age=300, must-revalidate" \
             --exclude "assets/*" \
             --exclude "*.html" \
-            --exclude "*.map"
+            --exclude "*.map" \
+            --exclude "downloads/*"
           
           echo "=== Syncing HTML files with shorter cache ==="
           aws s3 sync dist/ s3://${{ env.S3_BUCKET }}/ \
@@ -397,6 +422,30 @@ jobs:
             --id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
             --query "Distribution.Status" \
             --output text
+
+      # ════════════════════════════════════════════════════════════════════
+      #  THE DOWNLOAD BUTTONS ARE FETCHED, NOT ASSUMED
+      # ════════════════════════════════════════════════════════════════════
+      #
+      # Every way this page has been wrong was invisible to CI, because CI checked the
+      # DECLARATION and never the served bytes: four `/releases/...` URLs that 403'd for two
+      # years after `--delete` pruned the prefix; advertised sizes for 64-69 byte text
+      # placeholders, one carrying the SHA-256 of the empty string; and then four
+      # `github.com/.../releases/download/...` URLs that returned 404 to every visitor
+      # because the repository is private. All three were well-formed URLs. A URL shape test
+      # cannot tell any of them apart from a working one.
+      #
+      # So this fetches what the page advertises, with NO credentials, after the invalidation
+      # has completed, and compares the bytes to the digest printed beside the button. It
+      # also fetches the release-notes link and probes an unpublished filename, so a CDN that
+      # answered everything with 200 could not satisfy it.
+      #
+      # BLOCKING. Unlike the FE/BE version-match step below, this is a gate: a deploy that
+      # leaves the download page pointing at something a visitor cannot fetch has broken the
+      # page, and the whole point is that nobody noticed the last three times.
+      - name: Verify the published desktop downloads are reachable and intact
+        working-directory: ./algo22-terminal
+        run: node scripts/verify-published-downloads.mjs
       # ════════════════════════════════════════════════════════════════════
       #  CI-03: FE/BE VERSION-MATCH IS REPORTED, NOT JUST MADE POSSIBLE
       # ════════════════════════════════════════════════════════════════════

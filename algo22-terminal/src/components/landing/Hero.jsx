@@ -139,7 +139,7 @@ export default function Hero() {
         <div className="section-inner">
           <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
             {/* Stage badge. `Early access` is a fact — there is an `/admin/waitlist` surface and
-                version 0.1.1 — not a growth claim. */}
+                version 0.1.2 — not a growth claim. */}
             <span className="mb-8 inline-flex items-center gap-2.5 rounded-full border border-brand/25 bg-brand-wash px-4 py-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-brand" />
               <span className="text-xs font-semibold tracking-wide text-brand">

@@ -182,8 +182,29 @@ describe('the four platforms are declared, in both tables', () => {
       const a = artifactForPlatform(platform);
       expect(a, `${platform} is not published`).not.toBeNull();
 
-      expect(a.url).toMatch(/^https:\/\/github\.com\/.+\/releases\/download\/.+/);
+      // WAS: /^https:\/\/github\.com\/.+\/releases\/download\/.+/ — which asserted the
+      // one thing that turned out to be WRONG. `Narendra2212/vyomquant-saas` is PRIVATE,
+      // so every one of those URLs returned 404 to every visitor; measured by fetching the
+      // deployed bundle's own asset base with no credentials, against a control request to
+      // a public repository that returned 200 over the same connection. A URL shape test
+      // cannot tell a reachable host from an unreachable one, so what is asserted now is
+      // the hosting contract that makes the link work:
+      //
+      //   - https, and on this site's own origin, so the bytes come from the same
+      //     CloudFront distribution that serves this page and the `download` attribute on
+      //     the anchor is honoured rather than ignored as it is cross-origin;
+      //   - under the version-scoped prefix, so immutable caching is safe and a later
+      //     release cannot overwrite an advertised digest;
+      //   - ending in the declared filename, so the saved file is the one described here.
+      //
+      // `guards/deployPrefixProtection.test.js` closes the loop by reading the prefix out
+      // of these URLs and failing if the deploy workflow could delete it.
+      const url = new URL(a.url);
+      expect(url.protocol).toBe('https:');
+      expect(url.hostname).toBe('www.vyomquant.in');
+      expect(url.pathname.startsWith(`/downloads/${DESKTOP_RELEASE.tag}/`)).toBe(true);
       expect(a.url.endsWith(a.filename)).toBe(true);
+      expect(a.filename).toContain(DESKTOP_RELEASE.version);
       expect(a.filename).toMatch(/\.(?:exe|dmg|AppImage|deb)$/);
 
       // An exact count, above the 1 MiB floor the build workflow itself enforces. The
@@ -209,6 +230,27 @@ describe('the four platforms are declared, in both tables', () => {
   it('records that the builds are not signed, rather than leaving the UI to decide', () => {
     expect(DESKTOP_RELEASE.signed).toBe(false);
     expect(DESKTOP_RELEASE.notesUrl).toMatch(/^https:\/\//);
+
+    // Same origin as the installers, and for the same measured reason: the GitHub release
+    // page for this tag is correct but lives in a PRIVATE repository, so linking it put a
+    // 404 behind a "release notes" control on a public page. A reachability requirement,
+    // not a styling one.
+    expect(new URL(DESKTOP_RELEASE.notesUrl).hostname).toBe('www.vyomquant.in');
+    expect(DESKTOP_RELEASE.notesUrl).toContain(`/downloads/${DESKTOP_RELEASE.tag}/`);
+  });
+
+  it('ties the version, the tag and every advertised filename together', () => {
+    // 0.1.2 exists only because 0.1.0 and 0.1.1 embed a Tauri runtime affected by
+    // CVE-2026-42184 and are otherwise indistinguishable to a user. If the tag, the
+    // version and the filenames can drift apart, the one signal a user has for "am I on
+    // the fixed build" stops meaning anything.
+    expect(DESKTOP_RELEASE.tag).toBe(`desktop-v${DESKTOP_RELEASE.version}`);
+    for (const platform of DESKTOP_PLATFORM_ORDER) {
+      const a = DESKTOP_ARTIFACTS[platform];
+      expect(a.filename, `${platform} filename omits the version`)
+        .toContain(DESKTOP_RELEASE.version);
+      expect(a.url, `${platform} url omits the tag`).toContain(DESKTOP_RELEASE.tag);
+    }
   });
 
   it('derives the displayed size from the byte count', () => {
