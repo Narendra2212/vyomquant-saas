@@ -46,7 +46,16 @@ const UA = 'vyomquant-deploy-verify';
 const fetchBytes = async (url) => {
   const res = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow' });
   const buf = Buffer.from(await res.arrayBuffer());
-  return { status: res.status, contentLength: res.headers.get('content-length'), buf };
+  return {
+    status: res.status,
+    contentLength: res.headers.get('content-length'),
+    // When a response is encoded, `Content-Length` counts the ENCODED bytes and comparing
+    // it to the file size is wrong rather than informative. CloudFront does not compress
+    // `application/octet-stream`, so this is not expected to fire -- but a byte count that
+    // silently means something else is exactly how a check starts lying.
+    contentEncoding: res.headers.get('content-encoding'),
+    buf,
+  };
 };
 
 /** First bytes of each container, so an HTML error page served with 200 cannot pass. */
@@ -80,15 +89,17 @@ for (const platform of DESKTOP_PLATFORM_ORDER) {
   const started = Date.now();
   let row;
   try {
-    const { status, contentLength, buf } = await fetchBytes(a.url);
+    const { status, contentLength, contentEncoding, buf } = await fetchBytes(a.url);
     const digest = createHash('sha256').update(buf).digest('hex');
     row = {
       platform,
       url: a.url,
       status,
       statusOk: status === 200,
-      lengthHeader: contentLength,
-      lengthOk: contentLength !== null && Number(contentLength) === a.bytes,
+      lengthHeader: contentEncoding ? `${contentLength} (${contentEncoding})` : contentLength,
+      lengthOk: contentEncoding
+        ? true
+        : contentLength !== null && Number(contentLength) === a.bytes,
       bytesOk: buf.length === a.bytes,
       digest,
       digestOk: digest === a.sha256,
@@ -144,15 +155,27 @@ const probe = DESKTOP_ARTIFACTS[DESKTOP_PLATFORM_ORDER[0]].url.replace(
   DESKTOP_RELEASE.version,
   '9.9.9',
 );
+const probeFirst = DESKTOP_ARTIFACTS[DESKTOP_PLATFORM_ORDER[0]];
 let negOk;
 try {
-  const { status } = await fetchBytes(probe);
-  negOk = status !== 200;
-  console.log(`  non-vacuity probe: http ${status} for an unpublished name (not 200: ${negOk})`);
+  const { status, buf } = await fetchBytes(probe);
+  // Not simply "status is not 200". If a CloudFront custom error response is ever added to
+  // serve index.html for a missing key -- the usual SPA deep-link fix -- this would start
+  // returning 200 and a status-only check would fail the deploy for no reason. What must be
+  // true is that the CDN does not serve A VALID INSTALLER under a name nobody published.
+  const looksLikeTheInstaller =
+    status === 200
+    && buf.length === probeFirst.bytes
+    && magicHolds(probeFirst.filename, buf);
+  negOk = !looksLikeTheInstaller;
+  console.log(
+    `  non-vacuity probe: http ${status}, ${buf.length} bytes for an unpublished name; `
+    + `not served as an installer: ${negOk}`,
+  );
   console.log(`    ${probe}`);
 } catch {
   negOk = true;
-  console.log('  non-vacuity probe: request failed, which is also not a 200');
+  console.log('  non-vacuity probe: request failed, which is also not a published installer');
 }
 if (!negOk) ok = false;
 
