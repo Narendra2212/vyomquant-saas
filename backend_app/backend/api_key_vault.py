@@ -209,6 +209,42 @@ class APIKeyVault:
                 raise ValueError(f"No keys found for {user_id}/{exchange_id}.")
 
             row = response.data[0]
+
+            # TENANT-01 residual / HY-07: RE-CHECK THE STORED OWNER, do not trust the
+            # query alone.
+            #
+            # The SELECT above already filters `.eq("user_id", user_id)`, so in a correct
+            # world this can never fire. That is exactly the point. Isolation here rests
+            # entirely on the WHERE clause being built correctly every time -- what
+            # TENANT-01 names as "a Python argument rather than a DB policy" -- so a
+            # dropped `.eq`, a refactor that threads the wrong variable, a client library
+            # that reorders filters, or RLS being off on this table all produce the same
+            # symptom: a row belonging to someone else, decrypted and returned.
+            #
+            # `backend_app/core/credential_vault.py` (the unused second vault HY-07
+            # tracks) was the only implementation in the tree that did this, re-verifying
+            # the stored tenant after the fetch and refusing on mismatch, and
+            # tests/test_tenant01_credential_vault_isolation.py was the only executed
+            # proof of it. Porting the invariant here is what makes that module genuinely
+            # redundant rather than merely unreferenced.
+            #
+            # Deliberately RAISES rather than returning None: every caller of this method
+            # expects a dict and already handles the ValueError raised just above for the
+            # not-found case, so failing closed costs nothing and a silent None would be
+            # read as "no credentials" and could be retried into a different code path.
+            stored_owner = row.get("user_id")
+            if stored_owner != user_id:
+                logger.error(
+                    "Cross-tenant credential read refused: caller asked for user=%s "
+                    "exchange=%s but the stored row belongs to user=%s. The query filters "
+                    "on user_id, so reaching this means the filter did not hold -- treat "
+                    "it as an isolation defect, not a bad request.",
+                    user_id, exchange_id, stored_owner,
+                )
+                raise PermissionError(
+                    "Stored credential owner does not match the requesting user."
+                )
+
             return {
                 "api_key":    self._decrypt(row.get("encrypted_api_key")),
                 "secret_key": self._decrypt(row.get("encrypted_secret_key")),
@@ -238,6 +274,38 @@ class APIKeyVault:
         exchange_id = _validate_id(exchange_id, "exchange_id")
 
         try:
+            # TENANT-01 residual / HY-07: confirm the row this is about to delete is
+            # actually the caller's BEFORE deleting it.
+            #
+            # A DELETE cannot re-check its own rows after the fact -- once it has run,
+            # the evidence is gone -- so unlike the read path above this has to look
+            # first. The extra SELECT is the price of being able to refuse at all.
+            #
+            # A MISSING ROW IS NOT AN ERROR HERE, and that is a deliberate difference
+            # from the read path: this method's contract is "ensure these keys are gone"
+            # (its docstring lists user-disconnects-exchange, account deletion and
+            # security incident as the callers), and all three are satisfied by a row
+            # that is already absent. Raising would turn a completed account deletion
+            # into a failed one on retry.
+            existing = (
+                self.supabase.table("exchange_keys")
+                .select("user_id")
+                .eq("user_id", user_id)
+                .eq("exchange_id", exchange_id.lower())
+                .execute()
+            )
+            for row in (existing.data or []):
+                stored_owner = row.get("user_id")
+                if stored_owner != user_id:
+                    logger.error(
+                        "Cross-tenant credential deletion refused: caller user=%s "
+                        "exchange=%s but a matched row belongs to user=%s.",
+                        user_id, exchange_id, stored_owner,
+                    )
+                    raise PermissionError(
+                        "Stored credential owner does not match the requesting user."
+                    )
+
             self.supabase.table("exchange_keys") \
                 .delete() \
                 .eq("user_id", user_id) \
@@ -245,6 +313,10 @@ class APIKeyVault:
                 .execute()
             logger.info(f"Keys revoked for user={user_id} exchange={exchange_id}.")
             return True
+        except PermissionError:
+            # Not wrapped in the generic handler below: an isolation refusal must reach
+            # the caller as a refusal, not be re-raised as a storage failure.
+            raise
         except Exception as e:
             logger.error(f"Failed to delete keys for user={user_id}: {e}")
             raise
