@@ -106,12 +106,12 @@ class _Vault:
         return True
 
 
-def _engine(connect_error: BaseException | None):
+def _engine(connect_error: BaseException | None, permissions: Dict[str, Any] | None = None):
     calls: List[Dict[str, Any]] = []
 
     class _Exchange:
         async def privateGetV5UserQueryApi(self):
-            return _bybit(0)
+            return permissions if permissions is not None else _bybit(0)
 
     class _Engine:
         def __init__(self, **kwargs):
@@ -139,8 +139,8 @@ class _Data:
         return {"USDT": {"total": 10}}
 
 
-def _client(monkeypatch, vault, connect_error=None):
-    engine, calls = _engine(connect_error)
+def _client(monkeypatch, vault, connect_error=None, permissions=None):
+    engine, calls = _engine(connect_error, permissions)
     monkeypatch.setattr(exchange_module, "ConnectionEngine", engine)
     monkeypatch.setattr(exchange_module, "DataEngine", _Data)
     app = FastAPI()
@@ -237,3 +237,66 @@ def test_store_without_a_verdict_leaves_the_stored_verdict_alone():
     vault._encrypt = lambda v: f"enc({v})"
     vault.store_exchange_keys(user_id="u1", exchange_id="bybit", raw_api_key="k", raw_secret="s")
     assert "validation_status" not in upserts[0]
+
+
+# ── 5. EXCH-STATE-02: withdrawal permission is re-checked, and blocks live trading ───────
+
+
+def test_a_stored_key_that_can_now_withdraw_is_recorded_and_refused(monkeypatch):
+    vault = _Vault()
+    withdraw = {"result": {"permissions": {"Wallet": ["AccountTransfer", "Withdraw"]},
+                           "readOnly": 0, "ips": ["*"]}}
+    client, _ = _client(monkeypatch, vault, permissions=withdraw)
+    res = client.post("/test-stored", json={"exchange_id": "bybit"})
+
+    assert res.status_code == 400, res.text
+    assert res.json()["detail"]["error"] == exchange_module.EXCHANGE_KEY_WITHDRAW_ENABLED
+    assert [r["validation_status"] for r in vault.recorded] == ["withdraw_enabled"]
+    assert vault.recorded[0]["can_trade"] is False
+
+
+from backend_app.backend.api_key_vault import (  # noqa: E402
+    VALIDATION_WITHDRAW_ENABLED,
+    credential_trade_block_reason,
+)
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        {"validation_status": None, "can_trade": None},
+        {"validation_status": "invalid", "can_trade": False},
+        {"validation_status": VALIDATION_WITHDRAW_ENABLED, "can_trade": False},
+        {"validation_status": "verified", "can_trade": False},
+        {"validation_status": "unreadable"},
+        None,
+    ],
+)
+def test_live_trading_is_refused_without_an_affirmative_verdict(keys):
+    assert credential_trade_block_reason(keys)
+
+
+@pytest.mark.parametrize("can_trade", [True, None])
+def test_a_verified_key_may_trade(can_trade):
+    assert credential_trade_block_reason({"validation_status": "verified", "can_trade": can_trade}) is None
+
+
+def test_a_withdraw_enabled_record_can_never_trade():
+    assert build_validation_record(VALIDATION_WITHDRAW_ENABLED, True)["can_trade"] is False
+
+
+def test_the_live_bot_start_consults_the_verdict_before_connecting():
+    """master_executor's live branch must refuse an untradeable key BEFORE ConnectionEngine is
+    built, and must route by the stored key's environment, not the blueprint's."""
+    import inspect
+
+    import backend_app.backend.master_executor as me
+
+    src = inspect.getsource(me)
+    live = src[src.index("# LIVE path"):]
+    assert live.index("credential_trade_block_reason(keys)") < live.index("ConnectionEngine("), (
+        "the verdict must be checked before the live connection is opened"
+    )
+    assert "testnet=key_sandbox" in live
+    assert "sandbox=key_sandbox" in live
+    assert 'sandbox=self.blueprint.get("testnet", False)' not in live

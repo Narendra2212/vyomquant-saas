@@ -446,7 +446,10 @@ _CREDENTIAL_VALID_STATUSES = frozenset({"valid", "validated", "verified", "activ
 #: remedy is the same but the cause, and therefore the message, is not.
 _CREDENTIAL_INVALID_STATUSES = frozenset(
     {"revoked", "invalid", "expired", "failed", "error", "unauthorized", "denied", "disabled", "inactive",
-     _UNREADABLE_CREDENTIAL_STATUS}
+     _UNREADABLE_CREDENTIAL_STATUS,
+     # EXCH-STATE-02: written by the stored-key probe when the venue reports the key can
+     # withdraw. Spelled here (not imported) for the same reason the set above is literal.
+     "withdraw_enabled"}
 )
 
 

@@ -22,6 +22,7 @@ from backend_app.backend.exchange_key_permissions import inspect_key_permissions
 from backend_app.backend.api_key_vault import (
     VALIDATION_INVALID,
     VALIDATION_VERIFIED,
+    VALIDATION_WITHDRAW_ENABLED,
     build_validation_record,
 )
 from backend_app.core.dependencies import (get_current_user,
@@ -1258,6 +1259,34 @@ async def test_stored_connection(
         # EXCH-STATE-01: the venue accepted the stored key just now -- record it, with the
         # trade permission the venue reports (introspection never raises).
         permission_report = await inspect_key_permissions(exchange, body.exchange_id)
+        # EXCH-STATE-02: EXCH-02 refuses a withdraw-enabled key at SAVE time, but a key's
+        # permissions can be edited at the exchange afterwards (e.g. to enable trading), and
+        # nothing re-asked. The stored-key probe now does: a key that can withdraw is
+        # recorded as such -- which stops any live bot from starting on it
+        # (`credential_trade_block_reason`) -- and the trader is told what to do.
+        if permission_report.withdraw_enabled:
+            _record_validation(
+                vault,
+                user["id"],
+                body.exchange_id,
+                build_validation_record(VALIDATION_WITHDRAW_ENABLED),
+            )
+            logger.warning(
+                "EXCH-STATE-02: stored key can withdraw user=%s exchange=%s",
+                user["id"], body.exchange_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": EXCHANGE_KEY_WITHDRAW_ENABLED,
+                    "message": (
+                        "This stored API key now has withdrawal permission enabled, so it "
+                        "has been blocked from live trading. Turn withdrawals off for this "
+                        "key at the exchange (or create a new key without them), then press "
+                        "refresh to verify it again."
+                    ),
+                },
+            )
         _record_validation(
             vault,
             user["id"],
@@ -1271,6 +1300,10 @@ async def test_stored_connection(
             "exchange_status": status,
             "message": "Stored keys verified successfully.",
         }
+    except HTTPException:
+        # EXCH-STATE-02: a structured refusal raised above (withdraw-enabled key) is
+        # already the answer -- not a verification failure to be relabelled as 502.
+        raise
     except ValueError as e:
         # 404 is preserved: the frontend branches on it to mean "this venue has no stored
         # credentials", and `load_decrypted_keys` raises ValueError for exactly that.

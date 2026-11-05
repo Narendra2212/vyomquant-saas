@@ -14,12 +14,20 @@ class _Vault:
         self.api_key = api_key
 
     def load_decrypted_keys(self, user_id, exchange_id):
-        return {"api_key": self.api_key, "secret_key": "s", "password": None}
+        # A VERIFIED key: EXCH-STATE-02 refuses to start a live bot on a key with no recorded
+        # verdict, before the balance checks this file exists for are reached. These tests are
+        # about the balance, so the key is modelled as one that passed verification.
+        return {"api_key": self.api_key, "secret_key": "s", "password": None,
+                "validation_status": "verified", "can_trade": True, "sandbox": False}
 
 
 class _Conn:
-    def __init__(self, exchange_id=None, api_key=None, secret_key=None, password=None):
+    def __init__(self, exchange_id=None, api_key=None, secret_key=None, password=None,
+                 testnet=False):
+        # `testnet` mirrors the real ConnectionEngine signature: the live path now routes by
+        # the stored key's environment (EXCH-STATE-02).
         self.api_key = api_key
+        self.testnet = testnet
 
     async def connect(self):
         return object()

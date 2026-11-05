@@ -195,6 +195,17 @@ describe('EXCH-STATE-01 ConnectionCard renders the recorded verdict', () => {
     expect(stateOf('bybit')).toBe('rejected');
   });
 
+  it('a key the exchange reports can withdraw reads Blocked and Cannot trade', async () => {
+    api.exchange.list.mockResolvedValue([
+      row({ validation_status: 'withdraw_enabled', last_validated_at: '2026-11-05T05:45:54+00:00', can_trade: false }),
+    ]);
+    render(<ExchangeManager />);
+
+    expect(await screen.findByText('Blocked')).toBeDefined();
+    expect(screen.getByText('Cannot trade')).toBeDefined();
+    expect(stateOf('bybit')).toBe('blocked');
+  });
+
   it('a key no check has recorded still reads not reported — never a guessed verdict', async () => {
     api.exchange.list.mockResolvedValue([row({})]);
     render(<ExchangeManager />);
