@@ -172,7 +172,9 @@ describe('Phase 6B ExchangeManager Contract & Lifecycle Test Suite', () => {
         api_key: 'bin_key_123',
         secret_key: 'bin_sec_456',
         password: undefined,
-        uid: undefined
+        uid: undefined,
+        // EXCH-SAVE-01: the Testnet toggle is now always sent; unticked means live.
+        sandbox: false
       });
     });
 
@@ -215,7 +217,8 @@ describe('Phase 6B ExchangeManager Contract & Lifecycle Test Suite', () => {
         secret_key: 'bin_sec_456',
         password: undefined,
         uid: undefined,
-        label: ''
+        label: '',
+        sandbox: false
       });
     });
 

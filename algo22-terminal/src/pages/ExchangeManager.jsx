@@ -437,16 +437,45 @@ const Marker = ({ field, reason }) => (
  * vocabulary for (Requirement 4.4 finding 5). Its remaining `return detail` is the exposure
  * path this file's header reports.
  */
+const MFA_REQUIRED_MESSAGE =
+  "Two-factor authentication is required to save or remove exchange keys. " +
+  "Open Security → Two-Factor Authentication (/app/2fa), set up or confirm your " +
+  "authenticator code, then return here and save again. Nothing was stored.";
+
 function sanitizeErrorMessage(err, fallback = "An error occurred. Please try again.") {
   if (!err) return fallback;
   if (err.name === "AbortError" || err.name === "CanceledError") return null;
 
-  const status = err?.response?.status;
-  if (status === 401) return "Session expired. Please log in again.";
-  if (status === 403) return "Access denied. Insufficient permissions.";
-  if (status === 429) return "Exchange rate limit reached. Please try again shortly.";
+  /*
+   * EXCH-SAVE-01. READ THE ERROR WHERE `apiClient` ACTUALLY PUTS IT.
+   *
+   * Every call on this page goes through `apiClient`'s `post`/`get`/`del`, whose response
+   * interceptor rejects with an `ApiError` carrying `status` and `data` as OWN properties
+   * (`apiClient.js` `class ApiError`). It has no `.response`. This function read only the
+   * axios-native `err.response.status` / `err.response.data.detail`, so against a real
+   * request every branch below was dead and every failure on this page — a 403, a 429, and
+   * every structured `{error, message}` refusal `routers/exchange.py` takes care to write —
+   * collapsed into the generic `fallback`. That is how a trader whose save was refused for
+   * want of two-factor authentication was shown only "Failed to save exchange keys." with
+   * nothing to act on. `err.status`/`err.data` are read first; the axios shape stays as the
+   * second source because this page's tests (and any future caller using axios directly)
+   * reject with it.
+   * Regression: tests/unit/exchange_manager_error_shape.test.jsx
+   */
+  const status = err?.status ?? err?.response?.status;
+  const detail = err?.data?.detail ?? err?.response?.data?.detail;
 
-  const detail = err?.response?.data?.detail;
+  if (status === 401) return "Session expired. Please log in again.";
+  if (status === 403) {
+    // `require_aal2` (core/dependencies.py) answers 403 with a string naming two-factor
+    // authentication. That refusal is a step the trader can complete, not a permission they
+    // lack, so it gets its own instruction instead of "Access denied".
+    if (typeof detail === "string" && /two-factor|mfa/i.test(detail)) {
+      return MFA_REQUIRED_MESSAGE;
+    }
+    return "Access denied. Insufficient permissions.";
+  }
+  if (status === 429) return "Exchange rate limit reached. Please try again shortly.";
 
   /*
    * The server's STRUCTURED refusal: `detail` is `{error, message}` rather than a string.
@@ -974,6 +1003,10 @@ export default function ExchangeManager() {
         secret_key: credentialValues.secret_key,
         password: credentialValues.password,
         uid: credentialValues.uid,
+        // EXCH-SAVE-01: the "Testnet / Sandbox Mode" checkbox was rendered and then never
+        // sent, so Test Connection and Save both silently used PRODUCTION while the form
+        // said testnet. Sent on both calls so the test proves the environment the save stores.
+        sandbox: credentialValues.sandbox === true,
       });
       setNotice({
         severity: 'info',
@@ -1004,6 +1037,9 @@ export default function ExchangeManager() {
         password: credentialValues.password,
         uid: credentialValues.uid,
         label: credentialValues.label,
+        // EXCH-SAVE-01 / EXCH-06: persisted as `exchange_keys.sandbox`, which decides whether
+        // orders route to the venue's testnet or to live. See handleTestConnection.
+        sandbox: credentialValues.sandbox === true,
       });
       setNotice({ severity: 'info', message: 'Exchange keys encrypted and stored securely.' });
 
