@@ -1079,9 +1079,16 @@ async def test_connection(
             secret_key=body.secret_key,
             password=body.password,
             uid=body.uid,
+            # EXCH-SAVE-01. Test the environment the SAVE would store. `store_keys` passes
+            # `testnet=sandbox` (EXCH-06); this handler did not, so with "Testnet / Sandbox
+            # Mode" ticked the test dialled production and answered "verified" for a
+            # credential the save would then check against the sandbox — two buttons on
+            # one form, disagreeing about the same key. Same `getattr` default as
+            # `store_keys`: absent means production, the pre-existing behaviour.
+            testnet=getattr(body, "sandbox", False),
         )
         exchange = await bridge.connect()
-        
+
         # Validate keys with lightweight call
         is_valid = await bridge.validate_keys()
         if not is_valid:
