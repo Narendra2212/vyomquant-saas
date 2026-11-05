@@ -234,6 +234,10 @@ def test_a_row_predating_the_column_reads_as_live(vault):
     """
     vault._recording.store["rows"] = {
         ("user-1", "binance"): {
+            # A real `exchange_keys` row always carries its owner (NOT NULL), and the vault
+            # now re-verifies it after the fetch (TENANT-01/HY-07). Omitting it made this
+            # fixture a row from no one, which the vault correctly refuses.
+            "user_id": "user-1",
             "encrypted_api_key": vault._encrypt("key"),
             "encrypted_secret_key": vault._encrypt("secret"),
             "encrypted_password": None,

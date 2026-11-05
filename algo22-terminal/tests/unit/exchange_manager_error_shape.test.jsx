@@ -21,6 +21,9 @@ import { api } from '../../src/api';
 import { ApiError } from '../../src/apiClient';
 
 vi.mock('../../src/api', () => ({
+  // Required by tests/test_api_mock_factories_declare_isauthenticated.py: a vi.mock factory
+  // replaces the whole module. This suite never signs in.
+  isAuthenticated: () => false,
   api: {
     exchange: {
       list: vi.fn(),
