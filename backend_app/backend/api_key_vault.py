@@ -220,7 +220,9 @@ class APIKeyVault:
             "sandbox":              bool(sandbox),
         }
         if validation:
-            data.update({k: validation[k] for k in _VALIDATION_COLUMNS if k in validation})
+            for column in _VALIDATION_COLUMNS:
+                if column in validation:
+                    data[column] = validation[column]
 
         # FIX VA-5: Use upsert to handle existing keys cleanly.
         try:
@@ -242,13 +244,18 @@ class APIKeyVault:
         """
         user_id     = _validate_id(user_id,     "user_id")
         exchange_id = _validate_id(exchange_id, "exchange_id")
-        update = {k: validation[k] for k in _VALIDATION_COLUMNS if k in (validation or {})}
-        if not update:
+        if not validation or "validation_status" not in validation:
             return False
         try:
+            # A literal payload (not a built dict) so the schema-drift guard can check every
+            # column this write names against the table.
             (
                 self.supabase.table("exchange_keys")
-                .update(update)
+                .update({
+                    "validation_status": validation["validation_status"],
+                    "last_validated_at": validation.get("last_validated_at"),
+                    "can_trade": validation.get("can_trade"),
+                })
                 .eq("user_id", user_id)
                 .eq("exchange_id", exchange_id.lower())
                 .execute()

@@ -711,17 +711,18 @@ async def list_exchanges(
             )
 
         try:
-            async def _read_keys(projection: str):
-                res = (
+            async def _settle(res):
+                return await res if inspect.isawaitable(res) else res
+
+            # Each read names its projection constant directly in the chain, so the
+            # schema-drift guard resolves both against the table's declared columns.
+            try:
+                q1 = await _settle(
                     supabase.table("exchange_keys")
-                    .select(projection)
+                    .select(_EXCHANGE_KEYS_PROJECTION)
                     .eq("user_id", user["id"])
                     .execute()
                 )
-                return await res if inspect.isawaitable(res) else res
-
-            try:
-                q1 = await _read_keys(_EXCHANGE_KEYS_PROJECTION)
             except Exception as wide_err:
                 # EXCH-STATE-01: a database without migrations 056/060 has no verdict columns.
                 # That must cost the verdict, not the whole list -- so on an undefined-column
@@ -734,7 +735,12 @@ async def list_exchanges(
                     "exchange_keys verdict columns unavailable (%s); listing without them",
                     type(wide_err).__name__,
                 )
-                q1 = await _read_keys(_EXCHANGE_KEYS_BASE_PROJECTION)
+                q1 = await _settle(
+                    supabase.table("exchange_keys")
+                    .select(_EXCHANGE_KEYS_BASE_PROJECTION)
+                    .eq("user_id", user["id"])
+                    .execute()
+                )
             read_error = getattr(q1, "error", None)
             rows = getattr(q1, "data", None)
             if read_error or not isinstance(rows, list):
@@ -1263,7 +1269,6 @@ async def test_stored_connection(
             "exchange": body.exchange_id.upper(),
             "usdt_balance": round(total_usdt, 2),
             "exchange_status": status,
-            "can_trade": permission_report.trade_enabled,
             "message": "Stored keys verified successfully.",
         }
     except ValueError as e:
