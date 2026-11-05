@@ -29,6 +29,8 @@ from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from supabase import Client, create_client
 
+from datetime import datetime, timezone
+
 # FIX VA-3: Remove logging.basicConfig() — let the application configure logging.
 #            Never call basicConfig inside a library/module.
 logger = logging.getLogger("APIKeyVault")
@@ -41,6 +43,34 @@ logger = logging.getLogger("APIKeyVault")
 # FIX VA-6: Strict validation regex — only alphanumeric + hyphens + underscores.
 # Prevents spaces/commas/equals that would corrupt ILP line protocol downstream.
 _SAFE_ID_RE = re.compile(r'^[a-zA-Z0-9\-_]{1,128}$')
+
+
+#: EXCH-STATE-01. The three `exchange_keys` columns migration 056 added for a credential's
+#: verified state, which nothing wrote until now -- so every stored key read as "not reported"
+#: no matter how many times the venue had accepted it.
+_VALIDATION_COLUMNS = ("validation_status", "last_validated_at", "can_trade")
+
+#: The two verdicts this module writes. Spellings are the ones
+#: `dashboard_aggregation_service._CREDENTIAL_VALID_STATUSES` / `_INVALID_STATUSES` already
+#: read, so the dashboard and the exchange page agree without a second vocabulary.
+VALIDATION_VERIFIED = "verified"
+VALIDATION_INVALID = "invalid"
+
+
+def build_validation_record(status: str, can_trade: Optional[bool] = None) -> dict:
+    """The row fragment for one venue check's verdict, timestamped now (UTC).
+
+    ``can_trade`` is passed through as the venue reported it; ``None`` means the venue did
+    not say, and is stored as NULL rather than guessed. An ``invalid`` verdict always
+    records ``can_trade = False``: a key the venue rejects cannot place an order.
+    """
+    if status not in (VALIDATION_VERIFIED, VALIDATION_INVALID):
+        raise ValueError(f"unknown validation status: {status!r}")
+    return {
+        "validation_status": status,
+        "last_validated_at": datetime.now(timezone.utc).isoformat(),
+        "can_trade": False if status == VALIDATION_INVALID else can_trade,
+    }
 
 
 def _validate_id(value: str, name: str) -> str:
@@ -150,8 +180,15 @@ class APIKeyVault:
         label:          Optional[str] = None,
         uid:            Optional[str] = None,
         sandbox:        bool = False,
+        validation:     Optional[dict] = None,
     ) -> bool:
         """Encrypt and store one credential.
+
+        EXCH-STATE-01: ``validation`` is the result of the venue check the caller just ran
+        against THIS credential (``build_validation_record``). When given it is written in
+        the same upsert as the ciphertext, so a freshly stored key never sits beside the
+        previous key's verdict. When omitted (``rotate_key``, which re-encrypts the same
+        plaintext) the stored verdict is left as it is.
 
         EXCH-06: ``sandbox`` records whether this credential addresses the venue's
         testnet rather than production. It is NOT encrypted -- it is not a secret, it is
@@ -182,6 +219,8 @@ class APIKeyVault:
             # must not turn into a NULL or a type error on the write.
             "sandbox":              bool(sandbox),
         }
+        if validation:
+            data.update({k: validation[k] for k in _VALIDATION_COLUMNS if k in validation})
 
         # FIX VA-5: Use upsert to handle existing keys cleanly.
         try:
@@ -191,6 +230,36 @@ class APIKeyVault:
         except Exception as e:
             logger.error(f"Supabase upsert failed for user={user_id}: {e}")
             raise
+
+    def record_validation(self, user_id: str, exchange_id: str, validation: dict) -> bool:
+        """EXCH-STATE-01: persist the verdict of a venue check against the STORED credential.
+
+        Written by ``POST /test-stored``. Returns False rather than raising: the check the
+        trader asked for has already happened and its answer is already in the response, so
+        failing to record it must not turn a successful probe into an error. The cost of a
+        failed write is that the card keeps showing the previous verdict with its timestamp,
+        which says when it was true -- not a fabricated present.
+        """
+        user_id     = _validate_id(user_id,     "user_id")
+        exchange_id = _validate_id(exchange_id, "exchange_id")
+        update = {k: validation[k] for k in _VALIDATION_COLUMNS if k in (validation or {})}
+        if not update:
+            return False
+        try:
+            (
+                self.supabase.table("exchange_keys")
+                .update(update)
+                .eq("user_id", user_id)
+                .eq("exchange_id", exchange_id.lower())
+                .execute()
+            )
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Recording credential validation failed for user=%s exchange=%s: %s",
+                user_id, exchange_id, type(e).__name__,
+            )
+            return False
 
     def load_decrypted_keys(self, user_id: str, exchange_id: str) -> dict:
         user_id     = _validate_id(user_id,     "user_id")

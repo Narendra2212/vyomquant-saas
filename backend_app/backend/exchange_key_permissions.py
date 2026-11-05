@@ -29,6 +29,10 @@ class KeyPermissionReport:
     withdraw_enabled: Optional[bool]        # None = unknown
     ip_restricted: Optional[bool]           # None = unknown / not reported by venue
     venue: str = ""
+    # EXCH-STATE-01: whether the venue says this key may place orders. None = the venue did not
+    # say, which is NOT "cannot trade" -- it is persisted as `exchange_keys.can_trade = NULL`
+    # and rendered as "Trade permission not reported", never as a guess either way.
+    trade_enabled: Optional[bool] = None
 
     @property
     def refuse_reason(self) -> Optional[str]:
@@ -54,7 +58,9 @@ def parse_binance(resp: dict) -> KeyPermissionReport:
     if not isinstance(resp, dict) or "enableWithdrawals" not in resp:
         return KeyPermissionReport(False, None, None, "binance")
     return KeyPermissionReport(True, _truthy(resp["enableWithdrawals"]),
-                               _truthy(resp["ipRestrict"]) if "ipRestrict" in resp else None, "binance")
+                               _truthy(resp["ipRestrict"]) if "ipRestrict" in resp else None, "binance",
+                               trade_enabled=(_truthy(resp["enableSpotAndMarginTrading"])
+                                              if "enableSpotAndMarginTrading" in resp else None))
 
 
 def parse_okx(resp: dict) -> KeyPermissionReport:
@@ -65,8 +71,10 @@ def parse_okx(resp: dict) -> KeyPermissionReport:
     except Exception:  # noqa: BLE001
         return KeyPermissionReport(False, None, None, "okx")
     ip = row.get("ip")
-    return KeyPermissionReport(True, "withdraw" in {p.strip() for p in perm.split(",")},
-                               bool(ip) if ip is not None else None, "okx")
+    perms = {p.strip() for p in perm.split(",")}
+    return KeyPermissionReport(True, "withdraw" in perms,
+                               bool(ip) if ip is not None else None, "okx",
+                               trade_enabled="trade" in perms)
 
 
 def parse_bybit(resp: dict) -> KeyPermissionReport:
@@ -78,7 +86,11 @@ def parse_bybit(resp: dict) -> KeyPermissionReport:
         return KeyPermissionReport(False, None, None, "bybit")
     ips = result.get("ips")
     restricted = None if ips is None else (bool(ips) and ips != ["*"])
-    return KeyPermissionReport(True, any("withdraw" in str(w).lower() for w in wallet), restricted, "bybit")
+    # `readOnly`: 0 = read-and-write (can place orders), 1 = read-only. Absent = not reported.
+    read_only = result.get("readOnly")
+    trade_enabled = None if read_only is None else str(read_only).strip() in ("0", "false", "False")
+    return KeyPermissionReport(True, any("withdraw" in str(w).lower() for w in wallet), restricted, "bybit",
+                               trade_enabled=trade_enabled)
 
 
 async def inspect_key_permissions(exchange: Any, exchange_id: str) -> KeyPermissionReport:

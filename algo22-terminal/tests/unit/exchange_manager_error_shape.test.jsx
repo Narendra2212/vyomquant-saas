@@ -144,3 +144,73 @@ describe('EXCH-SAVE-01 ExchangeManager error shape and testnet toggle', () => {
     );
   });
 });
+
+/*
+ * EXCH-STATE-01 — the card shows the credential's RECORDED verdict.
+ * A saved key whose save had proven it against the venue read "Connection not reported",
+ * because the verdict was never stored. It now is, and the card renders it with its time.
+ */
+// The badge's own attribute, so the page's "Connected" count heading cannot satisfy it.
+const stateOf = (exchange) =>
+  document.querySelector(`[data-exchange="${exchange}"]`)?.getAttribute('data-connection-state');
+
+describe('EXCH-STATE-01 ConnectionCard renders the recorded verdict', () => {
+  const row = (extra) => ({
+    id: 'u_bybit',
+    account_id: 'acc-1',
+    exchange_id: 'bybit',
+    name: 'BYBIT',
+    masked_key: 'BYB••••IT',
+    bot_count: 0,
+    connected_at: '2026-11-05T05:45:54+00:00',
+    ...extra,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.exchange.getSupported.mockResolvedValue(supported);
+  });
+  afterEach(() => cleanup());
+
+  it('a verified key reads Connected, with its trade permission and when it was verified', async () => {
+    api.exchange.list.mockResolvedValue([
+      row({ validation_status: 'verified', last_validated_at: '2026-11-05T05:45:54+00:00', can_trade: true }),
+    ]);
+    render(<ExchangeManager />);
+
+    expect(await screen.findByText('Can trade')).toBeDefined();
+    expect(stateOf('bybit')).toBe('connected');
+    expect(screen.getByText('Last verified')).toBeDefined();
+    expect(screen.queryByText('Connection not reported')).toBeNull();
+  });
+
+  it('a key the exchange rejected reads Rejected and Cannot trade', async () => {
+    api.exchange.list.mockResolvedValue([
+      row({ validation_status: 'invalid', last_validated_at: '2026-11-05T05:45:54+00:00', can_trade: false }),
+    ]);
+    render(<ExchangeManager />);
+
+    expect(await screen.findByText('Rejected')).toBeDefined();
+    expect(screen.getByText('Cannot trade')).toBeDefined();
+    expect(stateOf('bybit')).toBe('rejected');
+  });
+
+  it('a key no check has recorded still reads not reported — never a guessed verdict', async () => {
+    api.exchange.list.mockResolvedValue([row({})]);
+    render(<ExchangeManager />);
+
+    expect(await screen.findByText('Connection not reported')).toBeDefined();
+    expect(stateOf('bybit')).toBe('unreported');
+    expect(screen.queryByText('Can trade')).toBeNull();
+  });
+
+  it('a verified key whose venue did not report trade permission says so', async () => {
+    api.exchange.list.mockResolvedValue([
+      row({ validation_status: 'verified', last_validated_at: '2026-11-05T05:45:54+00:00', can_trade: null }),
+    ]);
+    render(<ExchangeManager />);
+
+    expect(await screen.findByText('Trade permission not reported')).toBeDefined();
+    expect(stateOf('bybit')).toBe('connected');
+  });
+});
