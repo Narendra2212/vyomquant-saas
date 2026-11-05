@@ -55,6 +55,46 @@ _VALIDATION_COLUMNS = ("validation_status", "last_validated_at", "can_trade")
 #: read, so the dashboard and the exchange page agree without a second vocabulary.
 VALIDATION_VERIFIED = "verified"
 VALIDATION_INVALID = "invalid"
+#: EXCH-STATE-02: the venue accepted the key AND reports it can withdraw funds. Recorded by
+#: the stored-key probe, because a key's permissions can be changed at the exchange after
+#: the save-time EXCH-02 check passed. A known negative: such a key never starts a live bot.
+VALIDATION_WITHDRAW_ENABLED = "withdraw_enabled"
+
+_VALIDATION_STATUSES = (VALIDATION_VERIFIED, VALIDATION_INVALID, VALIDATION_WITHDRAW_ENABLED)
+
+
+class CredentialNotTradeable(RuntimeError):
+    """A stored credential's recorded verdict does not permit opening live orders."""
+
+
+def credential_trade_block_reason(keys: Optional[dict]) -> Optional[str]:
+    """Why this credential must not OPEN live orders, or None when it may.
+
+    EXCH-STATE-02. Live trading with real money requires an affirmative, recorded verdict:
+    the venue accepted this key (``verified``) and did not report it read-only. Everything
+    else refuses -- a key no check has recorded, a key the venue rejected, a key that can
+    withdraw. ``can_trade is None`` (the venue did not say) is NOT a refusal: some venues
+    expose no introspection, and the order itself is then the venue's to refuse.
+
+    Opening orders only. Cancelling and flattening reduce risk and are not gated by this.
+    """
+    if not isinstance(keys, dict):
+        return "no stored credential was readable"
+    status = str(keys.get("validation_status") or "").strip().lower()
+    if status == VALIDATION_WITHDRAW_ENABLED:
+        return (
+            "the exchange reports this API key can withdraw funds; create a key with "
+            "withdrawals disabled and store it again"
+        )
+    if status != VALIDATION_VERIFIED:
+        return (
+            "this API key has no recorded successful verification"
+            + (f" (last result: {status})" if status else "")
+            + "; verify it from the Exchange Manager (refresh button) first"
+        )
+    if keys.get("can_trade") is False:
+        return "the exchange reports this API key is read-only"
+    return None
 
 
 def build_validation_record(status: str, can_trade: Optional[bool] = None) -> dict:
@@ -64,12 +104,12 @@ def build_validation_record(status: str, can_trade: Optional[bool] = None) -> di
     not say, and is stored as NULL rather than guessed. An ``invalid`` verdict always
     records ``can_trade = False``: a key the venue rejects cannot place an order.
     """
-    if status not in (VALIDATION_VERIFIED, VALIDATION_INVALID):
+    if status not in _VALIDATION_STATUSES:
         raise ValueError(f"unknown validation status: {status!r}")
     return {
         "validation_status": status,
         "last_validated_at": datetime.now(timezone.utc).isoformat(),
-        "can_trade": False if status == VALIDATION_INVALID else can_trade,
+        "can_trade": can_trade if status == VALIDATION_VERIFIED else False,
     }
 
 
@@ -336,6 +376,12 @@ class APIKeyVault:
                 # returns no such key, and "absent" must mean production -- the same
                 # answer this function gave before the column existed.
                 "sandbox":    bool(row.get("sandbox")),
+                # EXCH-STATE-02: the recorded verdict travels with the key, so the live
+                # path can refuse a key that is unverified, rejected, read-only or able to
+                # withdraw (`credential_trade_block_reason`). Plain reads: a database
+                # without migration 056 returns no such keys, which reads as "no verdict".
+                "validation_status": row.get("validation_status"),
+                "can_trade":         row.get("can_trade"),
             }
         except Exception as e:
             logger.error(f"Failed to load keys for {user_id}: {e}")

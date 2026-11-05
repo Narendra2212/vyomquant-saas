@@ -590,6 +590,11 @@ function credentialVerdict(row) {
   const raw = typeof row?.validation_status === 'string'
     ? row.validation_status.trim().toLowerCase()
     : '';
+  // EXCH-STATE-02: the venue accepted the key but reports it can withdraw funds. Recorded by
+  // the refresh probe; such a key cannot start a live bot, so it reads as Blocked.
+  if (raw === 'withdraw_enabled') {
+    return { connectionState: 'blocked', canTrade: false };
+  }
   if (VERDICT_VALID.has(raw)) {
     return { connectionState: 'connected', canTrade: row?.can_trade ?? null };
   }

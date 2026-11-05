@@ -677,11 +677,41 @@ class BotRunner:
 
         # LIVE path — real keys, real exchange, real OHLCV warmup
         keys = self.vault.load_decrypted_keys(self.user_id, self.exchange_id)
+
+        # EXCH-STATE-02: a live bot opens real orders, so it starts only on a key whose
+        # RECORDED verdict permits that -- verified by the venue, not read-only, not able
+        # to withdraw. Checked before anything connects, so a refused key is never used.
+        from backend_app.backend.api_key_vault import (
+            CredentialNotTradeable,
+            credential_trade_block_reason,
+        )
+        block_reason = credential_trade_block_reason(keys)
+        if block_reason:
+            raise CredentialNotTradeable(
+                f"Refusing to start live bot {self.user_id}/{self.symbol} on "
+                f"{self.exchange_id}: {block_reason}."
+            )
+
+        # EXCH-STATE-02: the ENVIRONMENT is the stored key's (EXCH-06 `sandbox`), not a
+        # blueprint flag -- a key belongs to exactly one environment, and dialling the
+        # other one with it either fails or, worse, routes a testnet strategy to live.
+        # A blueprint that names an environment different from its key is refused.
+        key_sandbox = bool(keys.get("sandbox"))
+        blueprint_testnet = self.blueprint.get("testnet")
+        if blueprint_testnet is not None and bool(blueprint_testnet) != key_sandbox:
+            raise CredentialNotTradeable(
+                f"Refusing to start live bot {self.user_id}/{self.symbol}: the strategy asks "
+                f"for {'testnet' if blueprint_testnet else 'live'} but the stored "
+                f"{self.exchange_id} key is a {'testnet' if key_sandbox else 'live'} key."
+            )
+        self._key_sandbox = key_sandbox
+
         self.ccxt_bridge = ConnectionEngine(
             self.exchange_id,
             api_key=keys["api_key"],
             secret_key=keys["secret_key"],
             password=keys.get("password"),
+            testnet=key_sandbox,
         )
         self.exchange = await self.ccxt_bridge.connect()
         self.data_engine = DataEngine(self.exchange)
@@ -735,7 +765,7 @@ class BotRunner:
             exchange_id=self.exchange_id,
             api_key=keys["api_key"],
             api_secret=keys["secret_key"],
-            sandbox=self.blueprint.get("testnet", False),
+            sandbox=key_sandbox,
             password=keys.get("password"),
             user_id=self.user_id,
         )
