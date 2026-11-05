@@ -570,6 +570,41 @@ const venueLabel = (venue) =>
  * Every figure on it goes through `rowField`, so a column the response did not carry renders
  * the marker with its declared reason rather than a constant.
  */
+/*
+ * EXCH-STATE-01. The credential's RECORDED verdict, as the server stores it
+ * (`exchange_keys.validation_status` / `last_validated_at` / `can_trade`, written by the save
+ * and by the refresh probe). Spellings mirror `dashboard_aggregation_service`'s valid/invalid
+ * sets so this page and the dashboard read one vocabulary. Anything else — including no
+ * verdict at all — passes nothing, and `ds/ExchangeStatus` keeps saying "not reported".
+ */
+const VERDICT_VALID = new Set(['valid', 'validated', 'verified', 'active', 'ok']);
+const VERDICT_INVALID = new Set([
+  'revoked', 'invalid', 'expired', 'failed', 'error', 'unauthorized', 'denied', 'disabled',
+  'inactive', 'unreadable',
+]);
+const LAST_VERIFIED_UNRECORDED_REASON =
+  'No check of this key has been recorded yet. Use the refresh button to verify it with the '
+  + 'exchange now.';
+
+function credentialVerdict(row) {
+  const raw = typeof row?.validation_status === 'string'
+    ? row.validation_status.trim().toLowerCase()
+    : '';
+  if (VERDICT_VALID.has(raw)) {
+    return { connectionState: 'connected', canTrade: row?.can_trade ?? null };
+  }
+  if (VERDICT_INVALID.has(raw)) {
+    return { connectionState: 'rejected', canTrade: false };
+  }
+  return { connectionState: undefined, canTrade: undefined };
+}
+
+const formatDateTime = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toLocaleString();
+};
+
 function ConnectionCard({ row, busy, onReconnect, onTest, onDelete }) {
   const venue = rowField(row, FIELD.connectionName);
   const maskedKey = rowField(row, FIELD.maskedApiKey);
@@ -581,6 +616,8 @@ function ConnectionCard({ row, busy, onReconnect, onTest, onDelete }) {
     : connectedAt;
 
   const name = venue.available ? String(venue.value) : String(row?.exchange_id ?? '');
+  const verdict = credentialVerdict(row);
+  const lastVerified = formatDateTime(row?.last_validated_at);
 
   return (
     <div className="flex min-w-0 flex-col gap-4 rounded-lg border border-line-default bg-surface-raised p-4">
@@ -592,7 +629,12 @@ function ConnectionCard({ row, busy, onReconnect, onTest, onDelete }) {
             reported" and the latency marker with its reason — which is the truth about a
             stored credential nobody has probed. */}
         {venue.available ? (
-          <ExchangeStatus exchange={name} className="min-w-0 flex-1" />
+          <ExchangeStatus
+            exchange={name}
+            connectionState={verdict.connectionState}
+            canTrade={verdict.canTrade}
+            className="min-w-0 flex-1"
+          />
         ) : (
           <Marker field={FIELD.connectionName} reason={venue.reason} />
         )}
@@ -666,6 +708,17 @@ function ConnectionCard({ row, busy, onReconnect, onTest, onDelete }) {
           format="raw"
           unavailable
           unavailableReason={FIELD.connectionHealth.reason}
+        />
+        {/* EXCH-STATE-01: when the exchange last accepted (or rejected) this key — the
+            timestamp that qualifies the status badge above, so "Connected" is always read
+            as "verified at this time", never as a live heartbeat. */}
+        <Metric
+          label="Last verified"
+          value={lastVerified}
+          tier={3}
+          format="raw"
+          unavailable={lastVerified === null}
+          unavailableReason={LAST_VERIFIED_UNRECORDED_REASON}
         />
       </div>
 
@@ -1118,6 +1171,9 @@ export default function ExchangeManager() {
       const msg = sanitizeErrorMessage(err, "Stored connection test failed.");
       if (msg) setNotice({ severity: 'error', message: msg });
     } finally {
+      // EXCH-STATE-01: the probe's verdict is now recorded server-side (verified, or invalid
+      // when the exchange rejected the key), so re-read the list for the card to show it.
+      refetchConnections();
       setProcessingById((p) => ({ ...p, [exchangeId]: false }));
     }
   };

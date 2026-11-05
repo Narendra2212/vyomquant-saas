@@ -128,7 +128,17 @@ OWNER: Dict[str, Any] = {
 #: Adding ``updated_at`` here would retire that guard for a column no handler selects.
 #: Recorded rather than silently corrected, so the next reader knows the live table has
 #: moved and does not take this set as a current description of it.
-EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = frozenset(
+#:
+#: RE-QUERIED 2026-11-05 (EXCH-STATE-01): production now also holds ``sandbox`` (060) and
+#: ``is_active``, ``validation_status``, ``last_validated_at``, ``can_trade`` (056) --
+#: information_schema returned: can_trade, created_at, encrypted_api_key,
+#: encrypted_password, encrypted_secret_key, exchange_id, id, is_active, last_validated_at,
+#: sandbox, updated_at, user_id, validation_status. The connections read now selects the
+#: verdict columns so the page can show when the venue last accepted a key, and they are
+#: added here so this fixture keeps describing what production really holds. ``updated_at``
+#: stays out, for the reason above. ``LEGACY_EXCHANGE_KEYS_COLUMNS`` keeps the pre-056
+#: shape so the read's fallback for an un-migrated database is still exercised.
+LEGACY_EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = frozenset(
     {
         "id",
         "user_id",
@@ -138,6 +148,9 @@ EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = frozenset(
         "encrypted_password",
         "created_at",
     }
+)
+EXCHANGE_KEYS_COLUMNS: FrozenSet[str] = LEGACY_EXCHANGE_KEYS_COLUMNS | frozenset(
+    {"sandbox", "is_active", "validation_status", "last_validated_at", "can_trade"}
 )
 
 #: ``public.strategies``, restricted to the columns this handler's aggregation reads.
@@ -775,3 +788,49 @@ class TestNoFabricatedSyncTime:
             f"ExchangeConnection still declares last_sync as a property of this response: "
             f"{properties}"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# EXCH-STATE-01 — the recorded verdict is listed, and its absence costs only the verdict
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestTheRecordedVerdictIsListed:
+    def test_a_verified_key_reports_its_verdict_and_when(self) -> None:
+        row = _exchange_key_row("bybit")
+        row.update(
+            validation_status="verified",
+            last_validated_at="2026-11-05T05:45:54+00:00",
+            can_trade=True,
+            sandbox=False,
+        )
+        answer = _list_exchanges(_FakeSupabase(exchange_keys=[row], strategies=[]))
+
+        assert answer.status_code == 200, answer.text
+        (listed,) = answer.body
+        assert listed["validation_status"] == "verified"
+        assert listed["last_validated_at"] == "2026-11-05T05:45:54+00:00"
+        assert listed["can_trade"] is True
+        assert listed["sandbox"] is False
+
+    def test_a_key_no_check_has_recorded_reports_none_not_a_verdict(self) -> None:
+        answer = _list_exchanges(
+            _FakeSupabase(exchange_keys=[_exchange_key_row("bybit")], strategies=[])
+        )
+        (listed,) = answer.body
+        assert listed["validation_status"] is None
+        assert listed["last_validated_at"] is None
+        assert listed["can_trade"] is None
+
+    def test_a_database_without_the_verdict_columns_still_lists_its_keys(self, monkeypatch) -> None:
+        """Pre-056 shape: the wide projection earns a real 42703 from this double; the read
+        must fall back to the identity columns rather than 503 the whole page."""
+        monkeypatch.setitem(TABLE_COLUMNS, "exchange_keys", LEGACY_EXCHANGE_KEYS_COLUMNS)
+        answer = _list_exchanges(
+            _FakeSupabase(exchange_keys=[_exchange_key_row("bybit")], strategies=[])
+        )
+
+        assert answer.status_code == 200, answer.text
+        (listed,) = answer.body
+        assert listed["exchange_id"] == "bybit"
+        assert listed["validation_status"] is None

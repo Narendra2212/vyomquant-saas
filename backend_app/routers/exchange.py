@@ -19,6 +19,11 @@ from backend_app.backend.connection_engine import (ConnectionEngine,
                                                    release_exchange)
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.backend.exchange_key_permissions import inspect_key_permissions
+from backend_app.backend.api_key_vault import (
+    VALIDATION_INVALID,
+    VALIDATION_VERIFIED,
+    build_validation_record,
+)
 from backend_app.core.dependencies import (get_current_user,
                                            get_request_supabase, get_vault,
                                            get_ws_manager, require_aal2)
@@ -63,7 +68,14 @@ logger = logging.getLogger("ExchangeRouter")
 #: right. Selecting a column the table does not have raises `42703`, which this endpoint
 #: correctly reports as a 503, taking the whole listing down for every caller. Keep this
 #: constant, that fixture and the migration set in step.
-_EXCHANGE_KEYS_PROJECTION = "id, exchange_id, created_at"
+#: EXCH-STATE-01: the credential's recorded verdict (migration 056) is read alongside the
+#: identity columns, so the page can show when the venue last accepted this key instead of
+#: "Connection not reported" for a key that was proven at save time.
+_EXCHANGE_KEYS_PROJECTION = (
+    "id, exchange_id, created_at, sandbox, validation_status, last_validated_at, can_trade"
+)
+#: The identity columns alone -- the fallback when the verdict columns do not exist.
+_EXCHANGE_KEYS_BASE_PROJECTION = "id, exchange_id, created_at"
 
 #: The machine-readable code a connections read that DID NOT COMPLETE answers with, alongside
 #: HTTP 503. The same never-swallow rule ``routers/paper_trading.py`` (``PAPER_READ_FAILED``)
@@ -543,6 +555,12 @@ async def store_keys(
                 # Verified against the sandbox endpoint above BEFORE reaching here, so
                 # a stored `true` is a flag whose routing was already proven once.
                 sandbox=getattr(body, "sandbox", False),
+                # EXCH-STATE-01: the venue accepted this credential moments ago (connect,
+                # balance read, permission introspection above), so that verdict is stored
+                # with it, in the same write.
+                validation=build_validation_record(
+                    VALIDATION_VERIFIED, permission_report.trade_enabled
+                ),
             )
     except HTTPException:
         # The guard's own refusals (409 in flight, 503 lock unavailable) and the pre-check's
@@ -693,13 +711,36 @@ async def list_exchanges(
             )
 
         try:
-            q1_res = (
-                supabase.table("exchange_keys")
-                .select(_EXCHANGE_KEYS_PROJECTION)
-                .eq("user_id", user["id"])
-                .execute()
-            )
-            q1 = await q1_res if inspect.isawaitable(q1_res) else q1_res
+            async def _settle(res):
+                return await res if inspect.isawaitable(res) else res
+
+            # Each read names its projection constant directly in the chain, so the
+            # schema-drift guard resolves both against the table's declared columns.
+            try:
+                q1 = await _settle(
+                    supabase.table("exchange_keys")
+                    .select(_EXCHANGE_KEYS_PROJECTION)
+                    .eq("user_id", user["id"])
+                    .execute()
+                )
+            except Exception as wide_err:
+                # EXCH-STATE-01: a database without migrations 056/060 has no verdict columns.
+                # That must cost the verdict, not the whole list -- so on an undefined-column
+                # error (42703) the read is retried with the identity columns alone, and every
+                # verdict field is reported as None ("not reported"). Any other error is a
+                # read that did not complete and is raised exactly as before.
+                if "42703" not in str(wide_err) and "does not exist" not in str(wide_err):
+                    raise
+                logger.warning(
+                    "exchange_keys verdict columns unavailable (%s); listing without them",
+                    type(wide_err).__name__,
+                )
+                q1 = await _settle(
+                    supabase.table("exchange_keys")
+                    .select(_EXCHANGE_KEYS_BASE_PROJECTION)
+                    .eq("user_id", user["id"])
+                    .execute()
+                )
             read_error = getattr(q1, "error", None)
             rows = getattr(q1, "data", None)
             if read_error or not isinstance(rows, list):
@@ -778,6 +819,13 @@ async def list_exchanges(
                 # When the credential row was written, which is when this connection was
                 # established. `last_sync` is deliberately absent: see the docstring.
                 "connected_at": row.get("created_at"),
+                # EXCH-STATE-01: what the last real venue check said, verbatim, and when.
+                # `None` throughout for a key no check has recorded -- rendered as "not
+                # reported", never defaulted to a verdict.
+                "validation_status": row.get("validation_status"),
+                "last_validated_at": row.get("last_validated_at"),
+                "can_trade": row.get("can_trade"),
+                "sandbox": row.get("sandbox"),
                 "subscription_tier": subscription_tier,
                 "health": "healthy"
             })
@@ -1148,6 +1196,35 @@ async def test_connection(
             await bridge.disconnect()
 
 
+def _record_validation(vault: Any, user_id: str, exchange_id: str, record: dict) -> None:
+    """Persist a venue check's verdict without ever failing the check itself.
+
+    The probe the trader asked for has already run and its answer is in the response;
+    a vault that cannot record it (a double without the method, a write that errors)
+    leaves the previous verdict and its timestamp in place, which says when it was true.
+    """
+    recorder = getattr(vault, "record_validation", None)
+    if not callable(recorder):
+        return
+    try:
+        recorder(user_id, exchange_id, record)
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "Recording validation failed for user=%s exchange=%s: %s",
+            user_id, exchange_id, type(e).__name__,
+        )
+
+
+def _is_credential_rejection(exc: BaseException) -> bool:
+    """True when the venue refused the credential itself (ccxt ``AuthenticationError``,
+    which ``PermissionDenied`` subclasses) -- not for network, rate-limit or outage errors."""
+    try:
+        import ccxt as ccxt_base
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(exc, ccxt_base.AuthenticationError)
+
+
 @router.post("/test-stored")
 async def test_stored_connection(
     body: TestConnectionRequest,
@@ -1169,11 +1246,24 @@ async def test_stored_connection(
             api_key=keys["api_key"],
             secret_key=keys["secret_key"],
             password=keys.get("password"),
+            # EXCH-STATE-01: test the environment the credential was STORED for. Without
+            # this a testnet key was probed against production, failed authentication, and
+            # (now that the verdict is recorded) would have been marked invalid.
+            testnet=bool(keys.get("sandbox")),
         )
         exchange = await bridge.connect()
         balance = await DataEngine(exchange).fetch_wallet_balance_snapshot()
         total_usdt = balance.get("USDT", {}).get("total", 0)
         status = await bridge.check_exchange_status()
+        # EXCH-STATE-01: the venue accepted the stored key just now -- record it, with the
+        # trade permission the venue reports (introspection never raises).
+        permission_report = await inspect_key_permissions(exchange, body.exchange_id)
+        _record_validation(
+            vault,
+            user["id"],
+            body.exchange_id,
+            build_validation_record(VALIDATION_VERIFIED, permission_report.trade_enabled),
+        )
         return {
             "status": "CONNECTED",
             "exchange": body.exchange_id.upper(),
@@ -1221,6 +1311,13 @@ async def test_stored_connection(
             e,
             exc_info=True,
         )
+        # EXCH-STATE-01: only the VENUE REJECTING THE KEY is a verdict about the credential.
+        # A timeout, a rate limit or an outage says nothing about the key, so it is not
+        # recorded -- the card keeps its last verdict and that verdict's timestamp.
+        if _is_credential_rejection(e):
+            _record_validation(
+                vault, user["id"], body.exchange_id, build_validation_record(VALIDATION_INVALID)
+            )
         raise _verification_refusal(e, body.exchange_id) from e
     finally:
         if bridge:
