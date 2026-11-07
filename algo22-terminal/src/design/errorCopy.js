@@ -383,6 +383,10 @@ export const CATEGORY_COPY = Object.freeze({
   NETWORK_ERROR: { headline: 'No connection to VyomQuant', detail: 'Check your internet connection and try again.', retryable: true },
   SERVER_ERROR: { headline: 'Something went wrong on our side', detail: 'This is not caused by anything you did. Please try again in a moment.', retryable: true },
   AUTH_ERROR: { headline: 'Your session has expired', detail: 'Sign in again to continue.', retryable: false, action: { label: 'Sign in', to: '/signin' } },
+  // LAUNCH AUDIT: a 403 is NOT an expired session. `ApiError` files 401 and 403 together under
+  // `AUTH_ERROR`, so every refusal — a plan limit, an MFA step-up, a frozen account — was shown
+  // as "Your session has expired · Sign in". A 403 now gets its own copy (see `resolveCategory`).
+  FORBIDDEN: { headline: 'This action is not available on your account', detail: 'If you think it should be, contact support.', retryable: false },
   CLIENT_ERROR: { headline: 'That request could not be completed', detail: 'Check the values you entered and try again.', retryable: false },
   RATE_LIMIT: { headline: 'Too many requests', detail: 'You are refreshing faster than we can answer. Wait a few seconds.', retryable: true },
 });
@@ -537,6 +541,7 @@ function fromRefusal(error) {
 export function resolveCategory(error) {
   if (!error || typeof error !== 'object') return null;
   if (error.status === 429) return 'RATE_LIMIT';
+  if (error.status === 403) return 'FORBIDDEN';
   const category = error.category;
   if (typeof category !== 'string') return null;
   if (Object.prototype.hasOwnProperty.call(CATEGORY_COPY, category)) return category;
@@ -636,9 +641,50 @@ export function enforceNoLeak(candidate, error, context) {
  * @returns {{headline: string, detail: string|null, retryable: boolean,
  *            action: object|null, supportRef: string|null}}
  */
+/** Where a plan refusal's call to action goes. Mirrors `components/gates/UpgradePrompt`'s
+ *  `UPGRADE_ROUTE`; kept literal so this module stays import-free. */
+const PLAN_UPGRADE_ROUTE = '/app/billing';
+
+/**
+ * LAUNCH AUDIT — a PLAN refusal speaks for itself.
+ *
+ * `core/subscription_dependencies.py` answers every gated action with
+ * `403 detail={code, message, upgrade_message, required_plan | contact_sales, cta_label, ...}`.
+ * None of those codes (`STRATEGY_LIMIT_REACHED`, `PAPER_STRATEGY_LIMIT_REACHED`,
+ * `LIVE_TRADING_NOT_INCLUDED`, ...) is in `CODE_COPY`, so the refusal fell through to the 403
+ * category — which read "Your session has expired · Sign in". The refusal's own sentences are the
+ * server's authored copy for exactly this situation, and name the plan that would allow it, so
+ * they are used directly (still passed through `enforceNoLeak`).
+ */
+function fromPlanRefusal(error) {
+  if (!error || typeof error !== 'object' || error.status !== 403) return null;
+  const detail = error.data && typeof error.data === 'object' ? error.data.detail : null;
+  if (!detail || typeof detail !== 'object') return null;
+  const isPlanRefusal =
+    typeof detail.code === 'string'
+    && typeof detail.message === 'string'
+    && detail.message.trim() !== ''
+    && (typeof detail.required_plan === 'string' || detail.contact_sales === true || Number.isFinite(Number(detail.limit)));
+  if (!isPlanRefusal) return null;
+  return {
+    headline: detail.message.trim(),
+    detail: typeof detail.upgrade_message === 'string' && detail.upgrade_message.trim() !== '' ? detail.upgrade_message.trim() : null,
+    retryable: false,
+    action: {
+      label: typeof detail.cta_label === 'string' && detail.cta_label.trim() !== '' ? detail.cta_label.trim() : 'See plans',
+      to: PLAN_UPGRADE_ROUTE,
+    },
+  };
+}
+
 export function translateError(error, context) {
   const chosen =
-    fromCode(error) ?? fromReasons(error) ?? fromRefusal(error) ?? fromCategory(error) ?? fromContext(context);
+    fromCode(error)
+    ?? fromReasons(error)
+    ?? fromRefusal(error)
+    ?? fromPlanRefusal(error)
+    ?? fromCategory(error)
+    ?? fromContext(context);
 
   return enforceNoLeak(
     {

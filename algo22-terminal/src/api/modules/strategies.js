@@ -257,6 +257,13 @@ export const strategiesApi = {
   rename: (id, name) => put(`/api/strategies/${encodeURIComponent(id)}/rename`, { name }),
 
   /**
+   * Clone a strategy into a new one owned by the caller. Quota-gated server-side
+   * (`check_strategy_quota`), so a refusal is a 403 with the plan's upgrade payload.
+   * @param {string} id
+   */
+  clone: (id) => post(`/api/strategies/${encodeURIComponent(id)}/clone`, {}),
+
+  /**
    * Delete a strategy
    * @param {string} id
    * @returns {Promise<{status: string, deleted: string}>}

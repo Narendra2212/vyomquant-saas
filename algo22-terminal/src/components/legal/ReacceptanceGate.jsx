@@ -37,6 +37,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { apiErrorBody, apiErrorDetail, apiErrorMessage } from '../../design/apiErrors'
 
 import { api } from '../../api'
 import { supabase } from '../../supabase'
@@ -87,7 +88,8 @@ export default function ReacceptanceGate() {
       // A 409 means THIS BUNDLE IS STALE — the server publishes a version this
       // build does not have — so retrying the same request cannot work and the
       // honest instruction is to reload.
-      const code = err?.response?.data?.error
+      const detail = apiErrorDetail(err)
+      const code = (detail && typeof detail === 'object' ? detail.error : null) ?? apiErrorBody(err)?.error
       if (code === 'LEGAL_VERSION_UNKNOWN') {
         setError(
           'This page is out of date and is not showing the current documents. '
@@ -95,8 +97,7 @@ export default function ReacceptanceGate() {
         )
       } else {
         setError(
-          err?.response?.data?.message
-          || 'We could not record your acceptance. Nothing was saved. Please try again.',
+          apiErrorMessage(err, 'We could not record your acceptance. Nothing was saved. Please try again.'),
         )
       }
     } finally {

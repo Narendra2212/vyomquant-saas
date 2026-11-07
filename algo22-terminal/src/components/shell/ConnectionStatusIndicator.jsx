@@ -98,6 +98,8 @@ import { StatusBadge } from '../ds/StatusBadge';
  */
 export const CONNECTION_LABELS = Object.freeze({
   connected: 'Connected',
+  // LAUNCH AUDIT: no page on screen uses the live socket. Neutral, never the down strip.
+  idle: 'Idle',
   connecting: 'Connecting',
   reconnecting: 'Reconnecting',
   disconnected: 'Disconnected',

@@ -103,6 +103,7 @@ const MARGIN_HEALTH = Object.freeze({
 /** The switch this file operates. RISK-05 made two of the other three real too; this file
  * is unaffected either way, since it only ever toggles this one. */
 const LOSS_SWITCH = 'Daily Loss Limit';
+const CAPITAL_SWITCH = 'Capital Utilization Limit';
 
 /** How the real application renders: StrictMode on. */
 const mountStrict = () =>
@@ -137,6 +138,12 @@ const mountLoaded = async () => {
   await waitFor(
     () => {
       expect(checkedState(LOSS_SWITCH)).toBe('true');
+      // Wait for the SERVER config, not the page defaults. `loss: true` is also the default,
+      // so the line above passed before `getConfig` resolved under a loaded CI runner, and a
+      // toggle then wrote the defaults (`blackswan: true, capital: true`) instead of the
+      // fixture's values. `capital` is `false` in RISK_CONFIG and `true` by default, so it
+      // reading `false` proves the fixture has been applied.
+      expect(checkedState(CAPITAL_SWITCH)).toBe('false');
     },
     { timeout: 5000 },
   );

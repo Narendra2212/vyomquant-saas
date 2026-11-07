@@ -216,7 +216,8 @@ import { SectionHeader } from '../components/ds/SectionHeader';
 import { StatusBadge } from '../components/ds/StatusBadge';
 import { TradingEnvironmentBadge } from '../components/ds/TradingEnvironmentBadge';
 import { LockedCommand, UpgradePrompt, useAllowance, useFeature } from '../components/gates';
-import { FEATURES, RESOURCES } from '../design/entitlements';
+import { FEATURES, RESOURCES, readRefusal } from '../design/entitlements';
+import { apiErrorMessage } from '../design/apiErrors';
 import { translateError } from '../design/errorCopy';
 import { BADGE_SUBSCRIBED, resolveSubscriptionView } from '../design/subscriptionState';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
@@ -310,6 +311,17 @@ const formatDate = (value) => {
 const errorMessage = (err, fallback) => {
   const structured = err?.data?.error?.message;
   if (typeof structured === 'string' && structured.trim()) return structured;
+  // LAUNCH AUDIT: a PLAN refusal (403 from `core/subscription_dependencies.py`) carries its
+  // sentence on `err.data.detail.message`, which neither branch here read — clone (strategy
+  // limit), subscribe (not on Free) and deploy (0 bots on Free) showed a generic line instead
+  // of the reason and the plan that allows it.
+  const refusal = readRefusal(err);
+  if (refusal && typeof refusal.message === 'string' && refusal.message.trim()) {
+    const upgrade = typeof refusal.upgrade_message === 'string' ? refusal.upgrade_message.trim() : '';
+    return upgrade ? `${refusal.message.trim()} ${upgrade}` : refusal.message.trim();
+  }
+  const detailMessage = apiErrorMessage(err, '');
+  if (detailMessage) return detailMessage;
   if (typeof err?.getUserMessage === 'function') {
     const userMessage = err.getUserMessage();
     if (typeof userMessage === 'string' && userMessage.trim()) return userMessage;

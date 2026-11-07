@@ -243,6 +243,9 @@ import {
   validationSummary,
 } from '../lib/graphValidation';
 import { strategiesApi } from '../api/modules/strategies';
+import { readRefusal } from '../design/entitlements';
+import { apiErrorDetail, apiErrorMessage } from '../design/apiErrors';
+import { UpgradePrompt } from '../components/gates/UpgradePrompt';
 import { dataQualityApi } from '../api/modules/dataQuality';
 import { useBuilderRealtime } from '../hooks/useBuilderRealtime';
 import {
@@ -2110,6 +2113,9 @@ function StrategyBuilderCanvas({
   const [saveState, setSaveState] = useState('');
   const [saveStatus, setSaveStatus] = useState(SAVE_STATES.UNSAVED);
   const [saveIssues, setSaveIssues] = useState([]);
+  // A save refused by the PLAN (403 `{code, message, required_plan, …}` from
+  // `check_strategy_quota`), rendered as an upgrade prompt rather than a status-line string.
+  const [planRefusal, setPlanRefusal] = useState(null);
   // A blocked training half observed by this page's own save. Separate from `saveIssues`
   // because the two say different things: a save issue means nothing was persisted, while a
   // training block means the version WAS saved and only training was refused (Requirements
@@ -2885,6 +2891,7 @@ function StrategyBuilderCanvas({
     const trimmedName = strategyName.trim() || 'Untitled Strategy';
     setIsSavingStrategy(true);
     setSaveIssues([]);
+    setPlanRefusal(null);
     setObservedTrainingBlock(null);
     setSaveStatus(SAVE_STATES.SAVING);
     setSaveState('Compiling...');
@@ -2977,8 +2984,38 @@ function StrategyBuilderCanvas({
         setSaveStatus(SAVE_STATES.REFUSED);
         setSaveState(`Save refused: ${err.code}`);
       } else {
-        setSaveStatus(SAVE_STATES.FAILED);
-        setSaveState(`Save Failed: ${err.message || 'Unknown error'}`);
+        /*
+          LAUNCH AUDIT (Builder save). A server refusal used to land here as
+          `Save Failed: ${err.message}` in the status strip and nowhere else — no toast, no
+          panel — so a trader at their plan's strategy limit clicked Save and saw nothing
+          happen. `ApiError` carries the body on `err.data` (`design/apiErrors.js`), so each
+          refusal the server actually sends is now read and shown where the author looks:
+            * a PLAN refusal (403 from `check_strategy_quota`) → the upgrade prompt;
+            * a GRAPH refusal (422 STRATEGY_GRAPH_INVALID / _UNREADABLE) → the same
+              "not saved" issue panel a client-side refusal uses, node by node;
+            * anything else → the server's own sentence, as a toast and in the strip.
+        */
+        const refusal = readRefusal(err);
+        const detail = apiErrorDetail(err);
+        if (refusal) {
+          setPlanRefusal(refusal);
+          setSaveStatus(SAVE_STATES.REFUSED);
+          setSaveState(`Save refused: ${refusal.message}`);
+          notify('error', refusal.message);
+        } else if (detail && typeof detail === 'object' && Array.isArray(detail.errors) && detail.errors.length > 0) {
+          setSaveIssues(detail.errors);
+          setSaveStatus(SAVE_STATES.REFUSED);
+          setSaveState(`Save refused: ${detail.errors.length} problem${detail.errors.length === 1 ? '' : 's'}`);
+        } else if (detail && typeof detail === 'object' && typeof detail.error === 'string' && detail.error.startsWith('STRATEGY_GRAPH_')) {
+          setSaveIssues([saveIssue(detail.error, detail.message || 'The graph could not be read.', { fixHint: detail.hint || '' })]);
+          setSaveStatus(SAVE_STATES.REFUSED);
+          setSaveState(`Save refused: ${detail.error}`);
+        } else {
+          const message = apiErrorMessage(err, err?.message || 'Unknown error');
+          setSaveStatus(SAVE_STATES.FAILED);
+          setSaveState(`Save Failed: ${message}`);
+          notify('error', `Strategy not saved: ${message}`);
+        }
       }
     } finally {
       setIsSavingStrategy(false);
@@ -4227,6 +4264,13 @@ function StrategyBuilderCanvas({
         A save that was refused. The error surface and `role="alert"` are right here and stay:
         the author asked for something, it did not happen, and nothing on the canvas says so.
       */}
+      {/* A save the PLAN refused: the server's own reason and the plan that would allow it. */}
+      {planRefusal && (
+        <div data-testid="save-refusal">
+          <UpgradePrompt refusal={planRefusal} variant="banner" />
+        </div>
+      )}
+
       {saveIssues.length > 0 && (
         <ValidationSurface
           surface="error"
