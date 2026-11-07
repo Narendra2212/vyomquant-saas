@@ -1185,6 +1185,45 @@ async def _load_backtest_version(
     return dict(rows[0])
 
 
+#: Substrings that mark an exception as a DATABASE / PostgREST error rather than one of this
+#: repository's own authored sentences. Their text names tables, columns and SQLSTATE codes
+#: (`{'code': 'PGRST204', ... "Could not find the 'daily_returns' column of 'strategy_backtests'
+#: in the schema cache"}`), which is operator information: it reached a trader's screen verbatim
+#: when a results write failed (BT-01). The full text is already logged by the caller.
+_DB_ERROR_MARKERS = ("PGRST", "schema cache", "SQLSTATE", "relation \"", "violates ", "duplicate key")
+_GENERIC_BACKTEST_FAILURE = (
+    "The backtest could not be completed because of a problem on our side. No result was "
+    "recorded. The failure has been logged for investigation; please try again in a few minutes."
+)
+
+
+def _safe_failure_message(exc: BaseException) -> str:
+    """The text a 500 may show: the exception's own sentence, unless it is database text.
+
+    Runtime refusals this module raises itself (e.g. the missing-vectorbt explanation) are
+    authored for the caller and pass through unchanged. Anything shaped like a PostgREST or
+    Postgres error is replaced by one generic sentence, because it carries schema names.
+    """
+    text = str(exc)
+    looks_like_db = (
+        type(exc).__name__ in ("APIError", "PostgrestAPIError")
+        or text.lstrip().startswith("{'code'")
+        or any(marker in text for marker in _DB_ERROR_MARKERS)
+    )
+    return _GENERIC_BACKTEST_FAILURE if looks_like_db else text
+
+
+def _public_failure(exc: BaseException) -> Exception:
+    """``exc`` itself when its text is safe to show, else a generic one (see above).
+
+    Returns an exception rather than a string so the handler's ``str(...)`` stays the same
+    expression the pinned API-surface baseline records for this 500.
+    """
+    return exc if isinstance(exc, Exception) and _safe_failure_message(exc) == str(exc) else Exception(
+        _GENERIC_BACKTEST_FAILURE
+    )
+
+
 @router.post("/strategy-operations/strategies/{strategy_id}/backtests/execute")
 @router.post("/strategies/{strategy_id}/backtests/execute")
 @limiter.limit("10/minute")
@@ -1447,7 +1486,7 @@ async def execute_backtest(request: Request,
         )
         raise HTTPException(
             status_code=500,
-            detail={"error": "BACKTEST_EXECUTE_FAILED", "message": str(e)},
+            detail={"error": "BACKTEST_EXECUTE_FAILED", "message": str(_public_failure(e))},
         )
 
     # The persisted result, returned directly. ``run_version_backtest`` already created the

@@ -889,6 +889,11 @@ _LIST_COLUMNS: tuple = (
     "buy_logic",
     "tags",
     "version",
+    # LAUNCH AUDIT: the column that actually exists. `strategies` has `current_version`
+    # (migration 001; "v1.0" for a first save) and no `version` column, so the list answered
+    # without any version label and the Strategies table showed "—" in its Version column for
+    # every saved strategy. `Strategies.jsx` already reads `current_version`.
+    "current_version",
 )
 
 
