@@ -124,7 +124,11 @@ class WebSocketClient {
     this.maxReconnectAttempts = 5;
     this.reconnectDelay = 1000;
     this.subscriptions = new Map(); // event_type -> Set of callbacks
-    this.connectionStatus = 'disconnected';
+    // LAUNCH AUDIT: `idle`, not `disconnected`. Nothing has been asked of the socket yet, so
+    // nothing is stale. `disconnected` is in the error group (`design/semantic.js`), and the top
+    // bar painted "Not connected to the trading engine" on every page that never needs a socket
+    // (an unsaved strategy in the Builder, Backtester, Settings ...). `idle` is neutral.
+    this.connectionStatus = 'idle';
     this.messageQueue = []; // Queue messages while disconnected
     this.reconnectEnabled = true; // Flag to control reconnection
     this.reconnectTimeoutId = null; // Track reconnect timeout for cleanup
@@ -1000,6 +1004,11 @@ class WebSocketClient {
     
     // Close WebSocket
     if (this.ws) {
+      // A deliberate teardown is not a drop: detach the handlers first, so the `close` event
+      // this triggers does not run `handleClose` and re-label the socket `disconnected`.
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.onmessage = null;
       try {
         this.ws.close();
       } catch (e) {
@@ -1008,7 +1017,9 @@ class WebSocketClient {
       this.ws = null;
     }
     
-    this._setStatus('disconnected');
+    // LAUNCH AUDIT: released on purpose, by the last holder — no page needs live data, so
+    // nothing on screen is stale. Neutral `idle`, not the error-group `disconnected`.
+    this._setStatus('idle');
     this.subscriptions.clear();
     // strategy-builder task 8.5: the channel registry goes with it. Keeping it would
     // mean the next `connect()` resubscribed channels nobody is holding any more.
