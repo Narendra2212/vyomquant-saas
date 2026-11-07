@@ -875,6 +875,24 @@ _INDICATOR_LEGACY_PRIMARY_PORT: Dict[str, str] = {
 _COMPOSITE_PRICE_SOURCES = ("hl2", "hlc3", "ohlc4")
 
 
+def _frame_as_close(value: Any, node_id: str, port_name: str) -> Any:
+    """A candle frame offered to a single-series input, as its ``close`` column (BT-02).
+
+    ``registry.COMPATIBILITY_MATRIX`` lets OHLCV_FRAME feed PRICE_SERIES, so a frame can reach
+    any series port; the readers below flatten what they are given, which turned 8,640 bars x 5
+    columns into 43,200 values. Anything that is not a DataFrame is returned untouched.
+    """
+    if not isinstance(value, pd.DataFrame):
+        return value
+    if "close" not in value.columns:
+        raise DAGExecutionError(
+            f"Node '{node_id}': port '{port_name}' received a candle frame with no 'close' "
+            f"column (it holds {list(value.columns)}); connect one of the data node's price "
+            "outputs (open, high, low, close, volume) instead."
+        )
+    return value["close"]
+
+
 class IndicatorExecutor(NodeExecutor):
     """Execute an INDICATOR node through ``indicators_backend`` (task 5.4).
 
@@ -1134,6 +1152,8 @@ class IndicatorExecutor(NodeExecutor):
     def _as_bars(
         value: Any, node_id: str, port_name: str, market_data: pd.DataFrame
     ) -> np.ndarray:
+        # BT-02: a candle frame on a series port means its close column (see `_frame_as_close`).
+        value = _frame_as_close(value, node_id, port_name)
         array = np.asarray(value, dtype=float).reshape(-1)
         if array.size != len(market_data):
             raise DAGExecutionError(
@@ -3252,7 +3272,9 @@ class FeatureExecutor(NodeExecutor):
                     f"Node '{node_id}': port '{port.name}' accepts one connection but "
                     f"holds {len(values)}."
                 )
-            operands.append(np.asarray(values[0], dtype=float).reshape(-1))
+            operands.append(
+                np.asarray(_frame_as_close(values[0], node_id, port.name), dtype=float).reshape(-1)
+            )
 
         return operands
 
