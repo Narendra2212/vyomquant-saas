@@ -544,7 +544,7 @@ describe('the row\'s actions survive the rebuild', () => {
     // Not merely styled differently — not constructed inline at all. Both live behind the
     // row's overflow trigger, below a divider.
     expect(actions.queryByRole('button', { name: 'Deploy live' })).toBeNull();
-    expect(actions.queryByRole('button', { name: 'Archive strategy' })).toBeNull();
+    expect(actions.queryByRole('button', { name: 'Delete strategy' })).toBeNull();
     expect(actions.getByRole('button', { name: 'More actions for Momentum v2' })).toBeTruthy();
   });
 
@@ -563,16 +563,14 @@ describe('the row\'s actions survive the rebuild', () => {
     // if the trader changes nothing. It KEEPS its place below the divider and its separated
     // treatment, because the dialog it opens can still reach a Live transition.
     const deploy = within(group).getByRole('menuitem', { name: 'Start paper session' });
-    const archive = within(group).getByRole('menuitem', { name: 'Archive strategy' });
+    const archive = within(group).getByRole('menuitem', { name: 'Delete strategy' });
 
     // §7.2's treatments: `env.live` for the deployment, `status.error` for the archive.
     expect(deploy.getAttribute('data-menu-intent')).toBe('live');
     expect(archive.getAttribute('data-menu-intent')).toBe('destructive');
-    // The archive still describes ARCHIVAL, because `DELETE /api/strategies/{id}` is a soft
-    // archive — a menu entry saying "Delete" would describe an operation the backend stopped
-    // performing at task 5.1.
-    expect(archive.textContent).toMatch(/archive/i);
-    expect(archive.textContent).not.toMatch(/delete/i);
+    // Traders look for "Delete"; the entry says so. The server soft-archives, and the confirmation
+    // dialog says history is retained, so the wording is not a promise of destruction.
+    expect(archive.textContent).toMatch(/delete/i);
   });
 
   it('archives only after the confirmation, never from the menu entry', async () => {
@@ -583,13 +581,13 @@ describe('the row\'s actions survive the rebuild', () => {
 
     await user.click(actions.getByRole('button', { name: 'More actions for Momentum v2' }));
     await user.click(within(screen.getByRole('menu'))
-      .getByRole('menuitem', { name: 'Archive strategy' }));
+      .getByRole('menuitem', { name: 'Delete strategy' }));
 
-    const dialog = await screen.findByRole('dialog', { name: /archive strategy/i });
-    expect(within(dialog).getByText(/Nothing is deleted/i)).toBeTruthy();
+    const dialog = await screen.findByRole('dialog', { name: /delete strategy/i });
+    expect(within(dialog).getByText(/retained for history and audit/i)).toBeTruthy();
     expect(mockApi.strategies.delete).not.toHaveBeenCalled();
 
-    await user.click(within(dialog).getByRole('button', { name: /archive strategy/i }));
+    await user.click(within(dialog).getByRole('button', { name: /delete strategy/i }));
     await waitFor(() => expect(mockApi.strategies.delete).toHaveBeenCalledWith('s-1'));
   });
 
@@ -605,7 +603,7 @@ describe('the row\'s actions survive the rebuild', () => {
       .click(actions.getByRole('button', { name: 'More actions for Momentum v2' }));
     const menu = within(screen.getByRole('menu'));
     expect(menu.queryByRole('menuitem', { name: 'Deploy live' })).toBeNull();
-    expect(menu.getByRole('menuitem', { name: 'Archive strategy' })).toBeTruthy();
+    expect(menu.getByRole('menuitem', { name: 'Delete strategy' })).toBeTruthy();
   });
 
   it('links the row to its detail page from the name cell', async () => {

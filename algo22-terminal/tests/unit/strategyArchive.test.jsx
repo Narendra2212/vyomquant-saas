@@ -289,7 +289,7 @@ const renderPage = async () => {
  * §7.2 puts a row's destructive and live-transition actions inside the row's trailing
  * `ds/OverflowMenu`, below a `role="separator"` and inside a `role="group"` named
  * "Destructive and live-trading actions", and the entry's label is the page action
- * catalogue's `[ROW_ACTION.ARCHIVE]` — "Archive strategy". So the old query found nothing:
+ * catalogue's `[ROW_ACTION.ARCHIVE]` — "Delete strategy". So the old query found nothing:
  * the control exists, but only once the menu is open, and under a different name.
  *
  * Re-adding a flat button to satisfy this helper was the other way to make it green and the
@@ -320,7 +320,7 @@ const openArchiveDialog = async (user) => {
   const separated = within(menu).getByRole('group', {
     name: /destructive and live-trading actions/i,
   });
-  await user.click(within(separated).getByRole('menuitem', { name: 'Archive strategy' }));
+  await user.click(within(separated).getByRole('menuitem', { name: 'Delete strategy' }));
 
   return screen.findByRole('dialog');
 };
@@ -374,11 +374,12 @@ describe('Strategies page archive action', () => {
     expect(dialog.getAttribute('aria-modal')).toBe('true');
     expect(dialog.getAttribute('data-ds-intent')).toBe('destructive');
     // The action, and its consequence in both directions (Requirements 2.8, 2.9, 3.2, 3.5).
-    expect(dialog.textContent).toMatch(/archive strategy/i);
-    expect(dialog.textContent).toMatch(/removes this strategy from your library list/i);
-    expect(dialog.textContent).toMatch(/nothing is deleted/i);
-    expect(dialog.textContent).not.toMatch(/delete this strategy/i);
-    expect(dialog.textContent).not.toMatch(/will be deleted/i);
+    // Trader-facing wording is "Delete" with an explicit warning; the server soft-archives, so
+    // the copy must also say history is retained (it must not claim the data is destroyed).
+    expect(dialog.textContent).toMatch(/delete strategy\?/i);
+    expect(dialog.textContent).toMatch(/warning: this removes the strategy from your library/i);
+    expect(dialog.textContent).toMatch(/retained for history and audit/i);
+    expect(dialog.textContent).not.toMatch(/permanently/i);
     // Requirement 2.10, stated up front rather than only on refusal.
     expect(dialog.textContent).toMatch(/deploying, running or paused/i);
     // The review grid names the strategy the click was on.

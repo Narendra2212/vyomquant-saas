@@ -1674,7 +1674,7 @@ export default function Strategies() {
     // delete would describe an operation the backend stopped performing, and the dialog it
     // opens (below) has said "Archive strategy" since task 10.3.
     [ROW_ACTION.ARCHIVE]: {
-      label: "Archive strategy",
+      label: "Delete strategy",
       icon: Trash2,
       onSelect: (row) => requestArchiveStrategy(row),
     },
@@ -2637,13 +2637,13 @@ export default function Strategies() {
         open={archiveDialog !== null}
         onCancel={() => setArchiveDialog(null)}
         onConfirm={handleConfirmArchive}
-        title="Archive strategy"
+        title="Delete strategy?"
         intent="destructive"
         description={
-          "Archiving removes this strategy from your library list. Nothing is deleted: its "
-          + "versions, backtests, deployments and signals are all kept and stay inspectable "
-          + "for history and audit. Archiving is refused while any of its deployments is "
-          + "still deploying, running or paused."
+          "Warning: this removes the strategy from your library and you will no longer be "
+          + "able to open, edit, backtest or deploy it. Its versions, backtests, deployments "
+          + "and signals are retained for history and audit. Deleting is refused while any of "
+          + "its deployments is still deploying, running or paused — stop those first."
         }
         review={[
           { label: "Strategy", value: archiveDialog?.name ?? null },
@@ -2654,8 +2654,8 @@ export default function Strategies() {
           { label: "Removed from", value: "Your strategy library list" },
           { label: "Kept", value: "Versions, backtests, deployments, signals" },
         ]}
-        confirmLabel="Archive strategy"
-        cancelLabel="Keep it in the list"
+        confirmLabel="Delete strategy"
+        cancelLabel="Keep strategy"
       />
 
       {/* ── Rename. A labelled `ds/Field` with inline validation (Requirements 15.1, 15.2)
