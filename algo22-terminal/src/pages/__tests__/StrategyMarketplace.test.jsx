@@ -470,6 +470,9 @@ describe('StrategyMarketplace transport (Requirements 20.2, 20.10)', () => {
       '../components/ds/TradingEnvironmentBadge',
       '../components/gates',
       '../design/entitlements',
+      // LAUNCH AUDIT: a pure reader over an already-rejected ApiError (status / data / detail →
+      // a sentence). It imports nothing and issues no request, so it adds no transport.
+      '../design/apiErrors',
       '../design/errorCopy',
       '../design/subscriptionState',
       '../hooks/usePanelState',
