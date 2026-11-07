@@ -6,7 +6,9 @@ import {
   Activity, Zap, Globe, Shield, RefreshCw
 } from "lucide-react";
 import { endpoints, api, publicGet } from "../api";
-import { CONFIG } from "../config";
+import { readRefusal } from "../design/entitlements";
+import { apiErrorMessage } from "../design/apiErrors";
+import { UpgradePrompt } from "../components/gates/UpgradePrompt";
 import { Button } from "../components/ui/Button";
 // Task 10.3: two of the three confirmation surfaces (archive and rename); task 17.2's last
 // part made the deploy modal the third, so `ConfirmDialog` is now this page's only overlay
@@ -746,6 +748,12 @@ export default function Strategies() {
     stopLoss: "2",
   });
   const [deployError, setDeployError] = useState(null);
+  // LAUNCH AUDIT: a deploy the PLAN refused (bots / live trading are plan-gated) — rendered as
+  // the upgrade prompt inside the deploy dialog, beside the server's own sentence.
+  const [deployRefusal, setDeployRefusal] = useState(null);
+  // LAUNCH AUDIT: page-level outcome of a clone. Clone used to fail with console.error only, so a
+  // trader at their strategy limit clicked Clone and nothing happened.
+  const [actionNotice, setActionNotice] = useState(null);
   // FE-03: fail closed. Live is offered only after the server says the platform is live.
   const [liveAvailable, setLiveAvailable] = useState(false);
   const [connectedExchanges, setConnectedExchanges] = useState([]);
@@ -1108,7 +1116,6 @@ export default function Strategies() {
             : PANEL_STATES.EMPTY)
           : PANEL_STATES.READY;
 
-  const API_BASE = CONFIG.apiBaseUrl;
 
   const setProcessingFor = (id, value) =>
     setIsProcessing((prev) => ({ ...prev, [id]: value }));
@@ -1249,6 +1256,7 @@ export default function Strategies() {
   const handleOpenDeployModal = async (s) => {
     setDeployModalStrategy(s);
     setDeployError(null);
+    setDeployRefusal(null);
     setSelectedAccount(null);
     setConnectedExchanges([]);
     setExchangesLoading(true);
@@ -1332,7 +1340,10 @@ export default function Strategies() {
       setDeployModalStrategy(null);
     } catch (err) {
       console.error("📊 DEPLOY ERROR:", err);
-      setDeployError(err?.data?.message || err?.response?.data?.message || err?.message || 'Deployment failed');
+      // LAUNCH AUDIT: a plan refusal's sentence lives on `err.data.detail.message`, which the
+      // previous `err.data.message` read missed — a Free account got "Request failed".
+      setDeployRefusal(readRefusal(err));
+      setDeployError(apiErrorMessage(err, 'Deployment failed'));
       setStrategies(prevStrategies);
     } finally {
       setProcessingFor(id, false);
@@ -1345,12 +1356,20 @@ export default function Strategies() {
     setProcessingFor(id, true);
     setStrategies(prev => prev.map(s => s.id === id ? { ...s, status: "paused" } : s));
     try {
+      setActionNotice(null);
       console.log(`📊 PAUSE STRATEGY: POST /api/strategies/${id}/pause`);
       const res = await endpoints.strategies.pause(id);
       console.log("📊 PAUSE RESPONSE:", res);
     } catch (err) {
       console.error("📊 PAUSE ERROR:", err);
       setStrategies(prevStrategies);
+      // LAUNCH AUDIT: the row silently snapped back to its previous state, so a trader who
+      // paused a running bot had no sign the pause had NOT happened. Say so, with the reason.
+      setActionNotice({
+        title: "Pause failed — the strategy is still in its previous state",
+        refusal: readRefusal(err),
+        message: apiErrorMessage(err, "The strategy could not be paused. Please try again."),
+      });
     } finally {
       setProcessingFor(id, false);
     }
@@ -1440,26 +1459,22 @@ export default function Strategies() {
     if (isProcessing[id]) return;
     setProcessingFor(id, true);
     try {
-      console.log(`📊 CLONE STRATEGY: POST /api/strategies/${id}/clone`);
-      const token = sessionStorage.getItem("token");
-      const res = await fetch(`${API_BASE}/api/strategies/${id}/clone`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        }
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || data.detail || `Clone failed (HTTP ${res.status})`);
-      }
+      setActionNotice(null);
+      // LAUNCH AUDIT: the shared client, not a raw `fetch` — it carries the session token the
+      // way every other call does and rejects with an `ApiError` the readers below understand.
+      const data = await endpoints.strategies.clone(id);
       console.log("📊 CLONE RESPONSE:", data);
       // Reload strategies
       const payload = await endpoints.strategies.list();
       const rows = Array.isArray(payload) ? payload : payload?.data || payload?.strategies || [];
       if (Array.isArray(rows)) setStrategies(normalizeStrategies(rows));
     } catch (err) {
-      console.error("📊 CLONE ERROR:", err.message);
+      console.error("📊 CLONE ERROR:", err?.message);
+      setActionNotice({
+        title: "Clone failed",
+        refusal: readRefusal(err),
+        message: apiErrorMessage(err, "The strategy could not be cloned. Please try again."),
+      });
     } finally {
       setProcessingFor(id, false);
     }
@@ -1837,6 +1852,18 @@ export default function Strategies() {
           onto `ds/Alert`, which takes the hue, the icon, the border style and the
           live-region role from `severity` (Requirement 1.4); the copy, the testids and the
           dismiss control are unchanged. */}
+      {actionNotice && (
+        actionNotice.refusal ? (
+          <div data-testid="action-refusal">
+            <UpgradePrompt refusal={actionNotice.refusal} variant="banner" />
+          </div>
+        ) : (
+          <Alert severity="error" title={actionNotice.title} data-testid="action-error">
+            {actionNotice.message}
+          </Alert>
+        )
+      )}
+
       {archiveError && (
         <Alert
           severity="error"
@@ -2454,6 +2481,11 @@ export default function Strategies() {
               <Alert severity="error" title="Deployment error" data-testid="deploy-error">
                 {deployError || preflight.error?.message}
               </Alert>
+            )}
+            {deployRefusal && (
+              <div data-testid="deploy-refusal">
+                <UpgradePrompt refusal={deployRefusal} variant="inline" />
+              </div>
             )}
 
             <div className="grid grid-cols-2 gap-3">
