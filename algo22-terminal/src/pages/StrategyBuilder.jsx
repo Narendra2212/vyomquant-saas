@@ -3986,6 +3986,46 @@ function StrategyBuilderCanvas({
             `POST /api/strategies` genuinely answers without one, and "no version label yet"
             is a true sentence where "version 1" would be a guess the author would then deploy.
           */}
+          {/*
+            LAUNCH AUDIT: the save state, in words, next to the name. After a successful save the
+            only confirmation was a toast that disappears and a small status line at the bottom
+            of the page, so an author could not tell at a glance whether the canvas was stored.
+            One observation of the same values the Backtest and Deploy refusals read: no id yet →
+            "Not saved yet"; an id and an unchanged graph → "Saved"; an id and a changed graph →
+            "Unsaved changes"; a save in flight → "Saving…".
+          */}
+          <span
+            data-testid="builder-save-chip"
+            data-save-state={
+              isSavingStrategy
+                ? 'saving'
+                : !strategyIdState
+                  ? 'unsaved-new'
+                  : unsaved
+                    ? 'unsaved-changes'
+                    : 'saved'
+            }
+            className="text-micro"
+            style={{
+              padding: '2px 8px',
+              borderRadius: '4px',
+              border: `1px solid ${token.line.default}`,
+              background: token.surface.panel,
+              color:
+                !isSavingStrategy && strategyIdState && !unsaved
+                  ? token.content.primary
+                  : token.content.muted,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {isSavingStrategy
+              ? 'Saving…'
+              : !strategyIdState
+                ? 'Not saved yet'
+                : unsaved
+                  ? 'Unsaved changes'
+                  : 'Saved'}
+          </span>
           <span
             data-testid="builder-version-chip"
             data-version={savedVersion === null ? undefined : savedVersion}

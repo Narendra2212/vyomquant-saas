@@ -435,3 +435,34 @@ describe('server refusals of the save are visible', () => {
     );
   });
 });
+
+describe('after a successful save the header says so', () => {
+  it('says Not saved yet before any save', async () => {
+    renderBuilder({ id: null, name: 'Fresh', graph_json: graphFor({ symbol: 'ETH/USDT', timeframe: '4h' }) });
+    await waitFor(() => expect(screen.getByTestId('registry-state').textContent).toContain('ready'));
+    expect(screen.getByTestId('builder-save-chip').textContent).toBe('Not saved yet');
+  });
+
+  it('shows the saved version and enables Backtest and Deploy', async () => {
+    // The shape POST /api/strategies really answers: the strategy row with the version fields
+    // appended (`created.update(version_result)` in routers/strategies.py).
+    mockClient.post.mockImplementation((url) =>
+      url === '/api/strategies'
+        ? Promise.resolve({ id: 'strategy-1', name: 'Saved one', version_saved: true, version: 'v1.0', version_id: 'ver-1' })
+        : Promise.resolve({ status: 'compiled', dag_hash: 'h', execution_graph: {} }),
+    );
+    renderBuilder({ id: null, name: 'Saved one', graph_json: graphFor({ symbol: 'ETH/USDT', timeframe: '4h' }) });
+    await waitFor(() => expect(screen.getByTestId('registry-state').textContent).toContain('ready'));
+    const save = await screen.findByRole('button', { name: 'Save' });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+
+    await waitFor(() => expect(screen.getByTestId('save-state').textContent).toMatch(/Saved/));
+    await waitFor(() => expect(document.body.textContent).toContain('Version v1.0'));
+    // The save state is stated in words beside the name, not only in a toast that vanishes.
+    expect(screen.getByTestId('builder-save-chip').textContent).toBe('Saved');
+    expect(screen.getByTestId('builder-save-chip').dataset.saveState).toBe('saved');
+    expect(document.body.textContent).not.toContain('Save this strategy before backtesting');
+    expect(document.body.textContent).not.toContain('Save this strategy before deploying');
+  });
+});
