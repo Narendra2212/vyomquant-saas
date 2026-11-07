@@ -28,7 +28,7 @@ const CATALOGUE = {
   [ROW_ACTION.SIGNAL_TRACE]: { label: 'Signal Trace' },
   [ROW_ACTION.PAUSE]: { label: 'Pause' },
   [ROW_ACTION.DEPLOY_LIVE]: { label: 'Deploy live' },
-  [ROW_ACTION.ARCHIVE]: { label: 'Archive strategy' },
+  [ROW_ACTION.ARCHIVE]: { label: 'Delete strategy' },
 };
 
 describe('the classifier (Requirement 4.3)', () => {
