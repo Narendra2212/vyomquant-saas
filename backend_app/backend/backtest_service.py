@@ -528,10 +528,27 @@ class BacktestService:
             "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
-        for column, source_key in RESULT_COLUMN_SOURCE_KEYS.items():
-            update_data[column] = results.get(source_key)
-        for column, source_key in RESULT_JSON_COLUMN_SOURCE_KEYS.items():
-            update_data[column] = results.get(source_key, [])
+        if results.get("status") == "failed":
+            # BT-03. A FAILED run is recorded as failed. `BacktestRuntime.run_backtest`'s
+            # failure path calls this method with `{"status": "failed", "error": ...}`, and this
+            # method used to ignore both keys: it wrote status='completed' and then set every
+            # metric column to NULL (`results.get(...)` on a payload that carries none), so
+            # every failed backtest was persisted as a COMPLETED one with no results -- and was
+            # then listed, compared and offered as marketplace evidence. Only the status, the
+            # reason and the elapsed time are written; the metric and curve columns are left
+            # exactly as they were (they hold nothing, and a partial write must not invent a
+            # zero or erase an earlier value).
+            reason = str(results.get("error") or "The backtest failed.")[:2000]
+            update_data["status"] = "failed"
+            update_data["error"] = reason
+            update_data["error_message"] = reason
+            if results.get("execution_time_seconds") is not None:
+                update_data["execution_time_seconds"] = results.get("execution_time_seconds")
+        else:
+            for column, source_key in RESULT_COLUMN_SOURCE_KEYS.items():
+                update_data[column] = results.get(source_key)
+            for column, source_key in RESULT_JSON_COLUMN_SOURCE_KEYS.items():
+                update_data[column] = results.get(source_key, [])
 
         bar_count = coerce_executed_bar_count(executed_bar_count)
 

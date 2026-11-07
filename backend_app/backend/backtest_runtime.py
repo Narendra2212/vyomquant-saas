@@ -886,16 +886,23 @@ class BacktestRuntime:
             
         except Exception as e:
             logger.error(f"[BACKTEST] Failed: {e}")
-            # Update backtest with error status
-            await self.backtest_service.update_backtest_results(
-                user=user,
-                backtest_id=backtest_id,
-                results={
-                    "status": "failed",
-                    "error": str(e),
-                    "execution_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds()
-                }
-            )
+            # Update backtest with error status. BT-03: recording the failure must never replace
+            # the failure -- if this write itself fails (the database is the thing that broke),
+            # the caller still receives the ORIGINAL error below, not a second, unrelated one.
+            try:
+                await self.backtest_service.update_backtest_results(
+                    user=user,
+                    backtest_id=backtest_id,
+                    results={
+                        "status": "failed",
+                        "error": str(e),
+                        "execution_time_seconds": (datetime.now(timezone.utc) - start_time).total_seconds()
+                    }
+                )
+            except Exception as record_exc:  # noqa: BLE001 - the original error is what matters
+                logger.error(
+                    f"[BACKTEST] Could not record the failure of {backtest_id}: {record_exc}"
+                )
             raise
     
     def _calculate_performance_metrics(
