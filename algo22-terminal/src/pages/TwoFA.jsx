@@ -145,6 +145,7 @@ import { token } from '../design/tokens';
 import { Button } from '../components/ui/Button';
 import { api } from '../api';
 import { supabase } from '../supabase';
+import { apiErrorMessage, apiErrorStatus } from '../design/apiErrors';
 
 /**
  * SEC-24 — backup codes, the self-service path back in for a trader who has
@@ -427,9 +428,7 @@ export default function TwoFA() {
       setBackupCodes(Array.isArray(result?.codes) ? result.codes : []);
     } catch (err) {
       setBackupCodesError(
-        err?.response?.data?.detail
-          || err?.message
-          || "Could not generate backup codes right now. You can try again from this screen.",
+        apiErrorMessage(err, "Could not generate backup codes right now. You can try again from this screen."),
       );
     } finally {
       setBackupCodesBusy(false);
@@ -482,11 +481,10 @@ export default function TwoFA() {
         navigate("/signin", { replace: true });
       }, 2500);
     } catch (err) {
-      const status = err?.response?.status;
+      const status = apiErrorStatus(err);
       if (status === 429) {
         setBackupCodeError(
-          err?.response?.data?.detail
-            || "Too many attempts. Wait a while before trying another backup code.",
+          apiErrorMessage(err, "Too many attempts. Wait a while before trying another backup code."),
         );
       } else {
         setBackupCodeError("Invalid or already-used backup code.");

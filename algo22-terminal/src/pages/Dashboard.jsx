@@ -283,6 +283,7 @@ import { fromNullable } from "../design/reported";
 import { ENVIRONMENT } from "../design/semantic";
 import { useLiveChannel } from "../hooks/useLiveChannel";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
+import { apiErrorMessage } from '../design/apiErrors';
 
 /**
  * `ds/Chart`, lazily — the one primitive on this page not imported by path.
@@ -1946,7 +1947,7 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error("Kill switch operation failed:", err);
-      setKillSwitchError(err?.response?.data?.message || err?.message || "Operation failed. Please check network or risk settings.");
+      setKillSwitchError(apiErrorMessage(err, "Operation failed. Please check network or risk settings."));
     } finally {
       setIsKillSwitchProcessing(false);
     }

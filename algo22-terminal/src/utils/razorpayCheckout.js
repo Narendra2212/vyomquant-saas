@@ -1,3 +1,5 @@
+import { apiErrorMessage } from '../design/apiErrors';
+
 /**
  * Razorpay Standard Web Checkout — script loader and modal runner.
  *
@@ -251,9 +253,10 @@ export async function runRazorpayCheckout({
             orderId: response?.razorpay_order_id,
             paymentId: response?.razorpay_payment_id,
             message:
-              err?.response?.data?.detail
-              || err?.message
-              || 'We could not verify this payment. Do not retry — contact support if you were charged.',
+              apiErrorMessage(
+                err,
+                'We could not verify this payment. Do not retry — contact support if you were charged.',
+              ),
           });
         }
       },

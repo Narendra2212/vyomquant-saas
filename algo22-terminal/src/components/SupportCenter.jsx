@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { apiErrorMessage } from "../design/apiErrors";
 import { 
   MessageSquare, Plus, Search, Filter, X, 
   Clock, AlertCircle, CheckCircle, ChevronRight, ChevronDown,
@@ -210,7 +211,7 @@ export default function SupportCenter() {
       setActiveTab('tickets');
     } catch (err) {
       console.error('Failed to create ticket:', err);
-      setError(err?.response?.data?.detail || err?.message || 'Failed to create ticket. Please check your inputs.');
+      setError(apiErrorMessage(err, 'Failed to create ticket. Please check your inputs.'));
     } finally {
       setSubmitting(false);
     }
@@ -228,7 +229,7 @@ export default function SupportCenter() {
       setCommentText('');
     } catch (err) {
       console.error('Failed to add comment:', err);
-      setError(err?.response?.data?.detail || 'Failed to submit comment. Please try again.');
+      setError(apiErrorMessage(err, 'Failed to submit comment. Please try again.'));
     } finally {
       setSubmittingComment(false);
     }
