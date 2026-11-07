@@ -230,6 +230,8 @@ import {
   TIER_PAGE_ATTRIBUTE,
 } from "../design/pageHierarchy";
 import { fromNullable } from "../design/reported";
+import { readRefusal } from "../design/entitlements";
+import { UpgradePrompt } from "../components/gates/UpgradePrompt";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
 import {
   REASON_UNREADABLE_EQUITY,
@@ -2066,6 +2068,13 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                 >
                   {runError}
                 </Alert>
+              )}
+              {/* LAUNCH AUDIT: a run the PLAN refused (monthly backtest allowance) carries the
+                  plan that allows more — offer it, beside the server's sentence above. */}
+              {readRefusal(runFailure) && (
+                <div data-testid="backtester-run-refusal">
+                  <UpgradePrompt refusal={readRefusal(runFailure)} variant="inline" />
+                </div>
               )}
             </div>
           </div>
