@@ -433,3 +433,40 @@ describe('supportRef', () => {
     expect(translateError(new Error('x'), 'dashboard').supportRef).toBeNull();
   });
 });
+
+/*
+ * LAUNCH AUDIT — a 403 is not an expired session, and a plan refusal speaks for itself.
+ * `ApiError` files 401 and 403 together under AUTH_ERROR, so every plan-limit refusal on a page
+ * using translateError (Paper Trading, Marketplace, ErrorState, ConfirmDialog, ...) read
+ * "Your session has expired · Sign in".
+ */
+describe('403 refusals', () => {
+  const apiError = (status, detail, category) =>
+    Object.assign(new Error('Request failed'), { name: 'ApiError', status, category, data: { detail } });
+
+  it('a plan refusal shows the server sentence and an upgrade action, not "session expired"', () => {
+    const out = translateError(apiError(403, {
+      code: 'PAPER_STRATEGY_LIMIT_REACHED',
+      message: 'Your Free plan allows 1 paper strategy.',
+      upgrade_message: 'Trader lets you run up to 3 paper strategies.',
+      required_plan: 'starter',
+      cta_label: 'Upgrade to Trader',
+      limit: 1,
+    }, 'AUTH_ERROR'), 'paper-trading');
+    expect(out.headline).toBe('Your Free plan allows 1 paper strategy.');
+    expect(out.detail).toBe('Trader lets you run up to 3 paper strategies.');
+    expect(out.action).toEqual({ label: 'Upgrade to Trader', to: '/app/billing' });
+    expect(out.headline).not.toMatch(/session has expired/i);
+  });
+
+  it('any other 403 is not reported as an expired session', () => {
+    const out = translateError(apiError(403, 'Account frozen', 'AUTH_ERROR'), 'paper-trading');
+    expect(out.headline).not.toMatch(/session has expired/i);
+    expect(out.action?.to).not.toBe('/signin');
+  });
+
+  it('a 401 is still an expired session', () => {
+    const out = translateError(apiError(401, 'expired', 'AUTH_ERROR'), 'paper-trading');
+    expect(out.headline).toMatch(/session has expired/i);
+  });
+});
