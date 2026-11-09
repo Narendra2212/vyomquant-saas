@@ -317,7 +317,7 @@ elasticsearch==8.14.0
 aiosmtplib==5.1.2
 asgi-correlation-id==4.3.1
 requests==2.33.0
-sse-starlette==2.1.3
+sse-starlette==3.6.0
 tiktoken==0.7.0
 # opentelemetry-exporter-otlp-proto-grpc removed with the rest of the opentelemetry
 # packages -- see the DEP-04 note above. This was the one that pulled in
