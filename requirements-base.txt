@@ -40,7 +40,7 @@ rq==3.0.0
 
 # --- Auth + Database -----------------------------------------------------
 supabase==2.7.4
-postgrest==0.16.8
+postgrest==2.34.1
 # 12 open HIGH Dependabot alerts sit on this package and it is IN THE RUNNING IMAGE.
 # The binding one is CVE-2026-69249 / GHSA-jwv3-5hgf-82ww (HIGH, duplicate self-signed
 # intermediates cause exponential X.509 path building - a DoS on every TLS handshake
