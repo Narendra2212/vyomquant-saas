@@ -494,10 +494,28 @@ async def _persist_current_version(
         ``StrategyBuilder.jsx``'s ``serverVersionLabel`` finds no label and its confirmation
         says "Saved" rather than naming a version that does not exist.
     """
+    from backend_app.backend.strategy_builder import LIFECYCLE_READY, LIFECYCLE_VALIDATED
     from backend_app.backend.strategy_service import get_strategy_service
 
     try:
         service = await get_strategy_service()
+        # LAUNCH AUDIT (VERSION-READY-01). A save through this path wrote a ``VALIDATED`` DRAFT
+        # version, and nothing in the product ever turned one into anything else. Production held
+        # six versions, all drafts, none ``READY``. But every consumer wants the opposite:
+        #   * deploy (paper or live) requires ``lifecycle_state = READY`` and answered 409
+        #     ``VERSION_NOT_READY`` ("validated but has not been persisted as an immutable version
+        #     yet - save it") with no control anywhere that does that;
+        #   * a Paper_Session refuses a draft and anything outside READY/DEPLOYED/RUNNING/PAUSED;
+        #   * the Marketplace gate and the entitlement resolver count only NON-draft versions.
+        # So a strategy a trader had just built could not be deployed, paper-traded or published.
+        # ``StrategyService.create_version_and_maybe_train`` - the single save path - already says
+        # what a version with no model block is: ``READY`` (Requirement 14.10), nothing to train.
+        # The same rule is applied here, from the same plan. A graph WITH a model block keeps the
+        # old behaviour (VALIDATED draft): it is not deployable until training has run, and that
+        # transition belongs to the training worker, not to a save. Editing is unaffected - the
+        # canvas reads ``lifecycle_state`` and ``is_read_only``, and READY is neither read-only
+        # nor immutable until a deployment freezes it (migration 004c).
+        no_model_block = not getattr(getattr(compiled, "plan", None), "ml_nodes", None)
         result = await service.create_version(
             user,
             strategy_id,
@@ -508,11 +526,8 @@ async def _persist_current_version(
             compiled=compiled,
             version=version,
             make_current=True,
-            # A save produces an editable version, which is what `is_draft` means here:
-            # migration 004c's immutability trigger freezes a version once it is deployed,
-            # not once it is written, and `strategy_lifecycle.canvas_state` reads this to
-            # decide whether the Builder may open it for editing.
-            is_draft=True,
+            lifecycle_state=LIFECYCLE_READY if no_model_block else LIFECYCLE_VALIDATED,
+            is_draft=not no_model_block,
         )
     except Exception as exc:  # noqa: BLE001 - reported on the response, never swallowed
         logger.error(
