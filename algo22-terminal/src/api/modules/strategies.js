@@ -5,6 +5,9 @@
  */
 import { get, post, put, del } from '../../apiClient';
 
+/** Five minutes: long enough for a large synchronous backtest, short enough to still fail. */
+export const BACKTEST_EXECUTE_TIMEOUT_MS = 300000;
+
 /**
  * @typedef {Object} StrategyNode
  * @property {string} id
@@ -562,6 +565,10 @@ export const strategiesApi = {
     post(
       `/api/strategy-operations/strategies/${encodeURIComponent(strategyId)}/backtests/execute`,
       body,
+      // A backtest runs synchronously and a multi-year, short-interval run takes longer than the
+      // client's 30 s default. Giving up early reported "could not be run" while the server went on
+      // to finish (or fail) the run, so the trader saw an error that was not the outcome.
+      { timeout: BACKTEST_EXECUTE_TIMEOUT_MS },
     ),
 
   /**
