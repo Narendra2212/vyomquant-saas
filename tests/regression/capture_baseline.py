@@ -2218,7 +2218,13 @@ _SURFACES: Dict[str, List[str]] = {
     "sign_in": ["pages/AuthPage.jsx"],
     "dashboard": ["pages/Dashboard.jsx"],
     "strategy_builder": ["pages/StrategyBuilder.jsx"],
-    "strategies": ["pages/Strategies.jsx", "pages/StrategyDetail.jsx"],
+    # MKT-04: the strategy page's Marketplace tab is its own component now; its calls are still
+    # this surface's.
+    "strategies": [
+        "pages/Strategies.jsx",
+        "pages/StrategyDetail.jsx",
+        "components/marketplace/CreatorMarketplacePanel.jsx",
+    ],
     "backtester": ["pages/Backtester.jsx"],
     "signal_trace": ["pages/SignalTrace.jsx"],
     "exchange_connection": ["pages/ExchangeManager.jsx"],

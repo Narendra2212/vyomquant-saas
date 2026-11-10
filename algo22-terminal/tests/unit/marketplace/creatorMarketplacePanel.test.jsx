@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../../src/apiClient', () => ({ get: mocks.get, post: mocks.post }));
 vi.mock('../../../src/api', () => ({
+  // The panel never signs in; declared so the factory replaces the module whole.
+  isAuthenticated: () => false,
   api: {
     library: {
       submissions: {

@@ -1754,6 +1754,9 @@ MATRIX_DECLARATIONS: Tuple[_RowDeclaration, ...] = (
         body={"backtest_ids": [ABSENT_IDS["strategy_id"]] * 3},
         owner_control=True,
     ),
+    # MKT-03: the owner's own Submissions, scoped by owner_id in the query. Another tenant's
+    # Submission must never appear in the caller's list.
+    _D("GET /api/library/submissions", exposes=(SUBMISSION,)),
     _D(
         "GET /api/library/submissions/{submission_id}",
         owner_control=True,
@@ -4921,6 +4924,11 @@ LIST_SURFACES: Tuple[_ListSurface, ...] = (
         "GET /api/library/me",
         OWNER_SCOPED_LIST,
         "the caller's own Listings, read by author_id",
+    ),
+    _L(
+        "GET /api/library/submissions",
+        OWNER_SCOPED_LIST,
+        "the caller's own Submissions, read by owner_id (MKT-03)",
     ),
     _L(
         "GET /api/library/my-strategies",
