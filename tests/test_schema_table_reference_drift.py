@@ -4380,21 +4380,27 @@ DIVERGENT_COLUMN_TYPES = {
         ("numeric(15,2)", "numeric(20,8)"),
         "numeric(15,2)",
     ),
+    # 064 widens this to numeric(14,4) on purpose (BT-04) - an explicit ALTER COLUMN ... TYPE, applied
+    # to production - so production now carries 14,4 and the set has one more spelling.
     "strategy_backtests.profit_factor": (
-        ("numeric(10,4)", "numeric(8,4)"),
-        "numeric(8,4)",
+        ("numeric(10,4)", "numeric(14,4)", "numeric(8,4)"),
+        "numeric(14,4)",
     ),
+    # 064 widens this to numeric(14,4) on purpose (BT-04) - an explicit ALTER COLUMN ... TYPE, applied
+    # to production - so production now carries 14,4 and the set has one more spelling.
     "strategy_backtests.sharpe_ratio": (
-        ("numeric(10,4)", "numeric(8,4)"),
-        "numeric(8,4)",
+        ("numeric(10,4)", "numeric(14,4)", "numeric(8,4)"),
+        "numeric(14,4)",
     ),
     "strategy_backtests.slippage": (
         ("numeric(10,6)", "numeric(6,4)"),
         "numeric(6,4)",
     ),
+    # 064 widens this to numeric(14,4) on purpose (BT-04) - an explicit ALTER COLUMN ... TYPE, applied
+    # to production - so production now carries 14,4 and the set has one more spelling.
     "strategy_backtests.sortino_ratio": (
-        ("numeric(10,4)", "numeric(8,4)"),
-        "numeric(8,4)",
+        ("numeric(10,4)", "numeric(14,4)", "numeric(8,4)"),
+        "numeric(14,4)",
     ),
     "strategy_backtests.start_date": (
         ("date", "timestamp with time zone"),
@@ -4414,9 +4420,11 @@ DIVERGENT_COLUMN_TYPES = {
         ("character varying(20)", "integer"),
         "character varying(20)",
     ),
+    # 064 widens win_rate to numeric(8,4) (BT-04): the column holds a PERCENT, and numeric(6,4)
+    # (< 100) could not store a 100% win rate. Applied to production.
     "strategy_backtests.win_rate": (
-        ("numeric(10,4)", "numeric(6,4)"),
-        "numeric(6,4)",
+        ("numeric(10,4)", "numeric(6,4)", "numeric(8,4)"),
+        "numeric(8,4)",
     ),
     "strategy_deployments.exchange_id": (
         ("character varying(50)", "uuid"),

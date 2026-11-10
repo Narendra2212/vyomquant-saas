@@ -158,6 +158,8 @@ export const mapBacktestExecutionToUI = (response) => {
     version: response.version ?? null,
     configuration: response.configuration ?? null,
     ignored_fields: Array.isArray(response.ignored_fields) ? response.ignored_fields : [],
+    // The dates the simulation really covered (BT-05); null when the server did not report them.
+    data_coverage: response.data_coverage && typeof response.data_coverage === 'object' ? response.data_coverage : null,
   };
 };
 

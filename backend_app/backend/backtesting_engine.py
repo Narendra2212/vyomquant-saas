@@ -795,7 +795,14 @@ class BacktestEngine:
                         "gross_pnl": float(trade['PnL']) if 'PnL' in trade else float(trade.get('pnl', 0)),
                         "fees": float(trade['Fees']) if 'Fees' in trade else float(trade.get('fees', 0)),
                         "net_pnl": float(trade['PnL'] - trade.get('Fees', 0)) if 'PnL' in trade else float(trade.get('pnl', 0)),
-                        "return_pct": float((trade['PnL'] / trade['Entry Price']) * 100) if 'PnL' in trade and 'Entry Price' in trade else 0.0,
+                        # BT-06: a trade's return is its P&L over what was put at risk (size x entry price). It was
+                        # divided by the entry PRICE alone, so a 60 loss on a 1,000 position read -9,567%.
+                        "return_pct": (
+                            float(trade['PnL'] / (abs(trade['Size']) * trade['Entry Price']) * 100)
+                            if 'PnL' in trade and 'Entry Price' in trade and 'Size' in trade
+                            and abs(trade['Size']) * trade['Entry Price'] > 0
+                            else 0.0
+                        ),
                         "duration": 0,  # Will be calculated if timestamps available
                         "status": "CLOSED"
                     }
