@@ -279,9 +279,14 @@ async def handle_commands():
                             f"Already streaming {exchange_id} {symbol}; subscribe ignored."
                         )
                     else:
-                        task = asyncio.create_task(
-                            broadcast_ohlcv(exchange_id, symbol, timeframe)
+                        # 1m keeps the original two-argument call; only another timeframe
+                        # passes one (PAPER-11).
+                        stream = (
+                            broadcast_ohlcv(exchange_id, symbol)
+                            if timeframe == BASE_TIMEFRAME
+                            else broadcast_ohlcv(exchange_id, symbol, timeframe)
                         )
+                        task = asyncio.create_task(stream)
                         active_streams[key] = task
                         # Self-cleaning: whichever way the task ends -- the REST ceiling,
                         # a cancel, or an unexpected raise -- its entry leaves the dict, so
