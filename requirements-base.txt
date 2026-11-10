@@ -313,7 +313,7 @@ psutil==6.0.0
 # actually wire TracingManager into main.py's lifespan, which has never been done.
 # ─────────────────────────────────────────────────────────────────────────────────
 wrapt==1.16.0
-elasticsearch==8.14.0
+elasticsearch==9.5.1
 aiosmtplib==5.1.2
 asgi-correlation-id==4.3.1
 requests==2.33.0
