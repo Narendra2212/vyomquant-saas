@@ -1050,6 +1050,8 @@ async def start_paper_session(
             supabase,
             user,
             listing_id=listing_key,
+            # PAPER-09: a strategy reference with no Listing may be the caller's own strategy.
+            owned_strategy_id=body.strategy_id if body.strategy_id else None,
             exchange_id=_paper_venue(),
             symbol=body.symbol,
             timeframe=body.timeframe,

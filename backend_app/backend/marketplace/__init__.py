@@ -504,13 +504,15 @@ _ENTITLEMENT_HANDLER = {
         "strategy_versions": frozenset(
             {"id", "strategy_id", "version", "is_draft"}
         ),
+        # ``resolve_owned_strategy`` (PAPER-09): the caller's OWN strategy, which has no Listing.
+        "strategies": frozenset({"id", "user_id", "archived_at"}),
     },
     # ``library_strategies``, ``library_subscriptions`` and ``strategy_versions`` all pre-date
     # this work; only their additive columns are this spec's to create, proven present by the
     # 007/008 column assertions. ``marketplace_submissions`` is created by 007, so its
     # ``submission_state`` column IS asserted to exist by the migration set here.
     "preexisting": frozenset(
-        {"library_strategies", "library_subscriptions", "strategy_versions"}
+        {"library_strategies", "library_subscriptions", "strategy_versions", "strategies"}
     ),
 }
 
