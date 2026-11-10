@@ -785,6 +785,30 @@ const VALIDATION_STRATEGY_NOT_EXECUTABLE = 'STRATEGY_NOT_EXECUTABLE';
 /** `paper_session_service.VALIDATION_ENTITLEMENT`. */
 const VALIDATION_ENTITLEMENT = 'ENTITLEMENT';
 
+/**
+ * PAPER-13: what each `PAPER_START_REFUSED` check means, in the words a person acts on.
+ *
+ * The server's message says "the accompanying validation entry names the check that refused it",
+ * but the panel only ever showed the generic message and `PAPER_START_REFUSED` -- so a session
+ * started on the wrong timeframe failed with no way to tell why. These are the codes
+ * `paper_session_service.VALIDATION_*` sends; an unknown one is still shown, by name.
+ */
+export const START_REFUSAL_REASONS = Object.freeze({
+  STRATEGY_SYMBOL_TIMEFRAME_INCOMPATIBLE:
+    'This strategy was built for a different market or timeframe. Use the symbol and timeframe it was built on.',
+  TIMEFRAME_NOT_SUPPORTED: 'That timeframe is not supported for paper trading.',
+  CURRENCY_NOT_SUPPORTED: 'That currency is not supported for paper trading.',
+  CAPITAL_NOT_POSITIVE: 'The simulated capital must be greater than zero.',
+  CAPITAL_EXCEEDS_MAXIMUM: 'The simulated capital is above the allowed maximum.',
+  CAPITAL_PRECISION_EXCEEDED: 'The simulated capital has more decimal places than the currency allows.',
+  SESSION_CONFIG_NOT_BUILDABLE: 'The session settings could not be assembled into a runnable session.',
+});
+
+export function startRefusalReason(validation) {
+  if (!validation) return null;
+  return START_REFUSAL_REASONS[validation] || `The server refused it at the ${validation} check.`;
+}
+
 /** The two codes that mean "this listing's executable artifact does not resolve". */
 const UNAVAILABLE_STRATEGY_CODES = Object.freeze(['MARKETPLACE_STRATEGY_UNAVAILABLE']);
 
@@ -874,8 +898,11 @@ export function classifyReadFailure(error) {
   if (status === 401 || status === 403) {
     return { ...base, state: PANEL_STATES.UNAUTHORISED, signal: `HTTP ${status}` };
   }
+  const refusedBecause = code === 'PAPER_START_REFUSED' ? startRefusalReason(validation) : null;
   return {
     ...base,
+    message: refusedBecause ? `${refusedBecause} ${message || ''}`.trim() : message,
+    validation,
     state: PANEL_STATES.ERROR,
     signal: status === null ? 'no HTTP status (the request did not reach a response)' : `HTTP ${status}`,
   };
@@ -1205,3 +1232,25 @@ export const CHART_GEOMETRY = Object.freeze({
 });
 
 export const chartGeometry = (mode) => CHART_GEOMETRY[mode] || CHART_GEOMETRY[LAYOUT_MODES.WIDE];
+
+
+/**
+ * PAPER-12 follow-up: when the session's current candle closes, as words.
+ *
+ * A session now acts on (and records) a candle only once it has CLOSED, so a 1h session shows no
+ * price for up to an hour after it starts. Saying when the first close is due turns "nothing is
+ * happening" into "this is when it will". Returns `null` for a timeframe it cannot read, so the
+ * caller keeps its generic text rather than guessing.
+ */
+const TIMEFRAME_UNIT_MS = Object.freeze({ m: 60_000, h: 3_600_000, d: 86_400_000 });
+
+export function nextCandleCloseHint(timeframe, now = Date.now()) {
+  const match = /^(\d+)([mhd])$/.exec(String(timeframe || '').trim());
+  if (!match) return null;
+  const interval = Number(match[1]) * TIMEFRAME_UNIT_MS[match[2]];
+  if (!Number.isFinite(interval) || interval <= 0) return null;
+  const close = new Date((Math.floor(now / interval) + 1) * interval);
+  const hh = String(close.getUTCHours()).padStart(2, '0');
+  const mm = String(close.getUTCMinutes()).padStart(2, '0');
+  return `Prices are recorded when each ${timeframe} candle closes; the current one closes at ${hh}:${mm} UTC.`;
+}

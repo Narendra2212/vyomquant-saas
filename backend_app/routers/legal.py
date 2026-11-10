@@ -29,6 +29,7 @@ a bug in this file cannot rewrite history.
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -144,6 +145,23 @@ async def get_current_documents() -> Dict[str, Any]:
     }
 
 
+
+async def _executed(query: Any) -> Any:
+    """Run a PostgREST query from either client this router can be handed (LEGAL-02).
+
+    ``get_request_supabase`` returns an ASYNC PostgREST client, whose ``execute()`` is a
+    coroutine. Both handlers here called it without ``await``, so ``response.data`` raised on the
+    coroutine and every read answered 503 ``LEGAL_ACCEPTANCE_UNAVAILABLE`` and every write 503
+    ``LEGAL_ACCEPTANCE_NOT_RECORDED`` -- in production no acceptance had been recorded since
+    2026-10-23, so recent signups' age and country declarations were never stored, and the
+    re-acceptance gate (which fails open on a read error) never prompted anyone. A synchronous
+    client, as the tests use, still works.
+    """
+    result = query.execute()
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+
 @router.get("/acceptance")
 async def get_my_acceptance(
     user: dict = Depends(get_current_user),
@@ -175,12 +193,11 @@ async def get_my_acceptance(
         )
 
     try:
-        response = (
+        response = await _executed(
             supabase.table(TABLE)
             .select("document_version, documents, accepted_at, context")
             .eq("user_id", user_id)
             .order("accepted_at", desc=True)
-            .execute()
         )
         rows = response.data or []
     except Exception as exc:  # noqa: BLE001
@@ -323,9 +340,11 @@ async def accept_documents(
     try:
         # on_conflict names the unique index, so a repeat accept is a no-op
         # rather than a 23505 this handler would have to interpret.
-        supabase.table(TABLE).upsert(
-            row, on_conflict="user_id,document_version", ignore_duplicates=True
-        ).execute()
+        await _executed(
+            supabase.table(TABLE).upsert(
+                row, on_conflict="user_id,document_version", ignore_duplicates=True
+            )
+        )
     except Exception as exc:  # noqa: BLE001
         # NEVER report an acceptance as recorded when the write failed. The whole
         # value of this record is that it is true.

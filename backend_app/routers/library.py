@@ -1344,7 +1344,7 @@ async def browse_library(
 #: query, so the filter, ordering and response contract are identical.
 _MY_LIBRARY_SELECT = (
     "id, name, moderation_status, clone_count, avg_rating, rating_count, "
-    "is_active, published_at"
+    "is_active, published_at, source_strategy_id"
 )
 
 #: The owner-view fields the response carries, in the order it carries them. Frozen, so the
@@ -1358,6 +1358,10 @@ _MY_LIBRARY_FIELDS = (
     "rating_count",
     "is_active",
     "published_at",
+    # MKT-03: the owner's own source strategy, so the strategy page can tell whether THIS
+    # strategy already has a Listing (it matched on this field, which was never returned, so it
+    # always offered "Publish" and a second press was a 409).
+    "source_strategy_id",
 )
 
 
@@ -5357,6 +5361,56 @@ class AdminActionRequest(BaseModel):
     """The optional body for an admin action. Only ``reject`` reads ``reason``."""
 
     reason: Optional[str] = Field(None, max_length=2000)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/library/submissions — the caller's own Submissions (MKT-03)
+#
+# The owner could create a Submission and read it back by id, but nothing listed them, so after
+# a page reload the creator UI had no way to learn a Submission's state (SUBMITTED, REJECTED with
+# its reason, PUBLISHED...). Owner-scoped in the query itself, exactly as the single read below;
+# the same columns, no blueprint or logic field.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_OWN_SUBMISSION_LIST_SELECT = (
+    "id, listing_id, source_strategy_id, owner_id, version_id, "
+    "submission_state, eligibility_outcomes, evaluator_version, "
+    "rejection_reason, reviewed_by, submitted_at, reviewed_at, "
+    "published_at, created_at, updated_at"
+)
+
+
+@literal_router.get("/submissions")
+@limiter.limit("120/60second", key_func=caller_or_address)
+@limiter.limit("120/60second")
+async def list_own_submissions(
+    request: Request,
+    strategy_id: Optional[str] = Query(None),
+    user: dict = Depends(get_current_user),
+):
+    """The caller's own Submissions, newest first, optionally for one source strategy."""
+    user_id = _safe_uuid(user["id"], "user_id")
+    svc = _build_service_client()
+    try:
+        query = (
+            svc.table("marketplace_submissions")
+            .select(_OWN_SUBMISSION_LIST_SELECT)
+            .eq("owner_id", user_id)
+        )
+        if strategy_id:
+            query = query.eq("source_strategy_id", _safe_uuid(strategy_id, "strategy_id"))
+        resp = query.order("created_at", desc=True).limit(50).execute()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"list_own_submissions read error: {exc}")
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+
+    rows = resp.data if resp is not None else None
+    if rows is None:
+        logger.error("list_own_submissions read unreadable")
+        raise MarketplaceError(MARKETPLACE_READ_FAILED)
+    return {"submissions": rows, "count": len(rows)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

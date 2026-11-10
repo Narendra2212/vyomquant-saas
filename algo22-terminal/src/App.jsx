@@ -56,6 +56,7 @@ import { getAuthRedirectUrl, AUTH_REDIRECT_PATH } from './config';
 const LandingPage    = lazy(() => import('./components/landing/LandingPage'));
 const DownloadPage   = lazy(() => import('./components/download/DownloadPage'));
 const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard'));
+const AdminMarketplaceReview = lazy(() => import('./pages/AdminMarketplaceReview'));
 const LegalPageRoute = lazy(() => import('./components/legal/LegalPage'));
 
 // Auth / onboarding pages (lazy)
@@ -430,17 +431,41 @@ function AuthExchangePendingScreen() {
 
 // AUTH GUARDS. Exported (alongside `AuthExchangePendingScreen`) for
 // tests/unit/authPkceRedirect.test.jsx (FE-01) -- not used by any other module.
+/**
+ * NAV-01: where a signed-in user goes from a guest page -- the page they asked for, if it was one
+ * of this app's own, else the dashboard.
+ *
+ * A link opened in a new tab (or after a browser restart) has a persisted Supabase session but no
+ * per-tab `sessionStorage` token yet, so `AuthGuard` sends it to `/signin`; by the time
+ * `GuestGuard` renders, the session listener has restored the token and the user was sent to the
+ * DASHBOARD, losing the page they opened. Only a same-app `/app/...` path is honoured, so this can
+ * never become an open redirect.
+ */
+export function safeReturnPath(from) {
+  if (typeof from !== 'string') return null;
+  if (!from.startsWith('/app/') || from.startsWith('//') || from.includes('\\')) return null;
+  return from;
+}
+
 export function AuthGuard() {
   const { pending, token: effectiveToken } = useGuardedAuthToken();
+  const location = useLocation();
   if (pending) return <AuthExchangePendingScreen />;
-  if (!effectiveToken) return <Navigate to="/signin" replace />;
+  if (!effectiveToken) {
+    return (
+      <Navigate to="/signin" replace state={{ from: `${location.pathname}${location.search}` }} />
+    );
+  }
   return <Outlet />;
 }
 
 export function GuestGuard() {
   const { pending, token: effectiveToken } = useGuardedAuthToken();
+  const location = useLocation();
   if (pending) return <AuthExchangePendingScreen />;
-  if (effectiveToken) return <Navigate to="/app/dashboard" replace />;
+  if (effectiveToken) {
+    return <Navigate to={safeReturnPath(location.state?.from) || '/app/dashboard'} replace />;
+  }
   return <Outlet />;
 }
 
@@ -896,6 +921,8 @@ export default function AppWrapper() {
           {/* Admin-only: AdminGuard verifies Supabase session + app_metadata.role === 'admin' */}
           <Route element={<AdminGuard />}>
             <Route path="/admin/waitlist" element={<Suspense fallback={PUBLIC_FALLBACK}><AdminDashboard /></Suspense>} />
+            {/* MKT-04: the Marketplace submission review queue (admin-only server-side too). */}
+            <Route path="/admin/marketplace" element={<Suspense fallback={PUBLIC_FALLBACK}><AdminMarketplaceReview /></Suspense>} />
           </Route>
 
           {/* Guest-only: redirect to /app/dashboard if already authenticated */}
