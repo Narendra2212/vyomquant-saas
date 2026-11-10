@@ -2050,6 +2050,54 @@ async def get_library_detail(
 # POST /api/library — Publish a strategy
 # ─────────────────────────────────────────────────────────────────────────────
 
+_LATEST_RUN_SELECT = (
+    "id, total_return_pct, sharpe_ratio, max_drawdown, win_rate, profit_factor, "
+    "total_trades, start_date, end_date, initial_capital"
+)
+
+
+def _backtest_result_from_latest_run(svc, strategy_id: str, user_id: str):
+    """The strategy's latest COMPLETED backtest, shaped like the legacy ``backtest_result`` (MKT-02).
+
+    ``None`` when the strategy has no completed run. The two renamed figures are the ones the
+    evidence copy also renames (``max_drawdown`` -> ``max_drawdown_pct``, ``win_rate`` ->
+    ``win_rate_pct``); both are stored in percent. A read failure is a 500, not a "no backtest"
+    400: telling an owner to re-run a backtest they already have would be a false instruction.
+    """
+    try:
+        resp = (
+            svc.table("strategy_backtests")
+            .select(_LATEST_RUN_SELECT)
+            .eq("strategy_id", strategy_id)
+            .eq("user_id", user_id)
+            .eq("status", "completed")
+            .order("completed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error(f"publish_strategy latest backtest read error: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to read the strategy's backtests.",
+        )
+    rows = resp.data or []
+    if not rows:
+        return None
+    run = rows[0]
+    return {
+        "total_return_pct": run.get("total_return_pct"),
+        "sharpe_ratio": run.get("sharpe_ratio"),
+        "max_drawdown_pct": run.get("max_drawdown"),
+        "win_rate_pct": run.get("win_rate"),
+        "profit_factor": run.get("profit_factor"),
+        "total_trades": run.get("total_trades"),
+        "start_date": run.get("start_date"),
+        "end_date": run.get("end_date"),
+        "initial_capital": run.get("initial_capital"),
+    }
+
+
 @literal_router.post("", status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def publish_strategy(
@@ -2110,11 +2158,19 @@ async def publish_strategy(
             detail="Not your strategy.",
         )
 
-    # Backtest result check
+    # Backtest result check. ``strategies.backtest_result`` is a legacy column that no current
+    # code path writes (all 192 production strategies had it empty), so requiring it made this
+    # first step of the publish flow impossible and the Marketplace permanently empty (MKT-02).
+    # The figures now come from the strategy's latest completed ``strategy_backtests`` run when the
+    # legacy field is absent; a present legacy value is used exactly as before.
+    if not strategy.get("backtest_result"):
+        strategy["backtest_result"] = _backtest_result_from_latest_run(
+            svc, strategy_id, user_id
+        )
     if not strategy.get("backtest_result"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Run a backtest before publishing. Strategy has no stored backtest result.",
+            detail="Run a backtest before publishing. Strategy has no completed backtest.",
         )
 
     # 2. Prevent duplicate publication
@@ -5755,7 +5811,25 @@ def _load_pricing_conditions(sub_id: str, user_id: str, svc):
     except Exception as exc:
         logger.error(f"pricing evidence read error: {exc}")
         raise MarketplaceError(MARKETPLACE_READ_FAILED)
-    return resp.data or []
+    return [_exact_wire_row(row) for row in (resp.data or [])]
+
+
+def _exact_wire_row(row):
+    """One evidence row with every float made the exact decimal it was parsed from (MKT-01).
+
+    ``marketplace_backtest_evidence``'s metric columns are ``numeric(20,8)``. PostgREST renders a
+    ``numeric`` as a JSON number and the HTTP client parses a fractional one into a binary
+    ``float``; ``pricing_evaluator`` refuses a ``float`` by design (Requirement 8.13), so every
+    real submission answered 422 ``MARKETPLACE_PRICE_EVIDENCE_MISSING`` and nothing could be
+    priced. ``Decimal(repr(value))`` is the shortest decimal that round-trips, i.e. the digits the
+    column was stored with. ``int`` counts, ``str`` dates and hashes pass through untouched, and a
+    non-finite float becomes a non-finite ``Decimal`` the evaluator still refuses. The digest is
+    taken over these same rows at both call sites, so it stays consistent.
+    """
+    return {
+        key: Decimal(repr(value)) if isinstance(value, float) else value
+        for key, value in row.items()
+    }
 
 
 def _price_range_or_error(conditions, currency: str):
