@@ -447,8 +447,8 @@ export function safeReturnPath(from) {
 }
 
 export function AuthGuard() {
-  const location = useLocation();
   const { pending, token: effectiveToken } = useGuardedAuthToken();
+  const location = useLocation();
   if (pending) return <AuthExchangePendingScreen />;
   if (!effectiveToken) {
     return (
@@ -459,8 +459,8 @@ export function AuthGuard() {
 }
 
 export function GuestGuard() {
-  const location = useLocation();
   const { pending, token: effectiveToken } = useGuardedAuthToken();
+  const location = useLocation();
   if (pending) return <AuthExchangePendingScreen />;
   if (effectiveToken) {
     return <Navigate to={safeReturnPath(location.state?.from) || '/app/dashboard'} replace />;

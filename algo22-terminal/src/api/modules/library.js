@@ -128,6 +128,20 @@ const submissions = {
   create: (body) => post('/api/library/submissions', body),
 
   /**
+   * The caller's own Submissions, newest first, optionally for one source strategy.
+   *
+   * `GET /api/library/submissions` (`list_own_submissions`, MKT-03). Owner-scoped in the query;
+   * this is how the strategy page learns a Submission's state after a reload.
+   *
+   * @param {string} [strategyId]
+   * @returns {Promise<{submissions: Object[], count: number}>}
+   */
+  list: (strategyId) =>
+    get(
+      `/api/library/submissions${strategyId ? `?strategy_id=${encodeURIComponent(strategyId)}` : ''}`,
+    ),
+
+  /**
    * One of the caller's own Submissions.
    *
    * `GET /api/library/submissions/{submission_id}` (`get_own_submission`). The read is scoped

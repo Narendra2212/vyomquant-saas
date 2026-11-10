@@ -71,9 +71,9 @@ transcript of every earlier one — noise that looks like a leak.
 
 THE PENDING REGISTRY (read this before "fixing" a failure here)
 ---------------------------------------------------------------
-Zero of the twenty enumerated read endpoints are pending. :data:`PENDING` is **EMPTY**: every
-one of the twenty that are already correct is asserted strictly, so a newly added read endpoint,
-or a regression in any of them, fails immediately rather than being tolerated.
+Zero of the twenty-one enumerated read endpoints are pending. :data:`PENDING` is **EMPTY**:
+every one of the twenty-one that are already correct is asserted strictly, so a newly added read
+endpoint, or a regression in any of them, fails immediately rather than being tolerated.
 
 The registry held known Requirement 1.5 defects, each with the clauses it failed and the task
 that owned the fix, marked ``xfail(strict=True)`` so that the moment one started passing THIS FILE
@@ -520,7 +520,8 @@ def test_the_pending_registry_names_only_real_endpoints():
 #: Spelled-out counts, for the docstring check below. Only the range this file can reach.
 _NUMBER_WORDS = (
     "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
-    "fifteen sixteen seventeen eighteen nineteen twenty"
+    "fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two twenty-three "
+    "twenty-four twenty-five"
 ).split()
 
 
@@ -1325,6 +1326,7 @@ SUCCESS_CASES: Tuple[SuccessCase, ...] = (
                     "rating_count": 2,
                     "is_active": True,
                     "published_at": "2024-01-01T00:00:00+00:00",
+                    "source_strategy_id": "33333333-3333-3333-3333-333333333333",
                     # Not in _MY_LIBRARY_FIELDS. The entry is BUILT from the frozen tuple, so a
                     # column a migration adds cannot ride along into the owner's response.
                     "buy_logic": "PROTECTED",
@@ -1343,6 +1345,7 @@ SUCCESS_CASES: Tuple[SuccessCase, ...] = (
                     "rating_count": 2,
                     "is_active": True,
                     "published_at": "2024-01-01T00:00:00+00:00",
+                    "source_strategy_id": "33333333-3333-3333-3333-333333333333",
                 }
             ],
             "total": 1,

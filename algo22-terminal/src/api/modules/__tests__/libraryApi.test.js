@@ -97,6 +97,11 @@ const EXPECTED = {
     verb: 'post',
     call: ['/api/library/submissions', SUBMISSION_BODY],
   },
+  'submissions.list': {
+    args: [ID],
+    verb: 'get',
+    call: [`/api/library/submissions?strategy_id=${ENC}`],
+  },
   'submissions.get': {
     args: [ID],
     verb: 'get',
