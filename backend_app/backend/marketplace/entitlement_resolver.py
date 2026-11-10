@@ -149,6 +149,7 @@ __all__ = [
     "WIRE_CODE_FOR_REASON",
     "EntitlementReadFailed",
     "resolve",
+    "resolve_owned_strategy",
 ]
 
 
@@ -601,6 +602,84 @@ def _is_unresolvable_embed_error(exc: BaseException) -> bool:
         "more than one relationship" in text
         or "could not find a relationship" in text
         or "could not embed because" in text
+    )
+
+
+async def resolve_owned_strategy(
+    caller: Any,
+    strategy_id: Any,
+    supabase: Any,
+) -> Entitlement:
+    """Admit the caller to a strategy of THEIR OWN that was never published (PAPER-09).
+
+    :func:`resolve` is keyed on a Listing, and a Listing exists only once a strategy has been
+    submitted and published. A trader's own strategy has none, so naming it answered
+    ``LISTING_UNAVAILABLE`` - while ``GET /api/library/my-strategies`` offered ``start_paper`` on
+    that very strategy, and ``paper_session_service.start_session`` already records
+    ``entitlement.listing_id or entitlement.source_strategy_id`` for "an owned start". Nobody could
+    paper-trade a strategy they had just built, which is the first thing a trader does before
+    risking money on it.
+
+    This is the OWNED half of :func:`resolve` for a strategy with no Listing. It admits only when
+    all of these hold, each read with the caller's identity and none from a request field:
+
+    * the strategy row exists and its ``user_id`` is the caller's (another trader's strategy, and a
+      strategy id that does not exist, answer the SAME ``LISTING_UNAVAILABLE``, so the answer
+      discloses nothing about either - Requirement 7.11);
+    * the strategy is not archived (a deleted strategy is not runnable);
+    * it has a saved, non-draft version - the version the session will run, resolved by the same
+      :func:`_resolve_current_version` a Listing's owner is admitted on.
+
+    ``listing_id`` is ``None`` on the result: there is no Listing, and ``paper_sessions.listing_id``
+    is nullable for exactly this case.
+
+    Raises:
+        EntitlementReadFailed: a read did not complete (never turned into a refusal).
+    """
+    caller_id = _get(caller, "id")
+    strategy_key = _as_text(strategy_id)
+
+    def unavailable() -> Entitlement:
+        return Entitlement(
+            entitling=False,
+            reason=EntitlementReason.LISTING_UNAVAILABLE,
+            listing_id=strategy_key,
+        )
+
+    if not strategy_key or caller_id is None:
+        return unavailable()
+
+    try:
+        response = (
+            supabase.table("strategies")
+            .select("id,user_id,archived_at")
+            .eq("id", strategy_key)
+            .execute()
+        )
+        rows = _rows(response)
+    except EntitlementReadFailed:
+        raise
+    except Exception as exc:  # noqa: BLE001 - re-raised as the defined outcome, never swallowed
+        raise EntitlementReadFailed(
+            f"the strategy read for {strategy_key} did not complete: {exc}"
+        ) from exc
+
+    row = next((r for r in rows if _same_id(_get(r, "id"), strategy_key)), None)
+    if row is None or not _same_id(_get(row, "user_id"), caller_id):
+        return unavailable()
+    if _get(row, "archived_at"):
+        return unavailable()
+
+    version_id = _resolve_current_version(supabase, strategy_key)
+    if version_id is None:
+        return unavailable()
+
+    return Entitlement(
+        entitling=True,
+        reason=EntitlementReason.OWNED,
+        listing_id=None,
+        source_strategy_id=strategy_key,
+        version_id=version_id,
     )
 
 

@@ -920,10 +920,35 @@ def _rows(response: Any, what: str) -> List[Dict[str, Any]]:
     if data is None:
         return []
     if isinstance(data, Mapping):
-        return [dict(data)]
+        return [_exact_wire_row(data)]
     if isinstance(data, Sequence) and not isinstance(data, (str, bytes)):
-        return [dict(row) for row in data if isinstance(row, Mapping)]
+        return [_exact_wire_row(row) for row in data if isinstance(row, Mapping)]
     return []
+
+
+def _exact_wire_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """One row as it comes off the wire, with every JSON number that is a float made exact.
+
+    PAPER-08. PostgREST renders a ``numeric`` column as a JSON number, and the HTTP client parses
+    a JSON number with a fractional part into a binary ``float``. The accounting engine refuses
+    a ``float`` outright (Requirement 18.1), so the first read of any paper balance in production
+    failed with ``InvalidQuantity: available_balance must be an exact decimal value, not a float
+    (100000.0)`` - ``GET /api/paper/account``, ``/summary`` and ``/positions`` all answered 500 for
+    every user. The test suites did not see it because they read through a Postgres driver (or a
+    double) that returns ``Decimal`` for ``numeric``, which is not what the deployed client does.
+
+    ``Decimal(repr(value))`` is the exact decimal the float was parsed from: ``repr`` is the
+    shortest string that round-trips, so a value PostgREST rendered with up to 15 significant
+    digits comes back as the same digits it was stored with, not as ``0.1000000000000000055...``.
+    Only top-level scalar floats are converted; an ``int`` is already exact, a ``str`` is already
+    an exact decimal string, and a JSONB payload is left as stored (``_jsonb`` writes its decimals
+    as strings, so it carries no float). A non-finite float becomes a non-finite ``Decimal`` and
+    is refused downstream by ``to_decimal`` exactly as before.
+    """
+    exact: Dict[str, Any] = {}
+    for key, value in row.items():
+        exact[key] = Decimal(repr(value)) if isinstance(value, float) else value
+    return exact
 
 
 # ══════════════════════════════════════════════════════════════════════════

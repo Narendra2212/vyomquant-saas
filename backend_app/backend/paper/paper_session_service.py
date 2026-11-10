@@ -255,7 +255,9 @@ from backend_app.backend.market_data_contract import (
 from backend_app.backend.marketplace.entitlement_resolver import (
     Entitlement,
     EntitlementReadFailed,
+    EntitlementReason,
     resolve as resolve_entitlement,
+    resolve_owned_strategy,
 )
 from backend_app.backend.marketplace.money import (
     UnsupportedCurrency,
@@ -1513,6 +1515,7 @@ async def start_session(
     timeframe: Any,
     initial_capital_minor: Any,
     currency: Any = repo.DEFAULT_CURRENCY,
+    owned_strategy_id: Any = None,
     now: Optional[datetime] = None,
     markets: Any = None,
     exchange: Any = None,
@@ -1593,6 +1596,15 @@ async def start_session(
     # ── 1. THE SINGLE ADMISSION DECISION (Requirements 17.4, 11.10, property P-16) ──
     try:
         entitlement = await resolve_entitlement(caller, listing_id, supabase, instant)
+        if (
+            not entitlement.entitling
+            and owned_strategy_id
+            and entitlement.reason is EntitlementReason.LISTING_UNAVAILABLE
+        ):
+            # PAPER-09: no Listing backs this reference. It may still be the caller's OWN strategy,
+            # which has no Listing until it is published and is the first thing a trader paper-trades.
+            # Same admission decision, OWNED half, keyed on the strategy and the caller's identity.
+            entitlement = await resolve_owned_strategy(caller, owned_strategy_id, supabase)
     except EntitlementReadFailed as exc:
         # A read the decision needed did not complete, so there IS no decision. Reported as a
         # failure rather than as "not entitled": refusing a paying subscriber because a read
