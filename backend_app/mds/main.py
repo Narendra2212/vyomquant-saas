@@ -10,7 +10,10 @@ from backend_app.core.cache import redis_manager
 logger = logging.getLogger("MDS")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-active_streams = {} # (exchange_id, symbol) -> asyncio.Task
+# PAPER-11: the one timeframe this service streamed before sessions could ask for another.
+BASE_TIMEFRAME = '1m'
+
+active_streams = {} # (exchange_id, symbol) for 1m, (exchange_id, symbol, timeframe) otherwise -> asyncio.Task
 exchange_instances = {}
 
 # The `transport` field every published payload carries, naming WHICH of this module's two
@@ -93,10 +96,17 @@ def get_exchange_instance(exchange_id: str):
         exchange_instances[exchange_id] = ex_class({'enableRateLimit': True})
     return exchange_instances[exchange_id]
 
-async def broadcast_ohlcv(exchange_id, symbol):
+def data_channel(exchange_id: str, symbol: str, timeframe: str = BASE_TIMEFRAME) -> str:
+    """The channel :func:`broadcast_ohlcv` publishes to. The 1m channel is the unsuffixed one every
+    existing consumer reads; any other timeframe has its own, so the two can never be mixed.
+    ``paper_market_feed.mds_data_channel`` spells the same rule (asserted equal by a test)."""
+    base = f"mds:data:{exchange_id}:{symbol}"
+    return base if timeframe == BASE_TIMEFRAME else f"{base}:{timeframe}"
+
+
+async def broadcast_ohlcv(exchange_id, symbol, timeframe=BASE_TIMEFRAME):
     exchange = get_exchange_instance(exchange_id)
-    timeframe = '1m'
-    channel = f"mds:data:{exchange_id}:{symbol}"
+    channel = data_channel(exchange_id, symbol, timeframe)
     
     logger.info(f"Starting websocket stream for {exchange_id} {symbol}")
 
@@ -250,7 +260,12 @@ async def handle_commands():
                 if not symbol:
                     continue
                     
-                key = (exchange_id, symbol)
+                timeframe = str(data.get("timeframe") or BASE_TIMEFRAME).strip() or BASE_TIMEFRAME
+                key = (
+                    (exchange_id, symbol)
+                    if timeframe == BASE_TIMEFRAME
+                    else (exchange_id, symbol, timeframe)
+                )
                 
                 if action == "subscribe":
                     # `existing and not existing.done()` rather than `key not in
@@ -264,7 +279,9 @@ async def handle_commands():
                             f"Already streaming {exchange_id} {symbol}; subscribe ignored."
                         )
                     else:
-                        task = asyncio.create_task(broadcast_ohlcv(exchange_id, symbol))
+                        task = asyncio.create_task(
+                            broadcast_ohlcv(exchange_id, symbol, timeframe)
+                        )
                         active_streams[key] = task
                         # Self-cleaning: whichever way the task ends -- the REST ceiling,
                         # a cancel, or an unexpected raise -- its entry leaves the dict, so
