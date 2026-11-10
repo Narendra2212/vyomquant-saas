@@ -1,11 +1,12 @@
 {
-  "_baseline_note_launch_audit_clone_via_client": "LAUNCH AUDIT AUTHORISES one ADDED api call on the Strategies surface: POST /api/strategies/{strategy_id}/clone via api.strategies.clone. The endpoint and its handler (clone_strategy) are unchanged; the page previously called it with a raw fetch() that bypassed the shared client, which is why the capture did not see it, and whose failure only reached console.error (a trader at their plan limit clicked Clone and nothing happened). It now goes through strategiesApi.clone so refusals reach the page. No response field, status code or parameter changed.",
   "_baseline_note_api_call_count": "AUTHORISED RE-RECORD of `api_call_count` \u2014 12 to 15 (task 32.7; Requirements 12.2, 12.3, 12.4, 12.5, 12.6, 12.8). This figure is `len(api_calls)` and nothing else, so it moves by exactly the number of entries that were added and by no other cause. The three are `api.library.myStrategies` (GET /api/library/my-strategies), `api.library.cancelSubscription` (POST /api/library/subscriptions/{expr}/cancel) and `api.library.renewSubscription` (POST /api/library/subscriptions/{expr}/renew); each carries its own `_baseline_note_entry` beside itself naming the requirement that puts it on this surface. NO CALL WAS REMOVED: all twelve the pre-change baseline recorded are still recorded here, and 12 + 3 = 15. This note covers the count only. It authorises no fourth call: a sixteenth entry appearing here is a failure whether or not this figure is updated with it, because the added entry would be reported in its own right.",
   "_baseline_note_environment_filter": "Re-recorded for tasks 29.3 and 29.4 (Requirements 23.2, 23.3, 23.4, 23.6). ONE ADDITION in this file: the `environment` query parameter on GET /api/signal-trace/signals (`list_signals`, api_calls[5]) \u2014 Requirement 23.4's Execution_Environment filter, declared as a repeatable list like every other Requirement 17.2 filter category, with no default so Requirement 23.6's default (the caller's own signals across all environments) is unchanged. Nothing on that entry was removed, renamed or retyped: no path, method, rate limit or existing filter changed, no response key was removed, and its `raises` \u2014 which already recorded {detail_type: computed, status_code: e.http_status} before this change \u2014 is untouched. The detail handler GET /api/signal-trace/signals/{signal_id} is NOT recorded in this file; the 400/404 that task 29.3 added to it is annotated in `surface_signal_trace.json`, where that handler lives.\nCORRECTION (2026-06, task 30 checkpoint). An earlier version of this note said of the whole file \"Two ADDITIONS, nothing removed, renamed or retyped\". That was FALSE. This file also records four changes that ARE removals, renames and re-recorded shapes, none of them belonging to task 29.3/29.4 and none of them annotated at the time: api_calls[2] `creator_analytics` (decorator renamed, `returns` collapsed), api_calls[3] `my_library` (decorator renamed, `raises` emptied) and api_calls[7] `publish_strategy` (decorator renamed, two `returns` keys removed). Each is authorised by a task in this spec and each now carries its own `_baseline_note_*` member beside the entry it changed \u2014 read them there. The general point, which is why the wording mattered: under Requirements 25.7 and 25.8 the scope of an authorisation is the ENTRY it names, never the file it happens to sit in, so a file-level \"nothing was removed\" claim can only ever be read as covering changes it was never written about.",
+  "_baseline_note_launch_audit_clone_via_client": "LAUNCH AUDIT AUTHORISES one ADDED api call on the Strategies surface: POST /api/strategies/{strategy_id}/clone via api.strategies.clone. The endpoint and its handler (clone_strategy) are unchanged; the page previously called it with a raw fetch() that bypassed the shared client, which is why the capture did not see it, and whose failure only reached console.error (a trader at their plan limit clicked Clone and nothing happened). It now goes through strategiesApi.clone so refusals reach the page. No response field, status code or parameter changed.",
   "_baseline_note_legacy_deploy_delegates_rt03": "RT-03 AUTHORISES two changes on api_calls[13] (POST /api/strategies/{id}/deploy): (a) the response gained ONE key, `deployment_id` (additive; `status` is unchanged), and (b) the handler no longer raises the 500 `DEPLOY_DISPATCH_FAILED`. WHY. This route used to build a blueprint from the `strategies` row and call fleet.start_bot / publish a TEE command directly, with no Deployment_Binding and no strategy_deployments row; for a strategy saved by the current builder that bot could never emit an order while the route answered {status: running}. It now delegates to StrategyService.deploy_version (paper mode), the one canonical deploy, which owns dispatch and reports its own refusals (4xx via DeployRejected, 400 DEPLOY_FAILED). No existing response key was removed, renamed or retyped. Regression: tests/test_rt08_deployment_state_is_durable.py::TestLegacyRoutesDelegate.",
+  "_baseline_note_mkt04_marketplace_panel": "AUTHORISED RE-RECORD (MKT-04). The strategy page's Marketplace tab moved into components/marketplace/CreatorMarketplacePanel.jsx, now part of this surface's source_files. Its single 'Publish to Library' button called GET /api/library/me?strategy_id= (a filter the route never read) and POST /api/library; the panel calls GET /api/library/me, POST /api/library (unchanged) and adds GET /backtests (the evidence picker). The submission/price calls go through api.library.submissions.*, which the capture does not resolve. No call was removed from the product: /api/library/me is the same route without the ignored query string.",
   "_baseline_note_mkt07_creator_payouts": "MKT-07 AUTHORISES one ADDED entry in api_calls: GET /api/library/creator/payouts (apiClient direct). The marketplace creator payout panel reads this endpoint directly; it previously had no call site on this surface. Nothing existing was removed, renamed or retyped.",
   "_baseline_note_trading_capabilities_call": "FE-03 AUTHORISES one ADDED frontend call: GET /api/system/trading-capabilities (Strategies.jsx). The deploy modal previously offered Live unconditionally; it now asks the server whether live trading is available (public, read-only, fail-closed to paper) before offering Live.",
-  "api_call_count": 18,
+  "api_call_count": 19,
   "api_calls": [
     {
       "_baseline_note_handlers": "AUTHORISED RE-RECORD (API-01): removed the strategy_operations.py handler entry for this (method, path) -- it was a permanently shadowed duplicate (strategies.router is mounted before strategy_operations.router in main.py, so first-match-wins made it dead code since the day both were added: delete_strategy). Deleted as dead code; nothing served by the app changed. See tests/test_validation_sweep.py _DELIBERATELY_EXCLUDED_HANDLERS history.",
@@ -43,6 +44,58 @@
       "path_template": "/api/strategies/{id}",
       "resolved": true,
       "via": "api.strategies.delete"
+    },
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('/backtests')",
+            "limiter.limit('200/minute')"
+          ],
+          "handler": "list_backtests",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "limit": {
+              "annotation": "int",
+              "has_default": true
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "strategy_id": {
+              "annotation": "Optional",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "BACKTESTS_LIST_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "backtests": "computed",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/backtests"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/backtests{expr}",
+      "path_template": "/api/backtests{expr}",
+      "resolved": true,
+      "via": "api.strategies.listBacktests"
     },
     {
       "handler_count": 2,
@@ -210,9 +263,6 @@
       "handler_count": 1,
       "handlers": [
         {
-          "_baseline_note_decorators": "AUTHORISED RE-RECORD of `decorators` (task 13.1; Requirements 1.3, 22.1). `router.get('/me')` now reads `literal_router.get('/me')` (`library.py` line 1154) \u2014 the same literal-route splice as `creator_analytics` above, for the same reason and with the same scope: the router object the route is declared on changed, the path string, method, handler, dependencies and rate limit did not, and `route_path` `/api/library/me` is unchanged. `GET /me` was matched by the parameterised `@router.get('/{library_id}')` while it was declared below it, so it answered 422 from `_safe_uuid('me', 'library_id')` rather than the owner's library. `router.routes[:0] = literal_router.routes` (`library.py` line 4883) puts every literal route in front of every parameterised one at include time. Asserted by tests/test_library_route_resolution.py::TestLiteralRouteResolution, whose `LITERAL_ROUTE_EXPECTATIONS` pins ('GET', '/me', 'my_library').",
-          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` (task 21.3). The baseline recorded one entry: `HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=\"Failed to fetch your library entries.\")`, raised by the `except Exception:` around the `library_strategies` read. It is gone because Requirement 1.5 requires a Marketplace read that did not complete to answer a structured error carrying a STABLE MACHINE-READABLE code at 500 or 503, and an `HTTPException` carries none: it answers the legacy `{error, message, status_code, path, timestamp}` envelope, whose `error` member is an ad-hoc sentence a client can only branch on by string-matching, and whose `path` member is an internal route Requirement 22.9 excludes from a response body. The handler now raises `MarketplaceError(MARKETPLACE_READ_FAILED)` (503), which the AST capture does not record under `raises` because `_raised_status_codes` records `HTTPException` raises only \u2014 so this is a re-record of the CAPTURE SHAPE, not the removal of a refusal: the failure is still refused, at a status the catalogue permits for that code (`errors.ALLOWED_HTTP_STATUS_FOR_CODE[MARKETPLACE_READ_FAILED] == {500, 503}`), in the declared `{error: {code, message, details}, request_id}` envelope, with the driver's message logged for an operator and never put in the body. The handler now also refuses a response object carrying no readable `data`, which previously fell through as an empty library \u2014 telling an owner their strategies are gone (Requirements 1.5, 1.7, 28.5). Nothing else about this handler moved: the success body is still `{items, total}` over `_MY_LIBRARY_FIELDS`, and a read that COMPLETED and matched nothing still answers 200 with an empty `items` and `total: 0`. Authorising requirements: 1.5, 1.7, 22.9, 28.2, 28.5, 30.5. Task 21.3's own text names this entry \u2014 \"Re-record ONLY the two baseline entries the change legitimately moves \u2014 `auth_admin_role.admin_routes[3]` (`admin_pending_strategies`) and `surface_strategies.api_calls[3]` (`my_library`) \u2026 through the `_baseline_note_raises` mechanism, citing the authorising requirements\" \u2014 and only the first of the two was written at the time; this is the missing half. Asserted by tests/test_marketplace_error_surface.py (the `my_library` cases).",
-          "_baseline_note_rate_limit": "AUTHORISED RE-RECORD of `decorators` and `parameters` on THIS handler only (`backend_app.routers.library.my_library`, GET /api/library/me) \u2014 task 33.2; Requirements 6.7, 22.4. Exactly two differences are covered and no others: (a) `decorators` GAINS one entry, `limiter.limit('120/60second', key_func=caller_or_address)`, in second position after `literal_router.get('/me')` (`library.py` line 1194); (b) `parameters` GAINS the key `request`, as `{annotation: Request}` (`library.py` line 1195). As on `creator_analytics` above, (b) exists only so that (a) can work \u2014 `slowapi` reads the rate-limit key off the `Request` \u2014 and it is not a new caller-supplied input. Nothing was removed, renamed or retyped: `user` is still `{annotation: dict, depends_on: get_current_user}`, `route_path` is still `/api/library/me`, `returns` is still the single `{items, total}` shape, `raises` is still `[]` for the reason `_baseline_note_raises` above records, and the pre-existing `literal_router.get('/me')` decorator is unchanged and still first. `request` is NOT one of the five additive fields `design.md` declares, and ADDITIVE_FIELDS is deliberately NOT widened for it: this note permits an added `request` parameter and an added `limiter.limit` decorator HERE, on THIS handler, and nowhere else, and a rate limit LATER REMOVED from this handler is still a failure. AUTHORISING REQUIREMENTS. 22.4 \u2014 rate limiting on every endpoint; this owner-scoped read of `library_strategies` carried none before. 6.7 \u2014 the requirement whose \"per authenticated caller\" window the global `key_func=get_remote_address` cannot express, which is why task 33.2 introduces `caller_or_address` and passes it explicitly here. 120/60s is the read-endpoint figure; it is ONE limit, not 6.7's stacked catalogue pair, because `GET /api/library/me` is an owner-scoped read rather than a catalogue, search or detail endpoint. REQUIREMENTS THIS IS AN EXCEPTION TO: 25.7 and 25.8, for these two differences and no others. Requirement 25.4 still holds for the strategies surface: the call still resolves and still answers `{items, total}` to a caller inside the window, and a caller outside it is refused 429 `MARKETPLACE_RATE_LIMITED` having read nothing. Asserted by tests/test_task_33_2_rate_limit_keys.py.",
           "decorators": [
             "literal_router.get('/me')",
             "limiter.limit('120/60second', key_func=caller_or_address)"
@@ -239,8 +289,8 @@
         }
       ],
       "method": "GET",
-      "path": "/api/library/me?strategy_id={strat.id}",
-      "path_template": "/api/library/me?strategy_id={strat.id}",
+      "path": "/api/library/me",
+      "path_template": "/api/library/me",
       "resolved": true,
       "via": "apiClient direct"
     },
@@ -268,7 +318,6 @@
           "raises": [],
           "returns": [
             {
-              "_baseline_note_returns": "AUTHORISED RE-RECORD \u2014 three keys ADDED to this handler's return: `subscriptions_available` (bool), `owned_fields_unavailable` (list) and `subscription_fields_unavailable` (list). WHY. Production defect: this endpoint answered HTTP 503 MARKETPLACE_READ_FAILED on EVERY call for EVERY user, and the Strategies page rendered 'Ownership list unavailable / Server error occurred'. Cause: rounds 1 and 2 named columns the live schema does not carry \u2014 `strategies.is_active` (only migrations/006_reconcile_production_database.sql adds it), `strategies.archived_at` (only backend_app/migrations/005a_strategy_archive.sql), `library_subscriptions.period_expiry` and `.renewal_enabled` (only backend_app/migrations/008_marketplace_settlement.sql) \u2014 and PostgREST errors the WHOLE statement for an undefined column, which the handler's `except Exception` turned into a 503. The unhinted `library_strategies!inner(\u2026)` embed is a second instance: migration 006 gives `library_subscriptions` TWO foreign keys to `library_strategies` (`library_id` and `strategy_id`), so PostgREST answers PGRST201. This is the identical condition `library_entries.OWNED_STRATEGY_SELECT`'s docstring records for the `strategies.description` column. The reads are now TIERED (`routers/library.py::_read_owned_strategies` and `_read_subscriptions`): the narrow, correct projection is attempted FIRST and is what a correctly-migrated environment issues \u2014 same columns, same order, same one round trip \u2014 and a narrower one is tried only for an error `library_entries.is_degradable_projection_error` recognises as 'that projection is unreadable'. A timeout, a refused connection, an RLS denial or a missing TABLE still answers MARKETPLACE_READ_FAILED, so Requirements 1.5 and 1.7 are unweakened. WHY THE THREE KEYS ARE REQUIRED RATHER THAN OPTIONAL. Degrading silently would be the fabrication those requirements forbid, in a quieter form: `subscribed_total: 0` for a subscribed half that was never read is indistinguishable from 'you hold no Subscriptions', and a `null` `is_active` is indistinguishable from a column that was read and is empty. So the response STATES what it could not read, exactly as the pre-existing `running_paper_sessions_available` states it for round 3 (Requirement 28.5), and all three keys are present on every response for the same reason that one is \u2014 a reader must not have to infer availability from a missing key. WHAT IS NOT AUTHORISED. Every key the pre-change baseline recorded is still recorded here, unchanged and un-retyped; a later removal of any of them, including these three, is still a failure.",
               "as_of": "str",
               "items": "computed",
               "owned_fields_unavailable": "list",
@@ -734,19 +783,14 @@
       "via": "api.library.renewSubscription"
     },
     {
-      "via": "api.strategies.clone",
-      "path_template": "/api/strategies/{expr}/clone",
-      "method": "POST",
-      "path": "/api/strategies/{expr}/clone",
-      "resolved": true,
+      "handler_count": 1,
       "handlers": [
         {
-          "route_path": "/api/strategies/{strategy_id}/clone",
-          "handler": "clone_strategy",
-          "module": "backend_app.routers.strategies",
           "decorators": [
             "router.post('/{strategy_id}/clone')"
           ],
+          "handler": "clone_strategy",
+          "module": "backend_app.routers.strategies",
           "parameters": {
             "strategy_id": {
               "annotation": "str"
@@ -756,6 +800,24 @@
               "depends_on": "get_current_user"
             }
           },
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": "DAG_INVALID_STATUS"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_404_NOT_FOUND"
+            },
+            {
+              "detail_type": "str",
+              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
           "returns": [
             {
               "status": "str",
@@ -763,27 +825,14 @@
               "warnings": "computed"
             }
           ],
-          "raises": [
-            {
-              "status_code": "DAG_INVALID_STATUS",
-              "detail_type": "computed"
-            },
-            {
-              "status_code": "status.HTTP_404_NOT_FOUND",
-              "detail_type": "str"
-            },
-            {
-              "status_code": "status.HTTP_500_INTERNAL_SERVER_ERROR",
-              "detail_type": "str"
-            },
-            {
-              "status_code": 503,
-              "detail_type": "str"
-            }
-          ]
+          "route_path": "/api/strategies/{strategy_id}/clone"
         }
       ],
-      "handler_count": 1
+      "method": "POST",
+      "path": "/api/strategies/{expr}/clone",
+      "path_template": "/api/strategies/{expr}/clone",
+      "resolved": true,
+      "via": "api.strategies.clone"
     },
     {
       "_baseline_note_entry": "AUTHORISED RE-RECORD of this entry \u2014 `api.strategies.deployVersion`'s POST path, `/api/strategy-operations/strategies/{expr}/versions/{expr}/deploy` \u2192 `/api/strategies/{expr}/versions/{expr}/deploy`, and with it `resolved` FALSE \u2192 TRUE (commit b3771c3, \"fix(api): deploy and deployments paths resolve to routes the backend registers\"). ONE CHANGE, REPORTED AS TWO: the differ matches `api_calls` on (`via`, `method`, `path_template`), so correcting a path reads as a removal plus an addition of the same `via`. THE OLD PATH RESOLVED TO NOTHING, and this file is the evidence: the pre-change capture froze `\"resolved\": false` for this call, i.e. the capture tool had already recorded that the path matched no backend route. `strategy_operations.py:2835` declares only `@router.post(\"/strategies/{strategy_id}/versions/{version}/deploy\")` and `main.py:644` mounts that router at `prefix=\"/api\"`, so `/api/strategy-operations/\u2026/deploy` was never registered. What made the prefixed spelling look correct is that the siblings either side of it register both: `preflight_deploy_version` registers both spellings of the preflight GET (`_PREFLIGHT_PATHS`, strategy_operations.py:2954\u20132961) and `execute_backtest` carries two `@router.post` decorators (strategy_operations.py:1332\u20131333). CONSEQUENCE OF THE DEFECT: the preflight GET answered, the deploy gate passed, the Deploy button enabled, and the POST the user then pressed 404'd. The correction the user reviewed and approved is frontend-only (`api/modules/strategies.js`, `lib/deployFlow.js`); no backend route, handler or gate was touched. It is strictly an improvement in the captured contract: where an unresolved entry recorded nothing beyond a path, this entry now resolves to `backend_app.routers.strategy_operations.deploy_version` and records its decorators, parameters, `raises` and `returns`, which is why re-recording it is safe rather than a regression papered over. SCOPE: this note covers this one entry. `api_call_count` is unchanged at 15 \u2014 one entry out, one in \u2014 and no other call on this surface moved; an unresolved-to-resolved re-record anywhere else in this file is a failure in its own right, whether or not this note sits nearby.",
@@ -1035,6 +1084,7 @@
   "capture": "surface_strategies",
   "requirement": "25.4",
   "source_files": [
+    "components/marketplace/CreatorMarketplacePanel.jsx",
     "pages/Strategies.jsx",
     "pages/StrategyDetail.jsx"
   ],

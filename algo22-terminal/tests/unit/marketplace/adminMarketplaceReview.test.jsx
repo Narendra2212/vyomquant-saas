@@ -13,7 +13,8 @@ const admin = vi.hoisted(() => ({
   suspend: vi.fn(),
   unpublish: vi.fn(),
 }));
-vi.mock('../../../src/api', () => ({ api: { library: { admin } } }));
+// The page never signs in; `isAuthenticated` is declared so the factory replaces the module whole.
+vi.mock('../../../src/api', () => ({ api: { library: { admin } }, isAuthenticated: () => false }));
 
 import AdminMarketplaceReview from '../../../src/pages/AdminMarketplaceReview';
 
