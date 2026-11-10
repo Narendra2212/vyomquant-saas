@@ -271,7 +271,7 @@ protobuf==5.29.6
 # pin's own comment) or starlette (DEP-01), there was no conflict to document here.
 python-dotenv==1.2.2
 pydantic[email]==2.8.2
-pydantic-settings==2.4.0
+pydantic-settings==2.16.2
 httpx==0.27.0
 wsproto==1.2.0
 prometheus-client==0.20.0
