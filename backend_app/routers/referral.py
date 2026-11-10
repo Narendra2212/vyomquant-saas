@@ -589,6 +589,10 @@ async def get_commission_history(
             query = query.eq("status", status)
         
         resp = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
+        if inspect.isawaitable(resp):
+            # REF-01: the request client is async; un-awaited, `resp.data` raised and both
+            # history endpoints answered 500 for every user.
+            resp = await resp
         
         commissions = [
             CommissionRecord(
@@ -644,6 +648,10 @@ async def get_payout_history(
             query = query.eq("status", status)
         
         resp = query.order("created_at", desc=True).limit(limit).offset(offset).execute()
+        if inspect.isawaitable(resp):
+            # REF-01: the request client is async; un-awaited, `resp.data` raised and both
+            # history endpoints answered 500 for every user.
+            resp = await resp
         
         payouts = [
             PayoutRecord(

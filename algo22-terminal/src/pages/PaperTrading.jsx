@@ -371,6 +371,7 @@ import {
   responsiveGridColumns,
   retainFrames,
   toChartNumber,
+  nextCandleCloseHint,
 } from './paperTradingFormat';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -996,6 +997,7 @@ const PanelBody = ({
   code = null,
   onRetry,
   retryLabel = 'Retry',
+  errorHeading = 'This read did not complete',
   emptyText = 'Nothing recorded yet.',
   idleText = 'Select or start a session to populate this panel.',
   disabledReason = null,
@@ -1080,7 +1082,7 @@ const PanelBody = ({
         role="alert"
         tone="bad"
         Icon={AlertTriangle}
-        heading="This read did not complete"
+        heading={errorHeading}
         testId="panel-error-with-retry"
         code={code}
         footer={
@@ -2731,7 +2733,13 @@ export default function PaperTrading() {
           state={selectionState}
           message={selectionNotice.message}
           code={selectionNotice.code}
-          onRetry={loadStrategies}
+          // PAPER-13: a start refusal hid the whole form and its Retry only re-read the strategy
+          // list, leaving the refusal in place -- the user could not change the timeframe or
+          // capital that caused it without reloading the page. Retrying a refused START goes
+          // back to the form, with the settings the user entered still in it.
+          onRetry={startRefusal ? () => setStartRefusal(null) : loadStrategies}
+          retryLabel={startRefusal ? 'Back to session settings' : 'Retry'}
+          errorHeading={startRefusal ? 'The session was not started' : undefined}
           emptyText="No strategy you own or subscribe to currently offers a paper session."
         >
           <div
@@ -3219,7 +3227,8 @@ export default function PaperTrading() {
           hint={
             latestTick
               ? `Candle ${formatInstant(latestTick.at) || NOT_REPORTED}`
-              : 'A price is shown only once a validated candle has arrived — none is synthesised.'
+              : (nextCandleCloseHint(session?.timeframe)
+                || 'A price is shown only once a validated candle has arrived — none is synthesised.')
           }
         />
 
