@@ -863,12 +863,25 @@ export function resultCurves(results) {
   const equity = Array.isArray(results?.equity) ? results.equity : [];
   const derived = absoluteDrawdownSeries(equity);
 
+  // The x axis is a DATE when every point carries an ISO-8601 string the engine reported, and the
+  // run's position otherwise. Never a guess: a nanosecond integer or a missing stamp keeps the
+  // honest "Point in the run" axis, which is what this page drew before.
+  const isoOf = (value) => (
+    typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value))
+      ? value
+      : null
+  );
+  const dates = equity.map((entry) => isoOf(entry?.timestamp));
+  const dated = dates.length > 0 && dates.every((value) => value !== null);
+
   return {
     rows: derived.map((entry, index) => ({
       point: index + 1,
+      ...(dated ? { date: dates[index] } : {}),
       equity: entry.equity,
       drawdown: entry.drawdown,
     })),
+    dated,
     readable: derived.filter((entry) => entry.readable === true).length,
     unreadable: countUnreadableDrawdownPoints(derived),
   };
@@ -1119,6 +1132,50 @@ const percentText = (value) => (
 const decimalText = (value, digits) => (
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : null
 );
+
+/**
+ * One row per trade for the P&L bars: the engine's net P&L under `win` or `loss` by its sign,
+ * the other side `null` so each bar is one colour. A trade whose net P&L is unreadable is left
+ * out rather than drawn as a zero.
+ */
+export function tradePnlRows(trades) {
+  const rows = [];
+  (Array.isArray(trades) ? trades : []).forEach((trade, index) => {
+    const pnl = trade?.net_pnl;
+    if (typeof pnl !== "number" || !Number.isFinite(pnl)) return;
+    rows.push({ trade: index + 1, win: pnl >= 0 ? pnl : null, loss: pnl < 0 ? pnl : null });
+  });
+  return rows;
+}
+
+/**
+ * What the run really covered, in words — or `null` when it covered what was asked (BT-05).
+ * A request for four years that simulated three months must say so next to the numbers.
+ */
+export function coverageNotice(coverage) {
+  if (!coverage || typeof coverage !== "object") return null;
+  const day = (iso) => (typeof iso === "string" ? iso.slice(0, 10) : null);
+  const first = day(coverage.first_bar);
+  const last = day(coverage.last_bar);
+  if (!first || !last) return null;
+  const covered = `${first} → ${last}`;
+  if (coverage.truncated_by_cap === true) {
+    return {
+      title: `This run only covers ${covered}`,
+      body: `The simulation is limited to ${Number(coverage.bar_cap).toLocaleString("en-US")} bars, so the later `
+        + `part of your period (up to ${day(coverage.requested_end) ?? "the end date"}) was not simulated. `
+        + "Pick a shorter period or a longer bar interval to cover the whole window.",
+    };
+  }
+  if (coverage.starts_after_request === true) {
+    return {
+      title: `This run only covers ${covered}`,
+      body: `The exchange holds no ${day(coverage.requested_start) ? `data before ${first}` : "earlier data"} for `
+        + `this market, so the part of your period before ${first} was not simulated.`,
+    };
+  }
+  return null;
+}
 
 /** The name the saved row itself carries, or the id it was saved under. */
 const savedRunName = (run) => {
@@ -1606,6 +1663,7 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
 
   /** Both curves, derived once from the one equity series (task 23.3). */
   const curves = useMemo(() => resultCurves(results), [results]);
+  const coverage = useMemo(() => coverageNotice(results?.data_coverage), [results]);
   const curveState = curves.readable > 0 ? PANEL_STATES.READY : PANEL_STATES.EMPTY;
 
   /** The trade list, with its one projected column. */
@@ -1642,17 +1700,34 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
       id: DETAIL_TABS.TRADES,
       label: labelOf("tradeList"),
       content: tradesReported && tradeRows.length > 0 ? (
-        <DataTable
-          caption="Simulated trades, in the order the run reported them"
-          columns={TRADE_COLUMNS}
-          rows={tradeRows}
-          getRowId={(row, index) => row?.trade_id ?? index}
-          page={tradesPage}
-          pageSize={TRADES_PER_PAGE}
-          onPageChange={setTradesPage}
-          density="compact"
-          stickyHeader
-        />
+        <div className="flex min-w-0 flex-col gap-4">
+          {/* P&L per trade — wins and losses side by side, from the engine's own net P&L.
+              Two series so the colour carries the sign without this page deciding anything. */}
+          <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading trade results" />}>
+            <Chart
+              kind="bar"
+              data={tradePnlRows(tradeRows)}
+              xAxis={{ key: "trade", label: "Trade number", format: "number" }}
+              yAxis={{ label: "Net P&L per trade (quote currency)", format: "number" }}
+              series={[
+                { key: "win", name: "Winning trade", token: "profit" },
+                { key: "loss", name: "Losing trade", token: "loss" },
+              ]}
+              emptyMessage="No trade results to draw"
+            />
+          </Suspense>
+          <DataTable
+            caption="Simulated trades, in the order the run reported them"
+            columns={TRADE_COLUMNS}
+            rows={tradeRows}
+            getRowId={(row, index) => row?.trade_id ?? index}
+            page={tradesPage}
+            pageSize={TRADES_PER_PAGE}
+            onPageChange={setTradesPage}
+            density="compact"
+            stickyHeader
+          />
+        </div>
       ) : (
         <EmptyState
           headline={tradesReported
@@ -1723,13 +1798,30 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
    * not-available marker rather than an empty cell (Requirement 14.5).
    */
   const savedRunRows = useMemo(
-    () => savedRuns.map((run) => ({
-      ...run,
-      strategy: savedRunName(run),
-      returnText: percentText(run?.total_return_pct),
-      sharpeText: decimalText(run?.sharpe_ratio, 2),
-    })),
-    [savedRuns],
+    () => {
+      // A saved run names its strategy by the strategy's own current name when the listing holds
+      // it; an id prefix ("Strategy baff9ebb") told the trader nothing. A strategy that is no longer
+      // listed (archived or deleted) is said to be, rather than shown as an opaque id.
+      const namesById = new Map(
+        strategyRows.map((row) => namedStrategy(row)).filter(Boolean).map((entry) => [entry.id, entry.name]),
+      );
+      return savedRuns.map((run) => {
+        const listed = namesById.get(run?.strategy_id);
+        const own = run?.blueprint?.name;
+        const label = listed
+          ?? (typeof own === "string" && own.trim() !== "" ? own.trim() : null)
+          ?? (typeof run?.strategy_id === "string" && run.strategy_id !== ""
+            ? `Removed strategy · ${run.strategy_id.slice(0, 8)}`
+            : null);
+        return {
+          ...run,
+          strategy: label,
+          returnText: percentText(run?.total_return_pct),
+          sharpeText: decimalText(run?.sharpe_ratio, 2),
+        };
+      });
+    },
+    [savedRuns, strategyRows],
   );
 
   /** The saved table's columns plus its one action, which needs this page's handler. */
@@ -2110,6 +2202,11 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                 ) : null}
                 data-region="tier-1"
               >
+                {coverage === null ? null : (
+                  <Alert severity="warning" title={coverage.title} data-testid="backtester-coverage-notice">
+                    {coverage.body}
+                  </Alert>
+                )}
                 {/* Six equal-weight slots in ONE row: `flex-1` from a zero basis, not
                     `grid-cols-6` — the built stylesheet carries bare `grid-cols-1…4` plus
                     `lg:grid-cols-6`, so a bare `grid-cols-6` compiles to nothing and renders
@@ -2166,7 +2263,9 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                     <Chart
                       kind="area"
                       data={curves.rows}
-                      xAxis={{ key: "point", label: "Point in the run", format: "number" }}
+                      xAxis={curves.dated
+                        ? { key: "date", label: "Date", format: "date" }
+                        : { key: "point", label: "Point in the run", format: "number" }}
                       yAxis={{ label: "Equity (quote currency)", format: "number" }}
                       series={[{ key: "equity", name: "Equity", token: "brand" }]}
                       emptyMessage="This run produced no equity series"
@@ -2202,7 +2301,9 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                       <Chart
                         kind="area"
                         data={curves.rows}
-                        xAxis={{ key: "point", label: "Point in the run", format: "number" }}
+                        xAxis={curves.dated
+                        ? { key: "date", label: "Date", format: "date" }
+                        : { key: "point", label: "Point in the run", format: "number" }}
                         // Absolute, in the equity curve's own units — the derivation is
                         // `peak − current`, not a percentage. Tier 1's max drawdown is the
                         // engine's `max_drawdown_pct` and stays the only percentage on

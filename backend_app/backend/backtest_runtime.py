@@ -393,6 +393,46 @@ def _requested_window_ms(start_date: str, end_date: str) -> Tuple[Optional[int],
     return _epoch_ms(start_date), _epoch_ms(end_date)
 
 
+_BACKTEST_BAR_CAP = 10_000
+
+
+def _data_coverage(
+    ohlcv_data: list,
+    start_date: str,
+    end_date: str,
+    timeframe_ms: Optional[int],
+    bar_cap: int,
+) -> Dict[str, Any]:
+    """What dates the simulation actually ran over, against what was asked for (BT-05).
+
+    A request for 2022-2026 on 15-minute bars was silently simulated over ~3.4 months: the
+    exchange listed the pair in Dec 2023, and the fetch stops at ``bar_cap`` bars, so the later
+    bars never loaded. Nothing told the trader. This is the plain statement of the window the
+    numbers describe. ``truncated_by_cap`` means bars exist after ``last_bar`` that were not
+    simulated; ``starts_after_request`` means the exchange holds nothing earlier than
+    ``first_bar``. Both are facts about the data, never guesses.
+    """
+    def _iso(ms: int) -> str:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    since_ms, until_ms = _requested_window_ms(start_date, end_date)
+    first_ms = int(ohlcv_data[0][0])
+    last_ms = int(ohlcv_data[-1][0])
+    bar = timeframe_ms or 0
+    return {
+        "requested_start": _iso(since_ms) if since_ms is not None else None,
+        "requested_end": _iso(until_ms) if until_ms is not None else None,
+        "first_bar": _iso(first_ms),
+        "last_bar": _iso(last_ms),
+        "bars": len(ohlcv_data),
+        "bar_cap": bar_cap,
+        "truncated_by_cap": bool(
+            len(ohlcv_data) >= bar_cap and until_ms is not None and last_ms + 2 * bar < until_ms
+        ),
+        "starts_after_request": bool(since_ms is not None and first_ms - since_ms > 2 * bar),
+    }
+
+
 class BacktestRuntime:
     """
     Integrated backtesting runtime that executes Strategy Packages.
@@ -676,7 +716,7 @@ class BacktestRuntime:
             ohlcv_data = await self.data_engine.fetch_historical_ohlcv(
                 symbol=symbol,
                 timeframe=timeframe,
-                limit=10_000,  # Fetch up to 10k bars
+                limit=_BACKTEST_BAR_CAP,  # Fetch up to this many bars
                 max_retries=3,
                 since_ms=since_ms,
                 until_ms=until_ms,
@@ -686,6 +726,11 @@ class BacktestRuntime:
                 raise ValueError(f"Insufficient historical data: {len(ohlcv_data) if ohlcv_data else 0} bars")
             
             logger.info(f"[BACKTEST] Fetched {len(ohlcv_data)} OHLCV bars")
+            try:
+                tf_ms = self.data_engine._timeframe_ms(timeframe)
+            except Exception:  # noqa: BLE001 - coverage is informational, never a reason to fail a run
+                tf_ms = None
+            data_coverage = _data_coverage(ohlcv_data, start_date, end_date, tf_ms, _BACKTEST_BAR_CAP)
             
             # Convert to DataFrame
             df = pd.DataFrame(
@@ -866,6 +911,9 @@ class BacktestRuntime:
                 "backtest_id": backtest_id,
                 "status": "completed",
                 "results": results,
+                # The dates the simulation really covered (BT-05); on the envelope, not in
+                # `results`, because `results` is the measured payload with a pinned key set.
+                "data_coverage": data_coverage,
                 # ── What per-trade risk this run actually simulated ────────────
                 # Reported from the same dict the simulator was handed, so it cannot
                 # drift from the run. Carried on the ENVELOPE rather than inside
