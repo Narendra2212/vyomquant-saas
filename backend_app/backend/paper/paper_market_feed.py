@@ -200,7 +200,19 @@ MDS_ACTION_SUBSCRIBE = "subscribe"
 MDS_ACTION_UNSUBSCRIBE = "unsubscribe"
 
 
-def mds_command(action: str, exchange_id: Any, symbol: Any) -> str:
+#: The one timeframe ``mds`` has always streamed, on the unsuffixed channel. A session on this
+#: timeframe is wired exactly as it was before PAPER-11; every other timeframe is streamed on its own
+#: channel, named by :func:`mds_data_channel`, and requested through the command's ``timeframe`` key.
+MDS_BASE_TIMEFRAME = "1m"
+
+
+def _is_base_timeframe(timeframe: Any) -> bool:
+    return timeframe is None or str(timeframe).strip() in ("", MDS_BASE_TIMEFRAME)
+
+
+def mds_command(
+    action: str, exchange_id: Any, symbol: Any, timeframe: Any = None
+) -> str:
     """One ``mds:commands`` message, as the JSON text that channel carries.
 
     Exactly the three keys ``handle_commands`` reads - ``action``, ``exchange``, ``symbol`` - and
@@ -216,17 +228,25 @@ def mds_command(action: str, exchange_id: Any, symbol: Any) -> str:
             f"{action!r} is not an mds:commands action; handle_commands branches on "
             f"{MDS_ACTION_SUBSCRIBE!r} and {MDS_ACTION_UNSUBSCRIBE!r} and ignores anything else"
         )
-    return json.dumps(
-        {
-            "action": action,
-            "exchange": str(exchange_id).strip().lower(),
-            "symbol": str(symbol).strip(),
-        }
-    )
+    message = {
+        "action": action,
+        "exchange": str(exchange_id).strip().lower(),
+        "symbol": str(symbol).strip(),
+    }
+    # PAPER-11. Present ONLY for a non-base timeframe, so a 1m command is byte-for-byte what it
+    # always was and an older ``mds`` that ignores the key behaves exactly as it did.
+    if not _is_base_timeframe(timeframe):
+        message["timeframe"] = str(timeframe).strip()
+    return json.dumps(message)
 
 
 async def publish_unsubscribe(
-    redis: Any, *, exchange_id: Any, symbol: Any, session_id: Any = None
+    redis: Any,
+    *,
+    exchange_id: Any,
+    symbol: Any,
+    session_id: Any = None,
+    timeframe: Any = None,
 ) -> bool:
     """``PUBLISH {'action': 'unsubscribe', ...}`` to ``mds:commands``. Requirement 17.8's release.
 
@@ -262,7 +282,7 @@ async def publish_unsubscribe(
     try:
         await redis.publish(
             MDS_COMMAND_CHANNEL,
-            mds_command(MDS_ACTION_UNSUBSCRIBE, exchange_id, symbol),
+            mds_command(MDS_ACTION_UNSUBSCRIBE, exchange_id, symbol, timeframe),
         )
     except asyncio.CancelledError:
         raise
@@ -279,7 +299,7 @@ async def publish_unsubscribe(
     return True
 
 
-def mds_data_channel(exchange_id: Any, symbol: Any) -> str:
+def mds_data_channel(exchange_id: Any, symbol: Any, timeframe: Any = None) -> str:
     """The channel ``mds/main.py::broadcast_ohlcv`` publishes that pair's candles to.
 
     Spelled once, here, because it is a wire contract shared with a separate process: the
@@ -287,7 +307,15 @@ def mds_data_channel(exchange_id: Any, symbol: Any) -> str:
     stream table, so a caller passing ``"Binance"`` subscribes to the channel the service
     actually publishes to rather than to one nobody writes.
     """
-    return f"mds:data:{str(exchange_id).strip().lower()}:{str(symbol).strip()}"
+    base = f"mds:data:{str(exchange_id).strip().lower()}:{str(symbol).strip()}"
+    # PAPER-11. ``mds`` streamed ONLY 1m candles, and a session refuses a candle whose timeframe is
+    # not its own, so a 5m / 15m / 1h / 4h session received nothing, ever (zero ``paper_market_events``
+    # after twelve minutes of RUNNING). Every other timeframe now has its own channel, so it can never
+    # be mixed into the 1m stream other consumers (``stream_live_ohlcv``, the last-price key) read.
+    # ``mds/main.py`` spells the same suffix; tests/test_paper11 pins the two equal.
+    if _is_base_timeframe(timeframe):
+        return base
+    return f"{base}:{str(timeframe).strip()}"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -557,7 +585,7 @@ class PaperFeedConfig:
     @property
     def channel(self) -> str:
         """The ``mds:data:*`` channel this session's candles arrive on."""
-        return mds_data_channel(self.exchange_id, self.symbol)
+        return mds_data_channel(self.exchange_id, self.symbol, self.timeframe)
 
     @property
     def normalised_exchange_id(self) -> str:
@@ -1347,6 +1375,7 @@ class FeedHandle:
             MDS_ACTION_SUBSCRIBE,
             self.config.normalised_exchange_id,
             self.config.symbol,
+            self.config.timeframe,
         )
         await self.redis.publish(MDS_COMMAND_CHANNEL, command)
 
@@ -1618,6 +1647,7 @@ class FeedHandle:
                 exchange_id=self.config.normalised_exchange_id,
                 symbol=self.config.symbol,
                 session_id=self.session_id,
+                timeframe=self.config.timeframe,
             )
         finally:
             await self._close_pubsub()
