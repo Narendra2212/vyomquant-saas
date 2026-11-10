@@ -88,7 +88,7 @@ jobs:
       #     iam:PassedToService context key, and the role's logs grants were scoped to a
       #     log-group ARN that does not satisfy DescribeLogGroups or GetLogEvents.
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::273709947018:role/VyomQuantGithubActionsDeploy-production
           role-session-name: GitHubActions-02-build
