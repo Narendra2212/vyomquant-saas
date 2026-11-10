@@ -1458,6 +1458,13 @@ async def _spawn(
     spawner = spawn_loop or no_session_loop
     try:
         outcome = spawner(session, feed, config=config, account_id=account_id)
+        # PAPER-10. A Task (or any Future) is ALREADY scheduled: it is the running loop, and awaiting
+        # it here waited out the whole session. The production spawner returns exactly that, so a
+        # start request never returned while its session lived (CloudFront's 30 s ended it with a
+        # 504, the caller never received the session id, and ``stop_session`` never got a
+        # ``loop_task`` to settle). Only a bare coroutine - what a test spawner is - needs awaiting.
+        if isinstance(outcome, asyncio.Future):
+            return outcome
         if inspect.isawaitable(outcome):
             return await outcome
         return outcome
