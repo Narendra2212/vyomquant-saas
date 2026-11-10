@@ -56,6 +56,7 @@ import { getAuthRedirectUrl, AUTH_REDIRECT_PATH } from './config';
 const LandingPage    = lazy(() => import('./components/landing/LandingPage'));
 const DownloadPage   = lazy(() => import('./components/download/DownloadPage'));
 const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard'));
+const AdminMarketplaceReview = lazy(() => import('./pages/AdminMarketplaceReview'));
 const LegalPageRoute = lazy(() => import('./components/legal/LegalPage'));
 
 // Auth / onboarding pages (lazy)
@@ -920,6 +921,8 @@ export default function AppWrapper() {
           {/* Admin-only: AdminGuard verifies Supabase session + app_metadata.role === 'admin' */}
           <Route element={<AdminGuard />}>
             <Route path="/admin/waitlist" element={<Suspense fallback={PUBLIC_FALLBACK}><AdminDashboard /></Suspense>} />
+            {/* MKT-04: the Marketplace submission review queue (admin-only server-side too). */}
+            <Route path="/admin/marketplace" element={<Suspense fallback={PUBLIC_FALLBACK}><AdminMarketplaceReview /></Suspense>} />
           </Route>
 
           {/* Guest-only: redirect to /app/dashboard if already authenticated */}

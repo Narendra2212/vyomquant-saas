@@ -13,13 +13,12 @@ import {
 // `StatusDot` stay: they are components, not colours, and task 27.2 owns re-pointing them.
 import { Tag2, StatusDot } from "../components/common/primitives";
 import { CONFIG } from "../config";
-import { get, post } from "../apiClient";
+import { get } from "../apiClient";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 // Imported from the modules directly rather than through `components/ds/index.js` — this
 // page charts nothing, and the barrel is what would otherwise put `ds/Chart`'s recharts
 // dependency in its import graph. Same reason `pages/Strategies.jsx` gives.
-import { Alert } from "../components/ds/Alert";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
 import { EmptyState } from "../components/ds/EmptyState";
 import { LoadingState } from "../components/ds/LoadingState";
@@ -35,6 +34,7 @@ import { deployPresentation } from "../lib/deployFlow";
 // opinion about money.
 import { formatMinorUnits } from "./paperTradingFormat";
 import ResearchConsole from "../components/ResearchConsole";
+import CreatorMarketplacePanel from "../components/marketplace/CreatorMarketplacePanel";
 import DeploymentConsole from "../components/DeploymentConsole";
 
 /**
@@ -1765,117 +1765,15 @@ function LogsTab({ strategyId }) {
 }
 
 function MarketplaceTab({ strategy }) {
+  // MKT-04: the gated path (listing -> evidence submission -> price), replacing a single
+  // "Publish to Library" button that read a field `/api/library/me` never returned and so
+  // always offered to publish again.
   const strat = strategy.strategy || {};
-  const isPublished = strat.is_published || false;
-  const [loading, setLoading] = useState(false);
-  const [libraryStatus, setLibraryStatus] = useState(null);
-  /*
-   * Task 10.4, found by the guard rather than by §1.8's table.
-   *
-   * `publishToLibrary` used to report both of its outcomes with `window.alert` — one for
-   * the success and one carrying `err.message`. §1.8 lists only this page's four
-   * `window.confirm` calls, but `guards/native-dialogs.js` matches `alert(` as well, and
-   * task 10.11's repo-wide guard allowlists exactly `pages/TwoFA.jsx` and
-   * `components/NotificationCenter.jsx` — so these two had to go for this page to reach
-   * zero. `window.alert` is unstyled, unfocusable, unreadable to assistive technology in
-   * context and blocks the whole tab (Requirement 18.3).
-   *
-   * Reported inline instead, beside the control that caused it, in the same shape the
-   * page's own `actionError` and `VersionsTab`'s `error` banners already use. The publish
-   * request itself is untouched: same `POST /api/library`, same payload, same
-   * `checkLibraryStatus` re-read, same `loading` flag.
-   */
-  const [notice, setNotice] = useState(null);
-
-  const checkLibraryStatus = async () => {
-    try {
-      const res = await get(`/api/library/me?strategy_id=${strat.id}`);
-      setLibraryStatus(res?.data || res);
-    } catch (err) {
-      console.debug('Failed to check library status:', err);
-    }
-  };
-
-  const publishToLibrary = async () => {
-    setLoading(true);
-    try {
-      const payload = {
-        strategy_id: strat.id,
-        name: strat.name,
-        description: strat.description,
-        category: 'custom',
-        difficulty: 'intermediate',
-        tags: [],
-        price: null,
-        currency: 'USD',
-        subscription_tier: 'free'
-      };
-      await post('/api/library', payload);
-      setNotice({ kind: 'ok', text: 'Strategy submitted for review.' });
-      checkLibraryStatus();
-    } catch (err) {
-      console.error(err);
-      setNotice({ kind: 'error', text: err?.message || 'Failed to publish' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (strat.id) {
-      checkLibraryStatus();
-    }
-  }, [strat.id]);
-
-  const hasLibraryEntry = libraryStatus && libraryStatus.strategies && libraryStatus.strategies.some(s => s.source_strategy_id === strat.id);
-
   return (
     <div>
       {/* fontSize: 14 → --text-title (heading). Q8, per-tab depth. */}
-      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Marketplace Status</h3>
-
-      {/* What replaced the two `window.alert` calls.
-          `ds/Alert` rather than a hand-rolled banner: it already owns the severity token,
-          the icon, the border treatment and — the part that matters where an `alert` used
-          to be — the live-region role, `status` for the accepted case and `alert` for the
-          refusal, so the outcome is still announced without blocking the tab (Requirement
-          18.3). It also takes its hue from `statusToken` rather than from the `C` shim, so
-          this notice adds no legacy token reference and no colour literal. */}
-      {notice !== null && (
-        <div style={{ marginBottom: 12 }} data-testid="marketplace-notice">
-          <Alert
-            severity={notice.kind === "error" ? "error" : "info"}
-            title={notice.text}
-            onDismiss={() => setNotice(null)}
-            dismissLabel="Dismiss this message"
-          />
-        </div>
-      )}
-
-      <Card className="p-4">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{
-              color: token.content.primary,
-              fontWeight: 600,
-              // fontSize: 12 → --text-micro (label). Q4 — a field label naming the chip on the
-              // line beneath it — and the one legal SHRINK in this slice: it was rendered at the
-              // same 12px this page gives its panel `<h3>`s, so a field label was outranking the
-              // headings around it. `--text-micro` IS the floor, so it stops there, and no
-              // overflow in this diff is being avoided by it (§2.5).
-              fontSize: token.text.micro,
-            }}>Publication Status</div>
-            <Tag2 c={hasLibraryEntry ? "green" : "gray"}>
-              {hasLibraryEntry ? "Published to Library" : "Not Published"}
-            </Tag2>
-          </div>
-          {!hasLibraryEntry && (
-            <Button variant="primary" size="sm" onClick={publishToLibrary} disabled={loading}>
-              {loading ? 'Publishing...' : 'Publish to Library'}
-            </Button>
-          )}
-        </div>
-      </Card>
+      <h3 style={{ color: token.content.primary, fontSize: token.text.title, fontWeight: 700, marginBottom: 12 }}>Marketplace</h3>
+      <CreatorMarketplacePanel strategy={strat} />
     </div>
   );
 }
