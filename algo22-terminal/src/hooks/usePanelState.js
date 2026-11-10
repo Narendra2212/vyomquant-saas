@@ -154,7 +154,7 @@ export const PAPER_TRADING_STATE_TO_PANEL_STATE = Object.freeze({
  * outside this set is not treated as a collection, so an object payload with real content is
  * never reported as `empty`.
  */
-const COLLECTION_KEYS = Object.freeze(['items', 'results', 'rows', 'records', 'entries', 'data']);
+const COLLECTION_KEYS = Object.freeze(['items', 'results', 'rows', 'records', 'entries', 'data', 'strategies']);
 
 /**
  * Whether a successful payload has zero items — the `loading → empty` edge.

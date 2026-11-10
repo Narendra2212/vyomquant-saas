@@ -125,6 +125,10 @@ describe('isEmptyPayload', () => {
     expect(isEmptyPayload(new Set())).toBe(true);
     expect(isEmptyPayload({})).toBe(true);
     expect(isEmptyPayload({ items: [], total: 0 })).toBe(true);
+    // The strategies listing's own envelope: an account with no strategies must read as empty,
+    // not as a populated panel with a blank dropdown (Backtester "no result" report).
+    expect(isEmptyPayload({ strategies: [], total: 0, include_archived: false, archived_total: 28 })).toBe(true);
+    expect(isEmptyPayload({ strategies: [{ id: 'a' }], total: 1 })).toBe(false);
     expect(isEmptyPayload({ results: [] })).toBe(true);
   });
 
