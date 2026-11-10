@@ -158,6 +158,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from backend_app.backend.market_data_contract import interval_for
 from backend_app.backend.asset_universe import markets_are_mocked
 from backend_app.backend.market_data_latency import (
     OUTCOME_BLOCKED,
@@ -1330,6 +1331,9 @@ class FeedHandle:
     #: bound has to evict the OLDEST entry, and a set has no order to evict by.
     seen_event_ids: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
     last_timestamp: Dict[str, datetime] = field(default_factory=dict)
+    #: ``symbol -> (open_ms, open_time, values, transport)``: the candle still forming (PAPER-12).
+    forming: Dict[str, Any] = field(default_factory=dict)
+    forming_held: int = 0
 
     _pubsub: Any = None
     _messages: Any = None
@@ -1720,6 +1724,16 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _wall_now() -> datetime:
+    """The real clock, for ONE question: has this candle closed yet? (PAPER-12.)
+
+    Separate from :func:`_utc_now` on purpose. That one stamps when an event was *processed*, and a
+    replay or a test pins it to the bars' own instants; whether a bar has closed is a fact about
+    the world, so pinning the processing clock must not turn a historical bar into a forming one.
+    """
+    return datetime.now(timezone.utc)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # 24.3 - next_validated_event
 # ══════════════════════════════════════════════════════════════════════════
@@ -1746,6 +1760,10 @@ async def next_validated_event(handle: FeedHandle) -> Optional[MarketEvent]:
     5. **Exact values.** Any of the five that is not an exact decimal -> invalid. This is where a
        ``float`` is refused (Requirement 18.1).
     6. **Validate** through ``market_data_validation``'s own validators -> ``paper.feed.invalid``.
+    6b. **Forming candles are held, not processed** (PAPER-12). A candle whose interval has not
+        closed by the wall clock is kept (latest state per symbol) and returns ``None``; when a
+        NEWER candle opens, the held one is processed once through gates 7-10 with the last
+        values observed. Already-closed candles skip the hold.
     7. **Identity**, then the LRU. A hit -> ``paper.feed.duplicates``, dropped (Requirement 14.7).
     8. **Order.** Below the symbol's high-water mark -> ``paper.feed.out_of_order``, dropped, so the
        processed sequence per symbol is non-decreasing (Requirement 14.7).
@@ -1845,6 +1863,52 @@ async def next_validated_event(handle: FeedHandle) -> Optional[MarketEvent]:
         )
         return None
 
+    # 6b. A candle that has not closed is HELD, not processed (PAPER-12). mds republishes the
+    # forming candle on every socket update (~2 s), and every accepted event is a stored
+    # ``paper_market_events`` row, a ``market_tick`` frame, a full strategy evaluation and a
+    # chance to fill an order. Taken literally, a 1h session evaluated its strategy on a partial
+    # bar thirty times a minute (signals that repaint and orders on bars that never close that
+    # way) and wrote ~40,000 rows a day. The latest state of the forming candle is kept; when a
+    # NEWER candle opens, the held one has closed and is processed exactly once, with the last
+    # values observed. A candle that has already closed by the clock (a replay, a REST backfill)
+    # takes the unchanged path below.
+    event_timestamp = _as_utc(open_time)
+    held = handle.forming.get(symbol)
+    if event_timestamp + interval_for(config.timeframe) > _wall_now():
+        if held is not None and stamp_ms < held[0]:
+            _record_out_of_order(symbol)
+            return None
+        handle.forming[symbol] = (stamp_ms, open_time, values, transport)
+        handle.forming_held += 1
+        handle.reconnect_attempts = 0
+        # The feed is alive the moment it delivers a valid tick, not an hour later when the first
+        # candle closes: a session must not read PENDING for the whole first bar.
+        handle._transition_feed_state(
+            FEED_STATE_FOR_TRANSPORT[transport],
+            reason=f"forming_tick:{transport}",
+            transport=transport,
+        )
+        if held is None or held[0] == stamp_ms:
+            return None
+        # A newer candle opened: the held one closed, with the values last observed.
+        return await _accept_candle(handle, *held)
+    if held is not None:
+        # A candle that closed by the clock supersedes the held one (same bar: its final form;
+        # older bar: a gap, which is not repaired -- Requirement 14.9).
+        handle.forming.pop(symbol, None)
+    return await _accept_candle(handle, stamp_ms, open_time, values, transport)
+
+
+async def _accept_candle(
+    handle: FeedHandle,
+    stamp_ms: int,
+    open_time: Any,
+    values: Mapping[str, Decimal],
+    transport: str,
+) -> Optional[MarketEvent]:
+    """Steps 7-10 of :func:`next_validated_event` for one CLOSED candle: identity, order, record."""
+    config = handle.config
+    symbol = config.symbol
     event_timestamp = _as_utc(open_time)
 
     # 7. Identity, then the LRU (Requirement 14.7).

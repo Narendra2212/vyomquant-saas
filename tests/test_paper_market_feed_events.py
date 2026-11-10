@@ -1115,7 +1115,7 @@ class TestAnEqualTimestampIsAdmittedBecauseTheSequenceIsNonDecreasing:
         A ``<=`` here would be a different requirement, and this is the assertion that would fail if
         someone tightened it while every other ordering case stayed green.
         """
-        source = inspect.getsource(feed.next_validated_event)
+        source = inspect.getsource(feed._accept_candle)
 
         assert "event_timestamp < high_water" in source
         assert "event_timestamp <= high_water" not in source
