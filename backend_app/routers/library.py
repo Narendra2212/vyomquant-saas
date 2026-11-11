@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 # floating point. No money value passes through it — every amount in this module is an integer
 # number of Minor_Units (Requirement 10.3).
 from decimal import ROUND_HALF_UP, Decimal
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import redis
@@ -2102,6 +2102,31 @@ def _backtest_result_from_latest_run(svc, strategy_id: str, user_id: str):
     }
 
 
+def _graph_nodes(buy_logic: Any) -> List[Dict[str, Any]]:
+    """The node list of a strategy's stored graph, in either shape it is persisted in.
+
+    MKT-05: the strategy builder persists ``strategies.buy_logic`` as the canonical v2 graph with
+    underscored keys (``_nodes``, ``_edges``, ``_compiled_plan``...); only legacy rows use a plain
+    ``nodes`` key. Reading ``nodes`` alone found no nodes on 155 of 164 production strategies, so
+    the publish check refused every builder-made strategy ("has no action nodes").
+    """
+    if not isinstance(buy_logic, dict):
+        return []
+    for key in ("nodes", "_nodes"):
+        value = buy_logic.get(key)
+        if isinstance(value, list) and value:
+            return [n for n in value if isinstance(n, dict)]
+    return []
+
+
+def _is_action_node(node: Dict[str, Any]) -> bool:
+    """A legacy ``type: action`` node or a v2 node whose ``category`` is ``ACTION`` (MKT-05)."""
+    return (
+        str(node.get("type") or "").lower() == "action"
+        or str(node.get("category") or "").upper() == "ACTION"
+    )
+
+
 @literal_router.post("", status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def publish_strategy(
@@ -2215,12 +2240,12 @@ async def publish_strategy(
         except Exception:
             buy_logic = {}
 
-    nodes = buy_logic.get("nodes", [])
+    nodes = _graph_nodes(buy_logic)
     node_count = len(nodes)
     has_ml_model = bool(strategy.get("ml_model_path"))
 
     # Validate DAG has at least one action node
-    action_nodes = [n for n in nodes if n.get("type") == "action"]
+    action_nodes = [n for n in nodes if _is_action_node(n)]
     if not action_nodes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
