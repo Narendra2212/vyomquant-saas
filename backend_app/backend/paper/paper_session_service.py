@@ -896,8 +896,12 @@ session_not_found = _session_not_found
 #: ``execution_graph`` / ``schema_version`` it falls back to) every production session failed to
 #: resolve a plan - "Row carries no loadable strategy graph" - and produced no signal at all.
 STRATEGY_VERSIONS_TABLE = "strategy_versions"
+#: PROD-7: ``version`` (the label, e.g. ``v1.0``) is read too. ``signal_service.paper_session_facts``
+#: takes the Signal_Trace's ``strategy_version`` from this row - a ``paper_sessions`` row does not
+#: carry it - and without it every paper signal was refused SIGNAL_ATTRIBUTION_INCOMPLETE, so no
+#: paper signal ever reached ``public.signals``.
 STRATEGY_VERSION_SELECT = (
-    "id,strategy_id,lifecycle_state,is_draft,compiled_plan,"
+    "id,strategy_id,version,lifecycle_state,is_draft,compiled_plan,"
     "graph_json,schema_version,blueprint,execution_graph"
 )
 
