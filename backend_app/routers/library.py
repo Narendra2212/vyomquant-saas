@@ -76,6 +76,7 @@ from backend_app.backend.marketplace.errors import (
     MARKETPLACE_CLONING_DISABLED,
     MARKETPLACE_ELIGIBILITY_FAILED,
     MARKETPLACE_ELIGIBILITY_UNEVALUABLE,
+    MARKETPLACE_LISTING_NOT_PURCHASABLE,
     MARKETPLACE_PRICE_EVIDENCE_MISSING,
     MARKETPLACE_PRICE_OUT_OF_RANGE,
     MARKETPLACE_READ_FAILED,
@@ -6255,10 +6256,49 @@ async def admin_publish_submission(
     submission_id: str,
     admin: dict = Depends(get_admin_user),
 ):
-    """``APPROVED → PUBLISHED`` or ``SUSPENDED → PUBLISHED``."""
+    """``APPROVED → PUBLISHED`` or ``SUSPENDED → PUBLISHED``.
+
+    MKT-07: refused while the Submission's Listing has no ``price_minor``. Checkout refuses an
+    unpriced Listing (``reason="no_price"``) and there is no free-access path, so publishing one
+    put a Listing on the Marketplace that nobody could ever subscribe to. The owner prices it
+    first (``POST /api/library/submissions/{id}/price``), then it is published.
+    """
+    _require_priced_listing_for_publish(submission_id)
     return await _apply_admin_action_route(
         submission_id, _submission_service.SubmissionAction.PUBLISH, None, admin
     )
+
+
+def _require_priced_listing_for_publish(submission_id: str) -> None:
+    """Raise ``MARKETPLACE_LISTING_NOT_PURCHASABLE`` (409, ``reason=no_price``) for an unpriced
+    Listing. An unknown Submission is left to the transition itself, which answers 404."""
+    sub_id = _safe_uuid(submission_id, "submission_id")
+    svc = _require_service_client()
+    try:
+        sub_rows = (
+            svc.table("marketplace_submissions")
+            .select("id,listing_id")
+            .eq("id", sub_id)
+            .limit(1)
+            .execute()
+        ).data or []
+        listing_id = sub_rows[0].get("listing_id") if sub_rows else None
+        if not listing_id:
+            return
+        listing_rows = (
+            svc.table("library_strategies")
+            .select("id,price_minor")
+            .eq("id", str(listing_id))
+            .limit(1)
+            .execute()
+        ).data or []
+    except _PostgrestAPIError as exc:
+        raise _read_did_not_complete("publish price check", exc)
+    if listing_rows and listing_rows[0].get("price_minor") is None:
+        raise MarketplaceError(
+            MARKETPLACE_LISTING_NOT_PURCHASABLE,
+            details={"listing_id": str(listing_id), "reason": "no_price"},
+        )
 
 
 @literal_router.post("/admin/submissions/{submission_id}/suspend")
