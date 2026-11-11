@@ -37,7 +37,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend_app.core.dependencies import get_current_user, get_request_supabase
+from backend_app.core.dependencies import (get_current_user, get_request_supabase,
+                                           get_service_supabase_async)
 from backend_app.core.legal_documents import (
     LEGAL_EFFECTIVE_DATE,
     LEGAL_VERSION,
@@ -225,7 +226,10 @@ async def accept_documents(
     request: Request,
     body: AcceptanceRequest,
     user: dict = Depends(get_current_user),
-    supabase: Any = Depends(get_request_supabase),
+    # LEGAL-03: the SERVICE ROLE, as the module docstring has always said. 052 grants
+    # `authenticated` SELECT only, so the caller's own client got 42501 on every accept and
+    # no acceptance was ever recorded. The row's user_id comes from the verified token.
+    supabase: Any = Depends(get_service_supabase_async),
 ) -> Dict[str, Any]:
     """Record that this user accepted the current documents.
 

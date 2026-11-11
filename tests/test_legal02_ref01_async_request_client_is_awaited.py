@@ -104,3 +104,15 @@ def test_payout_history_answers_from_an_async_client() -> None:
         )
     )
     assert getattr(result, "payouts", result.get("payouts") if isinstance(result, dict) else None) == []
+
+
+def test_the_accept_write_uses_the_service_role_not_the_callers_client() -> None:
+    """LEGAL-03: migration 052 grants `authenticated` SELECT only on legal_acceptances, so a
+    write over the caller's client is refused with 42501 (seen in production Sentry). The
+    acceptance must be written over the service role, after validation, as designed."""
+    import inspect as _inspect
+
+    from backend_app.core.dependencies import get_service_supabase_async
+
+    param = _inspect.signature(legal.accept_documents).parameters["supabase"]
+    assert param.default.dependency is get_service_supabase_async
