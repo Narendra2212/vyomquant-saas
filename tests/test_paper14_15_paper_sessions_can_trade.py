@@ -128,3 +128,41 @@ def test_only_a_paper_session_runtime_skips_the_live_mode_gate() -> None:
     assert PaperDagRuntime(session_id="s", symbol="BTC/USDT", timeframe="1m").simulated is False
     assert "simulated=True" in inspect.getsource(build_session_evaluator)
     assert "simulated=True" not in inspect.getsource(deployment_runtime)
+
+
+def test_sizing_rounds_down_to_the_markets_quantity_precision() -> None:
+    """PAPER-18: production rejected 0.01357759 BTC with QUANTITY_PRECISION - BTC/USDT allows 5
+    decimals. 10% of $10,000 at $73,650.62 is 0.0135776..., which must become 0.01357."""
+    from decimal import Decimal
+
+    from backend_app.backend.paper.paper_simulator import decimal_places
+
+    qty = resolve_sizing_quantity(
+        {"quantity_type": "percent_of_equity", "quantity": 10},
+        account={"total_equity": "10000"},
+        price=Decimal("73650.62"),
+        quantity_precision=5,
+    )
+    assert qty == Decimal("0.01357")
+    assert decimal_places(qty) <= 5
+
+
+def test_without_a_precision_the_eight_decimal_floor_still_applies() -> None:
+    from decimal import Decimal
+
+    qty = resolve_sizing_quantity(
+        {"quantity_type": "percent_of_equity", "quantity": 10},
+        account={"total_equity": "10000"},
+        price=Decimal("73650.62"),
+    )
+    assert qty == Decimal("0.01357761")  # 1000 / 73650.62, rounded down
+
+
+def test_step_session_passes_the_frozen_precision_to_the_sizer() -> None:
+    import inspect
+
+    from backend_app.backend.paper import paper_session_service as svc
+
+    assert 'quantity_precision=getattr(config, "quantity_precision", None)' in inspect.getsource(
+        svc.step_session
+    )
