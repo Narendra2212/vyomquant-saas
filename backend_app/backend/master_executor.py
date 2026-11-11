@@ -1176,7 +1176,7 @@ class BotRunner:
                         from backend_app.backend.signal_service import get_signal_service
                         sig_svc = await get_signal_service()
                         sig = await sig_svc.create_signal(
-                            user={"id": self.user_id},
+                            user={"id": self.user_id, "_server_side": True},
                             strategy_id=str(self.blueprint.get("id") or self.blueprint.get("strategy_id", "default")),
                             strategy_version=str(self.blueprint.get("current_version", "1.0")),
                             deployment_id=str(self.blueprint.get("deployment_id", self.blueprint.get("id", "default"))),
@@ -1195,7 +1195,7 @@ class BotRunner:
 
                         # Risk evaluation audit
                         await sig_svc.update_risk_decision(
-                            user={"id": self.user_id},
+                            user={"id": self.user_id, "_server_side": True},
                             signal_id=sig_id,
                             risk_passed=(v_verdict == RiskVerdict.APPROVED),
                             risk_reason=str(v_reason or "Risk Approved"),
@@ -1246,7 +1246,7 @@ class BotRunner:
                             remaining_qty = requested_qty
 
                         await sig_svc.update_order(
-                            user={"id": self.user_id},
+                            user={"id": self.user_id, "_server_side": True},
                             signal_id=sig_id,
                             order_id=v_exec_id,
                             exchange_order_id=None,
@@ -1266,7 +1266,7 @@ class BotRunner:
 
                         if order_st == "FILLED":
                             await sig_svc.update_execution(
-                                user={"id": self.user_id},
+                                user={"id": self.user_id, "_server_side": True},
                                 signal_id=sig_id,
                                 trade_id=f"tr_{v_exec_id[:12]}",
                                 pnl=0.0,

@@ -3604,6 +3604,55 @@ def _sizing_decimal(value: Any) -> Optional[Decimal]:
     return number if number.is_finite() else None
 
 
+def _is_spot_symbol(symbol: Any) -> bool:
+    """A ccxt spot symbol (``BTC/USDT``); derivatives carry a settle suffix (``BTC/USDT:USDT``)."""
+    text = str(symbol or "")
+    return "/" in text and ":" not in text
+
+
+def _spot_sell_capped_at_holding(
+    produced: Mapping[str, Any],
+    resolved: Optional[Decimal],
+    open_position: Any,
+    *,
+    symbol: Any,
+    session_id: Any,
+) -> Optional[Decimal]:
+    """A rule-sized SELL on a spot pair, capped at the LONG position actually held (PAPER-19).
+
+    A percent-of-equity SELL is sized from equity, not from the holding, so it lands a little
+    above or below what is held. Production session ed9d8cfe (2026-11-11) bought 0.01344 BTC and
+    then sold 0.01345: the fill closed the long and opened a 0.00001 BTC SHORT on a SPOT market,
+    which cannot exist. Earlier, 7a8d3df2 sold 0.01349 of 0.0135 and left dust.
+
+    On spot a sell can only dispose of what is held, so the size is capped at the open long and
+    an exit closes it exactly. With nothing held there is nothing to sell: ``None`` places no
+    order (the signal is still recorded), rather than opening a short. Derivative symbols and
+    explicitly sized orders are left exactly as they were.
+    """
+    if resolved is None or not _is_spot_symbol(symbol):
+        return resolved
+    decision = str(produced.get("decision") or produced.get("side") or "").upper()
+    if decision != "SELL":
+        return resolved
+    held = Decimal(0)
+    if (
+        open_position is not None
+        and getattr(open_position, "is_open", False)
+        and str(getattr(open_position, "side", "")).upper() == "LONG"
+    ):
+        held = _sizing_decimal(getattr(open_position, "size", None)) or Decimal(0)
+    if held <= 0:
+        logger.info(
+            "[paper-session] session %s: a SELL on spot %s with no long position held places no "
+            "order (a spot account cannot go short)",
+            session_id,
+            symbol,
+        )
+        return None
+    return min(resolved, held)
+
+
 def resolve_sizing_quantity(
     sizing: Mapping[str, Any],
     *,
@@ -4380,6 +4429,13 @@ async def step_session(
                 price=event.close,
                 position_size=getattr(open_position, "size", None),
                 quantity_precision=getattr(config, "quantity_precision", None),
+            )
+            resolved = _spot_sell_capped_at_holding(
+                produced,
+                resolved,
+                open_position,
+                symbol=produced.get("symbol") or event.symbol,
+                session_id=session_id,
             )
             if resolved is not None:
                 produced = {**produced, "quantity": resolved}

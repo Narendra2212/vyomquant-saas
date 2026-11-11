@@ -166,3 +166,49 @@ def test_step_session_passes_the_frozen_precision_to_the_sizer() -> None:
     assert 'quantity_precision=getattr(config, "quantity_precision", None)' in inspect.getsource(
         svc.step_session
     )
+
+
+def _pos(side, size, is_open=True):
+    return SimpleNamespace(side=side, size=Decimal(str(size)), is_open=is_open)
+
+
+def test_a_spot_sell_larger_than_the_holding_is_capped_at_it() -> None:
+    """PAPER-19: production bought 0.01344 BTC then sold 0.01345, opening a 0.00001 SHORT on spot."""
+    from backend_app.backend.paper.paper_session_service import _spot_sell_capped_at_holding
+
+    got = _spot_sell_capped_at_holding(
+        {"decision": "SELL"}, Decimal("0.01345"), _pos("LONG", "0.01344"),
+        symbol="BTC/USDT", session_id="s",
+    )
+    assert got == Decimal("0.01344")
+
+
+def test_a_spot_sell_smaller_than_the_holding_is_unchanged() -> None:
+    from backend_app.backend.paper.paper_session_service import _spot_sell_capped_at_holding
+
+    got = _spot_sell_capped_at_holding(
+        {"decision": "SELL"}, Decimal("0.01"), _pos("LONG", "0.0135"),
+        symbol="BTC/USDT", session_id="s",
+    )
+    assert got == Decimal("0.01")
+
+
+def test_a_spot_sell_with_nothing_held_places_no_order() -> None:
+    from backend_app.backend.paper.paper_session_service import _spot_sell_capped_at_holding
+
+    for position in (None, _pos("LONG", "0", is_open=False), _pos("SHORT", "0.01")):
+        assert _spot_sell_capped_at_holding(
+            {"decision": "SELL"}, Decimal("0.0135"), position,
+            symbol="BTC/USDT", session_id="s",
+        ) is None
+
+
+def test_buys_and_derivatives_are_left_alone() -> None:
+    from backend_app.backend.paper.paper_session_service import _spot_sell_capped_at_holding
+
+    assert _spot_sell_capped_at_holding(
+        {"decision": "BUY"}, Decimal("0.0135"), None, symbol="BTC/USDT", session_id="s",
+    ) == Decimal("0.0135")
+    assert _spot_sell_capped_at_holding(
+        {"decision": "SELL"}, Decimal("0.0135"), None, symbol="BTC/USDT:USDT", session_id="s",
+    ) == Decimal("0.0135")

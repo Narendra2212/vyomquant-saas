@@ -21,7 +21,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from backend_app.core.dependencies import create_request_supabase_async
@@ -461,9 +461,17 @@ class BacktestService:
         backtest_id: str,
         results: Dict,
         executed_bar_count: Optional[int] = None,
+        covered_window: Optional[Tuple[str, str]] = None,
     ) -> Dict:
         """
         Update backtest with execution results.
+
+        ``covered_window`` (BT-07): ``(first_bar, last_bar)`` when the data did NOT cover the
+        requested window - the run stopped at the bar cap, or the exchange holds nothing that
+        early. The row's ``start_date`` / ``end_date`` are then rewritten to the dates the
+        numbers describe. Production, 2026-11-11: a 1m backtest "2025-07-01 to 2025-09-30"
+        simulated 10,000 bars (~7 days) and was stored as covering the full quarter, which the
+        Marketplace evidence gate (>= 90 days) then trusted.
 
         Args:
             user: User dict
@@ -551,6 +559,12 @@ class BacktestService:
                 update_data[column] = results.get(source_key, [])
 
         bar_count = coerce_executed_bar_count(executed_bar_count)
+
+        if covered_window and results.get("status") != "failed":
+            first_bar, last_bar = covered_window
+            if first_bar and last_bar:
+                update_data["start_date"] = first_bar
+                update_data["end_date"] = last_bar
 
         if sb is None:
             # DEV_MODE echoes what would have been written, including the bar count: there
