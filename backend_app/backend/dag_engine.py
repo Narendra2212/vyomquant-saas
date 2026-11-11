@@ -4526,6 +4526,7 @@ class DAGEngine:
         registry: Any = None,
         cache: Optional[NodeResultCache] = None,
         parallel: Optional[bool] = None,
+        simulated: bool = False,
     ) -> List[TradeIntent]:
         """``design.md`` -> "DAG runtime contract", implemented.
 
@@ -4784,7 +4785,15 @@ class DAGEngine:
         # without asking here a frozen platform would still produce intents. Node
         # evaluation is deliberately left alone - the canvas may show readiness under a
         # freeze; what a freeze stops is intents.
-        freeze = SafetyMonitor.check_execution_allowed("strategy_signal")
+        # PAPER-14: a SIMULATED evaluation (a paper session, whose intents go only to the
+        # paper simulator) is gated by the emergency freeze alone; every other caller keeps
+        # the live execution gate exactly as before. ``simulated`` defaults to False, so a
+        # caller that does not say otherwise is treated as one that can reach an exchange.
+        freeze = (
+            SafetyMonitor.check_simulation_allowed("strategy_signal")
+            if simulated
+            else SafetyMonitor.check_execution_allowed("strategy_signal")
+        )
         if freeze:
             logger.critical(
                 "🚫 execute_plan(%s): %d action node(s) ready, no intent emitted - %s",

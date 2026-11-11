@@ -213,6 +213,11 @@ class ExecutionFlags:
     All flags default to FALSE (blocked) for safety.
     """
     
+    #: PAPER-14: set ONLY by :meth:`freeze_all`, the emergency halt. The other flags cannot tell
+    #: "frozen" from "safe mode with live trading off" (both leave everything False), and a
+    #: simulated paper evaluation must run in the second and stop in the first.
+    FROZEN: bool = False
+
     # Master kill switch - overrides all other settings
     LIVE_TRADING_ENABLED: bool = False
     PAPER_TRADING_ENABLED: bool = False
@@ -256,6 +261,7 @@ class ExecutionFlags:
                 "Production requires explicit authorization for safety control operations."
             )
         
+        cls.FROZEN = True
         cls.LIVE_TRADING_ENABLED = False
         cls.PAPER_TRADING_ENABLED = False
         cls.MANUAL_ORDER_EXECUTION = False
@@ -315,6 +321,21 @@ class SafetyMonitor:
     Checks that can be performed before any execution.
     """
     
+    @staticmethod
+    def check_simulation_allowed(operation: str) -> Optional[str]:
+        """The gate for a SIMULATED evaluation (a paper session): only the emergency freeze.
+
+        PAPER-14. ``check_execution_allowed`` is the gate on anything that can reach an exchange,
+        and in ``VYOMQUANT_MODE=safe`` - the posture production runs while live trading is off -
+        it refuses every ``strategy_signal``. A paper session reaches no exchange: its intents go
+        to the paper simulator and nowhere else. Applying the live gate to it meant no paper
+        session in production had EVER produced a signal, order or fill (11 sessions, 370 closed
+        candles, 0 signals). A simulated evaluation still stops when the platform is frozen.
+        """
+        if ExecutionFlags.FROZEN:
+            return f"[BLOCKED] EXECUTION BLOCKED: system freeze is active (operation: {operation})"
+        return None
+
     @staticmethod
     def check_execution_allowed(operation: str) -> Optional[str]:
         """

@@ -232,7 +232,7 @@ import os
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import (
     Any,
     Callable,
@@ -3572,6 +3572,74 @@ def _signal_instant(source: Any, fallback: datetime) -> datetime:
     return fallback
 
 
+#: PAPER-15: base quantities are resolved to this precision, rounding DOWN so a resolved size
+#: never exceeds what the rule allows.
+SIZING_QUANTUM = Decimal("0.00000001")
+
+
+def _sizing_decimal(value: Any) -> Optional[Decimal]:
+    """An exact Decimal from a declared sizing number (an int, a decimal string, or the float a
+    JSON plan parameter decodes to - read via ``repr`` so 0.1 stays 0.1)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = value if isinstance(value, Decimal) else Decimal(
+            repr(value) if isinstance(value, float) else str(value)
+        )
+    except (InvalidOperation, ValueError):
+        return None
+    return number if number.is_finite() else None
+
+
+def resolve_sizing_quantity(
+    sizing: Mapping[str, Any],
+    *,
+    account: Optional[Mapping[str, Any]],
+    price: Any,
+    position_size: Any = None,
+) -> Optional[Decimal]:
+    """A strategy's sizing RULE as an exact base quantity for this paper session (PAPER-15).
+
+    The builder's default action block sizes as ``percent_of_equity``. The paper path only ever
+    used a base quantity, so such a strategy produced a signal and no order (and, through the
+    bug fixed alongside, briefly a 10 BTC order for "10%"). Resolved here, against the session's
+    OWN account and the closed candle's price - the same inputs a fill is priced from:
+
+    * ``percent_of_equity``        -> total_equity  x pct / 100 / price
+    * ``percent_of_free_balance``  -> available_balance x pct / 100 / price
+    * ``quote_notional``           -> amount / price
+    * ``percent_of_position``      -> open position size x pct / 100
+
+    ``None`` when the rule cannot be resolved (an unknown type, a missing number, no price or no
+    account); the caller then records a signal and places no order, which is what it did before.
+    """
+    quantity_type = str(sizing.get("quantity_type") or "")
+    amount = _sizing_decimal(sizing.get("quantity"))
+    price_d = _sizing_decimal(price)
+    if amount is None or amount <= 0:
+        return None
+    if quantity_type == "percent_of_position":
+        size = _sizing_decimal(position_size)
+        base = None if size is None else abs(size) * amount / Decimal(100)
+    else:
+        if price_d is None or price_d <= 0 or account is None:
+            return None
+        if quantity_type == "percent_of_equity":
+            capital = _sizing_decimal(account.get("total_equity"))
+            base = None if capital is None else capital * amount / Decimal(100) / price_d
+        elif quantity_type == "percent_of_free_balance":
+            capital = _sizing_decimal(account.get("available_balance"))
+            base = None if capital is None else capital * amount / Decimal(100) / price_d
+        elif quantity_type == "quote_notional":
+            base = amount / price_d
+        else:
+            return None
+    if base is None:
+        return None
+    base = base.quantize(SIZING_QUANTUM, rounding=ROUND_DOWN)
+    return base if base > 0 else None
+
+
 def paper_signal(produced: Any, *, event: MarketEvent) -> PaperSignal:
     """Project one value the evaluator produced onto :class:`PaperSignal`.
 
@@ -4257,7 +4325,41 @@ async def step_session(
             )
         )
 
+    sizing_account: Optional[Mapping[str, Any]] = None
+    sizing_account_read = False
     for produced in produced_values:
+        # PAPER-15: resolve a sizing RULE (e.g. 10% of equity) into an exact base quantity
+        # before the output becomes a PaperSignal. The account is read once per bar.
+        if (
+            isinstance(produced, Mapping)
+            and produced.get("quantity") is None
+            and isinstance(produced.get("sizing_intention"), Mapping)
+        ):
+            if not sizing_account_read:
+                sizing_account_read = True
+                try:
+                    sizing_account = repo.read_account(
+                        supabase,
+                        user_id,
+                        currency=session.get("currency") or "USD",
+                        session_id=session_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 - contained per Requirement 14.7
+                    logger.error(
+                        "[paper-session] session %s could not read its account to size a "
+                        "signal: %s",
+                        session_id,
+                        exc,
+                    )
+            open_position = positions.get(produced.get("symbol") or event.symbol)
+            resolved = resolve_sizing_quantity(
+                produced["sizing_intention"],
+                account=sizing_account,
+                price=event.close,
+                position_size=getattr(open_position, "size", None),
+            )
+            if resolved is not None:
+                produced = {**produced, "quantity": resolved}
         try:
             signal = paper_signal(produced, event=event)
         except PaperSignalUnreadable as exc:
