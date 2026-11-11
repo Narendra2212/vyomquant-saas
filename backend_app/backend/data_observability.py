@@ -7,6 +7,7 @@ Detects pipeline issues early before they cause bad trades.
 🚨 CRITICAL MONITORING COMPONENT — DO NOT MODIFY WITHOUT APPROVAL
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -248,7 +249,7 @@ class DataObservability:
     ) -> None:
         """Send alert for data quality violations."""
         try:
-            from backend_app.backend.alert_system import AlertSystem
+            from backend_app.backend.alert_system import AlertLevel, get_alert_system
             
             title = f"Data Quality Alert: {metrics.stage}"
             if symbol:
@@ -267,11 +268,21 @@ class DataObservability:
             if metrics.data_delay_seconds:
                 message += f"Data Delay: {metrics.data_delay_seconds:.0f}s\n"
             
-            AlertSystem.send_alert(
-                level="WARNING" if metrics.nan_ratio < 0.1 else "CRITICAL",
-                title=title,
-                message=message,
-                channels=["telegram", "email"]
+            # PROD-6: ``send_alert`` is an async INSTANCE method with no ``channels`` argument;
+            # calling it on the class with ``channels=`` raised TypeError on every alert (54 in
+            # Sentry from one paper session). The global instance routes to every configured
+            # channel itself.
+            _dispatch(
+                get_alert_system().send_alert(
+                    level=(
+                        AlertLevel.WARNING
+                        if metrics.nan_ratio < 0.1
+                        else AlertLevel.CRITICAL
+                    ),
+                    title=title,
+                    message=message,
+                    metadata={"stage": metrics.stage, "symbol": symbol},
+                )
             )
             
             logger.warning(f"🚨 Data quality alert sent for {metrics.stage}: {violations}")
@@ -291,7 +302,9 @@ class DataObservability:
             logger.info(
                 f"📊 {metrics.stage}{symbol_str}: "
                 f"nan={metrics.nan_ratio*100:.2f}%, "
-                f"mean={metrics.feature_mean:.4f if metrics.feature_mean else 'N/A'}, "
+                # PROD-5: the conditional cannot live inside a format spec; it raised on every
+                # passing bar and the handler then marked the metrics as failed.
+                f"mean={_fmt_mean(metrics.feature_mean)}, "
                 f"gaps={metrics.gap_count}"
             )
         else:
@@ -404,3 +417,24 @@ class DataQualityDashboard:
 
 # Global dashboard instance
 dashboard = DataQualityDashboard()
+
+
+def _fmt_mean(value: Optional[float]) -> str:
+    """``value`` to four places, or ``N/A`` when there is none (PROD-5)."""
+    return f"{value:.4f}" if value is not None else "N/A"
+
+
+def _dispatch(coro: Any) -> None:
+    """Run an alert coroutine from synchronous code, on whichever thread this is (PROD-6).
+
+    On the event loop's thread the alert is scheduled as a task. Elsewhere - the paper engine
+    evaluates strategies in a worker thread with no loop - it runs to completion on a private
+    loop. A failure is logged by the caller's handler, never raised into the data path.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(coro)
+        return
+    loop.create_task(coro)
+

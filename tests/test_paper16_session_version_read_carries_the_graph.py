@@ -54,3 +54,17 @@ def test_without_the_graph_the_plan_does_not_resolve() -> None:
     reg, row = _builder_row()
     old = {k: row[k] for k in ("id", "strategy_id", "lifecycle_state", "is_draft", "compiled_plan")}
     assert resolve_session_plan(old, reg) is None
+
+
+def test_the_projection_carries_the_version_label_the_signal_trace_needs() -> None:
+    """PROD-7: every paper signal's Signal_Trace was refused SIGNAL_ATTRIBUTION_INCOMPLETE
+    (strategy_version) because this projection did not read the version label."""
+    from backend_app.backend.signal_service import paper_session_facts
+
+    assert "version" in SELECTED
+    _reg, row = _builder_row()
+    row["version"] = "v1.0"
+    session = {"user_id": "u", "source_strategy_id": "strat-16", "version_id": "ver-16",
+               "exchange_id": "binance", "symbol": "BTC/USDT", "timeframe": "1m"}
+    facts = paper_session_facts(session, version=_projected(row))
+    assert facts["strategy_version"] == "v1.0"
