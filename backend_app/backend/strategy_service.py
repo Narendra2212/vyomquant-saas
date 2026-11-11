@@ -1529,56 +1529,67 @@ class StrategyService:
             raise ValueError(f"Version {version} not found")
         
         restored_version = version_res.data[0]
-        
-        # Mark current version as not current
-        q2 = (sb.table("strategy_versions")
-                      .select("*")
-                      .eq("strategy_id", strategy_id)
-                      .eq("is_current", True)
-                      .execute())
-        current_res = await q2 if inspect.isawaitable(q2) else q2
-        
-        if current_res and current_res.data:
-            q3 = sb.table("strategy_versions").update({"is_current": False}).eq("id", current_res.data[0]["id"]).execute()
-            if inspect.isawaitable(q3):
-                await q3
-        
-        # Get current version number to increment
-        version_parts = version.replace("v", "").split(".")
-        major, minor = int(version_parts[0]), int(version_parts[1]) if len(version_parts) > 1 else 0
-        minor += 1
-        new_version_str = f"v{major}.{minor}"
-        
-        # Create new version with restored blueprint
-        new_version_data = {
-            "id": str(uuid4()),
-            "strategy_id": strategy_id,
-            "version": new_version_str,
-            "blueprint": restored_version["blueprint"],
-            "is_draft": True,
-            "is_current": True,
-            "restored_from": version,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        q4 = sb.table("strategy_versions").insert(new_version_data).execute()
-        version_result = await q4 if inspect.isawaitable(q4) else q4
-        
-        # Update strategy current version. Tenant-scoped, like every other write on this
-        # path: `id` alone would be correct only while RLS is in force.
-        q5 = (
-            sb.table("strategies")
-            .update({"current_version": new_version_str})
-            .eq("id", strategy_id)
-            .eq("user_id", user["id"])
-            .execute()
+
+        # VER-01: this used to INSERT a bare row carrying only the old blueprint - no
+        # compiled_plan, no dag_hash, validation_state left UNVALIDATED, lifecycle_state
+        # unset - and label it v{major}.{minor+1}. That row could never be deployed
+        # ("validation_state is 'UNVALIDATED' (must be 'VALID')"), even though the deploy
+        # refusal for a STOPPED version tells the user to "restore this one", and restoring
+        # the same version twice minted a duplicate label. A restore is a save of an old
+        # graph, so it goes through the one save path every other version takes: compile
+        # first (an invalid graph raises before anything is written), READY when there is
+        # nothing to train, the ML entitlement/quota gates when there is, the next free
+        # version label, and is_current / strategies.current_version moved only after the
+        # INSERT succeeded.
+        from backend_app.backend.strategy_dag.schema import GraphParseError, load_graph
+
+        graph_source = restored_version.get("graph_json") or restored_version.get("blueprint")
+        try:
+            graph = load_graph(graph_source)
+        except GraphParseError as exc:
+            # Not "not found" - the version exists and is this user's. A CompilerError, as
+            # clone_strategy raises for the same case, which the router answers 422.
+            from backend_app.backend.strategy_compiler import CompilerError
+
+            raise CompilerError(
+                f"Version {version} carries no readable graph and cannot be restored: {exc}"
+            ) from exc
+
+        # Same rule as the builder save (routers/strategies._persist_current_version,
+        # VERSION-READY-01): no model block -> READY and not a draft, deployable at once; a
+        # model block -> a VALIDATED draft that only the training worker moves on.
+        compiled = compile_version(graph, None)
+        no_model_block = not getattr(compiled.plan, "ml_nodes", None)
+        saved = await self.create_version(
+            user,
+            strategy_id,
+            graph,
+            compiled=compiled,
+            blueprint=restored_version.get("blueprint"),
+            make_current=True,
+            lifecycle_state=LIFECYCLE_READY if no_model_block else LIFECYCLE_VALIDATED,
+            is_draft=not no_model_block,
         )
-        if inspect.isawaitable(q5):
-            await q5
-        
-        logger.info(f"Restored version {version} as {new_version_str} for strategy {strategy_id}")
-        
-        return version_result.data[0] if version_result and version_result.data else new_version_data
+        new_row = dict(saved.get("version") or {})
+
+        # Provenance. Written after the save, scoped to the row just created.
+        if new_row.get("id"):
+            q_prov = (
+                sb.table("strategy_versions")
+                .update({"restored_from": version})
+                .eq("id", new_row["id"])
+                .execute()
+            )
+            if inspect.isawaitable(q_prov):
+                await q_prov
+            new_row["restored_from"] = version
+
+        logger.info(
+            f"Restored version {version} as {new_row.get('version')} for strategy "
+            f"{strategy_id} (lifecycle_state={saved.get('lifecycle_state')}, "
+            f"validation_state={saved.get('validation_state')})"
+        )
+        return new_row
 
     async def _load_deployable_version(
         self, sb: Any, user: dict, strategy_id: str, version: str
