@@ -236,7 +236,10 @@ resource "aws_cloudfront_distribution" "frontend" {
       https_port               = 443
       origin_protocol_policy   = "http-only"
       origin_ssl_protocols     = ["TLSv1", "TLSv1.1", "TLSv1.2"]
-      origin_read_timeout      = 30
+      # BT-08: 60 s (the AWS maximum without a quota increase). At 30 s a backtest at the
+      # 10,000-bar cap (~30 s of compute) completed and persisted server-side while the
+      # browser received CloudFront's 504 - the user saw a failure for a run that succeeded.
+      origin_read_timeout      = 60
       origin_keepalive_timeout = 5
     }
   }

@@ -903,6 +903,16 @@ class BacktestRuntime:
                 backtest_id=backtest_id,
                 results=results,
                 executed_bar_count=len(ohlcv_data),
+                # BT-07: a run that did not cover its request is stored as what it covered.
+                covered_window=(
+                    (data_coverage["first_bar"], data_coverage["last_bar"])
+                    if data_coverage
+                    and (
+                        data_coverage.get("truncated_by_cap")
+                        or data_coverage.get("starts_after_request")
+                    )
+                    else None
+                ),
             )
             
             logger.info(f"[BACKTEST] Completed backtest {backtest_id} in {execution_time:.2f}s")
