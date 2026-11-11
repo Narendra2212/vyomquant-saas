@@ -31,6 +31,9 @@
        conclusion and granted js.stripe.com and api.stripe.com until it was corrected;
        tests/test_tauri_csp_configuration.py now holds the two policies to the same answer.)
        frame-src is REQUIRED, not optional: Standard Checkout renders as a modal iframe, so
+       (PAY-01) the iframe itself is served from https://api.razorpay.com/v1/checkout/public,
+       NOT from checkout.razorpay.com (which only serves checkout.js). Without api.razorpay.com
+       here the modal opens as a blank page with the browser's "blocked" icon. Also,
        permitting the script that opens it without the frame it opens would fail only at the
        moment a customer tries to pay. connect-src's *.vyomquant.in/.com hosts and
        wildcarded Supabase host cover every topology the deploy workflow's own API-hostname
@@ -43,7 +46,7 @@
     font-src 'self' data: https://fonts.gstatic.com;
     img-src 'self' data: blob: https://www.googletagmanager.com https://*.clarity.ms;
     connect-src 'self' https://*.vyomquant.com wss://*.vyomquant.com https://vyomquant.in https://*.vyomquant.in wss://vyomquant.in wss://*.vyomquant.in https://*.supabase.co wss://*.supabase.co https://*.sentry.io https://*.clarity.ms https://www.google-analytics.com https://api.razorpay.com https://lumberjack.razorpay.com;
-    frame-src https://checkout.razorpay.com;
+    frame-src https://checkout.razorpay.com https://api.razorpay.com;
     object-src 'none';
     base-uri 'self';
     form-action 'self';
