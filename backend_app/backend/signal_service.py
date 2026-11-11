@@ -172,8 +172,21 @@ class SignalService:
         self._local_signals: Dict[str, Dict[str, Any]] = {}
     
     async def _get_supabase(self, user: dict):
-        """Get Supabase client for user."""
+        """Get Supabase client for user.
+
+        BOT-01: a deployment bot runs in the background with no request and therefore no
+        access token. It called this with ``{"id": user_id}``, got a token-less client, and every
+        ``signals`` INSERT was refused by RLS and swallowed - the bot traded while its Signal_Trace
+        stayed empty (production deployment 8ac2aa8f, 2026-11-11). A server-side caller now says
+        so explicitly with ``_server_side=True`` and gets the service-role client; the rows it
+        writes carry the deployment owner's ``user_id`` set by the caller. Opt-in only, so a
+        request path that merely lacks a token is never silently widened past RLS.
+        """
         try:
+            if isinstance(user, dict) and user.get("_server_side") is True:
+                from backend_app.core.dependencies import get_service_supabase_async
+
+                return await get_service_supabase_async()
             token = user.get("access_token") if isinstance(user, dict) else None
             res = create_request_supabase_async(token)
             return await res if inspect.isawaitable(res) else res
@@ -311,8 +324,11 @@ class SignalService:
                     )
                     return result.data[0]
         except Exception as e:
-            logger.debug(f"Supabase signal insert fallback for {signal_id}: {e}")
-        
+            # BOT-01: this used to be DEBUG, so a refused INSERT left no trace while the line
+            # below still said "Created signal". A signal that is only in this process's memory
+            # is not in the Signal_Trace, and an operator has to be able to see that.
+            logger.warning(f"signal {signal_id} was NOT persisted (in-memory only): {e}")
+
         logger.info(f"Created signal {signal_id} for strategy {strategy_id}")
         return signal_data
     

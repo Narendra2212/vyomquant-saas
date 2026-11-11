@@ -409,9 +409,21 @@ class AlertSystem:
         if any(results):
             logger.info(f"Alert sent ({level.value}): {title}")
             return True
-        else:
-            logger.error(f"Failed to send alert: {title}")
+        if not results:
+            # OBS-03: NO channel is configured (no Telegram, no email). That is a deployment
+            # setting, not a delivery failure - logging it at ERROR made every data-quality
+            # alert a Sentry error (PROD-A/B, 26 in one paper run). Warned once per process;
+            # the alert itself is still in ``_alert_history`` and in the caller's own log line.
+            if not getattr(self, "_warned_no_channel", False):
+                self._warned_no_channel = True
+                logger.warning(
+                    "No alert channel is configured (Telegram/email), so alerts are recorded "
+                    "but not delivered. First undelivered alert: %s",
+                    title,
+                )
             return False
+        logger.error(f"Failed to send alert: {title}")
+        return False
     
     async def send_info_alert(
         self,
