@@ -4337,20 +4337,14 @@ async def step_session(
         ):
             if not sizing_account_read:
                 sizing_account_read = True
-                try:
-                    sizing_account = repo.read_account(
-                        supabase,
-                        user_id,
-                        currency=session.get("currency") or "USD",
-                        session_id=session_id,
-                    )
-                except Exception as exc:  # noqa: BLE001 - contained per Requirement 14.7
-                    logger.error(
-                        "[paper-session] session %s could not read its account to size a "
-                        "signal: %s",
-                        session_id,
-                        exc,
-                    )
+                # A failed read raises like every other read in this step; the caller's
+                # contained handler records it. Sizing never silently falls back.
+                sizing_account = repo.read_account(
+                    supabase,
+                    user_id,
+                    currency=session.get("currency") or "USD",
+                    session_id=session_id,
+                )
             open_position = positions.get(produced.get("symbol") or event.symbol)
             resolved = resolve_sizing_quantity(
                 produced["sizing_intention"],
