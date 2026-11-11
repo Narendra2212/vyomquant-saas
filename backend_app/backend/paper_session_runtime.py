@@ -227,8 +227,13 @@ class PaperDagRuntime:
         timeframe: Any,
         registry: Any = None,
         window_bars: int = DEFAULT_WINDOW_BARS,
+        simulated: bool = False,
     ) -> None:
         self.session_id = str(session_id)
+        #: PAPER-14: True only for a Paper_Session, which reaches no exchange and is gated by
+        #: the emergency freeze alone. Defaults to False so any other caller - the deployment
+        #: runtime that drives real orders - stays behind the live trading-mode gate.
+        self.simulated = bool(simulated)
         self.symbol = str(symbol)
         self.timeframe = str(timeframe)
         self.registry = registry
@@ -370,9 +375,9 @@ class PaperDagRuntime:
                 self._window.to_dataframe(),
                 self._state,
                 registry=self.registry,
-                # PAPER-14: a paper session reaches no exchange; it is gated by the
-                # emergency freeze, not by the live trading mode.
-                simulated=True,
+                # PAPER-14: only a paper session (simulated=True at construction) is gated by
+                # the emergency freeze alone; every other caller keeps the live-mode gate.
+                simulated=self.simulated,
             )
         )
 
@@ -602,6 +607,7 @@ def build_session_evaluator(
         symbol=symbol,
         timeframe=timeframe,
         registry=registry,
+        simulated=True,
     )
     return runtime, plan
 
