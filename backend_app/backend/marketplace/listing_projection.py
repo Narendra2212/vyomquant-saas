@@ -336,8 +336,9 @@ def project_listing(
         A fresh ``dict`` whose key set is a subset of :data:`PUBLIC_LISTING_FIELDS`.
 
     Raises:
-        ValueError: ``creator_alias`` is missing, blank, or equal to the row's ``author_id`` -
-            each of which would put an owner identity in a public response (Requirement 6.5).
+        ValueError: ``creator_alias`` equals the row's ``author_id``, which would put an owner
+            identity in a public response (Requirement 6.5). A missing or blank alias is not an
+            error: the ``creator_alias`` key is omitted (MKT-06, Requirement 28.5).
             Also raised when ``rating_count`` is present but not a whole number.
         money.MoneyError: ``price_minor`` is present but is not an admissible integer number of
             Minor_Units, or ``currency`` has no persisted minor-unit exponent. The bad row is
@@ -387,7 +388,8 @@ def project_listing(
     out["subscription_period_days"] = SUBSCRIPTION_PERIOD_NOMINAL_DAYS
 
     # ── Creator, publication and social counters ─────────────────────────
-    out["creator_alias"] = alias
+    if alias is not None:
+        out["creator_alias"] = alias
     out["published_at"] = _read(row, "published_at")
     out["subscriber_count"] = _read(row, "subscriber_count")
     out["source_cloning_enabled"] = bool(_read(row, "source_cloning_enabled"))
@@ -456,19 +458,25 @@ def _price_display(price_minor: Any, currency: Any) -> Optional[str]:
     return str(money.to_major(price_minor, currency))
 
 
-def _checked_alias(creator_alias: Optional[str], row: Any) -> str:
-    """Return the alias, refusing anything that would disclose the creator's identity.
+def _checked_alias(creator_alias: Optional[str], row: Any) -> Optional[str]:
+    """Return the alias, ``None`` when there is none, refusing an identity disclosure.
 
-    Requirement 6.5 is the whole reason this check exists: the alias is the *only* creator
-    representation a public response carries, so an empty alias (which invites a caller-side
-    fallback to some other field) and an alias that is really the ``author_id`` are both
-    failures worth raising on rather than serving.
+    Requirement 6.5: the alias is the *only* creator representation a public response carries,
+    so an alias that is really the ``author_id`` is refused rather than served.
+
+    MKT-06: a creator WITHOUT an alias is not an error. ``aliases.resolve_aliases`` omits such a
+    creator by design and its contract says callers "omit the creator field for it rather than
+    substituting anything" (Requirement 28.5). Raising here instead turned every browse and
+    detail read into a 503 - in production no profile has a ``display_name`` (0 of 184), so the
+    first listing ever published could not be seen by anyone. ``None`` now means "omit the
+    field"; nothing is substituted, so no identity can leak through a fallback.
     """
-    if not isinstance(creator_alias, str) or not creator_alias.strip():
-        raise ValueError(
-            "creator_alias must be a non-empty display alias resolved server-side; "
-            "resolve it with marketplace.aliases.resolve_aliases before projecting"
-        )
+    if creator_alias is None or (
+        isinstance(creator_alias, str) and not creator_alias.strip()
+    ):
+        return None
+    if not isinstance(creator_alias, str):
+        raise ValueError("creator_alias must be a display alias string")
     author_id = _read(row, "author_id")
     if author_id is not None and creator_alias == str(author_id):
         raise ValueError(
