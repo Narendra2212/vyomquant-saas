@@ -115,3 +115,16 @@ def test_a_percent_sized_intent_is_not_sent_as_a_base_quantity() -> None:
 
     assert "quantity" not in signal, "10% of equity must not travel as 10 BTC"
     assert signal["sizing_intention"]["quantity_type"] == "percent_of_equity"
+
+
+def test_only_a_paper_session_runtime_skips_the_live_mode_gate() -> None:
+    """PAPER-14 must not reach live bots: ``deployment_runtime`` reuses ``PaperDagRuntime``
+    to drive real orders, so the freeze-only gate is opt-in and only the paper factory opts in."""
+    import inspect
+
+    from backend_app.backend import deployment_runtime
+    from backend_app.backend.paper_session_runtime import PaperDagRuntime, build_session_evaluator
+
+    assert PaperDagRuntime(session_id="s", symbol="BTC/USDT", timeframe="1m").simulated is False
+    assert "simulated=True" in inspect.getsource(build_session_evaluator)
+    assert "simulated=True" not in inspect.getsource(deployment_runtime)
