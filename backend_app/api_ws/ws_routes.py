@@ -846,7 +846,13 @@ async def _stream_candles(data_engine, symbol, timeframe, channel_key, manager):
 async def ws_user(
     websocket: WebSocket,
     user_id: str,
-    exchange_id: str = Query(..., description="Exchange ID (e.g., binance, coinbase)"),
+    # WS-01: optional. The Billing page holds this channel for account events
+    # (subscription_update / plan_changed / ...) and has no exchange to name. As a required
+    # parameter its absence failed FastAPI validation BEFORE the handler ran, which uvicorn
+    # answers as a bare 403 handshake - so every Billing visit painted "Not connected to the
+    # trading engine" and the plan never refreshed live after a payment. Without it the
+    # channel carries account events only and opens no exchange connection.
+    exchange_id: Optional[str] = Query(None, description="Exchange ID (e.g., binance, coinbase)"),
     # The only socket credential. "No credential present" is refused below with the
     # same 4001 it has always used, so nothing is admitted that was not admitted
     # before. The `token` arm that stood beside this one is gone — task 13.25.
@@ -862,25 +868,29 @@ async def ws_user(
     await manager.subscribe("user", user_id, websocket)
     logger.info(f"[WS/user] Private channel open: {user_id}")
 
-    # WSR-3: Use the shared exchange pool
-    vault = get_vault()
-    keys = vault.load_decrypted_keys(user_id, exchange_id)
-    exchange = await get_or_create_exchange(
-        user_id, exchange_id, keys["api_key"], keys["secret_key"], keys.get("password")
-    )
-    de = DataEngine(exchange)
+    stream_tasks = []
+    if exchange_id:
+        # WSR-3: Use the shared exchange pool
+        vault = get_vault()
+        keys = vault.load_decrypted_keys(user_id, exchange_id)
+        exchange = await get_or_create_exchange(
+            user_id, exchange_id, keys["api_key"], keys["secret_key"], keys.get("password")
+        )
+        de = DataEngine(exchange)
 
-    # ═══════════════════════════════════════════════════════════════════
-    # STEP 3: WS RECONNECT STATE RECOVERY
-    # ═══════════════════════════════════════════════════════════════════
-    # On reconnect, immediately sync current state to prevent stale data
-    await _sync_initial_state(de, user_id, manager, websocket)
-    # ═══════════════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════════════
+        # STEP 3: WS RECONNECT STATE RECOVERY
+        # ═══════════════════════════════════════════════════════════════
+        # On reconnect, immediately sync current state to prevent stale data
+        await _sync_initial_state(de, user_id, manager, websocket)
+        # ═══════════════════════════════════════════════════════════════
 
-    # WSR-4: Spin tasks independently — do NOT use gather() on infinite loops
-    t1 = asyncio.create_task(_stream_fills(de, user_id, manager))
-    t2 = asyncio.create_task(_stream_orders(de, user_id, manager))
-    t3 = asyncio.create_task(_stream_balance(de, user_id, manager))
+        # WSR-4: Spin tasks independently — do NOT use gather() on infinite loops
+        stream_tasks = [
+            asyncio.create_task(_stream_fills(de, user_id, manager)),
+            asyncio.create_task(_stream_orders(de, user_id, manager)),
+            asyncio.create_task(_stream_balance(de, user_id, manager)),
+        ]
 
     # STEP 1: WebSocket liveness, counted as consecutive 30s receive intervals
     # in which NO inbound frame arrived at all.
@@ -937,9 +947,8 @@ async def ws_user(
     except Exception as e:
         logger.warning(f"[WS/user] Error: {e}")
     finally:
-        t1.cancel()
-        t2.cancel()
-        t3.cancel()
+        for task in stream_tasks:
+            task.cancel()
         await manager.unsubscribe("user", user_id, websocket)
 
 
