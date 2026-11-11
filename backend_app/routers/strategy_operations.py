@@ -42,6 +42,9 @@ from backend_app.backend.marketplace import (
 from backend_app.backend.marketplace.errors import MarketplaceError
 from backend_app.core.dependencies import get_current_user, get_request_supabase
 from backend_app.core.rate_limit import limiter
+from backend_app.backend.strategy_compiler import CompilerError as _CompilerError, ValidationError as _CompileValidationError
+
+_RestoreCompileError = (_CompilerError, _CompileValidationError)
 # Task 6.3: the existing ML entitlement and quota controls, kept in force on the
 # training endpoints as declared dependencies. The caps from task 6.2 are additive to
 # these, never a replacement (Requirement 16.7).
@@ -2779,6 +2782,16 @@ async def restore_version(request: Request,
             "restored_from": version,
             "new_version": new_version
         }
+    except HTTPException:
+        raise
+    except _RestoreCompileError as e:
+        # VER-01: a restore now recompiles the old graph. One that no longer validates
+        # (e.g. a block since removed from the registry) is refused with its report and
+        # nothing written - a 422, not a 500.
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "VERSION_RESTORE_INVALID", "message": str(e)},
+        )
     except ValueError as e:
         # Re-versioning the owner's strategy is forbidden to a subscriber (Requirement 12.4),
         # not impossible. 403 with a stable code and an audited refusal for an entitled
