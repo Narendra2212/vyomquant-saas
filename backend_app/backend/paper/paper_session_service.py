@@ -3606,6 +3606,7 @@ def resolve_sizing_quantity(
     account: Optional[Mapping[str, Any]],
     price: Any,
     position_size: Any = None,
+    quantity_precision: Any = None,
 ) -> Optional[Decimal]:
     """A strategy's sizing RULE as an exact base quantity for this paper session (PAPER-15).
 
@@ -3621,6 +3622,12 @@ def resolve_sizing_quantity(
 
     ``None`` when the rule cannot be resolved (an unknown type, a missing number, no price or no
     account); the caller then records a signal and places no order, which is what it did before.
+
+    PAPER-18: the result is rounded DOWN to ``quantity_precision`` decimal places - the market's
+    precision frozen in the session's config, which ``paper_simulator.static_rejection_reason``
+    holds every order to. Rounding to a fixed 1e-8 instead made every percent-sized order on
+    BTC/USDT a ``QUANTITY_PRECISION`` rejection in production (0.01357759 BTC, session 278cab3a).
+    Without a precision the 1e-8 floor still applies.
     """
     quantity_type = str(sizing.get("quantity_type") or "")
     amount = _sizing_decimal(sizing.get("quantity"))
@@ -3645,7 +3652,15 @@ def resolve_sizing_quantity(
             return None
     if base is None:
         return None
-    base = base.quantize(SIZING_QUANTUM, rounding=ROUND_DOWN)
+    quantum = SIZING_QUANTUM
+    if quantity_precision is not None:
+        try:
+            places = int(quantity_precision)
+        except (TypeError, ValueError):
+            places = None
+        if places is not None and places >= 0:
+            quantum = max(SIZING_QUANTUM, Decimal(1).scaleb(-places))
+    base = base.quantize(quantum, rounding=ROUND_DOWN)
     return base if base > 0 else None
 
 
@@ -4360,6 +4375,7 @@ async def step_session(
                 account=sizing_account,
                 price=event.close,
                 position_size=getattr(open_position, "size", None),
+                quantity_precision=getattr(config, "quantity_precision", None),
             )
             if resolved is not None:
                 produced = {**produced, "quantity": resolved}
