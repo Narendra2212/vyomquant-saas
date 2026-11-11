@@ -123,10 +123,24 @@ class DeploymentConfig:
             alerts_enabled = os.getenv("ALERTS_ENABLED", "false").lower() == "true"
             
             if not sandbox:
-                logger.critical(
-                    "⚠️ PRODUCTION MODE: Live trading enabled! "
-                    "Ensure all safety checks are in place."
-                )
+                # OBS-02: this used to log CRITICAL "Live trading enabled!" on every config
+                # load in production, whatever the real gate said - Sentry raised it as a FATAL
+                # on every deployments page view while live trading was OFF. Report the gate that
+                # actually decides: ExecutionFlags.LIVE_TRADING_ENABLED, which only
+                # enable_live_trading() sets, and only with VYOMQUANT_MODE=live plus
+                # VYOMQUANT_ENABLE_LIVE_TRADING=true.
+                from backend_app.core.safety_config import ExecutionFlags
+
+                if ExecutionFlags.LIVE_TRADING_ENABLED:
+                    logger.critical(
+                        "⚠️ PRODUCTION MODE: Live trading enabled! "
+                        "Ensure all safety checks are in place."
+                    )
+                else:
+                    logger.info(
+                        "Production environment without sandbox; live trading is NOT enabled "
+                        "(ExecutionFlags.LIVE_TRADING_ENABLED is false)."
+                    )
         else:
             sandbox = os.getenv("SANDBOX_MODE", "true").lower() == "true"
             debug = os.getenv("DEBUG", "false").lower() == "true"

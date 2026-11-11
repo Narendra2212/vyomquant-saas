@@ -152,6 +152,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -199,6 +200,20 @@ MDS_COMMAND_CHANNEL = "mds:commands"
 #: whose ``elif`` never matched, and the session would report a release that never happened.
 MDS_ACTION_SUBSCRIBE = "subscribe"
 MDS_ACTION_UNSUBSCRIBE = "unsubscribe"
+
+#: PAPER-17. How long a subscription may stay silent before it is treated as dropped.
+#:
+#: ``mds`` keeps its streams in process memory and starts one only when a ``subscribe`` command
+#: arrives. When its task is replaced (every deploy, a crash, a reschedule) the new process streams
+#: nothing until it is asked again - and this feed asked exactly once, at start, then waited on the
+#: data channel with no timeout. Production session c2f57492 received one candle, then nothing, with
+#: ``feed_state`` still ``HEALTHY``, until reconciliation abandoned it. A silent channel is now the
+#: dropped subscription it is: :meth:`FeedHandle._receive` raises :class:`PaperFeedDisconnected`,
+#: :func:`next_validated_event` marks the session ``DEGRADED`` and reconnects, and the reconnect
+#: re-publishes ``subscribe``, which a restarted ``mds`` honours (its subscribe is idempotent, so a
+#: healthy ``mds`` ignores the repeat). ``mds`` publishes the forming candle on every exchange update,
+#: so a minute and a half of silence is far outside healthy behaviour on every timeframe.
+FEED_STALL_SECONDS = float(os.environ.get("PAPER_FEED_STALL_SECONDS", "90"))
 
 
 #: The one timeframe ``mds`` has always streamed, on the unsuffixed channel. A session on this
@@ -1334,6 +1349,8 @@ class FeedHandle:
     #: ``symbol -> (open_ms, open_time, values, transport)``: the candle still forming (PAPER-12).
     forming: Dict[str, Any] = field(default_factory=dict)
     forming_held: int = 0
+    #: PAPER-17: seconds of silence after which the subscription counts as dropped.
+    stall_seconds: float = FEED_STALL_SECONDS
 
     _pubsub: Any = None
     _messages: Any = None
@@ -1407,7 +1424,17 @@ class FeedHandle:
             )
         while True:
             try:
-                message = await self._messages.__anext__()
+                # PAPER-17: bounded, so a channel nobody publishes on any more (an ``mds`` that
+                # restarted and lost this pair's stream) surfaces as a drop and is re-subscribed,
+                # rather than hanging this session's loop forever behind a HEALTHY feed state.
+                message = await asyncio.wait_for(
+                    self._messages.__anext__(), timeout=self.stall_seconds
+                )
+            except asyncio.TimeoutError as exc:
+                raise PaperFeedDisconnected(
+                    f"no market data on {self.channel!r} for {self.stall_seconds:g}s; the "
+                    "market-data service may have restarted"
+                ) from exc
             except StopAsyncIteration as exc:
                 raise PaperFeedDisconnected(
                     f"the subscription to {self.channel!r} ended"
