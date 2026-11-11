@@ -370,6 +370,9 @@ class PaperDagRuntime:
                 self._window.to_dataframe(),
                 self._state,
                 registry=self.registry,
+                # PAPER-14: a paper session reaches no exchange; it is gated by the
+                # emergency freeze, not by the live trading mode.
+                simulated=True,
             )
         )
 
@@ -451,10 +454,20 @@ class PaperDagRuntime:
         if order_type is not None:
             signal["order_type"] = order_type
 
+        # PAPER-15: the intent's ``quantity`` is a BASE quantity only when the node sized in base
+        # units. For "10% of equity" the attribute holds 10, and copying it here sent 10 BTC to
+        # the simulator. A sizing rule travels as ``sizing_intention`` and the session step
+        # resolves it against the session's own account (``resolve_sizing_quantity``).
+        from backend_app.backend.signal_service import BASE_QUANTITY_TYPES
+
+        quantity_type = getattr(intent, "quantity_type", None)
+        sized_in_base = quantity_type is None or str(quantity_type) in BASE_QUANTITY_TYPES
         for field, attribute in (
             ("quantity", "quantity"),
             ("limit_price", "limit_price"),
         ):
+            if field == "quantity" and not sized_in_base:
+                continue
             value = getattr(intent, attribute, None)
             if value is not None:
                 signal[field] = value
@@ -462,15 +475,15 @@ class PaperDagRuntime:
         if "quantity" not in signal:
             sizing = output.get("sizing_intention")
             if sizing:
+                signal["sizing_intention"] = dict(sizing)
                 # The author sized against equity, free balance, a quote notional or the open
                 # position. That is a rule, not a quantity, and resolving it belongs to the live
                 # execution layer. Reported at INFO with its type named so an operator can see
                 # WHY the session produced a signal and no order, rather than inferring it from
                 # an absent row.
                 logger.info(
-                    "[paper-runtime] session %s: node %s sized as %s, which is a sizing rule "
-                    "rather than a base quantity; the signal is produced and no order intent is "
-                    "built from it (position sizing is the execution layer's)",
+                    "[paper-runtime] session %s: node %s sized as %s, a sizing rule rather than "
+                    "a base quantity; the session step resolves it against the session account",
                     self.session_id,
                     node_id,
                     sizing.get("quantity_type"),
