@@ -889,8 +889,17 @@ session_not_found = _session_not_found
 #: :func:`assert_strategy_supports_market` compares against. It is read and immediately reduced to
 #: two sets of strings; no part of it reaches a response, a log line or an event payload
 #: (Requirements 19.7, 23.3).
+#:
+#: PAPER-16: the same row is also what ``paper_session_runtime.resolve_session_plan`` hands to
+#: ``strategy_compiler.load_plan``, which must load the version's GRAPH to check the stored plan
+#: against it (Requirement 22.5). Without ``graph_json`` (and the legacy ``blueprint`` /
+#: ``execution_graph`` / ``schema_version`` it falls back to) every production session failed to
+#: resolve a plan - "Row carries no loadable strategy graph" - and produced no signal at all.
 STRATEGY_VERSIONS_TABLE = "strategy_versions"
-STRATEGY_VERSION_SELECT = "id,strategy_id,lifecycle_state,is_draft,compiled_plan"
+STRATEGY_VERSION_SELECT = (
+    "id,strategy_id,lifecycle_state,is_draft,compiled_plan,"
+    "graph_json,schema_version,blueprint,execution_graph"
+)
 
 #: The version ``lifecycle_state`` values from which a Paper_Session may execute.
 #:
