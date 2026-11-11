@@ -39,7 +39,6 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import Optional
 
-import sentry_sdk
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -115,15 +114,9 @@ from backend_app.routers import (admin, analytics, auth, billing, copilot, dashb
 # DAG task queue
 from backend_app.routers.dag_tasks import router as dag_tasks_router
 
-# Initialize Telemetry
-sentry_dsn = os.environ.get("SENTRY_DSN")
-if sentry_dsn:
-    sentry_sdk.init(
-        dsn=sentry_dsn,
-        traces_sample_rate=1.0,
-        profiles_sample_rate=1.0,
-    )
-    print("Telemetry: Sentry initialized.")
+# Telemetry: initialised once, in the lifespan, by `initialize_sentry` (environment + release
+# tags, 10% tracing, a scrubbing before_send, no PII). OBS-01 removed a second, module-level
+# init here that sampled 100% of traces and profiles with no scrubbing and ran first.
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

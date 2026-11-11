@@ -260,6 +260,34 @@ def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
     return True, "All critical validations passed"
 
 
+
+#: OBS-01: the production Sentry DSN (project vyomquant-api-production). A DSN is a public
+#: ingest address, not a credential -- Sentry's own browser SDKs ship it in page source -- so it
+#: is safe here. The backend only initialises Sentry when SENTRY_DSN is set, and no ECS task
+#: definition ever carried it, so production had sent ZERO events: every unhandled 500 (PAPER-08,
+#: REF-01 among them) went unseen. Overridable from the workflow environment.
+PRODUCTION_SENTRY_DSN = os.environ.get(
+    "SENTRY_DSN",
+    "https://2203dfa56247e8d9bfb52f1b737a384e@o4512372046823424.ingest.us.sentry.io/4512372137197568",
+)
+
+
+def ensure_observability_env(container: dict) -> list:
+    """Give a container SENTRY_DSN / SENTRY_ENVIRONMENT unless it already declares them.
+
+    Never overwrites a value already present (in `environment` OR `secrets`), so an operator's
+    explicit choice survives every deploy. Returns the names it added, for the deploy log.
+    """
+    env = container.setdefault("environment", [])
+    present = {e.get("name") for e in env} | {s.get("name") for s in container.get("secrets", [])}
+    added = []
+    for name, value in (("SENTRY_DSN", PRODUCTION_SENTRY_DSN), ("SENTRY_ENVIRONMENT", "production")):
+        if value and name not in present:
+            env.append({"name": name, "value": value})
+            added.append(name)
+    return added
+
+
 def register_task_definition(image_uri: str, base_task_def_arn: str = "") -> Tuple[bool, str]:
     """Register updated task definition with new container image.
 
@@ -297,6 +325,9 @@ def register_task_definition(image_uri: str, base_task_def_arn: str = "") -> Tup
         for container in current_td["containerDefinitions"]:
             if container.get("name") in ("vyomquant-api", "api"):
                 container["image"] = image_uri
+                added = ensure_observability_env(container)
+                if added:
+                    print(f"[ecs_deploy] OBS-01: added {added} to the API container")
                 break
 
     # Step 4: Strip fields not accepted by register-task-definition
@@ -769,6 +800,9 @@ def register_worker_task_definition(image_uri: str, current_task_def_arn: str) -
 
     for container in current_td["containerDefinitions"]:
         container["image"] = image_uri
+        added = ensure_observability_env(container)
+        if added:
+            print(f"[ecs_deploy] OBS-01: added {added} to worker container {container.get('name')}")
 
     for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
                 'compatibilities', 'registeredAt', 'registeredBy', 'deregisteredAt']:
