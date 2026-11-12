@@ -20,7 +20,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -331,6 +331,41 @@ def evaluate_authorization_window(
     return None
 
 
+def clamp_paper_entry_to_plan_limit(
+    qty: Decimal, price: Decimal, max_trade: Optional[float]
+) -> Tuple[Optional[Decimal], Optional[str]]:
+    """PAPER-20: shrink a paper ENTRY to the plan's per-trade notional limit.
+
+    Returns ``(qty, note)``. ``note`` is ``None`` when nothing changed. ``qty`` is
+    ``None`` when the limit leaves nothing to trade at this precision.
+
+    Why: a paper bot sizes from the paper account (~$100k by default), so a 10%-of-equity
+    strategy asks for ~$10k a trade, and the Free plan's $1,000 ``max_trade`` rejected every
+    entry after the first - production deployment 6547c7b2 made one round trip and then 19
+    rejected BUYs. The owner chose (2026-11-12) to have paper entries REDUCED to the plan
+    limit instead, and the signal records that it was. Paper only: a live order above the
+    limit is still refused by the risk engine, unchanged. Rounded DOWN at the precision the
+    strategy already sized at, so the result can never exceed the limit.
+    """
+    if max_trade is None or price <= 0 or qty <= 0:
+        return qty, None
+    limit = Decimal(str(max_trade))
+    if qty * price <= limit:
+        return qty, None
+    exponent = qty.normalize().as_tuple().exponent
+    step = Decimal(1).scaleb(min(int(exponent), 0)) if isinstance(exponent, int) else Decimal("0.000001")
+    clamped = (limit / price).quantize(step, rounding=ROUND_DOWN)
+    if clamped <= 0:
+        return None, (
+            f"paper entry of {qty} at {price} is above the plan's ${limit:,} per-trade limit "
+            f"and nothing remains at this precision once reduced"
+        )
+    return clamped, (
+        f"paper entry reduced from {qty} to {clamped} to fit the plan's ${limit:,} "
+        f"per-trade limit"
+    )
+
+
 def evaluate_deployment_execution_limits(
     execution_config: Dict[str, Any],
     *,
@@ -582,6 +617,29 @@ class BotRunner:
     #  BOOT SEQUENCE
     # ══════════════════════════════════════════════════════════════════════
 
+    async def _seed_paper_engine_from_ledger(self, paper_ledger) -> None:
+        """PAPER-20: start a paper bot from the paper account it will trade, not $10,000.
+
+        The engine was built on a synthetic ``{"total_equity": 10000.0}`` and only became a
+        copy of the stored account after its FIRST fill (``_reconcile_from_paper_ledger``),
+        so the first trade was sized from $10k and every later one from the real balance
+        (~$100k) - a bot that changed behaviour after one round trip. Reconciling at boot
+        makes every trade, the first included, sized from the same stored figures. A read
+        failure keeps the synthetic balance and says so; it does not stop the bot.
+        """
+        try:
+            snapshot = await asyncio.to_thread(paper_ledger.snapshot, self.symbol)
+            self.execution_engine._reconcile_from_paper_ledger(snapshot)
+            logger.info(
+                f"[PAPER] Bot {self.user_id}/{self.symbol} starts from the paper account: "
+                f"cash {snapshot.cash}"
+            )
+        except Exception as exc:  # noqa: BLE001 - reported, and the bot still runs
+            logger.warning(
+                f"[PAPER] Bot {self.user_id}/{self.symbol}: could not read the paper account "
+                f"at start ({exc}); sizing from the synthetic balance until the first fill."
+            )
+
     async def _recover_live_state(self):
         """
         Connects to exchange, loads ML model, warms up Numba buffers.
@@ -671,6 +729,7 @@ class BotRunner:
                 # tests/test_execution_engine_mode_matches_its_branch.py
                 execution_environment=ExecutionEnvironment.PAPER,
             )
+            await self._seed_paper_engine_from_ledger(paper_ledger)
             await self._warm_up_from_history()
             logger.info(f"[PAPER] Bot {self.user_id}/{self.symbol} ready (paper mode).")
             return
@@ -994,6 +1053,24 @@ class BotRunner:
                         await self._request_authorization_stop()
                     continue
 
+                # ── PAPER-20: paper entries are reduced to the plan's per-trade limit ──
+                # Before DEPLOY-01 and the risk engine, so both judge the reduced order.
+                paper_clamp_note = None
+                if self.paper_trading and not is_reduce:
+                    tier_limits = getattr(self.risk_manager, "tier_limits", None) or {}
+                    tier_key = str(self.blueprint.get("user_tier") or "free").lower().strip()
+                    tier = tier_limits.get(tier_key) or tier_limits.get("free") or {}
+                    new_qty, paper_clamp_note = clamp_paper_entry_to_plan_limit(
+                        Decimal(str(order_payload.get("qty", 0))),
+                        Decimal(str(price)),
+                        tier.get("max_trade"),
+                    )
+                    if paper_clamp_note:
+                        logger.info(f"Bot {self.user_id}/{self.symbol}: {paper_clamp_note}")
+                    if new_qty is None:
+                        continue
+                    order_payload["qty"] = float(new_qty)
+
                 # ── DEPLOY-01: per-deployment execution_config limits ─────
                 # Consulted BEFORE the risk-engine check and before any order_id/lock is
                 # minted, so a refusal here costs nothing and looks exactly like a
@@ -1201,7 +1278,10 @@ class BotRunner:
                             user={"id": self.user_id, "_server_side": True},
                             signal_id=sig_id,
                             risk_passed=(v_verdict == RiskVerdict.APPROVED),
-                            risk_reason=str(v_reason or "Risk Approved"),
+                            risk_reason=(
+                                str(v_reason or "Risk Approved")
+                                + (f" ({paper_clamp_note})" if paper_clamp_note else "")
+                            ),
                             position_size=float(order_payload["qty"]),
                             capital=bal_usdt,
                             exposure=float(self.recovered_exposure_coins * Decimal(str(price))),

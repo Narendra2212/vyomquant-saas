@@ -381,6 +381,14 @@ class BotPaperLedger:
                 f"Nothing was sent to the paper ledger."
             )
 
+    def snapshot(self, symbol: Any) -> LedgerFill:
+        """The stored account and open positions, with no order (PAPER-20).
+
+        Read the same way a fill is read back, so a bot that reconciles at boot holds
+        exactly what it would hold after a fill. The order fields are empty/zero.
+        """
+        return self._read_back({}, self.ledger_symbol(symbol), "", "")
+
     def _read_back(
         self,
         order: Mapping[str, Any],
