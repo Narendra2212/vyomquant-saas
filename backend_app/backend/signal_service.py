@@ -249,11 +249,19 @@ class SignalService:
         decision: str,
         indicators: Dict,
         market_info: Dict,
-        ml_info: Optional[Dict] = None
+        ml_info: Optional[Dict] = None,
+        environment: Optional[str] = None,
     ) -> Dict:
         """
         Create a new signal record.
-        
+
+        BOT-02: ``environment`` names who produced the signal; a paper-mode deployment
+        passes ``"PAPER"``. Left ``None`` the column is not written and migration 010's
+        ``DEFAULT 'LIVE'`` applies - right for the live writer this path was built for, and
+        WRONG for every paper bot: production held paper-deployment signals labelled LIVE
+        (deployment 6547c7b2, 2026-11-11), so a Signal_Trace filtered on LIVE returned
+        simulated trades as real ones.
+
         Args:
             user: User dict with id and access_token
             strategy_id: Strategy ID
@@ -291,6 +299,8 @@ class SignalService:
             "ml_info": ml_info,
             "generated_at": datetime.now(timezone.utc).isoformat()
         }
+        if environment is not None:
+            signal_data["environment"] = environment
         
         # Store in local registry immediately
         self._local_signals[signal_id] = signal_data.copy()

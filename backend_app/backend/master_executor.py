@@ -1187,7 +1187,10 @@ class BotRunner:
                             decision=decision,
                             indicators=live_state,
                             market_info={"price": price, "volume": volume, "timestamp": timestamp_ms},
-                            ml_info={"confidence": live_state.get("ML_Prediction")} if "ML_Prediction" in live_state else None
+                            ml_info={"confidence": live_state.get("ML_Prediction")} if "ML_Prediction" in live_state else None,
+                            # BOT-02: name the environment. Unnamed, the column's DEFAULT
+                            # labelled every paper bot's signal LIVE.
+                            environment="PAPER" if self.paper_trading else None,
                         )
                         sig_id = sig.get("id")
                         if not sig_id:
