@@ -17,6 +17,7 @@
 """
 import asyncio
 import logging
+import uuid
 import os
 import time
 from datetime import datetime, timezone
@@ -329,6 +330,44 @@ def evaluate_authorization_window(
             "longer authorized to place orders"
         )
     return None
+
+
+#: BOT-03. Namespace for the deterministic UUIDs written to ``signals.order_id`` /
+#: ``signals.trade_id`` when no real order UUID is available. Fixed, so a retried trace write
+#: for the same execution produces the same id rather than a second one.
+_SIGNAL_TRACE_NAMESPACE = uuid.UUID("6f1d5a4e-2b3c-4d8e-9f10-5a6b7c8d9e0f")
+
+
+def signal_uuid_for(kind: str, execution_id: Any) -> str:
+    """A UUID for a signal-trace id column, derived deterministically from ``execution_id``.
+
+    BOT-03: ``signals.order_id`` and ``signals.trade_id`` are UUID columns. The bot wrote
+    its execution id (``exec-...``) and ``tr_...`` there, Postgres rejected every update, and
+    the failure was logged at DEBUG - so no bot signal ever recorded its fill, failure, fees or
+    a kill-switch refusal: all of them stayed "accepted" (production, 2026-11-13). A value that
+    already IS a UUID is kept as-is.
+    """
+    text = str(execution_id or "")
+    try:
+        return str(uuid.UUID(text))
+    except (ValueError, AttributeError, TypeError):
+        return str(uuid.uuid5(_SIGNAL_TRACE_NAMESPACE, f"{kind}:{text}"))
+
+
+def signal_order_uuid(execution_id: Any, result: Any) -> str:
+    """The order id for a signal trace: the venue/ledger order UUID when the result carries one.
+
+    The paper ledger returns the ``paper_orders`` row id, so using it links the trace to the
+    order the paper account actually recorded. Anything else falls back to
+    :func:`signal_uuid_for`.
+    """
+    candidate = result.get("order_id") if isinstance(result, dict) else getattr(result, "order_id", None)
+    if candidate:
+        try:
+            return str(uuid.UUID(str(candidate)))
+        except (ValueError, AttributeError, TypeError):
+            pass
+    return signal_uuid_for("order", execution_id)
 
 
 def clamp_paper_entry_to_plan_limit(
@@ -1331,7 +1370,8 @@ class BotRunner:
                         await sig_svc.update_order(
                             user={"id": self.user_id, "_server_side": True},
                             signal_id=sig_id,
-                            order_id=v_exec_id,
+                            # BOT-03: signals.order_id is a UUID column.
+                            order_id=signal_order_uuid(v_exec_id, v_result),
                             exchange_order_id=None,
                             order_status=order_st,
                             quantity=requested_qty,
@@ -1351,12 +1391,15 @@ class BotRunner:
                             await sig_svc.update_execution(
                                 user={"id": self.user_id, "_server_side": True},
                                 signal_id=sig_id,
-                                trade_id=f"tr_{v_exec_id[:12]}",
+                                # BOT-03: signals.trade_id is a UUID column.
+                                trade_id=signal_uuid_for("trade", v_exec_id),
                                 pnl=0.0,
                                 realized_pnl=None
                             )
                     except Exception as sig_err:
-                        logger.debug(f"Signal trace audit logging exception: {sig_err}")
+                        # BOT-03: was DEBUG, which is how a type error on every bot order
+                        # update stayed invisible in production.
+                        logger.warning(f"Signal trace audit logging exception: {sig_err}")
 
                 if verdict != RiskVerdict.APPROVED:
                     logger.warning(f"Risk check failed: {reason}")
