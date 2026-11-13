@@ -386,7 +386,23 @@ class BotPaperLedger:
 
         Read the same way a fill is read back, so a bot that reconciles at boot holds
         exactly what it would hold after a fill. The order fields are empty/zero.
+
+        PAPER-21: the default account is CREATED first if the user has none. A brand-new
+        user's paper account was only created by their first fill (or by opening a paper
+        page), so a bot deployed before either found nothing at boot, fell back to the
+        synthetic $10,000 and sized its first trades ten times too small (production,
+        2026-11-13: deployment 7bb586c0 booted 10 s before its account existed).
+        ``get_or_create_account`` is the same call the ``/api/paper/*`` endpoints make, so
+        the account is the one they serve, at the platform's default capital.
         """
+        from backend_app.backend.paper import paper_repository as repo
+
+        try:
+            repo.get_or_create_account(self._client(), self.user_id)
+        except Exception as exc:  # noqa: BLE001 - surfaced as the ledger's own error
+            raise BotPaperLedgerUnavailable(
+                f"the default paper account could not be read or created: {exc}"
+            ) from exc
         return self._read_back({}, self.ledger_symbol(symbol), "", "")
 
     def _read_back(

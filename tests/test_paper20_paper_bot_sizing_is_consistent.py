@@ -56,5 +56,32 @@ def test_snapshot_reads_back_with_no_order():
 
     ledger._read_back = _rb
     ledger.ledger_symbol = lambda s: s.replace("/", "-")
-    snap = ledger.snapshot("BTC/USDT")
+    ledger._client = lambda: "sb"
+    import backend_app.backend.paper.paper_repository as repo
+    created = []
+    orig = repo.get_or_create_account
+    repo.get_or_create_account = lambda sb, uid, *a, **k: created.append((sb, uid)) or {"id": "acc"}
+    try:
+        snap = ledger.snapshot("BTC/USDT")
+    finally:
+        repo.get_or_create_account = orig
     assert seen == {"order": {}, "sym": "BTC-USDT"} and snap.cash == Decimal("100000")
+    # PAPER-21: the default account is ensured BEFORE it is read, so a brand-new user's bot
+    # sizes from the real paper capital rather than the synthetic $10,000.
+    assert created == [("sb", "u")]
+
+
+def test_snapshot_fails_loudly_when_the_account_cannot_be_ensured(monkeypatch):
+    import pytest
+    import backend_app.backend.paper.paper_repository as repo
+    from backend_app.backend.paper.bot_paper_ledger import BotPaperLedgerUnavailable
+
+    ledger = BotPaperLedger("u")
+    ledger._client = lambda: "sb"
+
+    def _boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(repo, "get_or_create_account", _boom)
+    with pytest.raises(BotPaperLedgerUnavailable):
+        ledger.snapshot("BTC/USDT")
