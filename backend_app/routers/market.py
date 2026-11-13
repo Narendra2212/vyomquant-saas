@@ -15,7 +15,7 @@ from urllib.parse import unquote
 from fastapi import (APIRouter, Depends, HTTPException, Query, Request,
                      Response)
 
-from backend_app.backend.connection_engine import get_or_create_exchange
+from backend_app.backend.connection_engine import get_or_create_exchange, key_sandbox
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import get_current_user, get_vault
 from backend_app.core.rate_limit import limiter  # BE-CRITICAL-003 FIX
@@ -78,6 +78,7 @@ async def _get_data_engine(user, vault, exchange_id: str) -> DataEngine:
             api_key=keys["api_key"],
             secret_key=keys["secret_key"],
             password=keys.get("password"),
+            testnet=key_sandbox(keys),
         )
         return DataEngine(exchange)
     except Exception:

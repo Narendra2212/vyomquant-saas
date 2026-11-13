@@ -31,7 +31,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 
 from backend_app.backend.connection_engine import (  # WSR-3: shared pool
-    ConnectionEngine, get_or_create_exchange)
+    ConnectionEngine, get_or_create_exchange, key_sandbox)
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.core.dependencies import get_vault, get_ws_manager
 from backend_app.core.state import app_state
@@ -874,7 +874,8 @@ async def ws_user(
         vault = get_vault()
         keys = vault.load_decrypted_keys(user_id, exchange_id)
         exchange = await get_or_create_exchange(
-            user_id, exchange_id, keys["api_key"], keys["secret_key"], keys.get("password")
+            user_id, exchange_id, keys["api_key"], keys["secret_key"], keys.get("password"),
+            testnet=key_sandbox(keys),
         )
         de = DataEngine(exchange)
 
