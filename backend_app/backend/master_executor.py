@@ -270,6 +270,10 @@ def _coerce_authorized_until(raw: Any) -> Optional[datetime]:
     )
 
 
+#: OBS-01: how often a running bot persists its self-report (plus every phase change).
+RUNTIME_REPORT_INTERVAL_S = 30.0
+
+
 def quote_coin_of(symbol: Any) -> str:
     """The quote currency of a CCXT symbol: ``BTC/USDC`` -> ``USDC``,
     ``BTC/USDT:USDT`` -> ``USDT``. ``USDT`` only when the symbol names no quote at all,
@@ -913,6 +917,47 @@ class BotRunner:
         exchange = await bridge.connect(allow_mock=False)
         return bridge, exchange
 
+    def _runtime_report(self, *, force: bool = False, **fields: Any) -> None:
+        """OBS-01: update this bot's self-report and, at most every
+        ``RUNTIME_REPORT_INTERVAL_S`` (or on a phase change / ``force``), persist it to the
+        deployment row's ``runtime_status``. Never raises and never blocks the tick."""
+        try:
+            rt = self.__dict__.setdefault("_runtime_status", {})
+            phase_changed = "phase" in fields and fields["phase"] != rt.get("phase")
+            rt.update(fields)
+            now = time.time()
+            last = self.__dict__.get("_runtime_flushed_at", 0.0)
+            if not (force or phase_changed or now - last >= RUNTIME_REPORT_INTERVAL_S):
+                return
+            deployment_id = (self.blueprint or {}).get("deployment_id")
+            if not deployment_id:
+                return
+            self._runtime_flushed_at = now
+            rt["updated_at"] = datetime.now(timezone.utc).isoformat()
+            evaluator = getattr(self, "graph_eval", None)
+            if evaluator is not None:
+                rt["refusals"] = dict(getattr(evaluator, "refusals", None) or {})
+            asyncio.get_running_loop().create_task(
+                self._write_runtime_status(str(deployment_id), dict(rt))
+            )
+        except Exception:  # noqa: BLE001 - diagnostics must never affect trading
+            pass
+
+    async def _write_runtime_status(self, deployment_id: str, snapshot: Dict[str, Any]) -> None:
+        try:
+            from backend_app.backend.deployment_state import DeploymentStateStore
+
+            await DeploymentStateStore().write_runtime_status(deployment_id, snapshot)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"runtime status for {deployment_id} not written: {exc}")
+
+    def _on_stream_error(self, stream_name: str, error: Exception) -> None:
+        self._runtime_report(
+            phase="stream_error",
+            last_error=f"{stream_name}: {type(error).__name__}: {str(error)[:300]}",
+            last_error_at=datetime.now(timezone.utc).isoformat(),
+        )
+
     async def _record_refused_signal(
         self, order_payload: Dict[str, Any], reason: str, *, price: float, volume: float,
         timestamp_ms: int, live_state: Dict[str, Any], capital: float,
@@ -1007,6 +1052,12 @@ class BotRunner:
             except Exception as e:
                 reconnect_attempts += 1
                 self._last_error = f"{type(e).__name__}: {e}"
+                self._runtime_report(
+                    phase="reconnecting",
+                    reconnect_attempts=reconnect_attempts,
+                    last_error=str(self._last_error)[:300],
+                    last_error_at=datetime.now(timezone.utc).isoformat(),
+                )
                 wait = min(2**reconnect_attempts, 60)
                 logger.error(
                     f"Bot {self.user_id}/{self.symbol} loop crashed: {e}. "
@@ -1048,6 +1099,20 @@ class BotRunner:
         FIX ME-6: Wraps ML inference in asyncio.wait_for() with timeout.
         """
         logger.info(f"Bot {self.user_id}/{self.symbol} inner loop started.")
+        # OBS-01: the stream reports its own failures to this bot's self-report.
+        try:
+            self.data_engine.on_stream_error = self._on_stream_error
+        except Exception:  # noqa: BLE001
+            pass
+        self._runtime_report(
+            phase="waiting_for_market_data",
+            mode="paper" if self.paper_trading else "live",
+            symbol=self.symbol,
+            booted_at=datetime.now(timezone.utc).isoformat(),
+            ticks=0,
+            bars_closed=0,
+            force=True,
+        )
 
         async for ticks in self.data_engine.stream_live_ticks(self.symbol):
             for tick in (ticks if isinstance(ticks, list) else [ticks]):
@@ -1059,6 +1124,15 @@ class BotRunner:
                     continue
 
                 self._last_price = price
+                rt = self.__dict__.get("_runtime_status", {})
+                self._runtime_report(
+                    phase="streaming",
+                    ticks=int(rt.get("ticks", 0)) + 1,
+                    last_tick_at=datetime.fromtimestamp(
+                        int(timestamp_ms) / 1000, tz=timezone.utc
+                    ).isoformat(),
+                    last_price=price,
+                )
 
                 # ── Update Numba matrix ───────────────────────────────────
                 new_candles = self.data_processor.process_live_tick(
@@ -1067,6 +1141,11 @@ class BotRunner:
 
                 if not new_candles:
                     continue  # no closed candle yet — keep accumulating ticks
+
+                self._runtime_report(
+                    bars_closed=int(rt.get("bars_closed", 0)) + len(new_candles),
+                    last_bar_closed_at=datetime.now(timezone.utc).isoformat(),
+                )
 
                 # ── Per-tick state for the strategy engine in use ─────────
                 if self.graph_eval is None:
@@ -1119,6 +1198,14 @@ class BotRunner:
                         live_balance_usdt=bal_usdt,  # FIX SB-1 in strategy_builder
                     )
 
+                self._runtime_report(
+                    last_evaluation_at=datetime.now(timezone.utc).isoformat(),
+                    last_evaluation=(
+                        f"signal: {order_payload.get('side')} {order_payload.get('qty')}"
+                        if order_payload else "no_signal"
+                    ),
+                    force=bool(order_payload),
+                )
                 if not order_payload:
                     continue
 
@@ -1192,6 +1279,9 @@ class BotRunner:
                     logger.warning(
                         f"Bot {self.user_id}/{self.symbol}: order refused by this "
                         f"deployment's execution_config -- {execution_limit_reason}"
+                    )
+                    self._runtime_report(
+                        last_evaluation=f"refused: {execution_limit_reason}", force=True
                     )
                     # SIG-REFUSE-01: recorded, not only logged. A log line is invisible to
                     # the trader, so a correctly-refusing live bot looked dead.

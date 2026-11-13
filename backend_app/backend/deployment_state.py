@@ -176,6 +176,26 @@ class DeploymentStateStore:
             .eq("id", deployment_id)
         )
 
+    async def write_runtime_status(self, deployment_id: str, status: Dict[str, Any]) -> bool:
+        """OBS-01: store a running bot's self-report on its deployment row.
+
+        Best effort and silent on failure beyond one log line: the report is diagnostics,
+        never state anything decides on. Returns whether the row was written.
+        """
+        if not deployment_id:
+            return False
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments")
+                .update({"runtime_status": dict(status)})
+                .eq("id", deployment_id)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("runtime status not written for %s: %s", deployment_id, exc)
+            return False
+        return bool(getattr(res, "data", None))
+
     async def _settle_strategy_status(self, deployment_id: str, status: str) -> None:
         """DEP-STRAT-01: a strategy is not ``running`` once nothing of it is running.
 
