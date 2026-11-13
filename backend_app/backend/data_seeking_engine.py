@@ -52,6 +52,14 @@ class DataEngine:
         """
         if not self.exchange.has.get("watchTrades"):
             logger.error(f"Exchange does not support watchTrades for {symbol}")
+            callback = getattr(self, "on_stream_error", None)
+            if callback is not None:
+                try:
+                    callback("Tick Stream", RuntimeError(
+                        f"this venue client does not support watchTrades for {symbol}"
+                    ))
+                except Exception:  # noqa: BLE001
+                    pass
             return
 
         while True:
@@ -494,6 +502,15 @@ class DataEngine:
         Fatal errors are re-raised to kill the bot (prevents IP ban).
         Network errors trigger a brief reconnection pause.
         """
+        # OBS-01: tell the owner (``BotRunner`` sets ``on_stream_error``). A network error
+        # here is retried forever at WARNING level, so without this a bot whose stream never
+        # connects is alive, silent and never trades.
+        callback = getattr(self, "on_stream_error", None)
+        if callback is not None:
+            try:
+                callback(stream_name, error)
+            except Exception:  # noqa: BLE001 - diagnostics must never break the stream
+                pass
         if isinstance(
             error,
             (ccxt_base.AuthenticationError, ccxt_base.PermissionDenied, ccxt_base.AccountSuspended),
