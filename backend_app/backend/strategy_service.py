@@ -1846,6 +1846,24 @@ class StrategyService:
         binding_columns = await db_binding.binding_columns_supported(sb)
         db_binding.assert_binding_storable(binding, columns_available=binding_columns)
 
+        # LIVE-DEPLOY-01: a LIVE binding is refused here, before any quota is reserved or
+        # any row written, unless the PLATFORM is live for this tenant - the same check the
+        # order path makes at the venue boundary (RT-15). Without it, a live deployment row
+        # could be created on a paper platform and only fail at its first order.
+        if binding.mode == db_binding.MODE_LIVE:
+            from backend_app.core.live_execution_gate import (
+                LiveExecutionRefused, assert_platform_live_trading_enabled)
+
+            try:
+                assert_platform_live_trading_enabled(user["id"])
+            except LiveExecutionRefused as exc:
+                raise db_binding.DeployRejected(
+                    exc.code,
+                    f"Live deployment refused: {exc.detail}",
+                    {"mode": binding.mode},
+                    http_status=403,
+                ) from exc
+
         # RT-02: the runtime blueprint the fleet will be started with. Built (and so
         # validated) BEFORE quota is reserved and before any row is written, so a version the
         # runtime cannot start is refused with a 422 and leaves nothing behind -- it used to be
@@ -2021,8 +2039,36 @@ class StrategyService:
                     strategy_id=strategy_id,
                 )
 
+        # LIVE-DEPLOY-01: SEC-16's trigger (migration 034) lets the browser roles insert
+        # PAPER deployments only, so the user-scoped client cannot write a LIVE row - by
+        # design: a live row must be written by a trusted server role, and only AFTER the
+        # server-side gates. Every one of them has run by this point: version ownership,
+        # every binding gate (account ownership included, under the caller's own RLS plus
+        # an explicit user_id filter), the LIVE_TRADING entitlement, the platform live gate
+        # above, and the archival re-check. `user_id` is the authenticated caller's. So the
+        # one INSERT goes through the service-role client for a live binding and nothing
+        # else changes: every later write on this row is a lifecycle column the
+        # user-scoped client may still update.
+        insert_client = sb
+        if binding.mode == db_binding.MODE_LIVE:
+            from backend_app.core.dependencies import get_service_supabase
+
+            try:
+                insert_client = get_service_supabase()
+            except Exception:  # noqa: BLE001 - mapped to a classified 503 below
+                insert_client = None
+            if insert_client is None:
+                await SubscriptionEngine.decrement_quota_usage(user["id"], Resource.BOTS.value)
+                raise db_binding.DeployRejected(
+                    "LIVE_DEPLOY_WRITER_UNAVAILABLE",
+                    "A live deployment cannot be recorded: the platform's trusted "
+                    "database client is not configured. Nothing was deployed.",
+                    {"mode": binding.mode},
+                    http_status=503,
+                )
+
         try:
-            q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
+            q2 = insert_client.table("strategy_deployments").insert(deployment_data).execute()
             deployment_result = await q2 if inspect.isawaitable(q2) else q2
         except Exception as exc:  # noqa: BLE001 - classified below, never swallowed
             if binding_stored and db_binding.is_missing_binding_column_error(exc):
@@ -2036,7 +2082,7 @@ class StrategyService:
                 for column in db_binding.BINDING_COLUMNS:
                     deployment_data.pop(column, None)
                 binding_stored = False
-                q2 = sb.table("strategy_deployments").insert(deployment_data).execute()
+                q2 = insert_client.table("strategy_deployments").insert(deployment_data).execute()
                 deployment_result = await q2 if inspect.isawaitable(q2) else q2
             else:
                 # A genuine write failure. Release the quota this attempt reserved, then
