@@ -335,8 +335,20 @@ export function deploymentRequest(config = {}) {
   const mode = deploymentModeOf(config.environment);
   // Paper binds no account: `assert_account_required_for_live` requires one only for live,
   // and sending one for paper would bind a deployment to an account it does not use.
+  //
+  // DEPLOY-ACCT-01: `/api/exchange/connections` returns BOTH a synthesised `id`
+  // (`<user_id>_<exchange>`, kept for the exchange UI) and the real `exchange_keys.id` as
+  // `account_id` (EXCH-03). Sending the composite made every live preflight fail with
+  // EXCHANGE_ACCOUNT_NOT_FOUND. When the account carries `account_id` at all, that is the
+  // handle — never the composite, even when it is null, because a composite that resolves
+  // to nothing would read as "your account is missing" rather than "it has no handle".
+  const account = record(config.account);
+  const accountHandle =
+    account && Object.prototype.hasOwnProperty.call(account, 'account_id')
+      ? account.account_id
+      : account?.id;
   const exchangeAccountId =
-    mode === MODE_LIVE ? identifier(record(config.account)?.id ?? config.exchangeAccountId) : null;
+    mode === MODE_LIVE ? identifier(accountHandle ?? config.exchangeAccountId) : null;
   const riskConfigId = identifier(config.riskConfigId);
   const gapStrategy = text(config.gapStrategy);
   const executionConfig = executionConfigFrom(config);
