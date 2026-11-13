@@ -254,6 +254,27 @@ describe('deploymentRequest', () => {
     }
   });
 
+  it('binds the real exchange_keys id, never the synthesised composite (DEPLOY-ACCT-01)', () => {
+    // The shape `/api/exchange/connections` actually returns: a composite `id` for the
+    // exchange UI and the real row key as `account_id`.
+    const { body, query } = deploymentRequest({
+      environment: 'live',
+      account: { id: 'user-1_binance', account_id: 'key-uuid-1', exchange_id: 'binance' },
+      ...sizing,
+    });
+    expect(body.exchange_account_id).toBe('key-uuid-1');
+    expect(JSON.stringify({ body, query })).not.toContain('user-1_binance');
+  });
+
+  it('sends no account rather than the composite when the row has no handle (DEPLOY-ACCT-01)', () => {
+    const { body } = deploymentRequest({
+      environment: 'live',
+      account: { id: 'user-1_binance', account_id: null },
+      ...sizing,
+    });
+    expect(body).not.toHaveProperty('exchange_account_id');
+  });
+
   it('binds no account for paper, which uses none', () => {
     const { body } = deploymentRequest({
       environment: 'paper',
