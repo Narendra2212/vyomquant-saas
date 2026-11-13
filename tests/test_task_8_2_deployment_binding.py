@@ -397,6 +397,25 @@ async def _deploy(sb, *, payload=None, environment="paper", user=None, fleet_ok=
     patches = _no_quota_limits()
     for p in patches:
         p.start()
+    # LIVE-DEPLOY-01: a live binding now also needs the PLATFORM to be live for this tenant,
+    # and its one INSERT goes through the service-role client. This file is about the
+    # binding, so a live deploy here runs on a live platform whose trusted writer is the
+    # same fake (its `inserted()` record stays the one these tests read).
+    # tests/test_live_deploy01_service_role_insert.py covers the gate and the writer.
+    if (payload or {}).get("mode") == "live":
+        patches = patches + (
+            patch.dict(
+                os.environ,
+                {
+                    "VYOMQUANT_MODE": "live",
+                    "VYOMQUANT_ENABLE_LIVE_TRADING": "true",
+                    "VYOMQUANT_LIVE_TENANT_ALLOWLIST": "*",
+                },
+            ),
+            patch("backend_app.core.dependencies.get_service_supabase", lambda: sb),
+        )
+        for p in patches[-2:]:
+            p.start()
     app_state_patch = patch("backend_app.core.state.app_state")
     mock_state = app_state_patch.start()
     mock_state.fleet = fleet
