@@ -1356,7 +1356,7 @@ const DEPLOYMENT_STATUS_KEY = "status";
  * paraphrasing it shorter. So the three constants below are the paragraph's own three
  * sentences, cut at the full stops and otherwise untouched:
  *
- *     `${CLAIM} ${WHY} ${ACTION}` — the 384 characters, character for character
+ *     `${CLAIM} ${WHY} ${ACTION}` — the 306 characters since LT-01, character for character
  *
  * `liveTrading.test.jsx` asserts that join and its length, so an edit that shortens one of
  * the three fails rather than passes. {@link REGISTRY_CAVEAT_WHY} is the only piece that is
@@ -1374,10 +1374,12 @@ const REGISTRY_CAVEAT_CLAIM = "This list may be incomplete.";
  * "It" is "This list" — {@link REGISTRY_CAVEAT_CLAIM}, which is why that sentence stays on the
  * surface rather than moving in here with this one.
  */
+// LT-01: the list now reads the `strategy_deployments` records (it used to read only the
+// in-process registry, which no fleet-started deployment ever entered). What can still be
+// missing is a deployment beyond the newest 50 per strategy, so that is what this now says.
 const REGISTRY_CAVEAT_WHY =
-  "It reports the deployments the backend process currently "
-  + "holds in memory, so one started by an earlier process — before a restart, or on another "
-  + "worker — is not listed here even though it is still recorded and may still be trading.";
+  "It reads each strategy's 50 most recent deployment records, so an older one is not "
+  + "listed here even though it is still recorded and may still be trading.";
 
 /**
  * The actionable sentence, and the reason this caveat is safety-relevant rather than
