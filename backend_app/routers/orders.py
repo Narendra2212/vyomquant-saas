@@ -786,20 +786,47 @@ async def get_open_orders(
     # ═══════════════════════════════════════════════════════════════════
     # DATA QUERIES USE EXCHANGE DIRECTLY (NO EXECUTION RISK)
     # ═══════════════════════════════════════════════════════════════════
-    keys = vault.load_decrypted_keys(
-        user["id"],
-        exchange_id,
-    )
-    exchange = await get_or_create_exchange(
-        user_id=user["id"],
-        exchange_id=exchange_id,
-        api_key=keys["api_key"],
-        secret_key=keys["secret_key"],
-        password=keys.get("password"),
-    )
-    
-    sym = symbol.replace("-", "/") if symbol else None
-    return await DataEngine(exchange).fetch_open_orders(sym)
+    # ORD-01: an account with no key for this venue answered a bare 500 - the vault's
+    # ValueError("No keys found ...") escaped - so the Live Trading page could not tell "you
+    # have not connected this exchange" from a server fault (production, 2026-11-13). A missing
+    # key is now 404 EXCHANGE_NOT_CONNECTED; a failure talking to the venue is 502. An owner
+    # mismatch (the vault's PermissionError) is deliberately NOT caught here: it stays loud.
+    try:
+        keys = vault.load_decrypted_keys(
+            user["id"],
+            exchange_id,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "EXCHANGE_NOT_CONNECTED",
+                "message": f"No {exchange_id} account is connected to this account, so it has "
+                           "no open orders to read. Connect it under Exchange Connections.",
+            },
+        )
+    try:
+        exchange = await get_or_create_exchange(
+            user_id=user["id"],
+            exchange_id=exchange_id,
+            api_key=keys["api_key"],
+            secret_key=keys["secret_key"],
+            password=keys.get("password"),
+        )
+        sym = symbol.replace("-", "/") if symbol else None
+        return await DataEngine(exchange).fetch_open_orders(sym)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Open orders could not be read from {exchange_id} for {user['id']}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "EXCHANGE_UNAVAILABLE",
+                "message": f"{exchange_id} did not answer the open-orders request. This is not a "
+                           "report that there are no open orders.",
+            },
+        )
 
 
 # ── POST /api/orders/cancel/{order_id} ───────────────────────────────

@@ -1968,6 +1968,23 @@ class ExecutionEngine:
                 else:
                     return False, f"Exchange execution failed: {result.error_message}"
             except Exception as e:
+                # LIVE-01: a refusal raised by the venue-boundary GATES is provably
+                # pre-submission. `require_live_authorization`, `assert_sandbox_only_policy`
+                # (LiveExecutionRefused) and the KILL-03 re-read `enforce_kill_switch`
+                # (ExecutionBlocked) all run in `place_order` BEFORE `create_order`, so the
+                # venue cannot hold an order. Booking them as SUBMISSION_UNKNOWN told the
+                # trader "the order may be live at the venue" and FROZE the symbol until a
+                # reconciliation that had nothing to find - e.g. every order in flight when
+                # an operator flipped live mode off or engaged the kill switch.
+                from backend_app.core.global_safety import ExecutionBlocked
+                from backend_app.core.live_execution_gate import LiveExecutionRefused
+
+                if isinstance(e, (LiveExecutionRefused, ExecutionBlocked)):
+                    logger.critical(
+                        "Execution %s refused at the venue boundary before any exchange "
+                        "write: %s", execution_id, e,
+                    )
+                    return False, f"Live execution refused before submission: {e}"
                 if _venue_call_possible:
                     # RT-17: raised after the submission evidence was committed, so the
                     # venue may hold an order. Not a plain failure.

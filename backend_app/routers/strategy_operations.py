@@ -2444,37 +2444,100 @@ async def list_deployments(request: Request,
     strategy_id: str,
     user: dict = Depends(get_current_user)
 ):
-    """List all deployments for a strategy."""
+    """List a strategy's deployments, from the authoritative record.
+
+    LT-01. This read ONLY ``deployment_manager.list_deployments`` - the in-process registry -
+    and a deployment started by ``deploy_version`` (the fleet path every deploy button uses)
+    is never in that registry (see ``get_deployment`` below, which already learned this). So
+    the Live Trading page answered "No deployment record was returned" for every strategy
+    while a bot was running (production, 2026-11-13: deployment 7bb586c0), could not show it
+    and could not stop it, and told traders the list "may be incomplete".
+
+    The ``strategy_deployments`` rows are read FIRST, scoped to the caller twice (the
+    request-scoped client's RLS plus an explicit ``user_id`` filter), newest first, capped
+    at 50. The in-process runtime is consulted only to ATTACH a worker and health readings to
+    a row the caller owns; a registry-only deployment for this strategy (legacy worker path)
+    is still listed. Health is ``None`` - never a fabricated 0 or "healthy" - when no runtime
+    is attached. Response keys are unchanged.
+    """
+    from backend_app.core.dependencies import create_request_supabase_async
+
     try:
-        deployment_manager = get_deployment_manager()
-        deployments = deployment_manager.list_deployments(user["id"])
-        
-        return {
-            "strategy_id": strategy_id,
-            "deployments": [
-                {
-                    "deployment_id": d.deployment_id,
-                    "status": d.status.value,
-                    "environment": d.config.environment.value,
-                    "worker": d.worker.worker_id if d.worker else None,
-                    "started_at": d.started_at,
-                    "health": {
-                        "cpu_percent": d.health.cpu_percent,
-                        "memory_percent": d.health.memory_percent,
-                        "latency_ms": d.health.latency_ms,
-                        "uptime_seconds": d.health.uptime_seconds
-                    }
-                }
-                for d in deployments if d.config.strategy_id == strategy_id
-            ],
-            "total": len([d for d in deployments if d.config.strategy_id == strategy_id])
-        }
-    except Exception as e:
-        logger.error(f"Error listing deployments for strategy {strategy_id} for user {user['id']}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "DEPLOYMENTS_LIST_FAILED", "message": str(e)}
+        sb_res = create_request_supabase_async(user.get("access_token"))
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        q = (
+            sb.table("strategy_deployments")
+            .select("*")
+            .eq("user_id", user["id"])
+            .eq("strategy_id", strategy_id)
+            .order("created_at", desc=True)
+            .limit(50)
+            .execute()
         )
+        res = await q if inspect.isawaitable(q) else q
+        rows = [dict(r) for r in ((getattr(res, "data", None) or []) if res else [])]
+    except Exception as e:
+        logger.error(
+            f"Deployments of strategy {strategy_id} could not be read for user {user['id']}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "DEPLOYMENTS_LIST_UNAVAILABLE",
+                "message": "The deployment records could not be read, so no list was returned. "
+                           "This is not a report that nothing is running.",
+            },
+        )
+
+    try:
+        runtime = {
+            d.deployment_id: d
+            for d in get_deployment_manager().list_deployments(user["id"])
+            if d.config.strategy_id == strategy_id
+        }
+    except Exception as e:  # noqa: BLE001 - runtime detail is optional; the rows are not
+        logger.warning(f"In-process deployment registry unreadable for {user['id']}: {e}")
+        runtime = {}
+
+    def _health(d: Any) -> Optional[Dict[str, Any]]:
+        if d is None or getattr(d, "health", None) is None:
+            return None
+        return {
+            "cpu_percent": d.health.cpu_percent,
+            "memory_percent": d.health.memory_percent,
+            "latency_ms": d.health.latency_ms,
+            "uptime_seconds": d.health.uptime_seconds,
+        }
+
+    listed: List[Dict[str, Any]] = []
+    seen = set()
+    for row in rows:
+        dep_id = str(row.get("id") or "")
+        seen.add(dep_id)
+        attached = runtime.get(dep_id)
+        listed.append({
+            "deployment_id": dep_id,
+            "status": str(row.get("status") or ""),
+            "environment": row.get("environment") or row.get("mode"),
+            "worker": (
+                attached.worker.worker_id if attached is not None and attached.worker
+                else row.get("worker_id")
+            ),
+            "started_at": row.get("started_at") or row.get("created_at"),
+            "health": _health(attached),
+        })
+    for dep_id, d in runtime.items():
+        if dep_id in seen:
+            continue
+        listed.append({
+            "deployment_id": d.deployment_id,
+            "status": d.status.value,
+            "environment": d.config.environment.value,
+            "worker": d.worker.worker_id if d.worker else None,
+            "started_at": d.started_at,
+            "health": _health(d),
+        })
+    return {"strategy_id": strategy_id, "deployments": listed, "total": len(listed)}
 
 
 @router.get("/deployments/{deployment_id}")

@@ -665,8 +665,9 @@ def test_a_paper_row_that_was_read_reports_every_figure_unchanged(request):
 
     Four directly-read figures are pinned with the sign of their zero intact, because the service
     carries them verbatim - ``total_value`` is ``total_equity`` (``:939``), ``free_balance`` is
-    ``available_balance`` (``:899``), ``used_balance`` is ``locked_balance``. Nothing here is
-    derived, so nothing here has an excuse to differ from the row.
+    ``available_balance`` (``:899``). ``used_balance`` is DERIVED since PORT-01 (equity minus
+    available, as the live branch reports it) and is asserted separately. Nothing in the carried
+    set is derived, so nothing there has an excuse to differ from the row.
 
     ``unrealized_pnl`` and ``cumulative_pnl`` are pinned by value only: the second is
     ``realized_pnl + unrealized_pnl``, and IEEE 754 makes ``0.0 + -0.0`` equal ``0.0``, which is
@@ -727,8 +728,15 @@ def test_a_paper_row_that_was_read_reports_every_figure_unchanged(request):
     ) -> None:
         census.start()
 
-        # The four figures the service carries verbatim, carrying the forced spine.
-        total_equity, available_balance, locked_balance, unrealized_pnl = _arrange(order, free)
+        # The figures the service carries verbatim, carrying the forced spine. PORT-01 made
+        # ``used_balance`` derived, so ``locked_balance`` is no longer reported: the spine is
+        # spread over the THREE still-carried sources (``order`` still decides which lands
+        # where) and ``locked_balance`` takes the free value, so every example still puts
+        # 0.0, -0.0 and a genuine 100000.0 on a figure that is asserted.
+        pool = list(FORCED_SPINE) + [free]
+        spine_slots = [index for index in order if index != len(FORCED_SPINE)]
+        total_equity, available_balance, unrealized_pnl = (pool[index] for index in spine_slots)
+        locked_balance = free
 
         row = _paper_row(
             total_equity=total_equity,
@@ -751,7 +759,6 @@ def test_a_paper_row_that_was_read_reports_every_figure_unchanged(request):
             "total_value": total_equity,
             "available_balance": available_balance,
             "free_balance": available_balance,
-            "used_balance": locked_balance,
             "unrealized_pnl": unrealized_pnl,
         }
         for key, expected in carried.items():
@@ -767,6 +774,15 @@ def test_a_paper_row_that_was_read_reports_every_figure_unchanged(request):
             if expected == FABRICATED_CAPITAL:
                 census.mark("genuine_starting_capital")
         census.mark("row")
+
+        # ── PORT-01: capital in use is DERIVED - everything not free - exactly as the live
+        # branch reports it. It used to be ``locked_balance`` (pending-order funds only), which
+        # read 0.00 for every filled spot position. Both operands were read, so it was read.
+        assert overview["used_balance"] == round(max(0.0, total_equity - available_balance), 2), (
+            f"used_balance must be total_equity - available_balance (floored at 0): "
+            f"observed {overview['used_balance']!r} from equity {total_equity!r} and "
+            f"available {available_balance!r}"
+        )
 
         # ── The derived sum, by value: IEEE 754 owns the sign of 0.0 + -0.0, not this spec.
         assert overview["cumulative_pnl"] == realized_pnl + unrealized_pnl, (

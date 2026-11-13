@@ -1027,7 +1027,10 @@ class TransactionalExecutionManager:
         cancel path (`exchange_executor.cancel_order`, reached from the two gated cancel
         endpoints) is unaffected.
         """
-        from backend_app.core.live_execution_gate import require_live_authorization
+        from backend_app.core.live_execution_gate import (
+            assert_sandbox_only_policy,
+            require_live_authorization,
+        )
 
         _authorization = getattr(self, "_current_live_authorization", None)
         self._current_live_authorization = None
@@ -1039,6 +1042,11 @@ class TransactionalExecutionManager:
             exchange_id=getattr(
                 getattr(self, "exchange_adapter", None), "exchange_id", ""
             ),
+        )
+        # LIVE-SBX-01: testnet-only live mode reads the adapter's VERIFIED sandbox evidence.
+        assert_sandbox_only_policy(
+            getattr(getattr(self, "exchange_adapter", None), "sandbox_verified", False),
+            exchange_id=getattr(getattr(self, "exchange_adapter", None), "exchange_id", ""),
         )
 
         if not getattr(self, "exchange_adapter", None):
@@ -1108,7 +1116,10 @@ class TransactionalExecutionManager:
 
         Regression: tests/test_trade03_second_write_path_is_gated.py
         """
-        from backend_app.core.live_execution_gate import require_live_authorization
+        from backend_app.core.live_execution_gate import (
+            assert_sandbox_only_policy,
+            require_live_authorization,
+        )
 
         _authorization = getattr(self, "_current_live_authorization", None)
         self._current_live_authorization = None
@@ -1120,6 +1131,11 @@ class TransactionalExecutionManager:
             exchange_id=getattr(
                 getattr(self, "exchange_adapter", None), "exchange_id", ""
             ),
+        )
+        # LIVE-SBX-01: testnet-only live mode reads the adapter's VERIFIED sandbox evidence.
+        assert_sandbox_only_policy(
+            getattr(getattr(self, "exchange_adapter", None), "sandbox_verified", False),
+            exchange_id=getattr(getattr(self, "exchange_adapter", None), "exchange_id", ""),
         )
 
         if not getattr(self, "exchange_adapter", None):

@@ -499,8 +499,9 @@ function LedgerSwitch({ value, onChange }) {
 const NO_ROWS_REASON =
   'No trades were read for this ledger, so there is nothing to compute a summary from.';
 
-const NO_PNL_REASON =
-  'No trade in this ledger reports a P&L, so no win rate can be computed.';
+/** TH-01: the win rate is over trades that realised a profit or a loss; there are none yet. */
+const NO_CLOSED_TRADE_REASON =
+  'No trade in view has realised a profit or a loss yet, so there is no win rate to compute.';
 
 /** `"` is doubled and every field is quoted, so a symbol or a label cannot break the row. */
 const escapeCsv = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
@@ -564,11 +565,15 @@ export default function TradeHistory() {
       return { trades: none, winRate: none, totalPnl: none, totalFees: none };
     }
 
-    const signs = ledger.map(pnlSign).filter((sign) => sign !== null);
+    // TH-01: only trades that REALISED a profit or a loss are decided. An opening fill realises
+    // exactly 0, and counting it as a non-win made a ledger of 11 opening buys read "WIN RATE
+    // 0.0%" (production, 2026-11-13) - a precise-looking figure about trades that had not
+    // closed. A close at exactly breakeven also realises 0 and is likewise not a win or a loss.
+    const signs = ledger.map(pnlSign).filter((sign) => sign !== null && sign !== 0);
     const winRate = !pnlReported
       ? unavailable(reasonFor('pnl'))
       : signs.length === 0
-        ? unavailable(NO_PNL_REASON)
+        ? unavailable(NO_CLOSED_TRADE_REASON)
         // A rate over two integer counts. Not money, so no exact-decimal handling is owed.
         : available((signs.filter((sign) => sign > 0).length / signs.length) * 100);
 

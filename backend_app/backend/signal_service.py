@@ -460,7 +460,8 @@ class SignalService:
                     )
                     return result.data[0]
         except Exception as e:
-            logger.debug(f"Supabase update_order fallback for {signal_id}: {e}")
+            # BOT-03: was DEBUG; a refused trace update must be visible.
+            logger.warning(f"Supabase update_order fallback for {signal_id}: {e}")
         
         logger.info(f"Updated order for signal {signal_id}: {order_status}")
         return self._local_signals.get(signal_id, update_data)
@@ -519,7 +520,8 @@ class SignalService:
                     )
                     return result.data[0]
         except Exception as e:
-            logger.debug(f"Supabase update_execution fallback for {signal_id}: {e}")
+            # BOT-03: was DEBUG; a refused trace update must be visible.
+            logger.warning(f"Supabase update_execution fallback for {signal_id}: {e}")
         
         logger.info(f"Updated execution for signal {signal_id}: pnl={pnl}")
         return self._local_signals.get(signal_id, update_data)
