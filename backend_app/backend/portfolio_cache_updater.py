@@ -146,8 +146,8 @@ class PortfolioCacheUpdater:
             user_id: User identifier
             exchange_id: Exchange identifier (e.g., "binance")
         """
-        from backend_app.backend.connection_engine import \
-            get_or_create_exchange
+        from backend_app.backend.connection_engine import (get_or_create_exchange,
+                                                           key_sandbox)
         from backend_app.backend.api_key_vault import APIKeyVault
 
         # Build cache keys
@@ -164,6 +164,7 @@ class PortfolioCacheUpdater:
                 api_key=keys["api_key"],
                 secret_key=keys["secret_key"],
                 password=keys.get("password"),
+                testnet=key_sandbox(keys),
             )
             
             # Fetch from exchange

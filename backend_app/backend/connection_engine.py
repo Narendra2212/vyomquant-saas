@@ -104,6 +104,20 @@ def _credential_identity(
     ).hexdigest()
 
 
+def key_sandbox(keys) -> bool:
+    """EXCH-SBX-02: whether a stored credential is a TESTNET key (EXCH-06 ``sandbox``).
+
+    Every caller that builds a client from ``vault.load_decrypted_keys`` must pass this as
+    ``testnet=``: :func:`get_or_create_exchange` defaults to the LIVE endpoint, so a caller
+    that omitted it sent a testnet key to the real venue, which answered "Invalid API keys"
+    (Sentry VYOMQUANT-API-PRODUCTION-M, ``/api/orders/open``, during the live testnet run).
+    ``exchange_websocket_listener`` and ``master_executor`` already read the same field.
+    """
+    if not isinstance(keys, dict):
+        return False
+    return bool(keys.get("sandbox") or keys.get("testnet"))
+
+
 async def get_or_create_exchange(
     user_id: str,
     exchange_id: str,

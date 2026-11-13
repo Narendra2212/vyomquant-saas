@@ -82,7 +82,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from backend_app.backend.connection_engine import get_or_create_exchange
+from backend_app.backend.connection_engine import get_or_create_exchange, key_sandbox
 from backend_app.backend.data_seeking_engine import DataEngine
 from backend_app.backend.execution_guard import ExecutionGuard
 # CRITICAL FIX C4: Use shared Redis pool instead of per-request connections
@@ -812,6 +812,7 @@ async def get_open_orders(
             api_key=keys["api_key"],
             secret_key=keys["secret_key"],
             password=keys.get("password"),
+            testnet=key_sandbox(keys),
         )
         sym = symbol.replace("-", "/") if symbol else None
         return await DataEngine(exchange).fetch_open_orders(sym)
@@ -1129,6 +1130,7 @@ async def get_history(
             api_key=keys["api_key"],
             secret_key=keys["secret_key"],
             password=keys.get("password"),
+            testnet=key_sandbox(keys),
         )
         
         sym = symbol.replace("-", "/") if symbol else None
