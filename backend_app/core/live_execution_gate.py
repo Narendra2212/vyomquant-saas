@@ -231,6 +231,40 @@ def assert_platform_live_trading_enabled(tenant_id: Any = None) -> None:
         )
 
 
+#: LIVE-SBX-01. When truthy, the platform may run in live mode for TESTNET keys only.
+LIVE_SANDBOX_ONLY_ENV = "VYOMQUANT_LIVE_SANDBOX_ONLY"
+
+
+def live_sandbox_only() -> bool:
+    """Whether the operator has restricted live execution to verified sandbox endpoints."""
+    return str(os.getenv(LIVE_SANDBOX_ONLY_ENV, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def assert_sandbox_only_policy(sandbox_verified: Any, *, exchange_id: Any = "") -> None:
+    """LIVE-SBX-01: refuse a venue write that is not PROVEN to address a sandbox.
+
+    Live mode is platform-wide (``VYOMQUANT_MODE=live`` plus the tenant allowlist), so
+    turning it on to certify the live path against an exchange TESTNET would also arm every
+    REAL key a listed tenant holds. This makes "testnet only" a property of the order path
+    instead of an operator promise: with ``VYOMQUANT_LIVE_SANDBOX_ONLY=true`` every venue
+    boundary refuses unless the client carries the sandbox VERIFICATION evidence
+    (``CCXTExchangeExecutor.sandbox_verified``) - never the caller's request for sandbox,
+    which EXCH-01 showed can be false (bitget). Unset, it changes nothing.
+
+    Raises:
+        LiveExecutionRefused: ``LIVE_SANDBOX_ONLY``.
+    """
+    if not live_sandbox_only():
+        return
+    if sandbox_verified is not True:
+        raise LiveExecutionRefused(
+            "LIVE_SANDBOX_ONLY",
+            f"the platform is restricted to exchange TESTNET/sandbox endpoints "
+            f"({LIVE_SANDBOX_ONLY_ENV}=true) and this {exchange_id or 'exchange'} client is not "
+            f"verified to address one. No order was sent.",
+        )
+
+
 def authorize_live_order(
     *,
     execution_id: Any,

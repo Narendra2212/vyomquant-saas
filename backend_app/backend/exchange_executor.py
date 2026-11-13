@@ -1301,8 +1301,11 @@ class BaseExchangeExecutor(ABC):
         for. Anything reporting sandbox certification must read this, so an unverified or
         not-yet-connected client cannot be presented as sandbox-certified.
         """
-        v = self._sandbox_verification
-        return bool(v and v.verified)
+        # getattr: an executor that never ran __init__ (or never connected) has NO evidence,
+        # and that must read as "not verified" - never as an AttributeError raised from the
+        # venue boundary, which the engine would book as an UNKNOWN submission (LIVE-SBX-01).
+        v = getattr(self, "_sandbox_verification", None)
+        return bool(v and getattr(v, "verified", False) is True)
 
     @property
     def sandbox_evidence(self) -> Optional["SandboxVerification"]:
@@ -1687,7 +1690,10 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         #
         # Consumed here, like the token, so one authorisation cannot cover two orders.
         # Regression: tests/test_trade04_live_order_gate_at_venue_boundary.py
-        from backend_app.core.live_execution_gate import require_live_authorization
+        from backend_app.core.live_execution_gate import (
+            assert_sandbox_only_policy,
+            require_live_authorization,
+        )
 
         _authorization = getattr(self, "_current_live_authorization", None)
         self._current_live_authorization = None
@@ -1698,6 +1704,8 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             size=size,
             exchange_id=self.exchange_id,
         )
+        # LIVE-SBX-01: testnet-only live mode reads the VERIFIED sandbox evidence.
+        assert_sandbox_only_policy(self.sandbox_verified, exchange_id=self.exchange_id)
 
         # ═══════════════════════════════════════════════════════════════════
         # KILL-03 / KILL-04: RE-READ THE HALT STATE, HERE, AT THE BOUNDARY
