@@ -270,6 +270,16 @@ def _coerce_authorized_until(raw: Any) -> Optional[datetime]:
     )
 
 
+def quote_coin_of(symbol: Any) -> str:
+    """The quote currency of a CCXT symbol: ``BTC/USDC`` -> ``USDC``,
+    ``BTC/USDT:USDT`` -> ``USDT``. ``USDT`` only when the symbol names no quote at all,
+    which is the pre-existing boot behaviour (LIVE-QUOTE-01)."""
+    text = str(symbol or "")
+    if "/" not in text:
+        return "USDT"
+    return text.split("/", 1)[1].split(":", 1)[0].strip().upper() or "USDT"
+
+
 def evaluate_authorization_window(
     authorized_until: Optional[datetime],
     *,
@@ -833,7 +843,7 @@ class BotRunner:
         wallet = await self.data_engine.fetch_wallet_balance_snapshot()
 
         base_coin = self.symbol.split("/")[0]
-        quote_coin = self.symbol.split("/")[1] if "/" in self.symbol else "USDT"
+        quote_coin = quote_coin_of(self.symbol)
 
         self.recovered_exposure_coins = Decimal(
             str((wallet.get(base_coin) or {}).get("total", 0.0))
@@ -902,6 +912,54 @@ class BotRunner:
         bridge = ConnectionEngine(self.exchange_id, api_key=None, secret_key=None)
         exchange = await bridge.connect(allow_mock=False)
         return bridge, exchange
+
+    async def _record_refused_signal(
+        self, order_payload: Dict[str, Any], reason: str, *, price: float, volume: float,
+        timestamp_ms: int, live_state: Dict[str, Any], capital: float,
+    ) -> None:
+        """SIG-REFUSE-01: record a signal this bot generated and then REFUSED before the risk
+        engine, as a rejected signal in Signal Trace.
+
+        Refusals ahead of the risk engine (the deployment's own execution limits) used to be
+        a log line and a ``continue``: no signal row, no audit entry, nothing in the UI. A
+        live bot refusing every signal correctly was indistinguishable from a dead one.
+        Best-effort: a recording failure is logged and never affects trading.
+        """
+        try:
+            from backend_app.backend.signal_service import get_signal_service
+
+            sig_svc = await get_signal_service()
+            server_user = {"id": self.user_id, "_server_side": True}
+            sig = await sig_svc.create_signal(
+                user=server_user,
+                strategy_id=str(self.blueprint.get("id") or self.blueprint.get("strategy_id", "default")),
+                strategy_version=str(self.blueprint.get("current_version", "1.0")),
+                deployment_id=str(self.blueprint.get("deployment_id", self.blueprint.get("id", "default"))),
+                exchange_id=self.exchange_id,
+                symbol=self.symbol,
+                timeframe=str(self.blueprint.get("timeframe", "1m")),
+                worker_id=f"worker_{self.user_id}_{self.symbol.replace('/', '_')}",
+                decision=str(order_payload.get("side", "BUY")).upper(),
+                indicators=live_state,
+                market_info={"price": price, "volume": volume, "timestamp": timestamp_ms},
+                environment="PAPER" if self.paper_trading else None,
+            )
+            sig_id = (sig or {}).get("id")
+            if not sig_id:
+                return
+            await sig_svc.update_risk_decision(
+                user=server_user,
+                signal_id=sig_id,
+                risk_passed=False,
+                risk_reason=reason,
+                position_size=float(order_payload.get("qty") or 0.0),
+                capital=capital,
+                exposure=float(self.recovered_exposure_coins * Decimal(str(price))),
+            )
+        except Exception as exc:  # noqa: BLE001 - recording must never stop trading
+            logger.warning(
+                f"Bot {self.user_id}/{self.symbol}: could not record a refused signal: {exc}"
+            )
 
     async def _warm_up_from_history(self) -> None:
         """Fill the Numba buffer and the DAG window from CLOSED historical bars.
@@ -1029,7 +1087,13 @@ class BotRunner:
                 else:
                     try:
                         wallet = await self.data_engine.fetch_wallet_balance_snapshot()
-                        bal_usdt = float(wallet.get("USDT", {}).get("free", 0.0))
+                        # LIVE-QUOTE-01: the free balance of THIS pair's quote coin, the
+                        # same coin boot measured equity in (`quote_coin` above). Reading
+                        # "USDT" for every pair sized a BTC/USDC or ADA/USDC bot from the
+                        # wrong currency - zero on an account holding only USDC.
+                        bal_usdt = float(
+                            (wallet.get(quote_coin_of(self.symbol)) or {}).get("free", 0.0)
+                        )
                     except Exception:
                         bal_usdt = 0.0
 
@@ -1129,6 +1193,14 @@ class BotRunner:
                         f"Bot {self.user_id}/{self.symbol}: order refused by this "
                         f"deployment's execution_config -- {execution_limit_reason}"
                     )
+                    # SIG-REFUSE-01: recorded, not only logged. A log line is invisible to
+                    # the trader, so a correctly-refusing live bot looked dead.
+                    asyncio.create_task(self._record_refused_signal(
+                        order_payload,
+                        f"Refused by this deployment's execution limits: {execution_limit_reason}",
+                        price=price, volume=volume, timestamp_ms=timestamp_ms,
+                        live_state=live_state, capital=bal_usdt,
+                    ))
                     continue
 
                 # ── RISK-05: consecutive-loss & capital-utilization kill switches ──
