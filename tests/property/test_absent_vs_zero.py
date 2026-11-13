@@ -728,8 +728,15 @@ def test_a_paper_row_that_was_read_reports_every_figure_unchanged(request):
     ) -> None:
         census.start()
 
-        # The four figures the service carries verbatim, carrying the forced spine.
-        total_equity, available_balance, locked_balance, unrealized_pnl = _arrange(order, free)
+        # The figures the service carries verbatim, carrying the forced spine. PORT-01 made
+        # ``used_balance`` derived, so ``locked_balance`` is no longer reported: the spine is
+        # spread over the THREE still-carried sources (``order`` still decides which lands
+        # where) and ``locked_balance`` takes the free value, so every example still puts
+        # 0.0, -0.0 and a genuine 100000.0 on a figure that is asserted.
+        pool = list(FORCED_SPINE) + [free]
+        spine_slots = [index for index in order if index != len(FORCED_SPINE)]
+        total_equity, available_balance, unrealized_pnl = (pool[index] for index in spine_slots)
+        locked_balance = free
 
         row = _paper_row(
             total_equity=total_equity,

@@ -542,6 +542,20 @@ def venue_status(probe: Optional[Dict[str, Any]], validity: Optional[bool]) -> s
     return VENUE_STATUS_UNKNOWN
 
 
+def _dashboard_run_state(status: Any) -> str:
+    """DASH-02: a strategy's dashboard state from ``strategies.status``.
+
+    ``running`` / ``deploying`` are active, ``paused`` is paused, everything else (draft,
+    ready, stopped, failed, unknown) is idle - never "active" by default.
+    """
+    run_state = str(status or "").strip().lower()
+    if run_state in ("running", "deploying"):
+        return "active"
+    if run_state == "paused":
+        return "paused"
+    return "idle"
+
+
 class DashboardAggregationService:
     """
     Single source of truth for all Dashboard data.
@@ -607,12 +621,31 @@ class DashboardAggregationService:
         return self._telemetry
     
     async def _execute_sb_query(self, query):
-        """Execute a Supabase PostgREST query in a background thread to prevent blocking asyncio loop."""
+        """Execute a Supabase PostgREST query without blocking the event loop.
+
+        DASH-01. The request-scoped client in production is the ASYNC postgrest client
+        (``_PooledAsyncPostgrestClient``), whose builder is not awaitable but whose
+        ``execute`` is a coroutine function. This helper handed that to
+        ``asyncio.to_thread``, which CALLED it in a worker thread and returned the un-awaited
+        coroutine - no ``.data`` - so every one of this service's reads (strategies, signals,
+        exchange keys, notifications, risk, referrals, marketplace, usage) silently answered
+        "nothing" in production: the Dashboard showed "No strategies deployed" and "No
+        exchange connected" for an account with both (2026-11-13). An async ``execute`` is
+        now awaited on this loop; only a SYNC ``execute`` goes to a thread, as intended.
+        """
         if inspect.isawaitable(query):
             return await query
-        if hasattr(query, "execute"):
-            return await asyncio.to_thread(query.execute)
-        return query
+        execute = getattr(query, "execute", None)
+        if execute is None:
+            return query
+        if inspect.iscoroutinefunction(execute):
+            return await execute()
+        result = await asyncio.to_thread(execute)
+        # A sync-looking ``execute`` that still hands back an awaitable is awaited here, on
+        # this loop, rather than leaked as a result with no ``.data``.
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     async def _get_supabase(self, user: dict):
         """Get Supabase client for user."""
@@ -1707,7 +1740,7 @@ class DashboardAggregationService:
         
         res = await self._execute_sb_query(
             sb.table("strategies")
-            .select("id, name, symbol, is_active, created_at")
+            .select("id, name, symbol, status, last_signal_at, created_at")
             .eq("user_id", user["id"])
         )
         strategies = res.data or [] if res and hasattr(res, "data") else []
@@ -1718,8 +1751,12 @@ class DashboardAggregationService:
                 "id": s.get("id"),
                 "name": s.get("name") or "Strategy",
                 "pair": s.get("pair") or s.get("symbol") or "BTC/USDT",
-                "status": "active" if s.get("is_active") else "paused",
-                "health": "healthy" if s.get("is_active") else "idle",
+                # DASH-02: the run state is ``strategies.status``, which the deployment
+                # lifecycle maintains. ``is_active`` defaults to TRUE and was true on all 192
+                # production strategies, so every strategy - drafts and never-deployed ones -
+                # was counted as an active bot.
+                "status": _dashboard_run_state(s.get("status")),
+                "health": "healthy" if _dashboard_run_state(s.get("status")) == "active" else "idle",
                 "today_pnl": float(s.get("today_pnl") or 0.0),
                 "today_return_pct": float(s.get("today_return_pct") or 0.0),
                 "last_signal_time": s.get("last_signal_at") or None,
@@ -1739,7 +1776,9 @@ class DashboardAggregationService:
         
         insights = []
         active_count = sum(1 for s in strategies if s["status"] == "active")
-        inactive_count = len(strategies) - active_count
+        # DASH-02: "currently paused" counts PAUSED strategies only; it used to count every
+        # non-active one, so an idle draft was announced as paused.
+        inactive_count = sum(1 for s in strategies if s["status"] == "paused")
         
         if inactive_count > 0:
             inactive_names = [s["name"] for s in strategies if s["status"] == "paused"]
