@@ -86,6 +86,20 @@ const _normalizeStatus = (value = "") => {
 };
 
 /**
+ * UI-01: the row's run state — `running`, `paused`, `inactive`, or `null` when the row
+ * carries neither a deployment record nor a lifecycle status.
+ */
+const _deploymentState = (row) => {
+  const dep = row?.most_recent_deployment;
+  const raw = (dep && typeof dep === "object" ? (dep.status ?? dep.state) : null) ?? row?.status;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const s = String(raw).toLowerCase();
+  if (["running", "active", "live", "started", "deploying", "starting"].includes(s)) return "running";
+  if (["paused", "pause"].includes(s)) return "paused";
+  return "inactive";
+};
+
+/**
  * §7.2's "Market / exchange" cell, as one projected string.
  *
  * The three keys `pageFields`' `market` entry names — `symbol`, `deployed_exchange` and
@@ -130,11 +144,11 @@ const normalizeStrategies = (rows = []) =>
     // `null` when there is nothing to report, so neither is defaulted here.
     last_signal_at: row.last_signal_at ?? null,
     last_execution_at: row.last_execution_at ?? null,
-    // `is_active` is the row's own deployment flag. It reports whether the strategy is
-    // marked active and claims no live worker — the deployment RECORD is a separate read
-    // this page does not make. Absent reads not-available, never "inactive".
-    deploymentState:
-      row.is_active === true ? "active" : row.is_active === false ? "inactive" : null,
+    // UI-01: whether the strategy is RUNNING. `is_active` used to drive this cell, but it is
+    // the not-archived flag — it stays `true` for a stopped strategy, so every row read
+    // "Active". The most-recent deployment record decides when the row carries one; otherwise
+    // the strategy's own lifecycle `status` does. Neither present reads not-available.
+    deploymentState: _deploymentState(row),
     is_running: row.is_running === true,
     // Requirements 1.8/1.9: health is computed from this row's own most-recent deployment
     // status and most-recent backtest outcome, and from nothing else. It was
@@ -365,10 +379,11 @@ function RiskCell({ value }) {
     : <StatusBadge state={badge} label={humaniseState(value)} size="sm" />;
 }
 
-/** The deployment flag as text. Absent reads not-available, never "inactive". */
+/** The run state as text. Absent reads not-available, never "Not running". */
 function DeploymentCell({ value }) {
-  if (value === "active") return <StatusBadge state="active" label="Active" size="sm" />;
-  if (value === "inactive") return <StatusBadge state="idle" label="Not active" size="sm" />;
+  if (value === "running") return <StatusBadge state="active" label="Running" size="sm" />;
+  if (value === "paused") return <StatusBadge state="paused" label="Paused" size="sm" />;
+  if (value === "inactive") return <StatusBadge state="idle" label="Not running" size="sm" />;
   return (
     <NotAvailableMarker
       label={labelFor("deploymentState")}
@@ -1683,11 +1698,32 @@ export default function Strategies() {
   const ActionsCell = function StrategyActionsCell({ row }) {
     const busy = Boolean(isProcessing[row.id]);
     const title = busy ? BUSY_TITLE : undefined;
-    const { inline, separated } = partitionRowActions(ownerRowActions(row), rowActionCatalog);
+    const { inline, separated: separatedAll } =
+      partitionRowActions(ownerRowActions(row), rowActionCatalog);
+    // UI-02: the deployment was reachable only from the ⋮ menu, so traders could not find
+    // how to start a strategy. It is now a visible, distinctly styled button beside the
+    // inline set. It still only OPENS the deploy dialog (on paper, FE-03) — Live is a
+    // deliberate choice inside that dialog — so nothing is submitted from this click.
+    const deployVisible = separatedAll.includes(ROW_ACTION.DEPLOY_LIVE);
+    const separated = separatedAll.filter((id) => id !== ROW_ACTION.DEPLOY_LIVE);
     const rowLabel = row.name ? row.name : `strategy ${row.id}`;
 
     return (
       <span className="inline-flex flex-wrap items-center gap-1">
+        {deployVisible ? (
+          <Button
+            key={ROW_ACTION.DEPLOY_LIVE}
+            variant="primary"
+            size="xs"
+            icon={Play}
+            title={title ?? "Opens the deploy dialog: paper by default, Live when your plan and exchange allow it"}
+            aria-label={`Deploy ${rowLabel}`}
+            disabled={busy}
+            onClick={() => rowActionCatalog[ROW_ACTION.DEPLOY_LIVE].onSelect(row)}
+          >
+            Deploy
+          </Button>
+        ) : null}
         {inline.map((id) => {
           const action = rowActionCatalog[id];
           return (

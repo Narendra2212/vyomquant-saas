@@ -235,15 +235,30 @@ describe('the ten columns §7.2 names, in §7.2\'s order (Requirement 4.1)', () 
     // `symbol · deployed_exchange · timeframe` — the three keys the `market` entry names.
     expect(cell(row, 'market').textContent).toBe('BTCUSDT · binance · 1h');
     expect(cell(row, 'current_version').textContent).toBe('1.2');
-    // `is_active`, which reports the row's own flag and claims no live worker.
-    expect(cell(row, 'deploymentState').textContent).toContain('Active');
+    // UI-01: the run state, from the row's lifecycle `status` ('running' in the fixture).
+    expect(cell(row, 'deploymentState').textContent).toContain('Running');
+  });
+
+  it('reads a stopped strategy as not running even though is_active is true (UI-01)', async () => {
+    // `is_active` is the not-archived flag; it used to make every row read "Active".
+    const { table } = await mountWith([strategyRow({ status: 'stopped', is_active: true })]);
+    const text = cell(bodyRows(table)[0], 'deploymentState').textContent;
+    expect(text).toContain('Not running');
+    expect(text).not.toMatch(/^Active|Running/);
+  });
+
+  it('prefers the most-recent deployment record over the lifecycle status (UI-01)', async () => {
+    const { table } = await mountWith([
+      strategyRow({ status: 'stopped', most_recent_deployment: { status: 'running' } }),
+    ]);
+    expect(cell(bodyRows(table)[0], 'deploymentState').textContent).toContain('Running');
   });
 
   it('renders the marker, never a placeholder, for a field the row does not carry', async () => {
     // A row the projection can legitimately produce: no symbol, no version, no `is_active`.
     // The page used to write `"N/A"`, `"1.0"` and `"paper"` into these three cells.
     const { table } = await mountWith([
-      strategyRow({ symbol: null, timeframe: null, deployed_exchange: null, version: null, is_active: null }),
+      strategyRow({ symbol: null, timeframe: null, deployed_exchange: null, version: null, is_active: null, status: null }),
     ]);
     const [row] = bodyRows(table);
 
@@ -537,18 +552,26 @@ describe('the row\'s actions survive the rebuild', () => {
     }
   });
 
-  it('keeps Deploy live and the archive OUT of the inline set (Requirement 4.3)', async () => {
+  it('shows Deploy as a visible button and keeps the archive in the overflow (UI-02)', async () => {
     const { table } = await mountWith([strategyRow({ status: 'stopped' })]);
     const actions = within(cell(bodyRows(table)[0], 'actions'));
 
-    // Not merely styled differently — not constructed inline at all. Both live behind the
-    // row's overflow trigger, below a divider.
-    expect(actions.queryByRole('button', { name: 'Deploy live' })).toBeNull();
+    // UI-02: traders could not find the deployment behind the ⋮ menu, so it is a visible
+    // button. The archive stays behind the overflow trigger, below a divider.
+    expect(actions.getByRole('button', { name: 'Deploy Momentum v2' })).toBeTruthy();
     expect(actions.queryByRole('button', { name: 'Delete strategy' })).toBeNull();
     expect(actions.getByRole('button', { name: 'More actions for Momentum v2' })).toBeTruthy();
   });
 
-  it('opens the two separated actions below a divider, in a named group', async () => {
+  it('opens the deploy dialog on paper from the visible Deploy button (FE-03)', async () => {
+    const { table } = await mountWith([strategyRow({ status: 'stopped' })]);
+    const actions = within(cell(bodyRows(table)[0], 'actions'));
+
+    await userEvent.setup().click(actions.getByRole('button', { name: 'Deploy Momentum v2' }));
+    expect(await screen.findByRole('dialog', { name: 'Start paper session' })).toBeTruthy();
+  });
+
+  it('opens the archive below a divider, in a named group', async () => {
     const { table } = await mountWith([strategyRow({ status: 'stopped' })]);
     const actions = within(cell(bodyRows(table)[0], 'actions'));
 
@@ -559,14 +582,10 @@ describe('the row\'s actions survive the rebuild', () => {
     expect(menu.getByRole('separator')).toBeTruthy();
 
     const group = menu.getByRole('group', { name: /destructive and live-trading actions/i });
-    // FE-03: the entry opens the deploy dialog on PAPER, so it is labelled for what happens
-    // if the trader changes nothing. It KEEPS its place below the divider and its separated
-    // treatment, because the dialog it opens can still reach a Live transition.
-    const deploy = within(group).getByRole('menuitem', { name: 'Start paper session' });
+    expect(within(group).queryByRole('menuitem', { name: 'Start paper session' })).toBeNull();
     const archive = within(group).getByRole('menuitem', { name: 'Delete strategy' });
 
-    // §7.2's treatments: `env.live` for the deployment, `status.error` for the archive.
-    expect(deploy.getAttribute('data-menu-intent')).toBe('live');
+    // §7.2's treatment: `status.error` for the archive.
     expect(archive.getAttribute('data-menu-intent')).toBe('destructive');
     // Traders look for "Delete"; the entry says so. The server soft-archives, and the confirmation
     // dialog says history is retained, so the wording is not a promise of destruction.
@@ -601,8 +620,9 @@ describe('the row\'s actions survive the rebuild', () => {
     // strategy is not offered a second deployment at all.
     await userEvent.setup()
       .click(actions.getByRole('button', { name: 'More actions for Momentum v2' }));
+    expect(actions.queryByRole('button', { name: 'Deploy Momentum v2' })).toBeNull();
     const menu = within(screen.getByRole('menu'));
-    expect(menu.queryByRole('menuitem', { name: 'Deploy live' })).toBeNull();
+    expect(menu.queryByRole('menuitem', { name: 'Start paper session' })).toBeNull();
     expect(menu.getByRole('menuitem', { name: 'Delete strategy' })).toBeTruthy();
   });
 

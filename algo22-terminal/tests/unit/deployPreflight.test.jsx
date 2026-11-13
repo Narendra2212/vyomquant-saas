@@ -744,9 +744,8 @@ const openDeployModalPaper = async () => {
     </MemoryRouter>,
   );
   await screen.findByText('Momentum v2');
-  fireEvent.click(screen.getByRole('button', { name: 'More actions for Momentum v2' }));
-  // FE-03: the row's control opens on PAPER.
-  fireEvent.click(screen.getByRole('menuitem', { name: PAPER.confirmLabel }));
+  // UI-02: the deployment is a visible row button. FE-03: it opens on PAPER.
+  fireEvent.click(screen.getByRole('button', { name: 'Deploy Momentum v2' }));
   return screen.findByRole('dialog', { name: PAPER.title });
 };
 
