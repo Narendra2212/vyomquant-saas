@@ -1175,7 +1175,42 @@ class DashboardAggregationService:
                 total_equity = _finite_float(acct.get("total_equity"))
                 available_balance = _finite_float(acct.get("available_balance"))
                 free_balance = available_balance
-                used_balance = float(acct.get("locked_balance", 0.0))
+                # PORT-01: "capital in use" was ``locked_balance`` - funds held by PENDING
+                # orders only - so every filled spot buy (cash moved into a position, nothing
+                # locked) reported 0.00 in use and 0.00 exposure while the same response listed
+                # a position worth $120.91 (production, 2026-11-13). It is now what the live
+                # branch reports (``max(0, total_equity - free_balance)``, below in this file):
+                # everything not free, i.e. position value plus any locked order funds. Absent
+                # when either side of the subtraction was not read.
+                used_balance: Optional[float] = (
+                    None
+                    if total_equity is None or available_balance is None
+                    else round(max(0.0, total_equity - available_balance), 2)
+                )
+                # PORT-01: exposure is the open positions' marked notional, read from the same
+                # ledger rows ``/api/paper/positions`` serves. ``None`` if any size or mark is
+                # unreadable - a partial sum would understate the exposure under this name. Its
+                # own ``try``: a positions read that fails absents THIS figure only, never the
+                # whole overview (the ``except`` below replaces every figure).
+                total_exposure_paper: Optional[float]
+                try:
+                    exposure_terms: List[Optional[float]] = []
+                    for position in paper_svc.get_positions(user["id"]) or []:
+                        size = _finite_float(position.get("size"))
+                        mark = _finite_float(position.get("current_price"))
+                        exposure_terms.append(
+                            None if size is None or mark is None else abs(size * mark)
+                        )
+                    total_exposure_paper = (
+                        None
+                        if any(term is None for term in exposure_terms)
+                        else round(float(sum(exposure_terms)), 2)
+                    )
+                except Exception as exposure_err:  # noqa: BLE001 - absent, and logged
+                    logger.warning(
+                        "Paper exposure could not be read for %s: %s", user["id"], exposure_err
+                    )
+                    total_exposure_paper = None
                 realized_pnl = float(acct.get("realized_pnl", 0.0))
                 unrealized_pnl = float(acct.get("unrealized_pnl", 0.0))
                 initial_capital = _finite_float(acct.get("initial_capital"))
@@ -1253,7 +1288,7 @@ class DashboardAggregationService:
                     "today_return_pct": today_return_pct,
                     "unrealized_pnl": unrealized_pnl,
                     "cumulative_pnl": cumulative_pnl,
-                    "total_exposure": used_balance,
+                    "total_exposure": total_exposure_paper,
                     "currency": "USD",
                     "environment": "paper",
                     "updated_at": now_utc.isoformat()
