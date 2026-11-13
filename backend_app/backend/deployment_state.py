@@ -116,6 +116,7 @@ class DeploymentStateStore:
         changed = bool(getattr(res, "data", None))
         if changed:
             await self._release_quota(deployment_id)
+            await self._settle_strategy_status(deployment_id, "failed")
         return changed
 
     async def mark_stopped(self, deployment_id: str) -> bool:
@@ -131,7 +132,10 @@ class DeploymentStateStore:
         except Exception as exc:  # noqa: BLE001
             logger.error("could not record stop of deployment %s: %s", deployment_id, exc)
             return False
-        return bool(getattr(res, "data", None))
+        changed = bool(getattr(res, "data", None))
+        if changed:
+            await self._settle_strategy_status(deployment_id, "stopped")
+        return changed
 
     async def request_stop(self, deployment_id: str) -> bool:
         """``running|deploying -> stopping``: the durable stop request the owner honours."""
@@ -171,6 +175,45 @@ class DeploymentStateStore:
             .update({"close_requested_at": None})
             .eq("id", deployment_id)
         )
+
+    async def _settle_strategy_status(self, deployment_id: str, status: str) -> None:
+        """DEP-STRAT-01: a strategy is not ``running`` once nothing of it is running.
+
+        The runtime ended a deployment (failed, or a restart refused to resume a live one)
+        and wrote only the DEPLOYMENT row, so the strategy itself kept saying ``running``:
+        the Strategies table showed a live bot that no longer existed and offered Pause
+        instead of Deploy. Moved here, conditioned like every other write in this module:
+        only a strategy still ``running``/``deploying`` changes, and only when none of its
+        deployments is still live. Best effort - the deployment's own state is already
+        recorded, which is the authority.
+        """
+        try:
+            sb = self._client()
+            res = await _run(
+                sb.table("strategy_deployments").select("strategy_id").eq("id", deployment_id)
+            )
+            rows = getattr(res, "data", None) or []
+            strategy_id = rows[0].get("strategy_id") if rows else None
+            if not strategy_id:
+                return
+            live = await _run(
+                sb.table("strategy_deployments")
+                .select("id")
+                .eq("strategy_id", strategy_id)
+                .in_("status", list(LIVE_STATES))
+            )
+            if getattr(live, "data", None):
+                return
+            await _run(
+                sb.table("strategies")
+                .update({"status": status})
+                .eq("id", strategy_id)
+                .in_("status", list(LIVE_STATES))
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "strategy status not settled for deployment %s: %s", deployment_id, exc
+            )
 
     async def _release_quota(self, deployment_id: str) -> None:
         """A failed deployment no longer occupies a bot slot."""
