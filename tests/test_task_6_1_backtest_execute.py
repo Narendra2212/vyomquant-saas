@@ -728,16 +728,15 @@ class TestTheVenueIsResolvedNotHardcoded:
         """The venue comes from ``DEFAULT_EXCHANGE`` — the same resolution the preview uses."""
         seen = {}
 
-        class _Engine:
-            def __init__(self, exchange_id=None, **kw):
-                seen["exchange_id"] = exchange_id
-
-            async def connect(self):
-                return "connected"
+        # PERF-01: the feed is the POOLED public client (connection_engine.get_public_exchange),
+        # not a fresh ConnectionEngine per backtest; the venue is still DEFAULT_EXCHANGE.
+        async def _pooled(exchange_id):
+            seen["exchange_id"] = exchange_id
+            return "connected"
 
         monkeypatch.setenv("DEFAULT_EXCHANGE", "kraken")
         monkeypatch.setattr(
-            "backend_app.backend.connection_engine.ConnectionEngine", _Engine
+            "backend_app.backend.connection_engine.get_public_exchange", _pooled
         )
 
         import asyncio

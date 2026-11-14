@@ -104,6 +104,29 @@ def _credential_identity(
     ).hexdigest()
 
 
+#: PERF-01: the shared, credential-less pool identity for PUBLIC market data. The same value
+#: `routers/market.py` uses, so every public read shares one client per venue.
+PUBLIC_MARKET_DATA_POOL_IDENTITY = "__public_market_data__"
+
+
+async def get_public_exchange(exchange_id: str) -> ccxt.Exchange:
+    """PERF-01: the pooled, unauthenticated client for a venue's PUBLIC market data.
+
+    The backtest feed, the builder's data-quality preview and the training window each did
+    ``await ConnectionEngine(exchange_id=venue).connect()`` per call: a brand-new ccxt.pro
+    client whose ``load_markets`` downloads and parses the venue's whole market list (several
+    MB of JSON, parsed ON the event loop), never closed afterwards. The Strategy Builder polls
+    the data-quality endpoint every 15 s, so each poll stalled every other request on that
+    worker for seconds - the latency of leaving the builder for the Strategies page - and
+    leaked a session each time (Sentry: "Unclosed client session" / "Unclosed connector",
+    culprit .../data-quality). The pool loads markets once per process and owns the client;
+    callers must not close it.
+    """
+    return await get_or_create_exchange(
+        user_id=PUBLIC_MARKET_DATA_POOL_IDENTITY, exchange_id=exchange_id
+    )
+
+
 def key_sandbox(keys) -> bool:
     """EXCH-SBX-02: whether a stored credential is a TESTNET key (EXCH-06 ``sandbox``).
 
