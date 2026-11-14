@@ -1605,6 +1605,27 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             logger.error(f"Failed to connect to {self.exchange_id}: {classified.message}")
             raise classified
     
+    async def _ensure_connected(self) -> None:
+        """CONN-02: connect (and, on a testnet, VERIFY the sandbox endpoint) before the first
+        venue call.
+
+        Nothing ever called :meth:`connect` on an executor the bot built: ``self._exchange``
+        was ``None`` and ``_sandbox_verification`` unset at the first order. Under
+        ``VYOMQUANT_LIVE_SANDBOX_ONLY`` every live order was therefore refused ("this
+        binance client is not verified to address one"), and without it the order would
+        have failed on the missing client - so no live order could be placed on this
+        path. Idempotent; concurrent callers share one connection attempt.
+        """
+        if getattr(self, "_connected", False) and getattr(self, "_exchange", None) is not None:
+            return
+        lock = self.__dict__.get("_connect_lock")
+        if lock is None:
+            lock = self.__dict__.setdefault("_connect_lock", asyncio.Lock())
+        async with lock:
+            if getattr(self, "_connected", False) and getattr(self, "_exchange", None) is not None:
+                return
+            await self.connect()
+
     async def _close_unverified_client(self) -> None:
         """Tear down a client that failed sandbox verification.
 
@@ -1660,6 +1681,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
                 thing that makes a timeout safe to add to an order path that forbids
                 retries.
         """
+        await self._ensure_connected()  # CONN-02
         if size is None:
             if "amount" in kwargs:
                 size = Decimal(str(kwargs["amount"]))
@@ -2025,6 +2047,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
     
     async def cancel_order(self, exchange_order_id: str, symbol: str) -> CancelResult:
         """STEP 6.1: Cancel order on exchange."""
+        await self._ensure_connected()  # CONN-02
         try:
             # STEP 6.7: Rate limiting
             await self.rate_limiter.acquire("cancel_order")
@@ -2076,6 +2099,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         different facts, and a caller (e.g. a reconciliation pass) that treated them the
         same would read every currently-open order as having left the venue.
         """
+        await self._ensure_connected()  # CONN-02
         ccxt_symbol = self.normalizer.format_symbol_for_ccxt(symbol) if symbol else None
         await self.rate_limiter.acquire("fetch_open_orders")
         try:
@@ -2092,6 +2116,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         venue-cancel call site and one error classification. Per-order outcomes are reported
         individually; one failure does not stop the rest.
         """
+        await self._ensure_connected()  # CONN-02
         ccxt_symbol = self.normalizer.format_symbol_for_ccxt(symbol) if symbol else None
         try:
             await self.rate_limiter.acquire("fetch_open_orders")
@@ -2128,6 +2153,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
     
     async def get_order_status(self, exchange_order_id: str, symbol: str) -> OrderStatusResult:
         """STEP 6.1: Fetch order status from exchange."""
+        await self._ensure_connected()  # CONN-02
         try:
             # STEP 6.7: Rate limiting
             await self.rate_limiter.acquire("get_order")
@@ -2212,6 +2238,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         converts into a plain ``FAILED`` that does not freeze the symbol. "I cannot ask"
         is the only true answer when the question was never delivered.
         """
+        await self._ensure_connected()  # CONN-02
         stripped = VENUES_THAT_STRIP_OUR_CLIENT_ORDER_ID.get(
             str(self.exchange_id or "").strip().lower()
         )
@@ -2342,6 +2369,7 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
 
     async def get_balance(self) -> Dict[str, Any]:
         """Get account balance."""
+        await self._ensure_connected()  # CONN-02
         try:
             await self.rate_limiter.acquire("get_balance")
             

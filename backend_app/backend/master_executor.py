@@ -893,6 +893,12 @@ class BotRunner:
             password=keys.get("password"),
             user_id=self.user_id,
         )
+        # CONN-02: connect - and on a testnet, prove the sandbox endpoint - NOW, so a bad
+        # key or a failed verification stops the deploy at boot rather than surfacing as a
+        # refused or failed first order.
+        ensure_connected = getattr(exchange_exec, "_ensure_connected", None)
+        if ensure_connected is not None:
+            await ensure_connected()
 
         # ═══════════════════════════════════════════════════════════════════
         # CRITICAL FIX C2: Use unified ExecutionEngine instead of deprecated OrderEngine
