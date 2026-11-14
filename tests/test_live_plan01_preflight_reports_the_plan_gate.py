@@ -69,3 +69,55 @@ def test_the_frontend_orders_it_first_after_prerequisites():
     names = [line.strip().strip("',") for line in order.splitlines()
              if line.strip().startswith("'")]
     assert names[:2] == ["deploy_prerequisites", "live_entitlement"]
+
+
+# ── QUOTA-MODE-01: paper deploys draw on the paper allowance ──────────────────────────
+
+
+def test_paper_deploys_use_the_paper_allowance_and_live_the_bot_allowance():
+    from backend_app.backend.strategy_service import deployment_quota_resource
+
+    assert deployment_quota_resource("paper") == "paper_strategies"
+    assert deployment_quota_resource("PAPER") == "paper_strategies"
+    assert deployment_quota_resource(None, "paper") == "paper_strategies"
+    assert deployment_quota_resource("live") == "bots"
+    # Unrecognised counts against the stricter live allowance.
+    assert deployment_quota_resource(None, None) == "bots"
+
+
+def test_the_free_plan_can_run_its_one_paper_strategy():
+    """The Free plan sets bots=0 and paper_strategies=1: reserving `bots` for a paper deploy
+    made its own paper allowance unusable ("Quota exceeded for bots: 0/0")."""
+    from backend_app.backend.strategy_service import deployment_quota_resource
+    from backend_app.core.subscription_engine import SubscriptionEngine
+
+    resource = deployment_quota_resource("paper")
+    assert SubscriptionEngine.get_quota_limit("free", resource) >= 1
+    assert SubscriptionEngine.get_quota_limit("free", "bots") == 0
+
+
+def _allowance(plan, used, mode="paper"):
+    service = StrategyService.__new__(StrategyService)
+    with patch("backend_app.core.subscription_dependencies.get_user_plan", AsyncMock(return_value=plan)), \
+         patch("backend_app.core.subscription_engine.SubscriptionEngine.get_quota_usage",
+               AsyncMock(return_value=used)):
+        return asyncio.run(service._plan_allowance_condition(
+            None, {"id": "u1"}, SimpleNamespace(mode=mode), mode))
+
+
+def test_the_preflight_reports_a_used_up_paper_allowance():
+    c = _allowance("free", 1)
+    assert c.status == "failed" and c.code == "PAPER_STRATEGY_LIMIT_REACHED"
+    assert "allows 1 running paper strategies" in c.message
+
+
+def test_the_preflight_passes_a_free_slot():
+    assert _allowance("free", 0).status == "passed"
+
+
+def test_a_plan_refusal_is_a_403_with_its_own_code_not_version_not_found():
+    from backend_app.backend.strategy_service import PlanLimitRefused
+
+    e = PlanLimitRefused("PAPER_STRATEGY_LIMIT_REACHED", "x")
+    assert e.http_status == 403 and e.code == "PAPER_STRATEGY_LIMIT_REACHED"
+    assert not isinstance(e, ValueError)  # so the ValueError -> 404 mapping cannot catch it
