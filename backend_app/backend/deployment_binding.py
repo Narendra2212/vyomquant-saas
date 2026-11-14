@@ -909,6 +909,16 @@ def outstanding_prerequisite(state: Any) -> str:
     )
 
 
+#: VER-REDEPLOY-01: a version that has been deployed before may be deployed again. A
+#: version is an immutable snapshot (004c's trigger forbids changing its graph, plan or hash
+#: once DEPLOYED), and it passed this very gate as READY the first time, so every
+#: prerequisite READY stands for still holds. Requiring READY only meant that, once a
+#: deployment had run, the ONLY way to deploy the strategy again was to save it - minting a
+#: new, identical version every time (reported by the user; ten such versions in prod, each
+#: stuck at RUNNING). ARCHIVED stays refused.
+REDEPLOYABLE_LIFECYCLE_STATES = frozenset({"DEPLOYED", "RUNNING", "PAUSED", "STOPPED"})
+
+
 def assert_version_ready(
     version_row: Mapping[str, Any], strategy_id: str, version: Any
 ) -> None:
@@ -926,7 +936,7 @@ def assert_version_ready(
     """
     state = version_row.get("lifecycle_state")
     label = str(state).upper() if state else None
-    if label == LIFECYCLE_READY:
+    if label == LIFECYCLE_READY or label in REDEPLOYABLE_LIFECYCLE_STATES:
         return
     raise DeployRejected(
         "VERSION_NOT_READY",

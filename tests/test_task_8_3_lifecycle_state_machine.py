@@ -88,6 +88,8 @@ DESIGN_EDGES = {
     ("RUNNING", "PAUSED"),
     ("PAUSED", "RUNNING"),
     ("RUNNING", "STOPPED"),
+    # VER-REDEPLOY-01: an unchanged, stopped version may be deployed again.
+    ("STOPPED", "DEPLOYED"),
     ("PAUSED", "STOPPED"),
     ("STOPPED", "ARCHIVED"),
     ("READY", "ARCHIVED"),
@@ -317,9 +319,10 @@ class TestTransitionTableMatchesTheDesign:
             for target in targets:
                 assert target in LIFECYCLE_STATES, (state, target)
 
-    def test_archived_is_terminal_and_stopped_leads_only_to_archived(self):
+    def test_archived_is_terminal_and_stopped_leads_to_redeploy_or_archive(self):
         assert lifecycle.VERSION_TRANSITIONS["ARCHIVED"] == ()
-        assert lifecycle.VERSION_TRANSITIONS["STOPPED"] == ("ARCHIVED",)
+        # VER-REDEPLOY-01: STOPPED -> DEPLOYED, so redeploying does not mint a new version.
+        assert lifecycle.VERSION_TRANSITIONS["STOPPED"] == ("DEPLOYED", "ARCHIVED")
 
     def test_the_design_file_still_draws_these_edges(self):
         """If the diagram changes, this file must be revisited rather than quietly pass."""

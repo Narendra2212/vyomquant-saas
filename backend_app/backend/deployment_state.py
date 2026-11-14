@@ -210,10 +210,15 @@ class DeploymentStateStore:
         try:
             sb = self._client()
             res = await _run(
-                sb.table("strategy_deployments").select("strategy_id").eq("id", deployment_id)
+                sb.table("strategy_deployments")
+                .select("strategy_id, version_id")
+                .eq("id", deployment_id)
             )
             rows = getattr(res, "data", None) or []
             strategy_id = rows[0].get("strategy_id") if rows else None
+            version_id = rows[0].get("version_id") if rows else None
+            if version_id:
+                await self._settle_version_lifecycle(sb, str(version_id))
             if not strategy_id:
                 return
             live = await _run(
@@ -234,6 +239,33 @@ class DeploymentStateStore:
             logger.warning(
                 "strategy status not settled for deployment %s: %s", deployment_id, exc
             )
+
+    async def _settle_version_lifecycle(self, sb: Any, version_id: str) -> None:
+        """VER-REDEPLOY-01: a version none of whose deployments is live is STOPPED.
+
+        The runtime moved a version READY -> DEPLOYED -> RUNNING and nothing ever moved it
+        on: every version that had run stayed RUNNING forever, after its deployment had
+        stopped or failed. Conditioned like every write here - only a version still
+        DEPLOYED/RUNNING/PAUSED changes, and only when no deployment of it is live.
+        ``lifecycle_state`` is not a column 004c's immutability trigger protects.
+        """
+        try:
+            live = await _run(
+                sb.table("strategy_deployments")
+                .select("id")
+                .eq("version_id", version_id)
+                .in_("status", list(LIVE_STATES))
+            )
+            if getattr(live, "data", None):
+                return
+            await _run(
+                sb.table("strategy_versions")
+                .update({"lifecycle_state": "STOPPED"})
+                .eq("id", version_id)
+                .in_("lifecycle_state", ["DEPLOYED", "RUNNING", "PAUSED"])
+            )
+        except Exception as exc:  # noqa: BLE001 - best effort; the deployment row decides
+            logger.warning("version %s lifecycle not settled: %s", version_id, exc)
 
     async def _release_quota(self, deployment_id: str) -> None:
         """A failed deployment no longer occupies a bot slot."""
