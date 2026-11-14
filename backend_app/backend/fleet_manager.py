@@ -87,6 +87,19 @@ class FleetManager:
         """
         bot_key = self._bot_key(user_id, symbol)
 
+        # STOP-REDEPLOY-01: a stop is honoured by the heartbeat (RT-08), up to one interval
+        # after the row says `stopped`. A redeploy inside that window found the old bot
+        # still here and failed the NEW deployment with "Bot already running" -- a failed
+        # deployment the user never asked for, seen in the launch run 8 s after a Stop.
+        # If the bot occupying this slot is one its own row has already stopped, finish
+        # that stop now. Outside the lock: `stop_bot` takes it.
+        if bot_key in self._active_fleet:
+            try:
+                if await self._stop_requested(bot_key):
+                    await self._honour_stop_request(bot_key)
+            except Exception as exc:  # noqa: BLE001 - the refusal below still applies
+                logger.warning("could not finish the pending stop of %s: %s", bot_key, exc)
+
         async with self._lock:  # FIX FM-3
             if bot_key in self._active_fleet:
                 return False, f"Bot already running for {symbol}."
