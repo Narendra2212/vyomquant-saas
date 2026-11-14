@@ -49,7 +49,7 @@ entirely rather than running it a second time for nothing.
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger("ReconciliationScheduler")
@@ -329,7 +329,15 @@ class ReconciliationScheduler:
         if mismatch.last_escalated_at is None:
             return True
 
-        seconds_since = (datetime.utcnow() - mismatch.last_escalated_at).total_seconds()
+        # REC-TZ-01: `last_escalated_at` is a `timestamptz` column, so a row read back from
+        # Postgres carries tzinfo while `datetime.utcnow()` does not; subtracting them raised
+        # TypeError on every poll the moment a real mismatch existed (Sentry
+        # VYOMQUANT-API-PRODUCTION-S, first live testnet order). Both sides are compared as
+        # aware UTC; a naive value is UTC by this codebase's convention.
+        last = mismatch.last_escalated_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        seconds_since = (datetime.now(timezone.utc) - last).total_seconds()
         return seconds_since >= RE_ESCALATION_INTERVAL_SECONDS
 
     async def _re_escalate(self, mismatch, repo) -> None:
