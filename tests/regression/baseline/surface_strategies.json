@@ -870,35 +870,44 @@
           },
           "raises": [
             {
+              "status_code": "e.http_status",
+              "detail_type": {
+                "error": "computed",
+                "message": "computed",
+                "upgrade_url": "str"
+              }
+            },
+            {
+              "status_code": 409,
               "detail_type": {
                 "error": "str",
                 "message": "str",
                 "missing_prerequisite": "computed"
               },
-              "error_code": "DEPLOY_PREREQUISITE_NOT_MET",
-              "status_code": 409
+              "error_code": "DEPLOY_PREREQUISITE_NOT_MET"
             },
             {
+              "status_code": 500,
               "detail_type": {
                 "error": "str",
                 "message": "str"
               },
-              "error_code": "VERSION_DEPLOY_FAILED",
-              "status_code": 500
+              "error_code": "VERSION_DEPLOY_FAILED"
             },
             {
+              "status_code": 404,
               "detail_type": {
                 "error": "str",
                 "message": "str"
               },
-              "error_code": "VERSION_NOT_FOUND",
-              "status_code": 404
+              "error_code": "VERSION_NOT_FOUND"
             }
           ],
           "returns": [
             "computed"
           ],
-          "route_path": "/api/strategies/{strategy_id}/versions/{version}/deploy"
+          "route_path": "/api/strategies/{strategy_id}/versions/{version}/deploy",
+          "_baseline_note_plan_refusal": "QUOTA-MODE-01 / LIVE-PLAN-01 AUTHORISE one ADDED raise on this handler: `except PlanLimitRefused` -> 403 with detail {error: <stable code>, message, upgrade_url}. Before it, a plan refusal from `StrategyService.deploy_version` was a plain ValueError and fell into the `ValueError -> 404 VERSION_NOT_FOUND` mapping, so a Free user's paper deploy (\"Quota exceeded for bots: 0/0\") was reported as a missing version. The codes are the existing stable ones from subscription_dependencies (LIVE_TRADING_NOT_INCLUDED, PAPER_STRATEGY_LIMIT_REACHED, LIVE_STRATEGY_LIMIT_REACHED). Nothing removed: the 409, 500 and 404 entries are unchanged. Evidence: tests/test_live_plan01_preflight_reports_the_plan_gate.py."
         }
       ],
       "method": "POST",
