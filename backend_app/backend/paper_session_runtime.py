@@ -41,15 +41,13 @@ WHAT IS DELIBERATELY NOT HERE, AND WHY EACH IS A REFUSAL RATHER THAN A DEFAULT
   ``paper_session_service.signal_to_intent`` reports ``SIGNAL_STATES_NO_QUANTITY`` and NO order
   is submitted. Writing the percentage into the quantity would be a fabricated order size
   (Requirement 28.3).
-* **A float -> Decimal conversion.** ``PaperSignal`` refuses a binary float rather than
-  converting it, and its docstring says so in terms: "widening that column's Python type is
-  ``signal_service``'s change to make, not something this loop may paper over by rounding". So
-  the declared quantity is carried EXACTLY AS THE PLAN STORES IT and
-  ``paper_session_service.paper_signal`` is the one gate on it. A plan whose ``quantity`` param
-  deserialises from JSONB as a Python float therefore produces a contained, logged
-  ``PaperSignalUnreadable`` per bar rather than an order for an amount nobody typed. That is a
-  real limitation of the current plan storage, not of this adapter, and it is stated rather than
-  hidden.
+* **A float -> Decimal conversion of a COMPUTED value.** ``PaperSignal`` refuses a binary float
+  rather than converting it. PAPER-QTY-01 narrowed what reaches it: a plan's AUTHORED params
+  (``quantity``, ``limit_price``) deserialise from JSONB as Python floats, and this adapter -
+  the plan boundary - recovers the exact decimal the author typed via :func:`authored_decimal`
+  (the float's shortest ``repr``), which is the inverse of that JSON decoding, not a rounding.
+  Before it, a plan with a stated quantity produced ``PaperSignalUnreadable`` on every bar and
+  the session never traded. Any other float is still refused downstream.
 * **``random``.** The signal identifier is a UUIDv5 over stable inputs, so a replay of the same
   market events mints the same identifiers (Requirement 15.4). ``uuid4`` would make a replay
   diverge in the one column that ties a paper order back to its decision.
@@ -475,7 +473,14 @@ class PaperDagRuntime:
                 continue
             value = getattr(intent, attribute, None)
             if value is not None:
-                signal[field] = value
+                # PAPER-QTY-01: the plan's params come back from JSONB through JSON decoding,
+                # so an authored 0.0001 arrives as a binary float and `paper_signal` refused
+                # it - every bar - which meant a paper session with a STATED quantity never
+                # traded (Sentry VYOMQUANT-API-PRODUCTION-13, 54 events in an hour). The
+                # value the author typed is recovered exactly here, at the plan boundary,
+                # from the float's shortest repr. Nothing downstream converts a float, so a
+                # float computed anywhere else is still refused by `paper_signal`.
+                signal[field] = authored_decimal(value)
 
         if "quantity" not in signal:
             sizing = output.get("sizing_intention")
@@ -577,6 +582,20 @@ def build_session_signal_recorder(
         return recorded
 
     return record
+
+
+def authored_decimal(value: Any) -> Any:
+    """PAPER-QTY-01: an author-typed plan param that JSON decoding turned into a ``float``, as
+    the exact ``Decimal`` the author wrote (``repr`` is the shortest string that round-trips to
+    the same float). Anything that is not a finite float is returned unchanged, so ``NaN``,
+    infinities and non-floats keep meeting ``paper_signal``'s own checks."""
+    from decimal import Decimal
+
+    if isinstance(value, bool) or not isinstance(value, float):
+        return value
+    if value != value or value in (float("inf"), float("-inf")):
+        return value
+    return Decimal(repr(value))
 
 
 def build_session_evaluator(
