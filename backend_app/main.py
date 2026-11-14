@@ -267,6 +267,7 @@ _plan_expiry_task = None
 _paper_reconcile_task = None
 # RT-08: handle of the resume-after-restart task started in lifespan
 _resume_task = None
+_orphan_sweep_task = None
 
 
 # ── Lifespan: boot + graceful shutdown ──────────────────────────────
@@ -615,12 +616,17 @@ async def lifespan(app: FastAPI):
     # skipped. No production behaviour changes: USE_TEE was never set to "true" anywhere
     # in this deployment (nothing could have consumed it), so this path already ran
     # unconditionally in practice.
-    global _resume_task
+    global _resume_task, _orphan_sweep_task
     try:
         if getattr(app_state, "fleet", None):
-            from backend_app.backend.deployment_runtime import \
-                resume_running_deployments
+            from backend_app.backend.deployment_runtime import (
+                resume_running_deployments, sweep_orphaned_deployments_forever)
             _resume_task = asyncio.create_task(resume_running_deployments(app_state.fleet))
+            # RESUME-SWEEP-01: the boot pass runs once; this restarts `running` bots that a
+            # process stopped after it (a rolling deploy's old task) left without an owner.
+            _orphan_sweep_task = asyncio.create_task(
+                sweep_orphaned_deployments_forever(app_state.fleet)
+            )
             service_status["deployment_resume"] = "ACTIVE"
         else:
             service_status["deployment_resume"] = "INACTIVE"
@@ -678,6 +684,16 @@ async def lifespan(app: FastAPI):
 
     #  Graceful shutdown 
     logger.info(" Shutdown initiated  terminating all bots...")
+
+    # RESUME-SWEEP-01: stop this process's orphan sweep FIRST, before the fleet below stops
+    # its bots and releases their claims -- otherwise the sweep here could restart a bot this
+    # very shutdown just stopped. Other processes' sweeps are what pick those bots up.
+    if _orphan_sweep_task is not None:
+        _orphan_sweep_task.cancel()
+        try:
+            await _orphan_sweep_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
 
     # ══════════════════════════════════════════════════════════════════════
     #  PAPER-04: RECORD THE DEATH OF THE SESSIONS THIS PROCESS WAS HOSTING

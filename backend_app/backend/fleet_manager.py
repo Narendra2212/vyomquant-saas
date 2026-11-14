@@ -20,6 +20,31 @@ from typing import Any, Dict, Optional, Tuple
 logger = logging.getLogger("FleetManager")
 
 
+#: RESUME-SWEEP-01: a row written this recently may belong to a deploy still taking its
+#: claim in another process (the deploy path writes the row before ``start_bot``), so the
+#: orphan sweep leaves it for the next pass.
+SWEEP_MIN_ROW_AGE_SECONDS = 120
+
+
+def _updated_within(row: Dict[str, Any], seconds: float) -> bool:
+    """True when the row's ``updated_at`` (or ``created_at``) is newer than ``seconds`` ago.
+
+    An unreadable timestamp counts as recent: when in doubt, the sweep waits.
+    """
+    from datetime import datetime, timezone
+
+    raw = row.get("updated_at") or row.get("created_at")
+    if not raw:
+        return True
+    try:
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return True
+    return (datetime.now(timezone.utc) - ts).total_seconds() < seconds
+
+
 class FleetManager:
     """
     Global singleton. One instance shared by all FastAPI routes.
@@ -398,6 +423,66 @@ class FleetManager:
         ok, detail = await bot.close_position()
         if not ok:
             logger.error("RT-21: close for %s did not complete: %s", bot_key, detail)
+
+    async def resume_orphaned_deployments(self, rebuild) -> Dict[str, int]:
+        """RESUME-SWEEP-01: start ``running`` deployments that NO process is running.
+
+        Found in production on the 2026-11-14 rolling deploy: the new task booted while the
+        old one still ran a bot, so its boot-time :meth:`resume_deployments` correctly left
+        the row alone ("another process owns it"). The old task was then stopped -- which
+        releases the claim but leaves the row ``running`` -- and nothing ever looked again.
+        The bot stayed dead behind a row that said ``running``; with live resume on, every
+        deploy would orphan every live bot the same way.
+
+        Called periodically. Deliberately narrower than the boot pass: a row is touched only
+        when it has a symbol, is not in THIS process's fleet, and its claim reads ``False``
+        (no fresh, unreleased claim anywhere). ``True`` (owned elsewhere) and ``None``
+        (claim store unreadable) are left alone, so nothing here can fail a running bot or
+        start a second copy; ``start_bot``'s WORK-03 claim still arbitrates a race.
+        """
+        from backend_app.core.bot_ownership import claim_is_live
+
+        outcome = {"started": 0, "refused": 0, "failed": 0, "skipped": 0}
+        store = self._store()
+        # `running` only, never `deploying`: a deploy in flight in ANOTHER process writes its
+        # row as `deploying` a moment before its `start_bot` takes the claim, and a sweep
+        # landing in that gap must not race it. A row reaches `running` only after a start
+        # succeeded, i.e. after a claim was taken.
+        for row in await store.rows_in(("running",)):
+            symbol = str(row.get("exchange_symbol") or "")
+            if (
+                not symbol
+                or self._bot_key(str(row.get("user_id")), symbol) in self._active_fleet
+                or _updated_within(row, SWEEP_MIN_ROW_AGE_SECONDS)
+            ):
+                outcome["skipped"] += 1
+                continue
+            try:
+                live = await asyncio.to_thread(claim_is_live, str(row.get("user_id")), symbol)
+            except Exception:  # noqa: BLE001
+                live = None
+            if live is not False:
+                outcome["skipped"] += 1
+                continue
+            deployment_id = str(row["id"])
+            try:
+                built = rebuild(row)
+                if inspect.isawaitable(built):
+                    built = await built
+                blueprint, paper = built
+            except Exception as exc:  # noqa: BLE001
+                await store.mark_failed(deployment_id, f"could not resume after restart: {exc}")
+                outcome["failed"] += 1
+                continue
+            ok, msg = await self.start_bot(
+                str(row["user_id"]), symbol, blueprint, paper_trading=paper
+            )
+            outcome["started" if ok else "refused"] += 1
+            logger.warning(
+                "RESUME-SWEEP-01: deployment %s was running with no owner; %s",
+                deployment_id, "restarted here" if ok else f"not started here: {msg}",
+            )
+        return outcome
 
     async def resume_deployments(self, rebuild) -> Dict[str, int]:
         """RT-08: after a restart, start what the database says should be running.

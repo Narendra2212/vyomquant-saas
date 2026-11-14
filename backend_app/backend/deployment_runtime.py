@@ -37,6 +37,7 @@ Regression: tests/test_rt02_builder_strategy_runs_on_deployment_runtime.py
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import os
@@ -374,6 +375,35 @@ async def resume_running_deployments(fleet, *, client_factory=None) -> Dict[str,
     )
     logger.info("[deployment-runtime] resume after boot: %s", outcome)
     return outcome
+
+
+#: RESUME-SWEEP-01: how often each process looks for ``running`` deployments nobody runs.
+ORPHAN_SWEEP_INTERVAL_SECONDS = 60
+
+
+async def sweep_orphaned_deployments_forever(
+    fleet, *, client_factory=None, interval: float = ORPHAN_SWEEP_INTERVAL_SECONDS
+) -> None:
+    """Every ``interval`` seconds, restart ``running`` deployments that no process owns.
+
+    The boot-time :func:`resume_running_deployments` runs once, and during a rolling deploy
+    the old task still owns its bots at that moment; when it is stopped a minute later its
+    bots had no one to resume them. See ``FleetManager.resume_orphaned_deployments``. A
+    failed pass is logged and the loop carries on; it never raises out.
+    """
+    loader = service_version_loader(client_factory)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            outcome = await fleet.resume_orphaned_deployments(
+                lambda row: rebuild_for_resume(row, load_version=loader)
+            )
+            if outcome.get("started") or outcome.get("failed") or outcome.get("refused"):
+                logger.warning("[deployment-runtime] orphan sweep: %s", outcome)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[deployment-runtime] orphan sweep failed: %s", exc)
 
 
 # ══════════════════════════════════════════════════════════════════════════

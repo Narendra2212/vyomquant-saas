@@ -262,6 +262,15 @@ QUOTA_REFUSAL_CODES = {
 }
 
 
+def _allowance_message(plan_key: Any, kind: str, limit: Any, used: Any) -> str:
+    """The refusal sentence for a used-up (or absent) allowance."""
+    if not limit:
+        return (f"Your {plan_key} plan does not include running {kind}. "
+                "Upgrade your plan to continue.")
+    return (f"Your {plan_key} plan allows {limit} running {kind} and {used} are in use. "
+            "Stop one, or upgrade your plan to continue.")
+
+
 def deployment_quota_resource(mode: Any, environment: Any = None) -> str:
     """The plan allowance a deployment occupies: paper strategies for paper, bots for live.
 
@@ -1844,10 +1853,7 @@ class StrategyService:
             name="plan_allowance",
             status=db_binding.CONDITION_FAILED,
             code=QUOTA_REFUSAL_CODES.get(resource, "QUOTA_EXCEEDED"),
-            message=(
-                f"Your {plan_key} plan allows {limit} running {kind} and {used} are in use. "
-                "Stop one, or upgrade your plan to continue."
-            ),
+            message=_allowance_message(plan_key, kind, limit, used),
             detail={**detail, "upgrade_url": "/app/billing"},
             http_status=403,
         )
@@ -2077,8 +2083,7 @@ class StrategyService:
             kind = "paper strategies" if quota_resource == Resource.PAPER_STRATEGIES.value else "live strategies"
             raise PlanLimitRefused(
                 QUOTA_REFUSAL_CODES.get(quota_resource, "QUOTA_EXCEEDED"),
-                f"Your plan allows {limit} running {kind} and {current_usage} are in use. "
-                "Stop one, or upgrade your plan to continue.",
+                _allowance_message(plan_key, kind, limit, current_usage),
             )
 
         # Create deployment
