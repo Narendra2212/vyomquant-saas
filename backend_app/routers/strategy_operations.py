@@ -1063,7 +1063,7 @@ async def _backtest_exchange_instance():
     """
     import os
 
-    from backend_app.backend.connection_engine import ConnectionEngine
+    from backend_app.backend.connection_engine import get_public_exchange
 
     venue = os.getenv("DEFAULT_EXCHANGE")
     if not venue:
@@ -1078,7 +1078,8 @@ async def _backtest_exchange_instance():
                 ),
             },
         )
-    return await ConnectionEngine(exchange_id=venue).connect()
+    # PERF-01: the pooled public client, not a fresh (leaked) one per backtest.
+    return await get_public_exchange(venue)
 
 
 def _backtest_runtime_for(body: "BacktestExecuteRequest"):
@@ -4213,7 +4214,7 @@ async def _fetch_preview_bars(symbol: str, timeframe: str, bars: int) -> List[Li
     """
     import os
 
-    from backend_app.backend.connection_engine import ConnectionEngine
+    from backend_app.backend.connection_engine import get_public_exchange
     from backend_app.backend.data_seeking_engine import DataEngine
 
     venue = os.getenv("DEFAULT_EXCHANGE")
@@ -4232,7 +4233,9 @@ async def _fetch_preview_bars(symbol: str, timeframe: str, bars: int) -> List[Li
             },
         )
 
-    engine = DataEngine(await ConnectionEngine(exchange_id=venue).connect())
+    # PERF-01: the pooled public client. A fresh client per call re-downloaded the venue's
+    # market list on the event loop every 15 s (the builder's poll) and leaked its session.
+    engine = DataEngine(await get_public_exchange(venue))
     return await engine.fetch_historical_ohlcv(symbol, timeframe, limit=int(bars))
 
 

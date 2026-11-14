@@ -102,3 +102,34 @@ async def test_a_stale_report_on_an_ended_deployment_changes_nothing():
     db = _DB([_dep("d1", "stopped")], [{"id": "s1", "status": "running"}])
     assert await DeploymentStateStore(lambda: db).mark_failed("d1", "late") is False
     assert db.tables["strategies"][0]["status"] == "running"
+
+
+# ── VER-REDEPLOY-01: the VERSION's lifecycle follows its deployments too ──────────────
+
+
+def _vdb(deployments, version_state="RUNNING"):
+    db = _DB(deployments, [{"id": "s1", "status": "running"}])
+    db.tables["strategy_versions"] = [{"id": "v1", "lifecycle_state": version_state}]
+    return db
+
+
+def _vdep(id_, status, version_id="v1"):
+    return {**_dep(id_, status), "version_id": version_id}
+
+
+async def test_a_version_whose_last_deployment_ended_is_stopped():
+    db = _vdb([_vdep("d1", "running")])
+    await DeploymentStateStore(lambda: db).mark_failed("d1", "x")
+    assert db.tables["strategy_versions"][0]["lifecycle_state"] == "STOPPED"
+
+
+async def test_a_version_with_another_live_deployment_stays_running():
+    db = _vdb([_vdep("d1", "running"), _vdep("d2", "running")])
+    await DeploymentStateStore(lambda: db).mark_stopped("d1")
+    assert db.tables["strategy_versions"][0]["lifecycle_state"] == "RUNNING"
+
+
+async def test_an_archived_version_is_never_reopened():
+    db = _vdb([_vdep("d1", "running")], version_state="ARCHIVED")
+    await DeploymentStateStore(lambda: db).mark_stopped("d1")
+    assert db.tables["strategy_versions"][0]["lifecycle_state"] == "ARCHIVED"

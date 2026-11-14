@@ -2401,6 +2401,7 @@ stateDiagram-v2
     PAUSED --> RUNNING: user resume
     RUNNING --> STOPPED: user stop / guard trip
     PAUSED --> STOPPED
+    STOPPED --> DEPLOYED: redeployed (same immutable version, new binding)
     STOPPED --> ARCHIVED
     READY --> ARCHIVED
     ARCHIVED --> [*]
@@ -2408,7 +2409,11 @@ stateDiagram-v2
 
 Transition rules: only forward transitions listed above are legal; each is recorded in the
 audit trail with actor, timestamp and reason. `DEPLOYED`/`RUNNING`/`PAUSED` versions are
-read-only — an edit clones the graph into a new `DRAFT` and eventually a new version. A
+read-only — an edit clones the graph into a new `DRAFT` and eventually a new version.
+Redeploying an UNCHANGED strategy does not need a new version: a version that has been deployed
+before (`DEPLOYED`/`RUNNING`/`PAUSED`/`STOPPED`) passed the `READY` gate when first deployed and
+cannot have changed since, so it may be bound again (VER-REDEPLOY-01). When a version's last
+deployment ends, the version moves to `STOPPED`. A
 guard trip or kill-switch moves `RUNNING → STOPPED` with the reason preserved.
 
 ### Versioning and immutability

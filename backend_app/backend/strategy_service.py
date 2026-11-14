@@ -4683,7 +4683,7 @@ async def fetch_training_bars(symbol: str, timeframe: str, bars: int) -> List[Li
     """
     import os
 
-    from backend_app.backend.connection_engine import ConnectionEngine
+    from backend_app.backend.connection_engine import get_public_exchange
     from backend_app.backend.data_seeking_engine import DataEngine
 
     venue = os.getenv("DEFAULT_EXCHANGE")
@@ -4697,7 +4697,8 @@ async def fetch_training_bars(symbol: str, timeframe: str, bars: int) -> List[Li
         )
 
     try:
-        engine = DataEngine(await ConnectionEngine(exchange_id=venue).connect())
+        # PERF-01: the pooled public client (see connection_engine.get_public_exchange).
+        engine = DataEngine(await get_public_exchange(venue))
         return await engine.fetch_historical_ohlcv(symbol, timeframe, limit=int(bars))
     except TrainingBlocked:
         raise
