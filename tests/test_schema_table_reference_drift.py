@@ -1313,6 +1313,11 @@ class TestWaitlistInsertPathTracksTheForm:
 SQL_UNDECLARED_PRESENT_IN_PRODUCTION = {
     "execution_records": "pre-migration base table, 198 rows; 006 only ALTERs it",
     "library_strategies": "present (0 rows); declared only by Alembic e88f9911b5a2",
+    "positions": (
+        "present (0 rows); declared only by Alembic d97ffff9c3bb / b2c3d4e5f6a7. "
+        "067 reshapes it for databases where b2c3d4e5f6a7 never ran, behind a "
+        "to_regclass guard"
+    ),
 }
 
 #: Relations that SQL DML reads, that NO migration declares, and that are

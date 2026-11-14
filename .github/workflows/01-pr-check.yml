@@ -724,6 +724,7 @@ jobs:
                  tests/test_bug049_identity_types_postgres.py \
                  tests/test_schema_drift_checker_is_read_only_postgres.py \
                  tests/test_production_security_probe_rolls_back_postgres.py \
+                 tests/test_pos_txn01_position_failure_keeps_the_order_update.py \
                  -v --tb=short
 
       # WHY THIS STEP EXISTS.
