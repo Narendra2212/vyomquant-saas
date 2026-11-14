@@ -951,6 +951,86 @@ class BotRunner:
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"runtime status for {deployment_id} not written: {exc}")
 
+    def _watchdog_idle_seconds(self) -> float:
+        """How long the tick stream may stay silent before the watchdog checks the clock:
+        a quarter of a bar, between 5 s and 30 s."""
+        tf = float(getattr(self, "timeframe_sec", 60) or 60)
+        return max(5.0, min(tf / 4.0, 30.0))
+
+    async def _ticks_with_watchdog(self):
+        """STREAM-01: the live trade stream, plus a synthetic tick whenever a bar boundary
+        passes with no trade.
+
+        Candles are built from trades (``process_live_tick``), so on a market nobody is
+        trading - an exchange TESTNET's USDC pairs, or a thin real pair overnight - or on a
+        websocket that stalls without raising, no candle ever closed and the strategy was
+        never evaluated. The bot stayed "running", silently, forever: during the live
+        testnet run a BTC/USDC bot reported ``ticks: 0`` from boot. The watchdog keeps the
+        stream's pending read alive (it is never cancelled, so no trade is lost) and, when
+        the stream has been silent past a bar boundary, reads the venue's last price over
+        REST and yields it as a zero-volume tick at the current time - which closes the
+        bar through the same path a real trade would. A bar with no trades is flat at the
+        last traded price, which is what this produces.
+        """
+        stream = self.data_engine.stream_live_ticks(self.symbol).__aiter__()
+        pending = None
+        try:
+            while True:
+                if pending is None:
+                    pending = asyncio.ensure_future(stream.__anext__())
+                done, _ = await asyncio.wait({pending}, timeout=self._watchdog_idle_seconds())
+                if pending in done:
+                    try:
+                        item = pending.result()
+                    except StopAsyncIteration:
+                        return
+                    finally:
+                        pending = None
+                    yield item
+                    continue
+                synthetic = await self._synthetic_tick_if_bar_due()
+                if synthetic is not None:
+                    yield synthetic
+        finally:
+            if pending is not None and not pending.done():
+                pending.cancel()
+
+    async def _synthetic_tick_if_bar_due(self) -> Optional[Dict[str, Any]]:
+        """A zero-volume tick at the venue's last price when a bar boundary has passed
+        since the last tick, else ``None``. Reports the silence either way."""
+        now_ms = int(time.time() * 1000)
+        tf_ms = int(float(getattr(self, "timeframe_sec", 60) or 60) * 1000)
+        last_ms = self.__dict__.get("_last_tick_ms")
+        if last_ms is None:
+            last_ms = self.__dict__.setdefault("_watchdog_started_ms", now_ms)
+        idle_s = round((now_ms - int(last_ms)) / 1000.0, 1)
+        boundary_passed = now_ms // tf_ms > int(last_ms) // tf_ms
+        grace_ms = min(2_000, tf_ms // 10)  # let a trade straddling the boundary arrive first
+        if not boundary_passed or now_ms % tf_ms < grace_ms:
+            self._runtime_report(seconds_since_last_tick=idle_s)
+            return None
+        try:
+            ticker = await self.data_engine.exchange.fetch_ticker(self.symbol)
+            price = float((ticker or {}).get("last") or (ticker or {}).get("close") or 0.0)
+        except Exception as exc:  # noqa: BLE001 - a failed poll is reported, not fatal
+            self._runtime_report(
+                phase="no_market_data",
+                seconds_since_last_tick=idle_s,
+                last_error=f"REST price poll: {type(exc).__name__}: {str(exc)[:200]}",
+                last_error_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return None
+        if price <= 0:
+            self._runtime_report(phase="no_market_data", seconds_since_last_tick=idle_s)
+            return None
+        rt = self.__dict__.get("_runtime_status", {})
+        self._runtime_report(
+            phase="streaming_quiet_market",
+            seconds_since_last_tick=idle_s,
+            synthetic_ticks=int(rt.get("synthetic_ticks", 0)) + 1,
+        )
+        return {"timestamp": now_ms, "price": price, "amount": 0.0, "synthetic": True}
+
     def _on_stream_error(self, stream_name: str, error: Exception) -> None:
         self._runtime_report(
             phase="stream_error",
@@ -1114,7 +1194,9 @@ class BotRunner:
             force=True,
         )
 
-        async for ticks in self.data_engine.stream_live_ticks(self.symbol):
+        # STREAM-01: ticks come through a watchdog, so a quiet market or a silently stalled
+        # websocket still closes candles on time (see `_ticks_with_watchdog`).
+        async for ticks in self._ticks_with_watchdog():
             for tick in (ticks if isinstance(ticks, list) else [ticks]):
                 timestamp_ms = tick.get("timestamp", int(time.time() * 1000))
                 price = float(tick.get("price", tick.get("last", 0)))
@@ -1124,10 +1206,12 @@ class BotRunner:
                     continue
 
                 self._last_price = price
+                self._last_tick_ms = int(timestamp_ms)
                 rt = self.__dict__.get("_runtime_status", {})
+                synthetic_tick = bool(tick.get("synthetic"))
                 self._runtime_report(
-                    phase="streaming",
-                    ticks=int(rt.get("ticks", 0)) + 1,
+                    phase="streaming_quiet_market" if synthetic_tick else "streaming",
+                    ticks=int(rt.get("ticks", 0)) + (0 if synthetic_tick else 1),
                     last_tick_at=datetime.fromtimestamp(
                         int(timestamp_ms) / 1000, tz=timezone.utc
                     ).isoformat(),
