@@ -169,6 +169,25 @@ def serialize_decimals(obj):
     return obj
 
 
+
+def _beyond_ledger_precision(recomputed: Any, recorded: Any) -> bool:
+    """PAPER-01-TOL: whether ``recomputed`` differs from the ledger's ``recorded`` value by
+    more than one unit at the ledger's own precision (its exponent; a cent for a 2-dp value).
+
+    Unreadable or non-finite inputs count as a disagreement, so a real fault is never hidden.
+    """
+    try:
+        rec = Decimal(str(recorded))
+        mine = Decimal(str(recomputed))
+        if not (rec.is_finite() and mine.is_finite()):
+            return True
+        exponent = rec.as_tuple().exponent
+        # Never looser than a cent, even for a ledger value that carries no decimals.
+        quantum = Decimal(1).scaleb(min(int(exponent), -2)) if isinstance(exponent, int) else Decimal("0.01")
+        return abs(mine - rec) > quantum
+    except (InvalidOperation, TypeError, ValueError):
+        return True
+
 class ExecutionEngine:
     """
     Paper trading execution engine.
@@ -691,7 +710,13 @@ class ExecutionEngine:
         self._marks = marks
         self._sync_equity()
 
-        if self.current_equity != recorded.total_equity:
+        # PAPER-01-TOL: the ledger persists money at its own precision (cents), while this
+        # process recomputes it unrounded, so an exact `!=` fired on EVERY paper fill over a
+        # sub-cent rounding difference - Sentry VYOMQUANT-API-PRODUCTION-D, 126 FATAL events
+        # a day, e.g. ledger 99999.89 vs recomputed 99999.8947. A disagreement is now one
+        # larger than a single unit at the ledger's own precision; anything else is the
+        # ledger rounding, not a divergence.
+        if _beyond_ledger_precision(self.current_equity, recorded.total_equity):
             logger.critical(
                 "PAPER-01 reconciliation disagreement: the ledger persisted "
                 "total_equity=%s and this process recomputed %s from the same rows. "
