@@ -275,6 +275,18 @@ def _coerce_authorized_until(raw: Any) -> Optional[datetime]:
 RUNTIME_REPORT_INTERVAL_S = 30.0
 
 
+def venue_order_id_of(result: Any) -> Optional[str]:
+    """SIG-VENUE-01: the exchange's order id from an ``execute_with_idempotency`` result,
+    or ``None``. TRADE-12 stores it at ``result["result"]["trade_result"]["order_id"]``."""
+    if not isinstance(result, dict):
+        return None
+    inner = result.get("result")
+    trade = inner.get("trade_result") if isinstance(inner, dict) else None
+    candidate = trade.get("order_id") if isinstance(trade, dict) else None
+    text = str(candidate).strip() if candidate is not None else ""
+    return text or None
+
+
 def quote_coin_of(symbol: Any) -> str:
     """The quote currency of a CCXT symbol: ``BTC/USDC`` -> ``USDC``,
     ``BTC/USDT:USDT`` -> ``USDT``. ``USDT`` only when the symbol names no quote at all,
@@ -1648,8 +1660,16 @@ class BotRunner:
                         # else -- which is right for an order that has neither executed nor
                         # failed -- and `map_order_state` covers SUBMITTED in the OrderState
                         # vocabulary that Requirement 16.2's reconciliation reads.
-                        if v_status in ("completed", "skipped_completed"):
+                        # SIG-DUP-01: `skipped_*` means THIS signal executed nothing - an
+                        # identical execution (same 5-minute bucket, side, qty and price) had
+                        # already run, so the engine refused to send it again. It used to be
+                        # recorded as FILLED with `filled: 0` - a phantom fill on the trail
+                        # (seen live: four "FILLED" signals, no venue order, position 0).
+                        # Recorded as CANCELLED: not executed, and not a failure either.
+                        if v_status == "completed":
                             order_st = "FILLED"
+                        elif str(v_status).startswith("skipped"):
+                            order_st = "CANCELLED"
                         elif v_status == FILL_STATE_PARTIAL:
                             order_st = "PARTIALLY_FILLED"
                         elif v_status == FILL_STATE_ACCEPTED:
@@ -1674,7 +1694,10 @@ class BotRunner:
                             signal_id=sig_id,
                             # BOT-03: signals.order_id is a UUID column.
                             order_id=signal_order_uuid(v_exec_id, v_result),
-                            exchange_order_id=None,
+                            # SIG-VENUE-01: the venue's own order id (TRADE-12 keeps it at
+                            # result.trade_result.order_id). It was always None, so a live
+                            # order on the exchange could not be traced from its signal.
+                            exchange_order_id=venue_order_id_of(v_result),
                             order_status=order_st,
                             quantity=requested_qty,
                             filled=filled_qty_f,
