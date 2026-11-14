@@ -1889,6 +1889,13 @@ class BotRunner:
                     )
                     if filled_qty > 0:
                         logger.info(f"✅ Executed {side} {filled_qty} {self.symbol} @ {price} (exposure: {self.recovered_exposure_coins})")
+                        # OBS-01: the self-report's position follows fills, not just boot.
+                        self._runtime_report(
+                            position_base=float(self.recovered_exposure_coins),
+                            last_fill=f"{side} {filled_qty} @ {price}",
+                            last_fill_at=datetime.now(timezone.utc).isoformat(),
+                            force=True,
+                        )
                     else:
                         logger.warning(
                             f"⚠️ Order {side} {qty} {self.symbol} was NOT executed "
