@@ -1616,13 +1616,16 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
         have failed on the missing client - so no live order could be placed on this
         path. Idempotent; concurrent callers share one connection attempt.
         """
-        if getattr(self, "_connected", False) and getattr(self, "_exchange", None) is not None:
+        # A client is only ever set by `connect()` (or injected by a caller that built it),
+        # so its presence means "connected". Verification is NOT assumed from it: an
+        # unverified client still fails `assert_sandbox_only_policy` at the order boundary.
+        if getattr(self, "_exchange", None) is not None:
             return
         lock = self.__dict__.get("_connect_lock")
         if lock is None:
             lock = self.__dict__.setdefault("_connect_lock", asyncio.Lock())
         async with lock:
-            if getattr(self, "_connected", False) and getattr(self, "_exchange", None) is not None:
+            if getattr(self, "_exchange", None) is not None:
                 return
             await self.connect()
 
