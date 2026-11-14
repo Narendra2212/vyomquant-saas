@@ -1757,12 +1757,61 @@ class StrategyService:
             sb, user, version_data, strategy_id, version, request
         )
 
+        entitlement = await self._live_entitlement_condition(sb, user, request, environment)
+
         return db_binding.BindingSummary(
-            conditions=(prerequisite, *summary.conditions),
+            conditions=(prerequisite, *((entitlement,) if entitlement else ()), *summary.conditions),
             # The binding the write path would create is reported only when the write path
             # would in fact create one, so a failed prerequisite cannot travel with a
             # binding that describes a deployment that is not going to happen.
             binding=summary.binding if prerequisite.passed else None,
+        )
+
+    async def _live_entitlement_condition(self, sb, user: dict, request, environment: str):
+        """LIVE-PLAN-01: the plan gate the write path enforces, reported by the preflight.
+
+        Found during the launch new-user run: a Free user's live preflight said only "bind
+        an exchange account". They would connect keys, open the modal again, and learn at
+        the final Deploy that "Live trading requires a paid subscription plan" -- the
+        write path's check (``deploy_version``), which the preflight never reported. Same
+        check, same plan resolution; ``None`` for a paper deploy, where it does not apply.
+        A plan that cannot be read is ``pending``, never ``passed``.
+        """
+        from backend_app.backend import deployment_binding as db_binding
+
+        mode = str(getattr(request, "mode", None) or environment or "").lower()
+        if mode != db_binding.MODE_LIVE:
+            return None
+        try:
+            from backend_app.core.subscription_dependencies import get_user_plan
+            from backend_app.core.subscription_engine import Feature, SubscriptionEngine
+
+            plan_key = await get_user_plan(user["id"], sb)
+            has_live = await SubscriptionEngine.check_feature_entitlement(
+                user["id"], plan_key, Feature.LIVE_TRADING.value
+            )
+        except Exception as exc:  # noqa: BLE001
+            return db_binding.BindingCondition(
+                name="live_entitlement",
+                status=db_binding.CONDITION_PENDING,
+                code=db_binding.CONDITION_NOT_EVALUATED,
+                reason=f"the plan could not be read, so live access was not checked: {exc}",
+            )
+        if has_live:
+            return db_binding.BindingCondition(
+                name="live_entitlement", status=db_binding.CONDITION_PASSED,
+                detail={"plan": plan_key},
+            )
+        return db_binding.BindingCondition(
+            name="live_entitlement",
+            status=db_binding.CONDITION_FAILED,
+            code="LIVE_TRADING_NOT_INCLUDED",
+            message=(
+                f"Live trading is not included in your {plan_key} plan. Upgrade to Starter "
+                "or above to deploy live, or deploy in paper mode."
+            ),
+            detail={"plan": plan_key, "upgrade_url": "/app/billing"},
+            http_status=403,
         )
 
     async def deploy_version(

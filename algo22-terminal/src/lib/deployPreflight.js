@@ -86,6 +86,9 @@ export const CONDITION_STATUSES = Object.freeze([
  */
 export const PREFLIGHT_CONDITION_ORDER = Object.freeze([
   'deploy_prerequisites',
+  // LIVE-PLAN-01: reported for a live deploy only; first so a Free user reads "upgrade"
+  // before being sent to connect exchange keys the deploy would refuse anyway.
+  'live_entitlement',
   'version_ready',
   'plan_readable',
   'market_resolved',
