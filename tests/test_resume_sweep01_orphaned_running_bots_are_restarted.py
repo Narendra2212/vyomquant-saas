@@ -21,8 +21,6 @@ from unittest.mock import patch
 from backend_app.backend.fleet_manager import FleetManager
 
 REPO = Path(__file__).resolve().parents[1]
-OLD = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-NEW = datetime.now(timezone.utc).isoformat()
 
 
 class _Store:
@@ -38,7 +36,14 @@ class _Store:
         return True
 
 
-def _row(id_="d1", user="u1", symbol="BTC/USDT", status="running", updated=OLD):
+def _old():
+    return (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+
+
+def _row(id_="d1", user="u1", symbol="BTC/USDT", status="running", updated=None):
+    # Timestamps are taken when the test RUNS, not at import: a long suite would otherwise
+    # make a "fresh" row look minutes old.
+    updated = updated or _old()
     return {"id": id_, "user_id": user, "exchange_symbol": symbol, "status": status,
             "updated_at": updated}
 
@@ -84,7 +89,7 @@ def test_a_bot_in_this_process_is_left_alone():
 
 def test_a_freshly_written_row_waits_for_the_next_pass():
     """The deploy path writes the row before start_bot takes the claim."""
-    _outcome, started, _ = _run([_row(updated=NEW)], claim=False)
+    _outcome, started, _ = _run([_row(updated=datetime.now(timezone.utc).isoformat())], claim=False)
     assert started == []
 
 
