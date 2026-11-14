@@ -250,3 +250,34 @@ def test_migration_067_refuses_blob_rows():
         with engine.begin() as conn:
             conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
         engine.dispose()
+
+
+# ── the loops recover a session a failed cycle left aborted ───────────────────────────
+
+
+@pytest.mark.parametrize("loop, step", [
+    ("_monitoring_loop", "_check_stale_orders"),
+    ("_reconciliation_loop", "_reconcile_open_orders"),
+])
+def test_a_failed_cycle_rolls_the_shared_session_back(loop, step):
+    """Before POS-TXN-01 the loop logged and slept, and the next cycle's first query
+    raised PendingRollbackError forever (~3,000 events in production)."""
+    from unittest.mock import AsyncMock
+
+    session = _Session()
+    watchdog = OrderWatchdog.__new__(OrderWatchdog)
+    watchdog.db = session
+    watchdog._running = True
+    watchdog.config = SimpleNamespace(check_interval_seconds=0)
+    watchdog._try_become_leader = AsyncMock(return_value=True)
+    if loop == "_monitoring_loop":  # it spawns the other loop as a task
+        watchdog._reconciliation_loop = AsyncMock()
+
+    async def fail_then_stop():
+        watchdog._running = False
+        raise RuntimeError("current transaction is aborted")
+
+    setattr(watchdog, step, fail_then_stop)
+    with patch("backend_app.backend.order_watchdog.asyncio.sleep", AsyncMock()):
+        asyncio.run(getattr(watchdog, loop)())
+    assert session.rollbacks == 1

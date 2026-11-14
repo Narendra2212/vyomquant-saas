@@ -365,7 +365,23 @@ class OrderWatchdog:
                 break
             except Exception as e:
                 logger.error(f"Watchdog error: {e}", exc_info=True)
+                self._reset_session_after_error()
                 await asyncio.sleep(5)  # Short wait on error
+
+    def _reset_session_after_error(self) -> None:
+        """POS-TXN-01. Roll the long-lived session back after a cycle failed.
+
+        Both loops share ONE session for the life of the process. A cycle that failed
+        mid-transaction left it aborted, and nothing rolled it back, so every later cycle
+        raised ``PendingRollbackError`` from its first query: in production the watchdog
+        was dead from 15:35 to the next deploy, logging ~3,000 "Watchdog error" events and
+        adjudicating nothing. Rolling back discards only the failed cycle's unsaved
+        changes; the next cycle re-reads the rows and re-applies them from the venue.
+        """
+        try:
+            self.db.rollback()
+        except Exception:  # pragma: no cover - rollback of an already-dead connection
+            logger.warning("Watchdog session rollback after an error failed", exc_info=True)
     
     async def _reconciliation_loop(self):
         """
@@ -404,6 +420,7 @@ class OrderWatchdog:
                 break
             except Exception as e:
                 logger.error(f"STEP 9: Reconciliation loop error: {e}", exc_info=True)
+                self._reset_session_after_error()
                 await asyncio.sleep(5)  # Wait before retry
     
     async def _reconcile_open_orders(self):
