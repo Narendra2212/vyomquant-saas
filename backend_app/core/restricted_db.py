@@ -86,6 +86,8 @@ def _get_engine() -> Optional[Engine]:
             _ENV_VAR, SQLITE_FALLBACK_URL,
         )
 
+    url = route_via_supabase_pooler(url, _main_database_url())
+
     # Deliberately small and un-pooled-beyond-a-handful: this engine serves exactly two
     # routes, not the whole application, and payment_methods_app's own CONNECTION LIMIT
     # 10 (set in the migration) is the real ceiling this should never approach.
@@ -96,6 +98,51 @@ def _get_engine() -> Optional[Engine]:
     _session_factory = sessionmaker(bind=_engine, autocommit=False, autoflush=False)
     logger.info("[restricted_db] payment_methods_app engine initialised")
     return _engine
+
+
+def _main_database_url() -> str:
+    try:
+        from backend_app.core.database_pool import DATABASE_URL
+
+        return DATABASE_URL or ""
+    except Exception:  # noqa: BLE001 - routing is best-effort; the URL is used as given
+        return ""
+
+
+def route_via_supabase_pooler(url: str, main_url: str) -> str:
+    """BILL-PM-01: send a DIRECT Supabase DSN through the IPv4 pooler the app already uses.
+
+    Found in production: ``GET /api/billing/payment-methods`` answered 500 for every user
+    -- ``connection to server at "db.<ref>.supabase.co" ... port 5432 failed: Network is
+    unreachable``. The direct host resolves to IPv6 only and the ECS tasks have no IPv6
+    route, so this engine could never connect, while the main engine works because its
+    ``DATABASE_URL`` names the Supavisor pooler (``*.pooler.supabase.com:6543``).
+
+    A ``db.<ref>.supabase.co`` URL is rewritten onto the pooler host the main URL uses,
+    port 6543 (transaction mode -- ``SET LOCAL`` above is transaction-scoped, so it is
+    safe there), with the username suffixed ``.<ref>`` as Supavisor requires for any role.
+    Anything else -- a pooler URL already, a non-Supabase host, SQLite, or no pooler to
+    copy -- is returned unchanged.
+    """
+    import re
+
+    from sqlalchemy.engine import make_url
+
+    try:
+        parsed = make_url(url)
+        main = make_url(main_url) if main_url else None
+    except Exception:  # noqa: BLE001
+        return url
+    m = re.fullmatch(r"db\.([a-z0-9]+)\.supabase\.co", parsed.host or "")
+    if not m or main is None or not (main.host or "").endswith(".pooler.supabase.com"):
+        return url
+    ref = m.group(1)
+    user = parsed.username or ""
+    if not user.endswith(f".{ref}"):
+        user = f"{user}.{ref}"
+    routed = parsed.set(host=main.host, port=6543, username=user)
+    logger.info("[restricted_db] routing the direct Supabase host through the pooler %s", main.host)
+    return routed.render_as_string(hide_password=False)
 
 
 @contextmanager
