@@ -281,3 +281,42 @@ def test_a_failed_cycle_rolls_the_shared_session_back(loop, step):
     with patch("backend_app.backend.order_watchdog.asyncio.sleep", AsyncMock()):
         asyncio.run(getattr(watchdog, loop)())
     assert session.rollbacks == 1
+
+
+# ── FILL-TS-01: a watchdog-completed fill records its venue status and fill time ──────
+
+
+def test_a_watchdog_completed_fill_records_venue_status_and_fill_time():
+    """Found in production: market orders Binance testnet first acknowledged as NEW were
+    completed by the watchdog with ``exchange_status='NEW'`` and ``filled_at`` empty."""
+    from backend_app.backend.exchange_executor import OrderStatusResult
+    from backend_app.core.models.execution_record import ExecutionStatus
+
+    class _Commit(_Session):
+        def commit(self):
+            pass
+
+    watchdog = OrderWatchdog.__new__(OrderWatchdog)
+    watchdog.db = _Commit()
+    order = SimpleNamespace(
+        execution_id="exec_28bd0b71772ede04", status=ExecutionStatus.EXECUTING,
+        filled_size="0.0", remaining_size="0.0001", avg_price=None,
+        exchange_status="NEW", filled_at=None, tenant_id="t", symbol="BTC/USDC",
+        last_exchange_sync=None,
+    )
+    status = OrderStatusResult(success=True, status="closed", filled_size="0.0001",
+                               remaining_size="0", avg_price="65090.2")
+
+    async def _no_position(*_a, **_k):
+        return None
+
+    watchdog._update_position = _no_position
+    with patch("backend_app.backend.order_watchdog._position_lock_sql", lambda _d: "SELECT 1"), \
+         patch("backend_app.backend.order_watchdog._watchdog_session_dialect", lambda _db: "postgresql"):
+        watchdog.db.execute = lambda *_a, **_k: None
+        asyncio.run(watchdog._update_order_from_status(order, status))
+
+    assert order.status == ExecutionStatus.COMPLETED
+    assert order.exchange_status == "closed"
+    assert order.filled_at is not None
+    assert order.avg_price == "65090.2"

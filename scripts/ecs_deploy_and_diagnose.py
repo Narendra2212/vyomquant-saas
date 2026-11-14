@@ -288,6 +288,55 @@ def ensure_observability_env(container: dict) -> list:
     return added
 
 
+#: LIVE-LAUNCH-01: the live-trading launch policy, applied to the API container on every
+#: deploy. Version-controlled here rather than hand-edited in the ECS console, so a change
+#: to who may trade live, or to whether live bots survive a restart, is a reviewed commit.
+#:
+#: * ``VYOMQUANT_LIVE_TENANT_ALLOWLIST='*'`` - live trading is open to every tenant whose
+#:   PLAN includes it. The per-tenant list was a pre-launch guard; with it, a paying
+#:   customer was refused (``LIVE_TENANT_NOT_ALLOWLISTED``) until an operator edited the
+#:   task definition by hand. The plan entitlement (``Feature.LIVE_TRADING``), a verified
+#:   tradeable exchange key, ``VYOMQUANT_MODE=live`` and ``VYOMQUANT_ENABLE_LIVE_TRADING``
+#:   all still have to hold.
+#: * ``RESUME_LIVE_DEPLOYMENTS='true'`` - a live bot is resumed after a restart instead of
+#:   being marked failed. Without it EVERY deploy, scale-in or task replacement silently
+#:   ended every customer's live bot (observed in production on 2026-11-14: three live
+#:   deployments failed with "not resumed automatically after a restart"). A resumed bot
+#:   rebuilds its position from its own fills, re-measures the balance, re-verifies the key
+#:   and takes the WORK-03 ownership claim, so exactly one process runs it.
+#:
+#: Deliberately NOT here: ``VYOMQUANT_LIVE_SANDBOX_ONLY``. Moving from testnet keys to real
+#: money stays an explicit operator action.
+LIVE_TRADING_POLICY_ENV = {
+    "VYOMQUANT_LIVE_TENANT_ALLOWLIST": "*",
+    "RESUME_LIVE_DEPLOYMENTS": "true",
+}
+
+
+def apply_live_trading_policy_env(container: dict) -> list:
+    """Set :data:`LIVE_TRADING_POLICY_ENV` on a container's ``environment``.
+
+    Unlike :func:`ensure_observability_env` this OVERRIDES an existing plaintext value: the
+    policy is the point, and an old hand-set allowlist is exactly what it replaces. A name
+    supplied through ``secrets`` is left alone (ECS refuses a name in both). Returns
+    ``[(name, old, new), ...]`` for each value it changed, for the deploy log.
+    """
+    env = container.setdefault("environment", [])
+    secret_names = {s.get("name") for s in container.get("secrets", [])}
+    changed = []
+    for name, value in LIVE_TRADING_POLICY_ENV.items():
+        if name in secret_names:
+            continue
+        entry = next((e for e in env if e.get("name") == name), None)
+        if entry is None:
+            env.append({"name": name, "value": value})
+            changed.append((name, None, value))
+        elif entry.get("value") != value:
+            changed.append((name, entry.get("value"), value))
+            entry["value"] = value
+    return changed
+
+
 def register_task_definition(image_uri: str, base_task_def_arn: str = "") -> Tuple[bool, str]:
     """Register updated task definition with new container image.
 
@@ -328,6 +377,11 @@ def register_task_definition(image_uri: str, base_task_def_arn: str = "") -> Tup
                 added = ensure_observability_env(container)
                 if added:
                     print(f"[ecs_deploy] OBS-01: added {added} to the API container")
+                for name, old, new in apply_live_trading_policy_env(container):
+                    # Values are policy constants, not secrets; the old allowlist is a
+                    # list of tenant ids, so it is reported by length rather than printed.
+                    shown = f"{len(old.split(','))} entr(y/ies)" if old and "ALLOWLIST" in name else old
+                    print(f"[ecs_deploy] LIVE-LAUNCH-01: {name}: {shown!r} -> {new!r}")
                 break
 
     # Step 4: Strip fields not accepted by register-task-definition
