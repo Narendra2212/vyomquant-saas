@@ -556,8 +556,23 @@ class TestLifecycleGate:
     def test_ready_passes(self):
         db.assert_version_ready(_version(), STRATEGY_ID, "v3.0")
 
+    @pytest.mark.parametrize("state", sorted(db.REDEPLOYABLE_LIFECYCLE_STATES))
+    def test_a_previously_deployed_version_can_be_deployed_again(self, state):
+        """VER-REDEPLOY-01: a version is immutable once deployed and passed this gate as
+        READY the first time, so redeploying it must not require saving a new version."""
+        db.assert_version_ready(_version(lifecycle_state=state), STRATEGY_ID, "v3.0")
+
+    def test_an_archived_version_is_still_refused(self):
+        with pytest.raises(db.DeployRejected) as exc:
+            db.assert_version_ready(_version(lifecycle_state="ARCHIVED"), STRATEGY_ID, "v3.0")
+        assert exc.value.code == "VERSION_NOT_READY"
+
     @pytest.mark.parametrize(
-        "state", sorted(s for s in LIFECYCLE_STATES if s != LIFECYCLE_READY)
+        "state",
+        sorted(
+            s for s in LIFECYCLE_STATES
+            if s != LIFECYCLE_READY and s not in db.REDEPLOYABLE_LIFECYCLE_STATES
+        ),
     )
     def test_every_other_state_is_a_409_naming_the_state_and_the_prerequisite(self, state):
         with pytest.raises(db.DeployRejected) as exc:
