@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.backend.strategy_service import (
     DeployPrerequisiteError,
+    PlanLimitRefused,
     StrategyEnvironment,
     StrategyStatus,
     get_strategy_service,
@@ -3004,6 +3005,13 @@ async def deploy_version(request: Request,
                 "message": str(e),
                 "missing_prerequisite": e.missing_prerequisite,
             }
+        )
+    except PlanLimitRefused as e:
+        # QUOTA-MODE-01 / LIVE-PLAN-01: a plan refusal is a 403 with its own stable code,
+        # not the generic ValueError -> 404 VERSION_NOT_FOUND below.
+        raise HTTPException(
+            status_code=e.http_status,
+            detail={"error": e.code, "message": e.message, "upgrade_url": "/app/billing"},
         )
     except ValueError as e:
         raise HTTPException(

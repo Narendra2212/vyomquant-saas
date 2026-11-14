@@ -1283,6 +1283,14 @@ class OrderWatchdog:
             order.filled_size = status.filled_size
             order.remaining_size = "0"
             order.avg_price = status.avg_price or order.avg_price
+            # FILL-TS-01: a market order the venue first acknowledged as NEW reaches
+            # COMPLETED here, not at submission, and kept `exchange_status='NEW'` and no
+            # `filled_at` -- a filled trade with no fill time, which trade history and the
+            # portfolio's timestamps read. The venue's own status is recorded, and the fill
+            # time is the moment this reconciliation observed it (never earlier than true).
+            order.exchange_status = status.status
+            if getattr(order, "filled_at", None) is None:
+                order.filled_at = datetime.utcnow()
             
             logger.info(
                 f"Order marked FILLED by watchdog: {order.execution_id} | "
@@ -1321,6 +1329,7 @@ class OrderWatchdog:
             order.filled_size = status.filled_size
             order.remaining_size = status.remaining_size
             order.avg_price = status.avg_price or order.avg_price
+            order.exchange_status = status.status  # FILL-TS-01
             
             logger.info(
                 f"Order partial fill updated: {order.execution_id} | "

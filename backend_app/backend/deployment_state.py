@@ -272,15 +272,20 @@ class DeploymentStateStore:
         try:
             sb = self._client()
             res = await _run(
-                sb.table("strategy_deployments").select("user_id").eq("id", deployment_id)
+                sb.table("strategy_deployments")
+                .select("user_id, mode, environment")
+                .eq("id", deployment_id)
             )
             rows = getattr(res, "data", None) or []
             if not rows:
                 return
-            from backend_app.core.subscription_engine import Resource, SubscriptionEngine
+            from backend_app.backend.strategy_service import deployment_quota_resource
+            from backend_app.core.subscription_engine import SubscriptionEngine
 
+            # QUOTA-MODE-01: release the allowance this deployment reserved.
             await SubscriptionEngine.decrement_quota_usage(
-                str(rows[0]["user_id"]), Resource.BOTS.value
+                str(rows[0]["user_id"]),
+                deployment_quota_resource(rows[0].get("mode"), rows[0].get("environment")),
             )
         except Exception as exc:  # noqa: BLE001 - best effort; the failure is already recorded
             logger.warning("quota not released for failed deployment %s: %s", deployment_id, exc)
