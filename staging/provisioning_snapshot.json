@@ -11920,6 +11920,17 @@
     ],
     [
       "strategy_deployments",
+      "runtime_status",
+      "jsonb",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "strategy_deployments",
       "started_at",
       "timestamp with time zone",
       "",
@@ -26126,6 +26137,26 @@
     [
       "migrations/062_sec24_mfa_backup_codes.sql",
       "bb61c8e454d22dd58197e675fc696f75832915120e73488adce152beab9890f7",
+      "step1"
+    ],
+    [
+      "migrations/063_bt01_backtest_result_columns.sql",
+      "72282d245f367e9be1b11a5360f42ad3ba64de6bb62f32f76c0d8c8d1292d8f5",
+      "step1"
+    ],
+    [
+      "migrations/064_bt04_backtest_metric_column_widths.sql",
+      "c46ee8b00499b07ac3808f5796936c57ba84e3c4af644093632ec6399861e833",
+      "step1"
+    ],
+    [
+      "migrations/065_version_ready01_promote_current_validated_drafts.sql",
+      "18208c39e104c37d1f216c37eaa76e298fb9331f7231a4c38fbab393f07e976e",
+      "step1"
+    ],
+    [
+      "migrations/066_obs01_deployment_runtime_status.sql",
+      "3e68f93cb12f8a6afd19c234296b5895d70f89b9ab3baa163c205188f4de5c07",
       "step1"
     ],
     [
