@@ -3525,16 +3525,6 @@ class PaperSignal:
         return self.decision in EXIT_DECISIONS
 
 
-def _authored_decimal(value: float) -> Any:
-    """PAPER-QTY-01: an author-typed number that JSON decoding turned into a ``float``, as the
-    exact ``Decimal`` the author wrote. ``repr`` is the shortest string that round-trips to the
-    same float, which for a value typed in a form is the typed value itself. A non-finite
-    float is returned unchanged so the accounting engine still refuses it."""
-    if value != value or value in (float("inf"), float("-inf")):
-        return value
-    return Decimal(repr(value))
-
-
 def _signal_value(source: Any, *names: str) -> Any:
     """The first of ``names`` that ``source`` reports as something other than ``None``.
 
@@ -4415,14 +4405,6 @@ async def step_session(
     sizing_account: Optional[Mapping[str, Any]] = None
     sizing_account_read = False
     for produced in produced_values:
-        # PAPER-QTY-01: a STATED quantity comes from the action node's params - a number the
-        # author typed, stored in the version's JSON and therefore decoded as a binary float.
-        # `paper_signal` refuses every float (Requirement 18.1), so each such signal was
-        # discarded as unreadable (Sentry VYOMQUANT-API-PRODUCTION-13: 54 in an hour). The
-        # author's decimal is recovered exactly from the float's shortest repr
-        # (0.0001 -> Decimal("0.0001")); a non-finite value is left as-is and still refused.
-        if isinstance(produced, Mapping) and isinstance(produced.get("quantity"), float):
-            produced = {**produced, "quantity": _authored_decimal(produced["quantity"])}
         # PAPER-15: resolve a sizing RULE (e.g. 10% of equity) into an exact base quantity
         # before the output becomes a PaperSignal. The account is read once per bar.
         if (
