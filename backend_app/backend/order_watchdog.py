@@ -365,7 +365,23 @@ class OrderWatchdog:
                 break
             except Exception as e:
                 logger.error(f"Watchdog error: {e}", exc_info=True)
+                self._reset_session_after_error()
                 await asyncio.sleep(5)  # Short wait on error
+
+    def _reset_session_after_error(self) -> None:
+        """POS-TXN-01. Roll the long-lived session back after a cycle failed.
+
+        Both loops share ONE session for the life of the process. A cycle that failed
+        mid-transaction left it aborted, and nothing rolled it back, so every later cycle
+        raised ``PendingRollbackError`` from its first query: in production the watchdog
+        was dead from 15:35 to the next deploy, logging ~3,000 "Watchdog error" events and
+        adjudicating nothing. Rolling back discards only the failed cycle's unsaved
+        changes; the next cycle re-reads the rows and re-applies them from the venue.
+        """
+        try:
+            self.db.rollback()
+        except Exception:  # pragma: no cover - rollback of an already-dead connection
+            logger.warning("Watchdog session rollback after an error failed", exc_info=True)
     
     async def _reconciliation_loop(self):
         """
@@ -404,6 +420,7 @@ class OrderWatchdog:
                 break
             except Exception as e:
                 logger.error(f"STEP 9: Reconciliation loop error: {e}", exc_info=True)
+                self._reset_session_after_error()
                 await asyncio.sleep(5)  # Wait before retry
     
     async def _reconcile_open_orders(self):
@@ -1410,27 +1427,53 @@ class OrderWatchdog:
             return False
 
     async def _update_position(self, order: ExecutionRecordModel, fill_delta: Optional[Any] = None):
-        """Update position from order fill (idempotent with delta tracking)."""
+        """Update position from order fill (idempotent with delta tracking).
+
+        POS-TXN-01. The position update runs inside a SAVEPOINT, and a failure rolls back
+        only that savepoint. Before this the exception was logged and swallowed with the
+        transaction still aborted, so the caller's ``self.db.commit()`` raised
+        ``PendingRollbackError``: the order's own COMPLETED status was never persisted, the
+        row stayed in the stale population, and the next cycle failed the same way. In
+        production (positions table missing ``position_id``) that was ~2,000 Sentry events
+        within hours and live orders that never left ``executing`` in the ledger.
+
+        ``begin_nested()`` flushes the order's pending status first, so rolling back the
+        savepoint cannot take the order's change with it. If the position path itself
+        committed (the repository commits by default) the savepoint is no longer active and
+        the order was committed with it; a later failure then needs a plain rollback.
+
+        Regression: tests/test_pos_txn01_position_failure_keeps_the_order_update.py
+        """
+        size_to_apply = str(fill_delta) if fill_delta is not None else order.filled_size
+        if not size_to_apply or Decimal(size_to_apply) <= 0:
+            return
+
+        savepoint = None
         try:
+            savepoint = self.db.begin_nested()
             position_engine = get_position_engine(self.db)
-            
-            size_to_apply = str(fill_delta) if fill_delta is not None else order.filled_size
-            if not size_to_apply or Decimal(size_to_apply) <= 0:
-                return
-                
             position = await position_engine.update_position_from_fill(
                 execution_record=order,
                 fill_size=size_to_apply,
                 fill_price=order.avg_price
             )
-            
+            if savepoint.is_active:
+                savepoint.commit()
+
             if position:
                 logger.info(
                     f"Position updated by watchdog: {position.position_id} | delta={size_to_apply}"
                 )
-                
+
         except Exception as e:
             logger.error(f"Failed to update position from watchdog: {e}")
+            try:
+                if savepoint is not None and savepoint.is_active:
+                    savepoint.rollback()
+                else:
+                    self.db.rollback()
+            except Exception:  # pragma: no cover - rollback of an already-dead session
+                logger.warning("Position update rollback failed", exc_info=True)
     
     async def _trigger_alert(self, order: ExecutionRecordModel, reason: str):
         """Trigger alert for stuck order."""
