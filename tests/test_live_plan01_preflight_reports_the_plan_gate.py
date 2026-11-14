@@ -121,3 +121,10 @@ def test_a_plan_refusal_is_a_403_with_its_own_code_not_version_not_found():
     e = PlanLimitRefused("PAPER_STRATEGY_LIMIT_REACHED", "x")
     assert e.http_status == 403 and e.code == "PAPER_STRATEGY_LIMIT_REACHED"
     assert not isinstance(e, ValueError)  # so the ValueError -> 404 mapping cannot catch it
+
+
+def test_a_zero_allowance_says_not_included_rather_than_stop_one():
+    c = _allowance("free", 0, mode="live")
+    assert c.status == "failed"
+    assert "does not include running live strategies" in c.message
+    assert "Stop one" not in c.message
