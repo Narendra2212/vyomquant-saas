@@ -108,6 +108,14 @@ class FleetManager:
 
             limit = DEPLOYMENT_LIMITS.get(user_tier, DEPLOYMENT_LIMITS.get("free", 1))
 
+            # TIER-01: the bot is risk-checked against THIS plan. The tier was resolved
+            # here only for the bot-count limit and never reached the bot, whose risk
+            # checks read `blueprint["user_tier"]` and defaulted to "free" - so every bot,
+            # paper and live, was held to free-tier trade and exposure limits whatever the
+            # user paid for. A tier the blueprint already names is kept.
+            if isinstance(blueprint, dict) and not blueprint.get("user_tier"):
+                blueprint = {**blueprint, "user_tier": user_tier}
+
             user_bot_count = sum(
                 1 for k in self._active_fleet if k.startswith(f"{user_id}_")
             )

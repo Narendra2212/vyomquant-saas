@@ -103,4 +103,7 @@ def test_positive_measured_balance_is_used_as_is(monkeypatch):
     except Exception:
         pass  # later warm-up steps are not under test
     assert captured["portfolio_state"] == {"total_equity": 1234.5}
-    assert str(bot.recovered_exposure_coins) == "0.25"
+    # POS-01: the 0.25 BTC the account already holds is NOT this bot's position. A new
+    # deployment with no fills of its own starts flat (it used to adopt the wallet total,
+    # so an exit signal would have sold coins the bot never bought).
+    assert bot.recovered_exposure_coins == 0
