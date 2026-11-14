@@ -16,6 +16,7 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 import asyncio
+import inspect
 import logging
 import uuid
 import os
@@ -849,8 +850,19 @@ class BotRunner:
         base_coin = self.symbol.split("/")[0]
         quote_coin = quote_coin_of(self.symbol)
 
-        self.recovered_exposure_coins = Decimal(
-            str((wallet.get(base_coin) or {}).get("total", 0.0))
+        # POS-01: the bot's position is what THIS deployment bought and sold, never the
+        # account's whole holding of the base coin. Seeding it from the wallet total made
+        # coins the user already owned count as the bot's exposure (every buy refused as
+        # "over max exposure" on a funded account) and, worse, made an exit signal close
+        # "the whole position" - selling the user's own coins the bot never bought. Rebuilt
+        # from this deployment's executed fills and capped at what the wallet holds.
+        wallet_base = Decimal(str((wallet.get(base_coin) or {}).get("total", 0.0)))
+        own_position, position_source = await self._own_position_from_fills()
+        self.recovered_exposure_coins = max(Decimal("0"), min(own_position, wallet_base))
+        self._runtime_report(
+            position_base=float(self.recovered_exposure_coins),
+            position_source=position_source,
+            wallet_base_total=float(wallet_base),
         )
 
         quote_balance = Decimal(str((wallet.get(quote_coin) or {}).get("total", 0)))
@@ -950,6 +962,44 @@ class BotRunner:
             await DeploymentStateStore().write_runtime_status(deployment_id, snapshot)
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"runtime status for {deployment_id} not written: {exc}")
+
+    async def _own_position_from_fills(self) -> Tuple[Decimal, str]:
+        """POS-01: this deployment's net filled base quantity, from its executed signals.
+
+        ``(position, source)``. A deployment with no id, or whose fills cannot be read,
+        starts FLAT: a bot that under-counts its position can at worst buy again within
+        its limits, while one that over-counts sells coins it never bought.
+        """
+        deployment_id = (self.blueprint or {}).get("deployment_id")
+        if not deployment_id:
+            return Decimal("0"), "no_deployment_id_flat"
+        try:
+            from backend_app.core.dependencies import get_service_supabase
+
+            sb = get_service_supabase()
+            q = (
+                sb.table("signals")
+                .select("decision, filled")
+                .eq("deployment_id", str(deployment_id))
+                .gt("filled", 0)
+                .execute()
+            )
+            res = await q if inspect.isawaitable(q) else q
+            rows = list(getattr(res, "data", None) or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"Bot {self.user_id}/{self.symbol}: own fills unreadable ({exc}); "
+                "starting flat rather than adopting the wallet's holdings."
+            )
+            return Decimal("0"), "fills_unreadable_flat"
+        net = Decimal("0")
+        for row in rows:
+            qty = Decimal(str(row.get("filled") or 0))
+            if str(row.get("decision") or "").upper() == "BUY":
+                net += qty
+            else:  # SELL and CLOSE both reduce the position
+                net -= qty
+        return net, f"own_fills:{len(rows)}"
 
     def _watchdog_idle_seconds(self) -> float:
         """How long the tick stream may stay silent before the watchdog checks the clock:
