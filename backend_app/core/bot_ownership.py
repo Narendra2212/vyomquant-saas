@@ -315,6 +315,49 @@ def _claim_store_dsn() -> Optional[str]:
     return None
 
 
+def claim_is_live(user_id: str, symbol: str) -> Optional[bool]:
+    """RES-OWN-01: does SOME process hold a fresh, unreleased claim on this bot right now?
+
+    ``True``  - a claim exists whose heartbeat is within the stale window: the bot is running
+                somewhere (possibly another worker process or pod).
+    ``False`` - no such claim; or a declared local/test environment with no claim store,
+                where this process is the only one.
+    ``None``  - unknown: the store is unconfigured outside a local environment, or
+                unreachable. Callers must not treat unknown as "not running".
+    """
+    from backend_app.core.runtime_env import local_state_is_acceptable
+
+    dsn = _claim_store_dsn()
+    if dsn is None:
+        return False if local_state_is_acceptable() else None
+    try:
+        import psycopg2
+    except Exception:  # noqa: BLE001
+        return None
+    conn = None
+    try:
+        conn = psycopg2.connect(dsn)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM bot_ownership_claims WHERE user_id = %s AND symbol = %s "
+            "AND released_at IS NULL "
+            "AND heartbeat_at >= now() - make_interval(secs => %s) LIMIT 1",
+            (str(user_id), str(symbol), int(effective_stale_seconds())),
+        )
+        return cur.fetchone() is not None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("WORK-03: claim store unreadable while checking %s/%s: %s",
+                       user_id, symbol, exc)
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def claim_bot(user_id: str, symbol: str) -> BotClaim:
     """Claim ``(user_id, symbol)`` against the real store, deciding the no-store case.
 

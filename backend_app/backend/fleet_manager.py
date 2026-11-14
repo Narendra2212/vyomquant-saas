@@ -408,6 +408,30 @@ class FleetManager:
                     built = await built
                 blueprint, paper = built
             except Exception as exc:  # noqa: BLE001
+                # RES-OWN-01: "this process cannot (or may not) resume it" is not "nothing is
+                # running it". Every worker process runs this on start-up, including a
+                # worker recycled while the bot runs happily in ANOTHER process - which
+                # marked a live, trading deployment `failed` (and its strategy with it) a
+                # minute after it was deployed, while it went on to fill an order. A fresh
+                # ownership claim, or an unreadable claim store, means leave the row alone.
+                from backend_app.core.bot_ownership import claim_is_live
+
+                symbol = str(row.get("exchange_symbol") or "")
+                try:
+                    live_elsewhere = await asyncio.to_thread(
+                        claim_is_live, str(row.get("user_id")), symbol
+                    ) if symbol else None
+                except Exception:  # noqa: BLE001
+                    live_elsewhere = None
+                if live_elsewhere is not False:
+                    logger.info(
+                        "resume: deployment %s not resumed here (%s) and %s; leaving its "
+                        "status unchanged.", deployment_id, exc,
+                        "another process owns it" if live_elsewhere else
+                        "its ownership could not be read",
+                    )
+                    outcome["owned_elsewhere"] = outcome.get("owned_elsewhere", 0) + 1
+                    continue
                 await store.mark_failed(deployment_id, f"could not resume after restart: {exc}")
                 outcome["failed"] += 1
                 continue
