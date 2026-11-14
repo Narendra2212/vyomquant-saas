@@ -320,3 +320,72 @@ def test_a_watchdog_completed_fill_records_venue_status_and_fill_time():
     assert order.exchange_status == "closed"
     assert order.filled_at is not None
     assert order.avg_price == "65090.2"
+
+
+# ── UNKNOWN-VENUE-01: an UNKNOWN order with a venue id is reconciled, not frozen ──────
+
+
+def test_unknown_rows_with_a_venue_id_are_in_the_reconciliation_population():
+    """Found on the testnet run: two UNKNOWN rows (one `closed` at the venue) froze the
+    symbol, so every later live order was refused "symbol frozen" for up to 24 h."""
+    import inspect
+
+    from backend_app.backend.order_watchdog import OrderWatchdog as W
+
+    src = inspect.getsource(W._find_open_orders)
+    assert "ExecutionStatus.UNKNOWN" in src
+    assert "venue_order_id.isnot(None)" in src  # still only rows the venue can be asked about
+
+
+def _unknown_order(**kw):
+    from backend_app.core.models.execution_record import ExecutionStatus
+
+    base = dict(execution_id="exec_907b96d18aebcc4e", status=ExecutionStatus.UNKNOWN,
+                filled_size="0.0", remaining_size="0.0001", avg_price=None,
+                exchange_status="ambiguous_submission", filled_at=None, tenant_id="t",
+                symbol="BTC/USDC", last_exchange_sync=None)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _apply(order, venue_status, filled="0.0"):
+    from backend_app.backend.exchange_executor import OrderStatusResult
+
+    class _Commit(_Session):
+        def commit(self):
+            pass
+
+    watchdog = OrderWatchdog.__new__(OrderWatchdog)
+    watchdog.db = _Commit()
+    watchdog.db.execute = lambda *_a, **_k: None
+
+    async def _no_position(*_a, **_k):
+        return None
+
+    watchdog._update_position = _no_position
+    status = OrderStatusResult(success=True, status=venue_status, filled_size=filled,
+                               remaining_size="0" if filled != "0.0" else "0.0001",
+                               avg_price="63699.25" if filled != "0.0" else None)
+    with patch("backend_app.backend.order_watchdog._position_lock_sql", lambda _d: "SELECT 1"), \
+         patch("backend_app.backend.order_watchdog._watchdog_session_dialect", lambda _db: "postgresql"):
+        asyncio.run(watchdog._update_order_from_status(order, status))
+    return order
+
+
+def test_an_unknown_order_the_venue_reports_open_becomes_executing():
+    from backend_app.core.models.execution_record import ExecutionStatus
+
+    assert _apply(_unknown_order(), "open").status == ExecutionStatus.EXECUTING
+
+
+def test_an_unknown_order_the_venue_reports_filled_becomes_completed():
+    from backend_app.core.models.execution_record import ExecutionStatus
+
+    order = _apply(_unknown_order(), "closed", filled="0.0001")
+    assert order.status == ExecutionStatus.COMPLETED and order.filled_at is not None
+
+
+def test_an_unknown_order_the_venue_reports_cancelled_becomes_failed():
+    from backend_app.core.models.execution_record import ExecutionStatus
+
+    assert _apply(_unknown_order(), "canceled").status == ExecutionStatus.FAILED

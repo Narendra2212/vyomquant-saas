@@ -119,7 +119,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from backend_app.backend.dashboard_aggregation_service import (
@@ -880,6 +880,15 @@ def test_a_paper_ledger_reports_absent_only_when_a_fill_was_unreadable(request):
         readable_pnls=st.one_of(st.just([]), st.lists(money(), min_size=1, max_size=3)),
         spoiler=st.sampled_from(NOT_A_NUMBER),
     )
+    # The empty-ledger case is FORCED, as the census asks: drawn at roughly even odds from the
+    # `one_of` above, 25 examples occasionally produced only 4 of the 5 the floor requires
+    # (seen in a full local run on 2026-11-14), failing the census while every assertion
+    # held. Explicit examples always run, so the floor is met deterministically.
+    @example(total_equity=4000.0, available_balance=4000.0, readable_pnls=[], spoiler=NOT_A_NUMBER[0])
+    @example(total_equity=0.0, available_balance=0.0, readable_pnls=[], spoiler=NOT_A_NUMBER[-1])
+    @example(total_equity=1.5, available_balance=0.5, readable_pnls=[], spoiler=NOT_A_NUMBER[0])
+    @example(total_equity=123456.78, available_balance=1.0, readable_pnls=[], spoiler=NOT_A_NUMBER[-1])
+    @example(total_equity=99.99, available_balance=99.99, readable_pnls=[], spoiler=NOT_A_NUMBER[0])
     @COMPOSER_SETTINGS
     def check(
         total_equity: float,

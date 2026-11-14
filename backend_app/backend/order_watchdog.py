@@ -593,7 +593,15 @@ class OrderWatchdog:
         """
         open_statuses = [
             ExecutionStatus.PENDING,
-            ExecutionStatus.EXECUTING
+            ExecutionStatus.EXECUTING,
+            # UNKNOWN-VENUE-01: an UNKNOWN row that carries the venue's own order id is not
+            # unknowable -- the id names exactly one order, so asking the venue is safe. It
+            # used to be left to the 24 h DUP-01 recheck, and an UNKNOWN row freezes its
+            # symbol (RT-17), so one ambiguous submission stopped a live bot trading for a
+            # day. Found on the 2026-11-14 testnet run: two such rows (one already `closed`
+            # at the venue) refused every later order with "symbol frozen". UNKNOWN rows
+            # with NO venue id still go only through the recovery path.
+            ExecutionStatus.UNKNOWN,
         ]
         
         orders = self.db.query(ExecutionRecordModel).filter(
@@ -1357,6 +1365,16 @@ class OrderWatchdog:
                 
                 await self._update_position(order, fill_delta=fill_delta)
             
+        elif exchange_status in ["open", "new"] and order.status == ExecutionStatus.UNKNOWN:
+            # UNKNOWN-VENUE-01: the venue confirms the order exists and is resting. It is no
+            # longer unknown: it is an ordinary working order, followed from here on.
+            order.status = ExecutionStatus.EXECUTING
+            order.exchange_status = status.status
+            logger.warning(
+                f"Order {order.execution_id} was UNKNOWN; the venue reports it {exchange_status}. "
+                "Tracking it as EXECUTING."
+            )
+
         elif exchange_status in ["canceled", "cancelled", "expired"]:
             order.status = ExecutionStatus.FAILED
             
