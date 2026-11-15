@@ -145,7 +145,6 @@ export const IN_SCOPE_NATIVE_DIALOG_BUDGET = Object.freeze({
   // The other nine entered the guard clean. They are listed anyway, for the
   // reason in this group's header.
   'pages/Dashboard.jsx': 0,
-  'pages/Portfolio.jsx': 0,
   'pages/Strategies.jsx': 0,
   'pages/TradeHistory.jsx': 0,
   'pages/LiveTrading.jsx': 0,

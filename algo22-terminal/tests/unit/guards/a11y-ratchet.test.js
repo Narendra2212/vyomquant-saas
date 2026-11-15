@@ -152,7 +152,7 @@ const WAIVER_FILE = 'eslint-rules/a11y-ratchet.js';
  * the line was not.
  */
 const IN_SCOPE_PAGES = Object.freeze([
-  // The eleven `In_Scope_Pages` this list started as.
+  // The eleven `In_Scope_Pages` this list started as, less Portfolio.jsx (PORTFOLIO-REMOVED-01).
   'src/pages/Dashboard.jsx',
   'src/pages/LiveTrading.jsx',
   'src/pages/Strategies.jsx',
@@ -160,7 +160,6 @@ const IN_SCOPE_PAGES = Object.freeze([
   'src/pages/StrategyBuilder.jsx',
   'src/pages/Backtester.jsx',
   'src/pages/SignalTrace.jsx',
-  'src/pages/Portfolio.jsx',
   'src/pages/TradeHistory.jsx',
   'src/pages/PaperTrading.jsx',
   'src/pages/StrategyMarketplace.jsx',
@@ -455,7 +454,8 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // move, so no change in count) and brought `CookieConsent.jsx` and
     // `ReacceptanceGate.jsx` with it (+2). The move also took that directory out of
     // `A11Y_ENFORCED_GLOBS` entirely until this change put it back.
-    expect(IN_SCOPE_PAGES).toHaveLength(37);
+    // 37 -> 36: PORTFOLIO-REMOVED-01 deleted `src/pages/Portfolio.jsx`.
+    expect(IN_SCOPE_PAGES).toHaveLength(36);
     expect(new Set(IN_SCOPE_PAGES).size).toBe(IN_SCOPE_PAGES.length);
   });
 
@@ -592,7 +592,6 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
 
     // And the cleared pages are really clean, at `error`, with no line left behind.
     for (const page of [
-      'src/pages/Portfolio.jsx',
       'src/pages/Strategies.jsx',
       'src/pages/SignalTrace.jsx',
       'src/pages/Backtester.jsx',

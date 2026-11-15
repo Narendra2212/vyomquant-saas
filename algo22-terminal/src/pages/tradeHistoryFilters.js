@@ -324,7 +324,9 @@ export const PAPER_REPORTED_FIELDS = Object.freeze(['pnl', 'fees', 'strategy']);
  *
  * @type {ReadonlyArray<string>}
  */
-export const LIVE_REPORTED_FIELDS = Object.freeze(['fees', 'slippage']);
+// LIVE-HIST-01 (2026-11-15): the live read is `execution_records`, which names the strategy
+// (`strategy`, joined from `strategies.name`, beside `strategy_id`) on every row.
+export const LIVE_REPORTED_FIELDS = Object.freeze(['fees', 'slippage', 'strategy']);
 
 /** The `pageFields` entry for one Trade History field, or `null`. */
 const historyEntry = (field) => HISTORY_FIELDS.find((f) => f.field === field) ?? null;
@@ -921,9 +923,16 @@ export const offersClearFilters = (variant) => variant === EMPTY_VARIANT.NO_MATC
  */
 export function filterTrades(rows, options = {}) {
   const environment = normaliseEnvironment(options.environment);
-  const filters = normaliseFilters(options.filters, environment);
   const query = normaliseQuery(options.search);
   const candidates = tradeRows(rows);
+  const withheld = withheldFilters(candidates, environment);
+  // TH-FILTER-01: a dimension whose control is withheld (unreported, or no row offers a
+  // value) is not applied. Applied, a stale selection the trader can no longer see or clear
+  // filtered the ledger to nothing.
+  const filters = { ...normaliseFilters(options.filters, environment) };
+  for (const entry of withheld) {
+    if (entry.id in DEFAULT_FILTERS) filters[entry.id] = DEFAULT_FILTERS[entry.id];
+  }
   const matched = candidates.filter(buildPredicate({ filters, search: query, environment }));
   const totalCount = candidates.length;
   const resultCount = matched.length;
@@ -943,7 +952,7 @@ export function filterTrades(rows, options = {}) {
     activeFilterCount: active,
     hasActiveFilters: active > 0,
     controls: filterControls(candidates, environment),
-    withheld: withheldFilters(candidates, environment),
+    withheld,
     search: searchControl(candidates, environment),
     marketOptions: marketOptions(candidates),
     strategyOptions: strategyOptions(candidates),

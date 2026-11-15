@@ -208,7 +208,6 @@ const BUDGET_FILE = 'tests/unit/guards/no-placeholders.budget.js';
  */
 const IN_SCOPE_PAGES = Object.freeze([
   'pages/Dashboard.jsx',
-  'pages/Portfolio.jsx',
   'pages/Strategies.jsx',
   'pages/TradeHistory.jsx',
   'pages/LiveTrading.jsx',
@@ -758,7 +757,8 @@ describe('no-placeholders: the in-scope set is closed', () => {
 
     // Non-vacuity: if IN_SCOPE_PAGES were ever emptied, the two checks above would pass
     // over nothing.
-    expect(IN_SCOPE_PAGES).toHaveLength(11);
+    // 11 -> 10: PORTFOLIO-REMOVED-01 deleted `pages/Portfolio.jsx`.
+    expect(IN_SCOPE_PAGES).toHaveLength(10);
     expect(inScope.length).toBeGreaterThanOrEqual(11);
   });
 

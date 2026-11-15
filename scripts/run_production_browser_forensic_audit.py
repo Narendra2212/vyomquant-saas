@@ -166,7 +166,6 @@ async def run_forensic_audit():
             "/app/billing",
             "/app/profile",
             "/app/security-logs",
-            "/app/portfolio",
             "/app/trades",
             "/app/support",
             "/app/notifications"

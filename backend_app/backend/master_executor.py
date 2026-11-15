@@ -287,6 +287,57 @@ def venue_order_id_of(result: Any) -> Optional[str]:
     return text or None
 
 
+def _decimal_or_none(value: Any) -> Optional[Decimal]:
+    try:
+        number = Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+    return number if number.is_finite() else None
+
+
+def fill_report_of(
+    result: Any, decision_price: Any, filled_qty: Any, symbol: Any
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """TRACE-FILL-01: ``(average_price, fees, slippage)`` as the execution reported them.
+
+    Found on 2026-11-15: Signal Trace's execution block was written from constants -- the
+    DECISION price as the fill price, an assumed 0.1% fee, ``slippage=0.0005`` and
+    ``latency_ms=10`` on every signal -- so a paper fill at 70.465215 (70.43 plus the
+    simulator's slippage) read as 70.44 with a 0.05% slippage nobody measured.
+
+    * price: ``trade_result.executed_price``; ``None`` when nothing filled.
+    * fee: ``trade_result.fee`` when it is in the symbol's quote currency (a paper fill's
+      fee, which the paper ledger books in quote, carries no currency); a fee in the base
+      asset -- Binance's default -- is not a quote figure and is reported as ``None``.
+    * slippage: the signed fraction ``(fill - decision) / decision``.
+    """
+    filled = _decimal_or_none(filled_qty)
+    if filled is None or filled <= 0 or not isinstance(result, dict):
+        return None, None, None
+    inner = result.get("result")
+    trade = inner.get("trade_result") if isinstance(inner, dict) else None
+    if not isinstance(trade, dict):
+        return None, None, None
+    executed = _decimal_or_none(trade.get("executed_price"))
+    if executed is not None and executed <= 0:
+        executed = None
+    fee = _decimal_or_none(trade.get("fee"))
+    currency = str(trade.get("fee_currency") or "").strip().upper()
+    if fee is not None:
+        in_quote = currency == quote_coin_of(symbol) if currency else bool(trade.get("paper_ledger"))
+        if not in_quote:
+            fee = None
+    decision = _decimal_or_none(decision_price)
+    slippage = None
+    if executed is not None and decision is not None and decision > 0:
+        slippage = float((executed - decision) / decision)
+    return (
+        None if executed is None else float(executed),
+        None if fee is None else float(fee),
+        slippage,
+    )
+
+
 def quote_coin_of(symbol: Any) -> str:
     """The quote currency of a CCXT symbol: ``BTC/USDC`` -> ``USDC``,
     ``BTC/USDT:USDT`` -> ``USDT``. ``USDT`` only when the symbol names no quote at all,
@@ -1583,6 +1634,12 @@ class BotRunner:
                             f"unmeasured for this tick."
                         )
 
+                # TRACE-EXP-01: the exposure the risk check judged, kept so the trace records
+                # THAT figure. The audit below runs after the fill, when the position (and so
+                # `recovered_exposure_coins`) already includes this trade: an approved signal
+                # showed post-trade exposure and a refused one pre-trade, so "approved at
+                # $4,993" sat beside "refused at $4,990" under a $5,000 cap.
+                checked_exposure = float(self.recovered_exposure_coins) * price  # Decimal * float is a TypeError
                 verdict, reason = await self.risk_manager.validate_trade_request(
                     TradeRequest(
                         user_id=self.user_id,
@@ -1591,7 +1648,7 @@ class BotRunner:
                         side=order_payload["side"],
                         amount=order_payload["qty"],
                         current_price=price,
-                        current_exposure=float(self.recovered_exposure_coins) * price,  # Decimal * float is a TypeError
+                        current_exposure=checked_exposure,
                         current_drawdown_pct=current_drawdown_pct,
                         daily_pnl_pct=daily_pnl_pct,
                         is_reduce_only=is_reduce,
@@ -1637,7 +1694,7 @@ class BotRunner:
                             ),
                             position_size=float(order_payload["qty"]),
                             capital=bal_usdt,
-                            exposure=float(self.recovered_exposure_coins * Decimal(str(price))),
+                            exposure=checked_exposure,
                             drawdown_check=bool(current_drawdown_pct < 0.2)
                         )
 
@@ -1689,6 +1746,9 @@ class BotRunner:
                         else:
                             remaining_qty = requested_qty
 
+                        fill_price, fill_fee, fill_slippage = fill_report_of(
+                            v_result, price, v_fill, self.symbol
+                        )
                         await sig_svc.update_order(
                             user={"id": self.user_id, "_server_side": True},
                             signal_id=sig_id,
@@ -1702,14 +1762,12 @@ class BotRunner:
                             quantity=requested_qty,
                             filled=filled_qty_f,
                             remaining=remaining_qty,
-                            average_price=float(price),
-                            # Charged on what actually filled. `v_fill` comes from
-                            # `settle_exposure`, which now returns the venue's own
-                            # quantity -- 0 for an accepted-but-unfilled order, so this
-                            # is 0 rather than a fee for a trade that never happened.
-                            fees=float(Decimal(str(v_fill)) * Decimal(str(price)) * Decimal("0.001")),
-                            slippage=0.0005,
-                            latency_ms=10.0
+                            # TRACE-FILL-01: what the execution reported, not constants.
+                            # `latency_ms` is not measured on this path, so it says so.
+                            average_price=fill_price,
+                            fees=fill_fee,
+                            slippage=fill_slippage,
+                            latency_ms=None,
                         )
 
                         if order_st == "FILLED":

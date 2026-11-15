@@ -867,7 +867,7 @@ const LiveVenueHealth = memo(function LiveVenueHealth({
  * TIER 2 — OPEN POSITIONS (`positions`, `degraded`, `risk.open_positions_count`)
  * ══════════════════════════════════════════════════════════════════════════ */
 
-/** §7.1 draws the top five and a link to the rest, which is `/app/portfolio`. */
+/** §7.1 draws the top five and a link to the rest, on the Live / Paper Trading page. */
 const POSITIONS_LIMIT = 5;
 
 /**
@@ -970,7 +970,7 @@ function LiquidationDistanceCell({ value }) {
  *
  * No column is `sortable`. Five rows chosen by the server are not a set to sort, and
  * `ds/DataTable` renders a header as text rather than as a dead button when no
- * `onSortChange` is given (Requirement 19.4). Sorting the full ledger is `/app/portfolio`'s.
+ * `onSortChange` is given (Requirement 19.4). Sorting the full ledger is the trading page's.
  *
  * @param {string|null} currency The denomination `overview.currency` reported, or `null`.
  */
@@ -1296,7 +1296,7 @@ const EQUITY_EMPTY = Object.freeze({
   headline: "No equity history",
   body: "The curve is drawn from account snapshots. None fell inside the selected period, "
     + "so there is nothing to plot.",
-  action: Object.freeze({ label: "Open portfolio", to: "/app/portfolio" }),
+  action: Object.freeze({ label: "Open trade history", to: "/app/trades" }),
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -2652,7 +2652,13 @@ export default function Dashboard() {
               // No error object to translate: nothing rejected. `ds/ErrorState` renders the
               // `dashboard` context copy beneath the server's own reason above.
               error={{ error: null, context: "dashboard", onRetry: refetch }}
-              actions={<PanelLink to="/app/portfolio">View all in Portfolio</PanelLink>}
+              actions={
+                // PORTFOLIO-REMOVED-01: the full positions list (with close/flatten) is the
+                // trading page of the ledger this panel is showing.
+                environment === "paper"
+                  ? <PanelLink to="/app/paper-trading">View all in Paper Trading</PanelLink>
+                  : <PanelLink to="/app/live-trading">View all in Live Trading</PanelLink>
+              }
               data-region="openPositions"
             >
               <div className="mb-4">
@@ -2669,7 +2675,7 @@ export default function Dashboard() {
               </div>
 
               {/* The top five §7.1 draws, in the order the server returned them. The
-                  remaining rows are `/app/portfolio`'s, which is what the link above is
+                  remaining rows are the trading page's, which is what the link above is
                   for — a truncated list with no way to the rest is a truncated list. */}
               <DataTable
                 columns={positionCols}

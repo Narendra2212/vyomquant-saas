@@ -599,7 +599,7 @@ describe('AccountMenu: inside the sidebar’s footer slot', () => {
     const navHrefs = within(screen.getByRole('navigation', { name: 'Main' }))
       .getAllByRole('link')
       .map((a) => a.getAttribute('href'));
-    expect(navHrefs).toHaveLength(10);
+    expect(navHrefs).toHaveLength(9);
     for (const path of ACCOUNT_MENU_PATHS) expect(navHrefs).not.toContain(path);
   });
 });

@@ -2229,7 +2229,6 @@ _SURFACES: Dict[str, List[str]] = {
     "signal_trace": ["pages/SignalTrace.jsx"],
     "exchange_connection": ["pages/ExchangeManager.jsx"],
     "risk_settings": ["pages/RiskSettings.jsx"],
-    "portfolio": ["pages/Portfolio.jsx"],
     "trade_history": ["pages/TradeHistory.jsx"],
     "billing": ["pages/Billing.jsx"],
     "notifications": ["components/NotificationCenter.jsx"],

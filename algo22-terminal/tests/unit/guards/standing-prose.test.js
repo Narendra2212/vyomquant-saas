@@ -262,13 +262,11 @@ import { exchangeApi } from '../../../src/api/modules/exchange';
 import { libraryApi } from '../../../src/api/modules/library';
 import { ordersApi } from '../../../src/api/modules/orders';
 import { paperApi } from '../../../src/api/modules/paper';
-import { portfolioApi } from '../../../src/api/modules/portfolio';
 import { strategiesApi } from '../../../src/api/modules/strategies';
 import { PAGE_FIELDS_BY_PAGE, PAGES } from '../../../src/design/pageFields';
 import Backtester from '../../../src/pages/Backtester';
 import Dashboard from '../../../src/pages/Dashboard';
 import LiveTrading from '../../../src/pages/LiveTrading';
-import Portfolio from '../../../src/pages/Portfolio';
 import SignalTrace from '../../../src/pages/SignalTrace';
 import Strategies from '../../../src/pages/Strategies';
 import StrategyMarketplace from '../../../src/pages/StrategyMarketplace';
@@ -343,14 +341,6 @@ const primeReads = () => {
   vi.spyOn(ordersApi, 'getOpenOrders').mockResolvedValue([]);
   vi.spyOn(ordersApi, 'getHistory').mockResolvedValue([]);
 
-  // BARE ARRAYS, not envelopes. `Portfolio.jsx:991`, `:1008` and `:1026` each check
-  // `Array.isArray(res.value)` and report an error state otherwise — the allocation route
-  // "answers a BARE ARRAY of `{asset, value_usd, pct}`" and the other two are the same
-  // shape. An envelope here puts three chart panels into `error`, which is not what a fresh
-  // account looks like.
-  vi.spyOn(portfolioApi, 'getAllocation').mockResolvedValue([]);
-  vi.spyOn(portfolioApi, 'getEquityCurve').mockResolvedValue([]);
-  vi.spyOn(portfolioApi, 'getHeatmap').mockResolvedValue([]);
 
   vi.spyOn(paperApi, 'getPositions').mockResolvedValue({
     positions: [],
@@ -390,7 +380,6 @@ const SUITES = Object.freeze([
   { file: 'pages/LiveTrading.jsx', page: PAGES.LIVE_TRADING, component: LiveTrading },
   { file: 'pages/SignalTrace.jsx', page: PAGES.SIGNAL_TRACE, component: SignalTrace },
   { file: 'pages/Dashboard.jsx', page: PAGES.DASHBOARD, component: Dashboard },
-  { file: 'pages/Portfolio.jsx', page: PAGES.PORTFOLIO, component: Portfolio },
   { file: 'pages/TradeHistory.jsx', page: PAGES.TRADE_HISTORY, component: TradeHistory },
   { file: 'pages/Strategies.jsx', page: PAGES.STRATEGIES, component: Strategies },
   { file: 'pages/StrategyMarketplace.jsx', page: null, component: StrategyMarketplace },
@@ -578,7 +567,6 @@ describe('standing-prose: the measurement is live', () => {
       'pages/Backtester.jsx',
       'pages/Dashboard.jsx',
       'pages/LiveTrading.jsx',
-      'pages/Portfolio.jsx',
     ]);
     // These four are outside the accessibility ratchet's original scope too — cause 2 in
     // requirements §1.4. Tasks 5-7 migrate them, and each one that gains a `data-region`
@@ -630,7 +618,7 @@ describe('standing-prose: the decreasing budget', () => {
     // deleted. The budget file's header records that decision and why.
     expect(Object.keys(STANDING_PROSE_BUDGET).sort())
       .toEqual(Object.keys(SOURCE_CONSTANT_SEED).sort());
-    expect(Object.keys(STANDING_PROSE_BUDGET)).toHaveLength(8);
+    expect(Object.keys(STANDING_PROSE_BUDGET)).toHaveLength(7); // less Portfolio (PORTFOLIO-REMOVED-01)
     expect(SUITES.map((s) => s.file).sort()).toEqual(Object.keys(STANDING_PROSE_BUDGET).sort());
   });
 

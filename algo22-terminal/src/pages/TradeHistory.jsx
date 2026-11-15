@@ -169,8 +169,13 @@ const labelFor = (field) => fieldEntry(field)?.label ?? field;
  */
 const reasonFor = (field) => fieldEntry(field)?.reason ?? undefined;
 
-/** `api.paper.getTrades`'s batch size, as §7.7 fixes it. */
-const PAPER_TRADE_LIMIT = 100;
+/**
+ * Each ledger's batch size: the most each route answers in one read (`GET /api/paper/trades`
+ * `le=200`, `GET /api/orders/history` `le=500`). TH-CAP-01: at 100 a busy bot's ledger was cut
+ * off with nothing on screen saying so ("100 of 100 trades" over 160 fills).
+ */
+const PAPER_TRADE_LIMIT = 200;
+const LIVE_TRADE_LIMIT = 500;
 
 /** Requirement 11.4 / §7.7, via `DataTable`'s own default. */
 const PAGE_SIZE = 50;
@@ -519,7 +524,9 @@ export default function TradeHistory() {
   // previous answer rather than filtering it, because a live row and a paper row are not
   // the same ledger.
   const reader = useCallback(
-    () => (isPaper ? api.paper.getTrades(PAPER_TRADE_LIMIT) : api.orders.getHistory()),
+    () => (isPaper
+      ? api.paper.getTrades(PAPER_TRADE_LIMIT)
+      : api.orders.getHistory({ limit: LIVE_TRADE_LIMIT })),
     [isPaper],
   );
   const { state, data, error, refetch } = usePanelState(reader, { deps: [environment] });
@@ -837,6 +844,14 @@ export default function TradeHistory() {
               </CommandButton>
             ) : null}
           />
+
+          {/* TH-CAP-01: a full batch means older trades may exist beyond it. */}
+          {rawRows.length >= (isPaper ? PAPER_TRADE_LIMIT : LIVE_TRADE_LIMIT) ? (
+            <p className="text-micro text-content-secondary" data-region="ledgerCap">
+              {`Showing the latest ${rawRows.length} ${COUNT_NOUN}. Older trades are not loaded `
+                + 'here; the totals above cover these rows only.'}
+            </p>
+          ) : null}
 
           {/* A control that is not offered is explained rather than simply absent —
               Requirement 19.3's rule, applied to a filter instead of a figure. No

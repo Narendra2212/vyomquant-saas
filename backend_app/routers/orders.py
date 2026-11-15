@@ -1062,6 +1062,99 @@ async def cancel_all(
     return {"status": "ok" if result.get("success") else "partial", "cancelled": result}
 
 
+#: LIVE-HIST-01: quote currencies a fee can be summed in. A fee charged in the base asset
+#: (Binance's default without the BNB discount: 1E-7 BTC on a 0.0001 BTC buy) is not a
+#: dollar figure, so it is reported as unavailable rather than summed into "Total fees".
+_QUOTE_FEE_CURRENCIES = frozenset({"USDT", "USDC", "USD", "BUSD", "FDUSD", "TUSD", "DAI"})
+
+_LIVE_HISTORY_SQL = """
+    SELECT er.execution_id,
+           er.venue_order_id                                      AS order_id,
+           er.strategy_id,
+           s.name                                                 AS strategy,
+           er.symbol,
+           lower(er.side)                                         AS side,
+           er.filled_size                                         AS quantity,
+           coalesce(er.avg_price, er.price)                       AS price,
+           er.exchange_id,
+           coalesce(er.filled_at, er.submitted_at, er.created_at) AS executed_at,
+           er.result -> 'trade_result' ->> 'fee'                  AS raw_fee,
+           er.result -> 'trade_result' ->> 'fee_currency'         AS fee_currency,
+           er.result -> 'trade_result' ->> 'fill_state'           AS fill_state
+      FROM execution_records er
+      LEFT JOIN strategies s
+             ON s.id::text = er.strategy_id AND s.user_id = er.tenant_id
+     WHERE er.tenant_id = :tenant_id
+       AND er.exchange_id IS NOT NULL
+       AND er.status::text = 'COMPLETED'
+       AND er.filled_size ~ '^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$'
+       AND er.filled_size::numeric > 0{symbol_clause}
+     ORDER BY coalesce(er.filled_at, er.submitted_at, er.created_at) DESC
+     LIMIT :limit
+"""
+
+
+def _live_history_rows(user_id: str, symbol: Optional[str], limit: int) -> Optional[list]:
+    """LIVE-HIST-01: this user's filled LIVE executions, newest first.
+
+    A row is LIVE when ``exchange_id`` is set; paper fills carry none (they are the paper
+    ledger, read by ``GET /api/paper/trades``). Only fills are trades: an order that never
+    filled is a signal outcome, which Signal Trace shows.
+    """
+    try:
+        tenant = UUID(str(user_id))
+    except (TypeError, ValueError):
+        return []
+    from sqlalchemy import bindparam, text
+    from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+    from backend_app.core.database import get_db_context
+
+    symbol_clause = ""
+    params: Dict[str, Any] = {"tenant_id": tenant, "limit": max(1, min(int(limit), 500))}
+    if symbol:
+        symbol_clause = (
+            "\n       AND upper(replace(replace(er.symbol, '-', '/'), '_', '/')) = :symbol"
+        )
+        params["symbol"] = symbol.upper().replace("-", "/").replace("_", "/")
+    statement = text(_LIVE_HISTORY_SQL.format(symbol_clause=symbol_clause)).bindparams(
+        bindparam("tenant_id", type_=PG_UUID(as_uuid=True))
+    )
+    with get_db_context() as session:
+        found = session.execute(statement, params).mappings().all()
+
+    rows = []
+    for r in found:
+        currency = (r.get("fee_currency") or "").upper()
+        # A fee written while the order was only ACCEPTED is a placeholder "0", not a fee.
+        fee = (
+            r.get("raw_fee")
+            if currency in _QUOTE_FEE_CURRENCIES and r.get("fill_state") != "accepted"
+            else None
+        )
+        executed_at = r.get("executed_at")
+        rows.append({
+            "execution_id": r.get("execution_id"),
+            "order_id": r.get("order_id"),
+            "strategy_id": r.get("strategy_id"),
+            "strategy": r.get("strategy"),
+            "symbol": r.get("symbol"),
+            "side": r.get("side"),
+            "quantity": None if r.get("quantity") is None else str(r.get("quantity")),
+            "price": None if r.get("price") is None else str(r.get("price")),
+            "fee": fee,
+            "fee_currency": r.get("fee_currency"),
+            "status": "FILLED",
+            "exchange_id": r.get("exchange_id"),
+            "executed_at": (
+                executed_at.isoformat() if hasattr(executed_at, "isoformat") else executed_at
+            ),
+            "execution_environment": "LIVE",
+            "is_simulated": False,
+        })
+    return rows
+
+
 # ── GET /api/orders/history ───────────────────────────────────────────
 @router.get("/history")
 async def get_history(
@@ -1081,15 +1174,31 @@ async def get_history(
     except Exception:
         pass
 
+    # STRICT symbol validation to prevent injection
+    if symbol and not re.match(r"^[A-Z0-9/_-]+$", symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol format")
+
+    # LIVE-HIST-01: the live ledger is `execution_records`, the table the trading engine
+    # writes every live order to. Found on 2026-11-15: this route read only QuestDB's
+    # `executions` (unreachable in production -- QUESTDB_HOST is 127.0.0.1 on the ECS task --
+    # and `execute_query` never binds its `%s` parameters anyway) and then, with no
+    # `exchange_id`, answered `[]`: Trade History's LIVE ledger was empty for every user
+    # however many live orders had filled.
     try:
-        # STRICT symbol validation to prevent injection
-        if symbol:
-            if not re.match(r"^[A-Z0-9/_-]+$", symbol):
-                raise HTTPException(status_code=400, detail="Invalid symbol format")
-            clean_sym = symbol.replace("-", "_").replace("/", "_")
-        else:
-            clean_sym = None
-        
+        rows = await asyncio.to_thread(_live_history_rows, str(user["id"]), symbol, int(limit))
+    except Exception as exc:  # noqa: BLE001 - fall through to the older sources
+        logger.warning("LIVE-HIST-01: execution_records history unreadable: %s", exc)
+        rows = None
+    if rows is not None:
+        try:
+            await redis_manager.set(cache_key, json.dumps(rows, default=str), ex=5)
+        except Exception:
+            pass
+        return rows
+
+    try:
+        clean_sym = symbol.replace("-", "_").replace("/", "_") if symbol else None
+
         # PARAMETERIZED query - prevents SQL injection
         if clean_sym:
             query = "SELECT * FROM executions WHERE user_id = %s AND symbol = %s ORDER BY timestamp DESC LIMIT %s"

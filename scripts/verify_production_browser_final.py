@@ -65,7 +65,6 @@ async def run_final_verification():
         "/app/marketplace",
         "/app/exchange",
         "/app/risk",
-        "/app/portfolio",
         "/app/trades",
         "/app/signal-trace",
         "/app/billing",

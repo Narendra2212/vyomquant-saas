@@ -26,7 +26,6 @@ export { exchangeApi } from './modules/exchange';
 export { marketApi } from './modules/market';
 export { ordersApi } from './modules/orders';
 export { strategiesApi } from './modules/strategies';
-export { portfolioApi } from './modules/portfolio';
 export { riskApi } from './modules/risk';
 export { billingApi } from './modules/billing';
 export { userApi } from './modules/user';
@@ -48,7 +47,6 @@ import { exchangeApi } from './modules/exchange';
 import { marketApi } from './modules/market';
 import { ordersApi } from './modules/orders';
 import { strategiesApi } from './modules/strategies';
-import { portfolioApi } from './modules/portfolio';
 import { riskApi } from './modules/risk';
 import { billingApi } from './modules/billing';
 import { userApi } from './modules/user';
@@ -74,7 +72,6 @@ export const api = {
   market: marketApi,
   orders: ordersApi,
   strategies: strategiesApi,
-  portfolio: portfolioApi,
   paper: paperApi,
   library: libraryApi,
   risk: riskApi,

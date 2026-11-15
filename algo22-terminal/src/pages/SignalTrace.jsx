@@ -57,7 +57,7 @@
  * `statusToken` instead of the six hex literals they carried.
  */
 
-import { useCallback, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Activity,
@@ -70,6 +70,8 @@ import {
 } from 'lucide-react';
 
 import { get } from '../apiClient';
+import { strategiesApi } from '../api/modules/strategies';
+import { projectSignal, rowText as text } from '../lib/signalTraceRow';
 import { CONFIG } from '../config';
 import { Alert } from '../components/ds/Alert';
 import { CommandButton } from '../components/ds/CommandButton';
@@ -1691,26 +1693,6 @@ const ENVIRONMENT_OPTIONS = Object.freeze([
 /** What the count region is counting. */
 const COUNT_NOUN = 'signals';
 
-/**
- * A non-empty trimmed string, or `null`. The one reader this page uses for a row field, so
- * `''`, `'   '` and a non-string all reach the not-available marker by the same route.
- */
-const text = (value) => {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed === '' ? null : trimmed;
-};
-
-/** One row as the five cells §10.3's table reads. Nothing is defaulted. */
-const projectSignal = (row) => ({
-  id: row?.id,
-  time: text(row?.generated_at),
-  strategy: text(row?.strategy_id),
-  version: text(row?.strategy_version),
-  market: text(row?.symbol),
-  decision: text(row?.decision),
-  outcome: text(row?.status),
-});
 
 /** A cell that renders the declared reason when the row does not carry the field. */
 const markerCell = (field) => {
@@ -1721,13 +1703,17 @@ const markerCell = (field) => {
   };
 };
 
-/** The strategy id, with the version beside it where the row reports one. */
+/**
+ * The strategy's name (its id when the name is not known), with the version beside it
+ * where the row reports one. ST-UI-01: a trader reads names; the id is kept as a tooltip.
+ */
 function StrategyCell({ value, observed }) {
   if (value === null) return markerCell('listStrategy')();
   const version = observed?.version ?? null;
+  const name = observed?.strategyName ?? null;
   return (
-    <span className="font-mono">
-      {value}
+    <span className={name === null ? 'font-mono' : undefined} title={value}>
+      {name ?? value}
       {version === null ? null : (
         <span className="text-content-secondary">{` v${version}`}</span>
       )}
@@ -1900,7 +1886,33 @@ export default function SignalTrace() {
     [served, pushedSignals],
   );
 
-  const displayRows = useMemo(() => rows.map(projectSignal), [rows]);
+  /*
+    ST-UI-01: strategy names, from the same list the Strategies page reads. Best effort --
+    a failed read leaves the ids on screen, which is what the page showed before.
+  */
+  const [strategyNames, setStrategyNames] = useState({});
+  useEffect(() => {
+    let live = true;
+    Promise.resolve()
+      .then(() => strategiesApi.list())
+      .then((res) => {
+        const list = Array.isArray(res?.strategies) ? res.strategies : Array.isArray(res) ? res : [];
+        const names = {};
+        for (const s of list) {
+          const id = text(s?.id);
+          const name = text(s?.name);
+          if (id !== null && name !== null) names[id] = name;
+        }
+        if (live) setStrategyNames(names);
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+
+  const displayRows = useMemo(
+    () => rows.map((row) => projectSignal(row, strategyNames)),
+    [rows, strategyNames],
+  );
 
   /*
     ── The environment badge reads the SERVER, never the select above (§8.1) ──
@@ -1986,9 +1998,11 @@ export default function SignalTrace() {
     if (strategyId !== '') seen.add(strategyId);
     return [
       { value: '', label: 'All strategies' },
-      ...[...seen].sort().map((id) => ({ value: id, label: id })),
+      ...[...seen]
+        .map((id) => ({ value: id, label: strategyNames[id] ?? id }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
     ];
-  }, [rows, strategyId]);
+  }, [rows, strategyId, strategyNames]);
 
   /* ── Export (the third read, unchanged) ─────────────────────────────── */
 

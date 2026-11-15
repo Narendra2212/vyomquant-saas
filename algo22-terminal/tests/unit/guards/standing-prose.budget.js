@@ -283,7 +283,6 @@ export const SOURCE_CONSTANT_SEED = Object.freeze({
   'pages/LiveTrading.jsx': Object.freeze({ constants: 29, characters: 3175 }),
   'pages/SignalTrace.jsx': Object.freeze({ constants: 14, characters: 1351 }),
   'pages/Dashboard.jsx': Object.freeze({ constants: 13, characters: 1225 }),
-  'pages/Portfolio.jsx': Object.freeze({ constants: 5, characters: 774 }),
   'pages/TradeHistory.jsx': Object.freeze({ constants: 3, characters: 584 }),
   'pages/Strategies.jsx': Object.freeze({ constants: 7, characters: 420 }),
   'pages/StrategyMarketplace.jsx': Object.freeze({ constants: 3, characters: 186 }),
@@ -334,7 +333,6 @@ export const STANDING_PROSE_BUDGET = Object.freeze({
   // before concluding the task under-delivered.
   'pages/Dashboard.jsx': 168,
   'pages/Backtester.jsx': 101,
-  'pages/Portfolio.jsx': 91,
 
   /*
    * UNANCHORED — no `data-region` anywhere in these four, so by §5.5's definition their

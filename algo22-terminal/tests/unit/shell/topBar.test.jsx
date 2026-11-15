@@ -349,11 +349,11 @@ describe('TopBar: page context', () => {
   });
 
   it('marks only the last crumb as the current page, and links neither', () => {
-    renderTopBar({ pathname: '/app/portfolio' });
+    renderTopBar({ pathname: '/app/trades' });
 
     const current = trail().querySelectorAll('[aria-current="page"]');
     expect(current).toHaveLength(1);
-    expect(current[0].textContent).toBe('Portfolio');
+    expect(current[0].textContent).toBe('Trade History');
     // A group has no route and the current page needs no link to itself (Requirement 19.4).
     expect(within(trail()).queryAllByRole('link')).toHaveLength(0);
   });

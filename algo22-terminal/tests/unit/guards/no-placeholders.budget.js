@@ -104,7 +104,6 @@
  */
 export const IN_SCOPE_PLACEHOLDER_BUDGET = Object.freeze({
   'pages/Dashboard.jsx': 0,
-  'pages/Portfolio.jsx': 0,
   'pages/Strategies.jsx': 0,
   'pages/TradeHistory.jsx': 0,
   'pages/LiveTrading.jsx': 0,
