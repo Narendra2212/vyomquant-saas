@@ -2242,14 +2242,20 @@ async def stop_bot(
     sb = await _sb(user)
     if not sb:
         raise HTTPException(404, "Strategy not found.")
-    resp = await (
-        sb
-        .table("strategies")
-        .select("symbol, status")
-        .eq("id", strategy_id)
-        .eq("user_id", user["id"])
-        .execute()
-    )
+    try:
+        resp = await (
+            sb
+            .table("strategies")
+            .select("symbol, status")
+            .eq("id", strategy_id)
+            .eq("user_id", user["id"])
+            .execute()
+        )
+    except Exception as e:
+        # Same answer pause gives: an unreadable store is a 503 the caller can retry, never a
+        # bare 500 (and never a fabricated "already stopped").
+        logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id} for stop, user {user['id']}: {e}")
+        raise HTTPException(status_code=503, detail="Unable to retrieve strategy for stop. Please try again later.")
     if not resp.data:
         logger.error(f"[STRATEGIES] Strategy not found for stop: {strategy_id}")
         raise HTTPException(404, "Strategy not found.")
