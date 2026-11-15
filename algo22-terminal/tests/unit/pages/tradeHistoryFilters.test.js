@@ -104,7 +104,8 @@ describe('the declaration this module reads from pageFields', () => {
     expect(isFieldReported('side', ENVIRONMENTS.LIVE)).toBe(true);
     expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(false);
     expect(isFieldReported('pnl', ENVIRONMENTS.PAPER)).toBe(true);
-    expect(isFieldReported('strategy', ENVIRONMENTS.LIVE)).toBe(false);
+    // LIVE-HIST-01: the live read (`execution_records`) names the strategy on every row.
+    expect(isFieldReported('strategy', ENVIRONMENTS.LIVE)).toBe(true);
     // Slippage is unreported on the PAPER read specifically — no paper fill records one —
     // which is why it is not in the paper set, even though TRADE-13 now reports it on LIVE.
     expect(PAPER_REPORTED_FIELDS).not.toContain('slippage');
@@ -344,8 +345,12 @@ describe('a control over a field the read does not report is not offered', () =>
     const stale = { side: ALL_VALUE, outcome: 'PROFIT', market: ANY_VALUE, strategy: 'momentum v2' };
     const applied = normaliseFilters(stale, 'live');
     expect(applied.outcome).toBe(ALL_VALUE);
-    expect(applied.strategy).toBe(ANY_VALUE);
+    // LIVE-HIST-01: the strategy is a reported live dimension now, so the declaration keeps it;
+    // with no row offering that value the control is withheld and the view does not apply it.
+    expect(applied.strategy).toBe('momentum v2');
     const result = view(LIVE_ROWS, { filters: stale, environment: 'live' });
+    // TH-FILTER-01: and the withheld (no-values) strategy selection is not applied either.
+    expect(result.filters.strategy).toBe(ANY_VALUE);
     expect(result.resultCount).toBe(3);
     expect(result.activeFilterCount).toBe(0);
     // And it is honoured again on the read that reports it.
@@ -355,12 +360,13 @@ describe('a control over a field the read does not report is not offered', () =>
   it('explains every control it withholds, and names which kind of absence it is', () => {
     const live = view(LIVE_ROWS, { environment: 'live' }).withheld;
     expect(live.map((entry) => entry.id)).toEqual([FILTER_IDS.OUTCOME, FILTER_IDS.STRATEGY]);
-    // Live: the venue records neither, so the reason is pageFields' own.
-    for (const entry of live) {
-      expect(entry.cause).toBe(WITHHELD_CAUSES.UNREPORTED);
-      expect(entry.reason).toMatch(/\S/);
-      expect(entry.reason).toBe(fieldAbsenceReason(entry.field));
-    }
+    // Live: P&L is not recorded, so the outcome's reason is pageFields' own. The strategy IS
+    // reported since LIVE-HIST-01, so these fixture rows (which carry none) leave it with no
+    // values to offer rather than unreported.
+    expect(live[0].cause).toBe(WITHHELD_CAUSES.UNREPORTED);
+    expect(live[0].reason).toBe(fieldAbsenceReason(live[0].field));
+    expect(live[1].cause).toBe(WITHHELD_CAUSES.NO_VALUES);
+    for (const entry of live) expect(entry.reason).toMatch(/\S/);
     // Paper reports a `strategy_id` key, so the declaration allows it; `_trade_body` writes
     // `null` into it on every row, so there is nothing to choose from.
     const paper = view(PAPER_ROWS, { environment: 'paper' }).withheld;
