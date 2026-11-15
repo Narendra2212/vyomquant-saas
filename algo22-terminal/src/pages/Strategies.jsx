@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import {
   Plus, Layers, TrendingUp, Edit2,
-  BarChart2, Pause, Play, Trash2, Copy, Settings,
+  BarChart2, Pause, Play, Trash2, Copy, Settings, Square,
   Activity, Zap, Globe, Shield, RefreshCw
 } from "lucide-react";
 import { endpoints, api, publicGet } from "../api";
@@ -1390,6 +1390,42 @@ export default function Strategies() {
     }
   };
 
+  // PAUSE-01: Resume and Stop, written like Pause above -- an optimistic row update that is
+  // rolled back, with the server's reason shown, when the request is refused.
+  const runLifecycleAction = async (id, { call, optimisticStatus, failureTitle, fallback }) => {
+    if (isProcessing[id]) return;
+    const prevStrategies = strategies;
+    setProcessingFor(id, true);
+    setStrategies(prev => prev.map(s => s.id === id ? { ...s, status: optimisticStatus } : s));
+    try {
+      setActionNotice(null);
+      await call(id);
+    } catch (err) {
+      setStrategies(prevStrategies);
+      setActionNotice({
+        title: failureTitle,
+        refusal: readRefusal(err),
+        message: apiErrorMessage(err, fallback),
+      });
+    } finally {
+      setProcessingFor(id, false);
+    }
+  };
+
+  const handleResumeStrategy = (id) => runLifecycleAction(id, {
+    call: endpoints.strategies.resume,
+    optimisticStatus: "running",
+    failureTitle: "Resume failed — the strategy is still paused",
+    fallback: "The strategy could not be resumed. Please try again.",
+  });
+
+  const handleStopStrategy = (id) => runLifecycleAction(id, {
+    call: endpoints.strategies.stop,
+    optimisticStatus: "stopped",
+    failureTitle: "Stop failed — the strategy is still in its previous state",
+    fallback: "The strategy could not be stopped. Please try again.",
+  });
+
   /**
    * Archive one strategy (task 16.3, Requirements 2.9, 2.10, 3.1).
    *
@@ -1676,6 +1712,19 @@ export default function Strategies() {
       label: "Pause",
       icon: Pause,
       onSelect: (row) => handlePauseStrategy(row.id),
+    },
+    // PAUSE-01: offered in Pause's place once the strategy is paused.
+    [ROW_ACTION.RESUME]: {
+      label: "Resume",
+      icon: Play,
+      onSelect: (row) => handleResumeStrategy(row.id),
+    },
+    // PAUSE-01: ends the deployments. The safe direction, so inline; it is also what makes
+    // Delete possible, which refuses while a deployment is running or paused.
+    [ROW_ACTION.STOP]: {
+      label: "Stop",
+      icon: Square,
+      onSelect: (row) => handleStopStrategy(row.id),
     },
     // ── The separated pair. `intent` is read from the classifier, not written here ──────
     [ROW_ACTION.DEPLOY_LIVE]: {

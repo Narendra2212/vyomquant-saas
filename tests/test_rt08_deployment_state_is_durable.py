@@ -412,7 +412,11 @@ class TestLegacyRoutesDelegate:
         users = {f.name for f in ast.walk(tree) if isinstance(f, ast.AsyncFunctionDef)
                  and any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_deploy_current_version_paper"
                          for n in ast.walk(f))}
-        assert users == {"deploy_bot", "resume_strategy"}
+        # PAUSE-01: `resume_strategy` no longer redeploys. Starting a fresh PAPER deployment
+        # turned a paused LIVE bot into a paper bot; Resume now continues the paused
+        # deployments through `StrategyService.transition_all_deployments` (the deployment
+        # lifecycle), so it still never touches the fleet directly -- which is what RT-08 pins.
+        assert users == {"deploy_bot"}
 
     @pytest.mark.asyncio
     async def test_the_helper_deploys_the_current_version_in_paper_mode_only(self):
