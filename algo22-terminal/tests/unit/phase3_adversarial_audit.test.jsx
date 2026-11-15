@@ -117,7 +117,10 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
     // selector that DOES match when a row is focused (see 3.3 in
     // `portfolio_phase3_workflow.test.jsx`), so it cannot pass vacuously.
     expect(await screen.findByRole('heading', { name: 'Strategies' })).toBeDefined();
-    expect(screen.getByText('Real Bot')).toBeDefined();
+    // The heading renders before the list read settles, so the row is AWAITED: asserting it
+    // synchronously raced the read, and lost on CI once this file's earlier (Portfolio) tests,
+    // which used to warm the module graph first, were removed.
+    expect(await screen.findByText('Real Bot', {}, { timeout: 10000 })).toBeDefined();
     expect(screen.queryByText('Focused target')).toBeNull();
   });
 
