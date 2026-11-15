@@ -255,6 +255,30 @@ class PlanLimitRefused(Exception):
         self.message = message
 
 
+class DeploymentConflict(PlanLimitRefused):
+    """DEPLOY-DUP-01: the strategy already has an active deployment (409, not a raw 23505)."""
+
+    http_status = 409
+
+
+#: DEPLOY-DUP-01: the statuses ``uq_strategy_deployments_one_live_per_user`` treats as active
+#: -- (user_id, strategy_id) may hold ONE row in any of them, whatever its mode.
+ACTIVE_DEPLOYMENT_STATUSES = (
+    "deploying", "deployed", "pending", "queued", "starting", "restarting",
+    "running", "active", "paused",
+)
+
+
+def _active_deployment_message(row: Mapping[str, Any]) -> str:
+    mode = str(row.get("mode") or row.get("environment") or "").lower() or "existing"
+    status = str(row.get("status") or "active").lower()
+    action = "Resume or stop it" if status == "paused" else "Pause or stop it"
+    return (
+        f"This strategy already has a {mode} deployment that is {status}. "
+        f"{action} before deploying it again."
+    )
+
+
 #: QUOTA-MODE-01: the stable refusal codes ``subscription_dependencies`` already uses.
 QUOTA_REFUSAL_CODES = {
     "paper_strategies": "PAPER_STRATEGY_LIMIT_REACHED",
@@ -1803,7 +1827,8 @@ class StrategyService:
 
         entitlement = await self._live_entitlement_condition(sb, user, request, environment)
         allowance = await self._plan_allowance_condition(sb, user, request, environment)
-        plan_conditions = tuple(c for c in (entitlement, allowance) if c is not None)
+        active = await self._no_active_deployment_condition(sb, user, strategy_id)
+        plan_conditions = tuple(c for c in (entitlement, allowance, active) if c is not None)
 
         return db_binding.BindingSummary(
             conditions=(prerequisite, *plan_conditions, *summary.conditions),
@@ -1811,6 +1836,50 @@ class StrategyService:
             # would in fact create one, so a failed prerequisite cannot travel with a
             # binding that describes a deployment that is not going to happen.
             binding=summary.binding if prerequisite.passed else None,
+        )
+
+    async def _active_deployment_of(self, sb, user: dict, strategy_id: str):
+        """DEPLOY-DUP-01: this strategy's active deployment row, or ``None``."""
+        q = (sb.table("strategy_deployments").select("id, mode, environment, status")
+             .eq("strategy_id", str(strategy_id)).eq("user_id", user["id"]).execute())
+        res = await q if inspect.isawaitable(q) else q
+        for row in getattr(res, "data", None) or []:
+            if str(row.get("status") or "").lower() in ACTIVE_DEPLOYMENT_STATUSES:
+                return row
+        return None
+
+    async def _no_active_deployment_condition(self, sb, user: dict, strategy_id: str):
+        """DEPLOY-DUP-01: report the one-active-deployment rule before submit.
+
+        Found on 2026-11-15: a strategy with a PAUSED paper deployment offered Deploy, and the
+        live deploy failed with the database's raw ``duplicate key value violates unique
+        constraint "uq_strategy_deployments_one_live_per_user"``. The rule is right (it is
+        what prevents a second bot); the preflight now names it so Deploy is disabled with a
+        sentence saying what to do. Unreadable -> pending, never passed.
+        """
+        from backend_app.backend import deployment_binding as db_binding
+
+        try:
+            row = await self._active_deployment_of(sb, user, strategy_id)
+        except Exception as exc:  # noqa: BLE001
+            return db_binding.BindingCondition(
+                name="no_active_deployment",
+                status=db_binding.CONDITION_PENDING,
+                code=db_binding.CONDITION_NOT_EVALUATED,
+                reason=f"existing deployments could not be read: {exc}",
+            )
+        if row is None:
+            return db_binding.BindingCondition(
+                name="no_active_deployment", status=db_binding.CONDITION_PASSED
+            )
+        return db_binding.BindingCondition(
+            name="no_active_deployment",
+            status=db_binding.CONDITION_FAILED,
+            code="STRATEGY_ALREADY_DEPLOYED",
+            message=_active_deployment_message(row),
+            detail={"deployment_id": str(row.get("id")), "status": row.get("status"),
+                    "mode": row.get("mode")},
+            http_status=409,
         )
 
     async def _plan_allowance_condition(self, sb, user: dict, request, environment: str):
@@ -2072,6 +2141,17 @@ class StrategyService:
                     f"Live trading is not included in your {plan_key} plan. Upgrade to "
                     "Starter or above to deploy live, or deploy in paper mode.",
                 )
+
+        # DEPLOY-DUP-01: one active deployment per strategy (the unique index's own rule),
+        # checked BEFORE any quota is reserved, so a refusal costs nothing and reads as a
+        # sentence instead of the database's raw 23505.
+        try:
+            _existing = await self._active_deployment_of(sb, user, strategy_id)
+        except Exception as _exc:  # noqa: BLE001 - the unique index still guards the insert
+            logger.warning("active-deployment pre-check unreadable for %s: %s", strategy_id, _exc)
+            _existing = None
+        if _existing is not None:
+            raise DeploymentConflict("STRATEGY_ALREADY_DEPLOYED", _active_deployment_message(_existing))
 
         # QUOTA-MODE-01: a PAPER deployment draws on the plan's paper-strategy allowance and
         # a LIVE one on its live-bot allowance. Every deploy used to reserve `bots`, which

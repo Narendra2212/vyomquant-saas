@@ -273,7 +273,7 @@ class TestTheResponseShape:
         assert body["deployable"] is True
         # QUOTA-MODE-01: a paper deploy also reports the plan's paper allowance (the
         # live-only `live_entitlement` condition is absent for paper).
-        expected = {DEPLOY_PREREQUISITE_CONDITION, "plan_allowance", *db.BINDING_CONDITIONS}
+        expected = {DEPLOY_PREREQUISITE_CONDITION, "plan_allowance", "no_active_deployment", *db.BINDING_CONDITIONS}
         assert _statuses(body) == {name: db.CONDITION_PASSED for name in expected}
 
     def test_the_top_level_body_is_exactly_designs_two_keys(self):
@@ -637,7 +637,7 @@ class TestTheTwoSurfacesAgree:
         names = [c["name"] for c in body["conditions"]]
         # The plan conditions (LIVE-PLAN-01 / QUOTA-MODE-01) come right after the
         # prerequisite, ahead of the binding gates; paper reports only the allowance.
-        assert names == [DEPLOY_PREREQUISITE_CONDITION, "plan_allowance", *db.BINDING_CONDITIONS]
+        assert names == [DEPLOY_PREREQUISITE_CONDITION, "plan_allowance", "no_active_deployment", *db.BINDING_CONDITIONS]
 
     async def test_both_registered_paths_answer_identically(self):
         sb = _sb()

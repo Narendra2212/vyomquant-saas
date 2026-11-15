@@ -91,6 +91,8 @@ export const PREFLIGHT_CONDITION_ORDER = Object.freeze([
   'live_entitlement',
   // QUOTA-MODE-01: whether the plan has a free paper / live slot.
   'plan_allowance',
+  // DEPLOY-DUP-01: one active (running/paused/deploying) deployment per strategy.
+  'no_active_deployment',
   'version_ready',
   'plan_readable',
   'market_resolved',
