@@ -2091,7 +2091,8 @@ async def _deploy_current_version_paper(
     except PlanLimitRefused as e:
         raise HTTPException(
             status_code=e.http_status,
-            detail={"error": e.code, "message": e.message, "upgrade_url": "/app/billing"},
+            detail={"error": e.code, "message": e.message,
+                    **({"upgrade_url": "/app/billing"} if e.http_status == 403 else {})},
         )
     except ValueError as e:
         raise HTTPException(status_code=403 if "Quota" in str(e) or "plan" in str(e) else 404,

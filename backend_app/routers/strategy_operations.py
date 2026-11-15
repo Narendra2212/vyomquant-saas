@@ -3011,7 +3011,8 @@ async def deploy_version(request: Request,
         # not the generic ValueError -> 404 VERSION_NOT_FOUND below.
         raise HTTPException(
             status_code=e.http_status,
-            detail={"error": e.code, "message": e.message, "upgrade_url": "/app/billing"},
+            detail={"error": e.code, "message": e.message,
+                    **({"upgrade_url": "/app/billing"} if e.http_status == 403 else {})},
         )
     except ValueError as e:
         raise HTTPException(
