@@ -306,7 +306,7 @@ import {
   AlertCircle,
   Bell,
   Check,
-  ChevronRight,
+  // `ChevronRight` left with SECLOG-REMOVED-01: it was the *Review All Logs* command's icon.
   Copy,
   Cpu,
   CreditCard,
@@ -1312,6 +1312,14 @@ export default function Profile() {
             </div>
           </Panel>
 
+          {/* SECLOG-REMOVED-01 (2026-11-15): this panel takes NO `actions`. A *Review All
+              Logs* ghost command stood there and navigated to `/app/security-logs`, a route
+              that no longer exists — it would now fall through the `/app/*` catch-all to the
+              dashboard, which is a worse answer than not offering the control at all.
+
+              The panel itself is UNCHANGED and still reads `api.user.getSecurityLogs(20)`.
+              Withdrawing the full-page view does not withdraw this account's own
+              recent-access reporting, and the backend events behind it are still written. */}
           <Panel
             title="Recent access"
             state={accessState}
@@ -1325,15 +1333,6 @@ export default function Profile() {
             error={{ error: security.error, onRetry: security.refetch }}
             unavailable={{ reason: 'Your access events cannot be read right now.' }}
             unauthorised={{ error: security.error }}
-            actions={
-              <CommandButton
-                intent="ghost"
-                icon={ChevronRight}
-                onClick={() => navigate('/app/security-logs')}
-              >
-                Review All Logs
-              </CommandButton>
-            }
           >
             <div className="flex flex-col gap-3">
               <div className="rounded-lg border border-line-default bg-surface-raised px-3 py-2.5">

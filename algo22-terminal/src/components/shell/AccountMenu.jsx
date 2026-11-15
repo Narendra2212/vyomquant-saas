@@ -126,7 +126,7 @@ import {
   ChevronUp,
   CreditCard,
   ExternalLink,
-  FileClock,
+  // `FileClock` left with SECLOG-REMOVED-01: it was the Security log row's icon.
   LifeBuoy,
   Link2,
   LogOut,
@@ -185,7 +185,10 @@ const MENU_GROUPS = Object.freeze([
     heading: 'Account',
     items: Object.freeze([
       Object.freeze({ path: '/app/profile', icon: User }),
-      Object.freeze({ path: '/app/security-logs', icon: FileClock }),
+      // SECLOG-REMOVED-01 (2026-11-15): `/app/security-logs` stood here. The user-facing
+      // Security log page is withdrawn from the product; the backend security-event and
+      // authentication logging it read is deliberately untouched, and Profile's own
+      // *Recent access* panel still reports the latest events for this account.
       Object.freeze({ path: '/app/billing', icon: CreditCard }),
     ]),
   }),

@@ -320,7 +320,11 @@ const CLEARED_BY_THIS_SPEC = Object.freeze({
   'pages/StrategyMarketplace.jsx': Object.freeze({ was: 30, now: 0, task: '5.2' }),
   'pages/RiskSettings.jsx': Object.freeze({ was: 16, now: 0, task: '7.2' }),
   'pages/TwoFA.jsx': Object.freeze({ was: 12, now: 0, task: '7.3' }),
-  'pages/SecurityLogs.jsx': Object.freeze({ was: 7, now: 0, task: '7.4' }),
+  // `pages/SecurityLogs.jsx: { was: 7, now: 0, task: '7.4' }` stood here. Task 7.4 did clear
+  // its seven absolute sizes, but SECLOG-REMOVED-01 (2026-11-15) later deleted the page, and
+  // this map's own rule is that the two states are exclusive: "a cleared page still renders".
+  // The entry therefore MOVED to `DELETED_BY_THIS_SPEC`, which records the 7 it came down
+  // from so the clearance is not lost from the history.
   'pages/UpdatePasswordPage.jsx': Object.freeze({ was: 3, now: 0, task: '7.5' }),
   'pages/Wizard.jsx': Object.freeze({ was: 24, now: 0, task: '7.6' }),
   'pages/LegalPage.jsx': Object.freeze({ was: 15, now: 0, task: '7.7' }),
@@ -382,6 +386,23 @@ const CLEARED_BY_THIS_SPEC = Object.freeze({
  */
 const DELETED_BY_THIS_SPEC = Object.freeze({
   'pages/Landing.jsx': Object.freeze({ was: 41, task: '9.2' }),
+  /*
+    SECLOG-REMOVED-01 (2026-11-15): the user-facing Security log page is withdrawn from the
+    product. The backend security-event, authentication and audit records it read are
+    untouched, and Profile's *Recent access* panel still reads them through
+    `api.user.getSecurityLogs`.
+
+    THE SECOND ENTRY HERE, AND THE FIRST THAT WAS CLEARED BEFORE IT WAS DELETED.
+    `CLEARED_BY_THIS_SPEC` carried `{ was: 7, now: 0, task: '7.4' }`, because task 7.4 really
+    did take its seven absolute sizes to zero. It is not there any more: the assertion below
+    holds the two maps exclusive on the grounds that "a cleared page still renders", and once
+    the file is gone `CLEARED` would be the wrong tense for it.
+
+    So `was: 7` here is doing double duty on purpose. It is §1.1's figure, which is what the
+    assertion checks it against -- and it is also the number task 7.4 brought to zero, kept in
+    this entry so moving the page between maps does not erase that it was cleared first.
+  */
+  'pages/SecurityLogs.jsx': Object.freeze({ was: 7, task: 'SECLOG-REMOVED-01' }),
 });
 
 /**

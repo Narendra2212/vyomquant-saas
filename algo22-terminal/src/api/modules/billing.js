@@ -170,35 +170,33 @@ export const billingApi = {
    */
   resumeSubscription: () => post('/api/billing/resume', {}),
 
-  /**
-   * Ask the server for a hosted provider billing-portal session.
+  /*
+   * NO `openPortal`. REMOVED BY BILLING-PORTAL-02 (2026-11-15).
    *
-   * THIS ALWAYS REJECTS. THERE IS NO PORTAL, AND THERE IS NO LONGER A CASE WHERE THERE IS.
+   * It wrapped `POST /api/billing/portal`, and its own docblock here opened with "THIS ALWAYS
+   * REJECTS. THERE IS NO PORTAL, AND THERE IS NO LONGER A CASE WHERE THERE IS." Razorpay is
+   * the only gateway and publishes no hosted self-serve billing portal, so the server answers
+   * `501 PROVIDER_HAS_NO_BILLING_PORTAL` (or `503 PAYMENT_PROVIDER_NOT_CONFIGURED`), never a
+   * URL. Stripe's `billing_portal.Session` branch went with Stripe, so the handler has had no
+   * success path at all.
    *
-   * Razorpay is the only gateway and it publishes no hosted self-serve billing portal, so
-   * there is no session to create and no customer-facing URL to hand out. The server answers
-   * `501 PROVIDER_HAS_NO_BILLING_PORTAL` when the live provider has no portal, and
-   * `503 PAYMENT_PROVIDER_NOT_CONFIGURED` when no provider holds live credentials. Neither
-   * carries a URL, because there is none to carry.
+   * The reason it was kept — that `Billing.jsx` rendered the server's structured
+   * `detail.message` verbatim, which is better than the bare 404 a deleted route would give —
+   * argued for good copy on a refusal, not for keeping the buttons. Both call sites are gone
+   * (*Manage billing* in the current-plan panel, *Update payment method* in the payment-failed
+   * alert), so this wrapper has no callers and a client method whose only contract is to
+   * reject is a trap for the next one.
    *
-   * It previously said a `{ url }` "comes back only from a genuinely Stripe-configured
-   * deployment". That is no longer a reachable case: Stripe has been removed from the
-   * product in full, so the branch that created a `stripe.billing_portal.Session` is gone
-   * and the handler has no success path left at all.
+   * THE BACKEND ROUTE IS DELIBERATELY UNTOUCHED. `routers/billing.py:2995` still serves it and
+   * still answers 501. This is the removal of a dead frontend control, not of the payment
+   * provider integration: `createCheckout`, `setCurrency`, `cancelSubscription`,
+   * `resumeSubscription` and webhook processing all stay exactly as they were.
    *
-   * The ROUTE still exists, deliberately. It was deleted during the Stripe removal and put
-   * back, because `Billing.jsx` renders this handler's own `detail.message` into `ds/Alert`
-   * verbatim, and with the route gone both callers got a bare 404 — which carries no coded
-   * `detail`, so the page fell back to a generic "Failed to open billing portal." and the
-   * user lost the sentence explaining where their card is actually changed (at the next
-   * Razorpay Checkout; the instrument is never stored here).
-   *
-   * So a caller must treat the rejection as the ONLY answer and render the server's own
-   * `detail.message`. No caller may synthesise a portal URL of its own.
-   *
-   * @returns {Promise<never>} always rejects; read `detail.error` and `detail.message`
+   * The sentence the refusal used to carry now lives where it is actually useful — in the
+   * payment-failed alert in `Billing.jsx`, stated before the user presses anything, telling
+   * them the instrument is collected by Razorpay Checkout at purchase, is never stored here,
+   * and is changed by paying again with a different instrument.
    */
-  openPortal: () => post('/api/billing/portal', {}),
 
   /**
    * Delete a stored payment method by ID.

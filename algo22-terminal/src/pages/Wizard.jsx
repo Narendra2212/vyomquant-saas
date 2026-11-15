@@ -312,7 +312,11 @@ const SECURITY_ROWS = Object.freeze([
     on: null, // declared UNAVAILABLE: neither arm is reachable
     off: null,
     action: "Manage",
-    to: "/app/security-logs",
+    // SECLOG-REMOVED-01 (2026-11-15): was `/app/security-logs`, which no longer exists. The
+    // toggle this row is about -- *Security & Login Events* -- lives on the Profile page
+    // today, so *Manage* goes where the setting actually is rather than to a page that would
+    // redirect to the dashboard.
+    to: "/app/profile",
   }),
 ]);
 

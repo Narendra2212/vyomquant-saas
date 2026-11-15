@@ -3960,7 +3960,43 @@ function StrategyBuilderCanvas({
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: token.surface.panel }}>
+    /*
+      LAYOUT-01 (2026-11-15). `flex: 1` + `minHeight: 0`, NOT `height: '100vh'`.
+
+      This element does not own the viewport. Both routes that mount the builder --
+      `/app/builder` (App.jsx) and the `view === 'builder'` branch of `pages/Strategies.jsx`
+      -- render it inside the authenticated shell's `<main>`, which App.jsx declares as the
+      `1fr` row of a `min-content 1fr` grid with `minHeight: 0; overflowY: 'auto'`. The
+      height actually available to a page is therefore the viewport MINUS the TopBar row and
+      its disconnected-state strip.
+
+      `height: '100vh'` asked for the whole viewport inside that remainder, so this column
+      was taller than its container by exactly the height of the chrome above it. The
+      toolbar sat at the top of the over-tall column, the canvas below is a `flex: 1` child
+      measured against the over-tall box, and the surplus rendered as a large empty band
+      between the toolbar and the canvas plus a document-level scroll.
+
+      It is also why the gap appeared to depend on browser zoom: zoom changes the CSS-pixel
+      height of the fixed chrome but not the definition of `vh`, so the mismatch grew and
+      shrank with the zoom level instead of staying put. That is the signature of this bug,
+      not a second one.
+
+      App.jsx already states the rule on the shell grid itself: "`100%` rather than `100dvh`
+      -- the gate's outer element is already the viewport height and this is the remainder
+      after its restriction strip, so `100dvh` here would overflow the document by the
+      strip's height." The builder was violating a convention its own shell documents.
+
+      `flex: 1` rather than `height: '100%'` because this element IS a flex item of `<main>`
+      (`<Suspense>` renders no DOM node, so nothing sits between them): growing to fill the
+      free main-axis space does not depend on a percentage resolving against a definite
+      container height. `minHeight: 0` is the companion guard -- a flex item's default
+      `min-height: auto` refuses to shrink below its content, which is what lets an
+      over-tall child push the document into a scroll instead of letting the canvas size
+      itself to what is actually visible.
+
+      Regression: tests/unit/pages/strategyBuilder.layout.test.js
+    */
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: token.surface.panel }}>
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: token.surface.raised, borderBottom: `1px solid ${token.line.default}`, gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

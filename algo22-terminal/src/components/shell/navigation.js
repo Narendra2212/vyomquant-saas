@@ -255,7 +255,9 @@ export function activeNavId(pathname) {
  */
 export const SECONDARY_ROUTE_TITLES = Object.freeze({
   '/app/profile': 'Profile',
-  '/app/security-logs': 'Security log',
+  // SECLOG-REMOVED-01 (2026-11-15): `'/app/security-logs': 'Security log'` is gone with the
+  // route. A title here for a path `App.jsx` no longer serves would label the shell header
+  // of a page that immediately redirects to the dashboard.
   '/app/billing': 'Billing & plan',
   '/app/exchange': 'Exchange accounts',
   '/app/risk': 'Risk settings',

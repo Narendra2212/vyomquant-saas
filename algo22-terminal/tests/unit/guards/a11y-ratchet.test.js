@@ -170,7 +170,16 @@ const IN_SCOPE_PAGES = Object.freeze([
   // with the file.
   'src/pages/RiskSettings.jsx',
   'src/pages/TwoFA.jsx',
-  'src/pages/SecurityLogs.jsx',
+  // `src/pages/SecurityLogs.jsx` stood here. SECLOG-REMOVED-01 (2026-11-15) withdrew the
+  // user-facing Security log page, and the line leaves with the file.
+  //
+  // This is the OPPOSITE call to `src/components/legal/LegalPage.jsx` below, and deliberately
+  // so. That page was MOVED and is still shipped, so its line followed it rather than being
+  // deleted -- dropping it would have stopped holding a live page. This page is not shipped at
+  // all any more, so a line naming it would hold nothing and would trip the list's own
+  // existence check. `Landing.jsx` set this precedent when task 9.2 discharged it by deletion.
+  //
+  // The count below goes 36 -> 35 for the same reason: a deletion is not a waiver.
   'src/pages/UpdatePasswordPage.jsx',
   'src/pages/Wizard.jsx',
   // Relocated, not removed. The LEGAL-01 work moved this page to
@@ -455,7 +464,8 @@ describe('a11y ratchet: no page can be quietly skipped', () => {
     // `ReacceptanceGate.jsx` with it (+2). The move also took that directory out of
     // `A11Y_ENFORCED_GLOBS` entirely until this change put it back.
     // 37 -> 36: PORTFOLIO-REMOVED-01 deleted `src/pages/Portfolio.jsx`.
-    expect(IN_SCOPE_PAGES).toHaveLength(36);
+    // 36 -> 35: SECLOG-REMOVED-01 deleted `src/pages/SecurityLogs.jsx`.
+    expect(IN_SCOPE_PAGES).toHaveLength(35);
     expect(new Set(IN_SCOPE_PAGES).size).toBe(IN_SCOPE_PAGES.length);
   });
 

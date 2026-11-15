@@ -426,8 +426,13 @@ export default function StrategyDetail() {
   ];
 
   if (isLoading) {
+    /*
+      LAYOUT-01: `100%`, not `100vh`. `/app/strategies/:strategyId` renders inside the
+      shell's `<main>`, so the height available is the viewport minus the TopBar and its
+      strip; `100vh` pushed this centred loader below the fold and scrolled the document.
+    */
     return (
-      <div style={{ padding: 20, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
+      <div style={{ padding: 20, display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: 0 }}>
         <LoadingState kind="page" label="Loading strategy detail" />
       </div>
     );
