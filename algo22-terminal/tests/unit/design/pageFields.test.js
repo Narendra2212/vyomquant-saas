@@ -158,13 +158,12 @@ describe('pageFields: permanent absence vs the one pending migration', () => {
     }
   });
 
-  it('marks the four §7 permanent absences as permanent, with their reasons', () => {
+  it('marks the §7 permanent absences as permanent, with their reasons', () => {
     const permanent = [
       // Per-deployment realised P&L: the ❌ row with no registered change.
       'live-trading/realisedPnlPerDeployment',
       // Fields a server genuinely reports as null.
       'live-trading/liquidationDistance',
-      'portfolio/positionLiquidationPrice',
       'dashboard/exchangeApiLatencyMs',
       // `dag_nodes` past the trace store's ~1h retention.
       'signal-trace/stage4Logic',
@@ -195,13 +194,8 @@ describe('pageFields: permanent absence vs the one pending migration', () => {
     expect(perDeployment.absence).toBe(ABSENCE.UNREPORTED);
   });
 
-  it('carries the tooltip copy for the two ⚠️ derivations §7 names', () => {
-    const invested = PAGE_FIELD_BY_KEY['portfolio/investedCapital'];
-    expect(invested.label).toBe('Invested (capital in use)');
-    expect(invested.verdict).toBe(VERDICT.DERIVED);
-    expect(invested.inputs).toContain('overview.used_balance');
-    expect(hasText(invested.tooltip)).toBe(true);
-
+  it('carries the tooltip copy for the ⚠️ derivation §7 names', () => {
+    // The first derivation, `portfolio/investedCapital`, went with the page (PORTFOLIO-REMOVED-01).
     const alert = PAGE_FIELD_BY_KEY['dashboard/alertCondition'];
     expect(alert.requirement).toBe('3.3');
     expect(alert.verdict).toBe(VERDICT.DERIVED);
@@ -220,15 +214,16 @@ describe('pageFields: the six BC fields point at real documented shapes', () => 
     'BC-2': ['degraded', 'risk.open_positions_count'],
     'BC-3': ['strategies[].last_signal_at'],
     'BC-4': ['strategies[].last_execution_at'],
-    'BC-5': ['overview.realized_pnl'],
+    // BC-5 (`overview.realized_pnl`) was read only by the removed Portfolio page.
+    'BC-5': [],
     // BC-6 lands a timeline EVENT, and its `resulting_position` stays declared not-available.
     'BC-6': ['timeline[].event=POSITION_UPDATED', null],
   };
 
-  it('claims all six, and each is consumed by at least one entry', () => {
+  it('claims all six, and each still-consumed one by at least one entry', () => {
     for (const [change, paths] of Object.entries(EXPECTED)) {
       const fields = BACKEND_CHANGE_FIELDS[change];
-      expect(fields.length, change).toBeGreaterThan(0);
+      if (paths.length) expect(fields.length, change).toBeGreaterThan(0);
       // Deduped: BC-1's field is read by two pages, and both must read the same path.
       expect([...new Set(fields.map((f) => f.path))].sort(), change).toEqual(
         [...new Set(paths)].sort(),
@@ -291,7 +286,7 @@ describe('pageFields: the six BC fields point at real documented shapes', () => 
 describe('pageFields: no entry reads a deprecated path', () => {
   it('reads current_drawdown_pct_v2 and never current_drawdown_pct', () => {
     const drawdowns = PAGE_FIELDS.filter((f) => f.field === 'currentDrawdown');
-    expect(drawdowns).toHaveLength(2); // dashboard tier 1 and portfolio tier 1
+    expect(drawdowns).toHaveLength(1); // dashboard tier 1 (portfolio removed)
     for (const field of drawdowns) {
       expect(field.path, pageFieldKey(field)).toBe('risk.current_drawdown_pct_v2');
       expect(field.backendChange).toBe('BC-1');

@@ -156,7 +156,6 @@ const BUDGET_FILE = 'tests/unit/guards/no-native-dialogs.budget.js';
  */
 const IN_SCOPE_PAGES = Object.freeze([
   'pages/Dashboard.jsx',
-  'pages/Portfolio.jsx',
   'pages/Strategies.jsx',
   'pages/TradeHistory.jsx',
   'pages/LiveTrading.jsx',
@@ -658,9 +657,10 @@ describe('no-native-dialogs: the in-scope set is closed', () => {
     // Non-vacuity: if either list were ever emptied, the checks above would pass over
     // nothing. A `ConfirmDialog` that fell back to `window.confirm` for some edge case
     // would defeat the focus trap on every page at once, without any page's entry moving.
-    expect(IN_SCOPE_PAGES).toHaveLength(11);
+    // 11 -> 10: PORTFOLIO-REMOVED-01 deleted `pages/Portfolio.jsx`.
+    expect(IN_SCOPE_PAGES).toHaveLength(10);
     expect(REPLACEMENT_PRIMITIVES).toHaveLength(2);
-    expect(inScope.length).toBeGreaterThanOrEqual(13);
+    expect(inScope.length).toBeGreaterThanOrEqual(12);
   });
 
   it('never gives an in-scope entry headroom of any size', () => {

@@ -80,7 +80,6 @@ const RiskSettings        = lazy(() => import('./pages/RiskSettings'));
 const Billing             = lazy(() => import('./pages/Billing'));
 const Profile             = lazy(() => import('./pages/Profile'));
 const SecurityLogs        = lazy(() => import('./pages/SecurityLogs'));
-const Portfolio           = lazy(() => import('./pages/Portfolio'));
 const TradeHistory        = lazy(() => import('./pages/TradeHistory'));
 const PaperTrading        = lazy(() => import('./pages/PaperTrading'));
 
@@ -957,7 +956,8 @@ export default function AppWrapper() {
               <Route path="/app/billing" element={<Suspense fallback={SHELL_FALLBACK}><Billing /></Suspense>} />
               <Route path="/app/profile" element={<Suspense fallback={SHELL_FALLBACK}><Profile /></Suspense>} />
               <Route path="/app/security-logs" element={<Suspense fallback={SHELL_FALLBACK}><SecurityLogs /></Suspense>} />
-              <Route path="/app/portfolio" element={<Suspense fallback={SHELL_FALLBACK}><Portfolio /></Suspense>} />
+              {/* PORTFOLIO-REMOVED-01: the page is gone; old bookmarks land on Trade History. */}
+              <Route path="/app/portfolio/*" element={<Navigate to="/app/trades" replace />} />
               <Route path="/app/trades" element={<Suspense fallback={SHELL_FALLBACK}><TradeHistory /></Suspense>} />
               <Route path="/app/paper-trading" element={<Suspense fallback={SHELL_FALLBACK}><PaperTrading /></Suspense>} />
               <Route path="/app/2fa" element={<Suspense fallback={SHELL_FALLBACK}><TwoFA /></Suspense>} />

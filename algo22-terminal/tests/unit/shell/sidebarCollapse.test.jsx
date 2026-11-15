@@ -372,7 +372,7 @@ describe('Sidebar: collapsing does not disturb navigation', () => {
     const user = userEvent.setup();
 
     for (const [pathname, expectedId] of [
-      ['/app/portfolio', 'portfolio'],
+      ['/app/trades', 'trades'],
       ['/app/backtester', 'backtest'],
       ['/app/strategies/abc-123', 'strategies'],
     ]) {

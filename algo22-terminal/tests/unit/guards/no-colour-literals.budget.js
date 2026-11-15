@@ -398,7 +398,6 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // `design/semantic.js` inside `ds/DataTable`, `ds/StatusBadge`, `ds/PnLDisplay`, `ds/Alert`
   // or `ds/Chart`'s series palette. Cleared with this page's five `C.` references in the same
   // change, as §14.4 requires of a page task.
-  'pages/Portfolio.jsx': 0,
   // 20 -> 0 at task 21.4a, which rebuilt the page on `ds/PageHeader`, `ds/FilterBar`,
   // `ds/DataTable`, `ds/Panel`, `ds/Alert`, `ds/StatusBadge` and `ds/Metric`'s
   // not-available marker. The 20 were the connection indicator's four presentations

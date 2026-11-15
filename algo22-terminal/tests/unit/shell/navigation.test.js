@@ -28,7 +28,6 @@ describe('NAV_GROUPS', () => {
     expect(NAV_ENTRIES.map((e) => e.id)).toEqual([
       'dashboard',
       'live-trading',
-      'portfolio',
       'strategies',
       'builder',
       'backtest',

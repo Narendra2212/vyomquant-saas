@@ -15,7 +15,7 @@
  * WHAT THIS REPLACED, AND WHY EACH PIECE HAD TO GO
  * ---------------------------------------------------------------------------
  * 1. A LOCAL 13-ENTRY `NAV` ARRAY. Three routes that existed and worked
- *    (`/app/live-trading`, `/app/portfolio`, `/app/trades`) were unreachable from it,
+ *    (`/app/live-trading`, `/app/trades`; `/app/portfolio` since removed) were unreachable from it,
  *    and five entries §6.4 moves to the account menu were in it. The table now says.
  *
  * 2. `location.pathname === '/app/' + n.id`. An exact comparison against a path derived

@@ -48,14 +48,17 @@
  * `activeNavId` answer differently on consecutive calls with the same input.
  *
  * ---------------------------------------------------------------------------
- * THE SET IS FIXED AT TEN (Requirement 2.1)
+ * THE SET IS FIXED AT NINE (Requirement 2.1, less Portfolio)
  * ---------------------------------------------------------------------------
- * Requirement 2.1 names exactly ten entries; `tests/unit/guards/nav-contract.test.js`
- * (task 8.2) holds this file to that number and to an icon plus a label on each one
+ * Requirement 2.1 named ten entries; PORTFOLIO-REMOVED-01 (2026-11-15) dropped
+ * `portfolio` -- an investor's holdings view on an algo-trading platform, every figure of
+ * which the Dashboard, Live Trading and Paper Trading already show -- so nine remain.
+ * `tests/unit/guards/nav-contract.test.js` (task 8.2) holds this file to that number and to an icon plus a label on each one
  * (Requirement 2.4). Changes from the thirteen entries `Sidebar.jsx` renders today:
  *
- *   ADDED — `live-trading`, `portfolio`, `trades`. All three have working routes in
- *   `App.jsx` and none of them was reachable from the sidebar.
+ *   ADDED — `live-trading`, `trades`. Both have working routes in `App.jsx` and
+ *   neither was reachable from the sidebar. (`portfolio` was added too, then removed by
+ *   PORTFOLIO-REMOVED-01; `/app/portfolio` now redirects to `/app/trades`.)
  *
  *   MOVED OUT of primary nav, still reachable via the account menu (§6.4, task 8.8) —
  *   `exchange`, `risk`, `billing`, `support`, `notifications`. Their routes are
@@ -79,7 +82,6 @@ import {
   Radio,
   Receipt,
   Store,
-  Wallet,
   Workflow,
 } from 'lucide-react';
 
@@ -104,9 +106,7 @@ function freezeNavGroups(groups) {
 /**
  * The four workflow groups, in the order a trader works: is everything OK → build and
  * validate → understand what happened → rehearse and find more (§6.3).
- *
- * `Portfolio` sits under Monitor rather than Review because Requirement 10 frames it as
- * current exposure, not history.
+
  */
 export const NAV_GROUPS = freezeNavGroups([
   {
@@ -126,13 +126,6 @@ export const NAV_GROUPS = freezeNavGroups([
         icon: Radio,
         path: '/app/live-trading',
         matches: [/^\/app\/live-trading(\/|$)/i],
-      },
-      {
-        id: 'portfolio',
-        label: 'Portfolio',
-        icon: Wallet,
-        path: '/app/portfolio',
-        matches: [/^\/app\/portfolio(\/|$)/i],
       },
     ],
   },
@@ -212,7 +205,7 @@ export const NAV_GROUPS = freezeNavGroups([
 ]);
 
 /**
- * The ten entries, group structure flattened away, in sidebar order. What the
+ * The nine entries, group structure flattened away, in sidebar order. What the
  * `nav-contract` guard counts and what anything needing "every nav destination" — the
  * responsive sweep's route registry, Property 3's generator — should iterate.
  */
@@ -252,13 +245,13 @@ export function activeNavId(pathname) {
  * moves into the account menu, plus `/app/2fa`.
  *
  * These exist because `App.jsx`'s route-level `Suspense` fallback wraps every lazy page
- * in the shell, not only the ten in the sidebar. Without them, `/app/billing` would fall
+ * in the shell, not only the nine in the sidebar. Without them, `/app/billing` would fall
  * back to a header with no title while its chunk loads. Their layouts are out of scope
  * for the redesign; only the loading title comes from here.
  *
  * Copy matches §6.4's account-menu labels so the same page is not called two things.
  * Keyed by exact path — none of these routes has children in `App.jsx`, so the regex
- * machinery the ten nav entries need would be scaffolding with nothing to hold up.
+ * machinery the nine nav entries need would be scaffolding with nothing to hold up.
  */
 export const SECONDARY_ROUTE_TITLES = Object.freeze({
   '/app/profile': 'Profile',

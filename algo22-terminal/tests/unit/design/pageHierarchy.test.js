@@ -43,16 +43,14 @@ const hasText = (value) => typeof value === 'string' && value.trim() !== '';
 const keysInTier = (page, tier) =>
   PAGE_HIERARCHY_BY_PAGE[page].tiers.filter((t) => t.tier === tier).map((t) => t.key);
 
-describe('pageHierarchy: the four pages §7 tiers, and only those', () => {
-  it('declares Portfolio, Dashboard, Live Trading and Backtester', () => {
+describe('pageHierarchy: the three pages §7 tiers, and only those', () => {
+  it('declares Dashboard, Live Trading and Backtester', () => {
+    // §7.6 Portfolio was removed with the page (PORTFOLIO-REMOVED-01).
     expect(TIERED_PAGES).toEqual([
-      PAGES.PORTFOLIO,
       PAGES.DASHBOARD,
       PAGES.LIVE_TRADING,
       PAGES.BACKTESTER,
     ]);
-    // Portfolio leads: task 16.1 renders it and 16.3 seeds Property 4 with it.
-    expect(TIERED_PAGES[0]).toBe(PAGES.PORTFOLIO);
   });
 
   it('answers `undefined` for a page §7 gives no tiers, rather than an empty list', () => {
@@ -164,45 +162,6 @@ describe('pageHierarchy: it lines up with pageFields', () => {
   });
 });
 
-describe('pageHierarchy: Portfolio (Requirements 10.1, 10.2)', () => {
-  const tierOne = keysInTier(PAGES.PORTFOLIO, 1);
-
-  it('holds Requirement 10.1\'s six figures in tier 1', () => {
-    // "Realised P&L" is two entries: today's window and BC-5's lifetime sum. Both are
-    // tier 1 and `pageFields` labels them apart, because the same words over two
-    // quantities is the confusion §7.6 records.
-    expect(tierOne).toEqual([
-      'totalValue',
-      'availableBalance',
-      'investedCapital',
-      'unrealisedPnl',
-      'realisedPnlToday',
-      'lifetimeRealizedPnl',
-      'totalExposure',
-      'currentDrawdown',
-    ]);
-  });
-
-  it('puts current drawdown IN tier 1, not in a lower section (Requirement 10.2)', () => {
-    expect(tierOne).toContain('currentDrawdown');
-    expect(keysInTier(PAGES.PORTFOLIO, 2)).not.toContain('currentDrawdown');
-    expect(keysInTier(PAGES.PORTFOLIO, 3)).not.toContain('currentDrawdown');
-  });
-
-  it('reads the drawdown from BC-1\'s v2 field', () => {
-    const entry = PAGE_FIELD_BY_KEY[
-      pageFieldKey({ page: PAGES.PORTFOLIO, field: 'currentDrawdown' })
-    ];
-    expect(entry.path).toBe('risk.current_drawdown_pct_v2');
-    expect(entry.backendChange).toBe('BC-1');
-  });
-
-  it('keeps the positions regions in tier 2 and the charts in tier 3', () => {
-    expect(keysInTier(PAGES.PORTFOLIO, 2)).toEqual(['openPositions', 'positionLiquidationPrice']);
-    expect(keysInTier(PAGES.PORTFOLIO, 3)).toEqual(['allocation', 'equityCurve', 'heatmap']);
-  });
-});
-
 describe('pageHierarchy: the three pages tasks 19.5, 20.4 and 23.5 register', () => {
   it('gives the Dashboard exactly four tier-1 figures (Requirement 3.4)', () => {
     // One row, four figures. Requirement 3.4 forbids a second row of equally-weighted
@@ -267,7 +226,6 @@ describe('pageHierarchy: the attributes Property 4 selects on', () => {
   });
 
   it('composes a selector that names one page\'s one container', () => {
-    expect(tierSelector(PAGES.PORTFOLIO, 1)).toBe('[data-page="portfolio"][data-page-tier="1"]');
     expect(tierSelector(PAGES.DASHBOARD, 2)).toBe('[data-page="dashboard"][data-page-tier="2"]');
   });
 });

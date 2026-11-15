@@ -35,7 +35,7 @@
  *     import { PAGES } from '../design/pageFields';
  *     import { TIER_PAGE_ATTRIBUTE, TIER_ATTRIBUTE } from '../design/pageHierarchy';
  *
- *     <div {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.PORTFOLIO, [TIER_ATTRIBUTE]: 1 }}
+ *     <div {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.DASHBOARD, [TIER_ATTRIBUTE]: 1 }}
  *          className="grid grid-cols-4 gap-4">
  *       ... every tier-1 figure, and nothing else ...
  *     </div>
@@ -170,57 +170,6 @@ const untieredFor = (page) => (field, reason) => {
   }
   return Object.freeze({ field, label: entry.label, reason });
 };
-
-/*
- * ═══════════════════════════════════════════════════════════════════════════
- * §7.6 Portfolio (Requirements 10.1, 10.2) — /app/portfolio
- * ═══════════════════════════════════════════════════════════════════════════
- *
- * ┌─ TIER 1 ── Total value │ Available │ Invested │ Unrealised P&L │ Realised P&L │
- * │            Total exposure │ Current drawdown
- * ├─ TIER 2 ── Open positions: summary above detail (Requirement 10.3)
- * └─ TIER 3 ── Allocation │ Equity curve │ P&L heatmap
- *
- * EIGHT tier-1 entries for the seven figures §7.6 draws, because "Realised P&L" is two
- * figures and always was: `today_realized_pnl` is today's window and BC-5's `realized_pnl`
- * is the lifetime sum, and `pageFields` labels them apart for the reason §7.6's table gives
- * — one of them scoped and the other not would be the same words over different quantities.
- *
- * `currentDrawdown` is IN TIER 1. That is the whole of Requirement 10.2 and the specific
- * thing task 16.1 fixes: it used to render below, in the risk region, where a figure a
- * trader reads to decide whether to cut size is a scroll away from the exposure it
- * qualifies.
- *
- * `positionLiquidationPrice` is a column of the tier-2 table rather than a region of its
- * own. It is declared because Property 4 asks where every declared field renders, and the
- * answer for a cell is "inside its table", which is a tier-2 answer.
- */
-const portfolioTier = tierFieldFor(PAGES.PORTFOLIO);
-
-const PORTFOLIO_HIERARCHY = Object.freeze({
-  page: PAGES.PORTFOLIO,
-  requirements: Object.freeze(['10.1', '10.2', '10.3']),
-  tiers: Object.freeze([
-    portfolioTier(1, 'totalValue'),
-    portfolioTier(1, 'availableBalance'),
-    portfolioTier(1, 'investedCapital'),
-    portfolioTier(1, 'unrealisedPnl'),
-    portfolioTier(1, 'realisedPnlToday'),
-    portfolioTier(1, 'lifetimeRealizedPnl'),
-    portfolioTier(1, 'totalExposure'),
-    portfolioTier(1, 'currentDrawdown'),
-    portfolioTier(2, 'openPositions'),
-    portfolioTier(2, 'positionLiquidationPrice'),
-    portfolioTier(3, 'allocation'),
-    portfolioTier(3, 'equityCurve'),
-    portfolioTier(3, 'heatmap'),
-  ]),
-  untiered: Object.freeze([]),
-  note: 'Tier 1 is one container holding all eight figures — two rows of four tracks, one '
-    + 'region. Requirement 10.1 orders the figures above everything else and 10.2 puts the '
-    + 'drawdown among them, so a second container for "risk" would satisfy neither however '
-    + 'it was placed.',
-});
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════
@@ -393,14 +342,10 @@ const BACKTESTER_HIERARCHY = Object.freeze({
  */
 
 /**
- * The four tiered pages, in the order §7 presents them.
- *
- * Portfolio leads because task 16.1 renders it and task 16.3 seeds Property 4 with it;
- * tasks 19.5, 20.4 and 23.5 register the other three, which are declared here now so that
- * those tasks add a render adapter and nothing else.
+ * The three tiered pages, in the order §7 presents them. (§7.6 Portfolio was removed by
+ * PORTFOLIO-REMOVED-01.)
  */
 export const PAGE_HIERARCHIES = Object.freeze([
-  PORTFOLIO_HIERARCHY,
   DASHBOARD_HIERARCHY,
   LIVE_TRADING_HIERARCHY,
   BACKTESTER_HIERARCHY,

@@ -129,7 +129,7 @@ describe('ROUTE_MIN_VIEWPORT', () => {
   it('leaves the other nine in-scope routes at the app-wide floor', () => {
     const restricted = Object.keys(ROUTE_MIN_VIEWPORT);
     const others = NAV_ENTRIES.filter((entry) => !restricted.includes(entry.path));
-    expect(others).toHaveLength(9);
+    expect(others).toHaveLength(8);
     for (const entry of others) {
       expect(routeAccess(entry.path, 'TABLET').access).toBe(ACCESS.FULL);
     }

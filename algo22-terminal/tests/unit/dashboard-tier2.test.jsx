@@ -33,7 +33,7 @@
  *      `exchange_api_latency_status: "unavailable"` beside it. The measured arm is asserted
  *      too, so the absence is a distinction and not a page that never renders latency.
  *   5. **The top five, and a way to the rest** (§7.1). Five rows out of seven, and a real
- *      `<a href="/app/portfolio">` that names its destination.
+ *      `<a href="/app/live-trading">` (or `/app/paper-trading`) that names its destination.
  *   6. **The two per-venue fields render as the real measurements `get_exchange_data` now
  *      produces, and only fall back to "not reported" where the probe genuinely measured
  *      nothing.** `status` and `latency_ms` used to be a hardcoded `"connected"` and a
@@ -564,8 +564,9 @@ describe('Dashboard tier 2 — the top five positions and the link to the rest (
 
     // A real link, in the tab order, naming where it goes — `anchor-ambiguous-text` rejects
     // a bare "View all", and a `<button onClick={navigate}>` is not a link.
-    const link = screen.getByRole('link', { name: /view all in portfolio/i });
-    expect(link.getAttribute('href')).toBe('/app/portfolio');
+    // PORTFOLIO-REMOVED-01: the full list lives on the ledger's own trading page.
+    const link = screen.getByRole('link', { name: /view all in live trading/i });
+    expect(link.getAttribute('href')).toBe('/app/live-trading');
   });
 });
 
