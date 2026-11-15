@@ -178,10 +178,23 @@ describe('Phase 5E Profile Trader UX Test Battery', () => {
     fireEvent.click(mfaBtn);
     expect(mockNavigate).toHaveBeenCalledWith('/app/2fa');
 
-    // Verify Review All Logs navigation
-    const reviewLogsBtn = screen.getByText(/Review All Logs/i);
-    fireEvent.click(reviewLogsBtn);
-    expect(mockNavigate).toHaveBeenCalledWith('/app/security-logs');
+    /*
+      SECLOG-REMOVED-01 (2026-11-15): the *Review All Logs* assertion that stood here is
+      inverted rather than deleted.
+
+      It clicked the command and expected `navigate('/app/security-logs')`. That route is
+      withdrawn, so the control is gone too -- leaving it would have navigated to a path the
+      `/app/*` catch-all redirects to the dashboard, which is a worse answer than offering
+      nothing.
+
+      Asserting its ABSENCE, not just dropping the lines, is what stops the control being
+      reintroduced by a later pass that only reads the page and not this history.
+    */
+    expect(screen.queryByText(/Review All Logs/i)).toBeNull();
+
+    // The panel it sat on is untouched and still reports this account's access events, so the
+    // data behind the removed link is still on the page.
+    expect(screen.getByText(/Recent access/i)).toBeTruthy();
   });
 
   // 5 & 6. Automation Account Context & Contextual Navigation

@@ -603,29 +603,20 @@ export const IN_SCOPE_COLOUR_LITERAL_BUDGET = Object.freeze({
   // and is untouched: a secret on the clipboard is a completed action, which is
   // `statusToken('ok')`'s group, so the name was right as well as the value.
   'pages/TwoFA.jsx': 0,
-  // 3 -> 0 at retail-ui-simplification task 7.4, in the same commit that deleted this page's
-  // font-size entry (7 -> 0).
+  // `pages/SecurityLogs.jsx: 0` stood here, with the paragraphs recording how its 3 literals
+  // were cleared at retail-ui-simplification task 7.4 (and its 7 font sizes in the same
+  // commit). Both the entry and that note left at SECLOG-REMOVED-01 (2026-11-15), which
+  // withdrew the user-facing Security log page from the product.
   //
-  // All three were the error banner's — `rgba(239,68,68,0.1)` wash, `rgba(239,68,68,0.3)`
-  // border, `#fca5a5` text — and all three left WITH the banner, which is now `ds/Panel`'s
-  // `error` state driven by `usePanelState`. None was in the palette: Tailwind's red ramp, not
-  // this app's `#EF5350`, so a one-for-one mapping would have re-decided the error hue by hand
-  // inside a typography commit.
+  // `no-colour-literals.test.js`'s `names only files that still exist` requires this: "A
+  // deleted file takes its entry with it." The two off-palette constructs the old note flagged
+  // as invisible to this scanner -- `${token.line.default}15`, a hand-mixed alpha wearing a
+  // token's name, and a `placeholder:text-slate-600` from Tailwind's own ramp -- are recorded
+  // against the Marketplace entry too, so neither observation is lost with the page.
   //
-  // TWO OFF-PALETTE CONSTRUCTS THIS GUARD CANNOT SEE WENT WITH THEM, recorded because a scan
-  // will not find them for the next reader and because both are worth recognising elsewhere:
-  //
-  //   `border: 1px solid ${token.line.default}15` on every table row — a token with two hex
-  //   digits concatenated onto it, i.e. a hand-mixed 8% alpha wearing a token's name. There is
-  //   no `#` in the source, so HEX_LITERAL never matched it. `ds/DataTable` owns row separation
-  //   now. This is the same class of blind spot the Marketplace entry records for a colour
-  //   inside an arbitrary-value utility.
-  //
-  //   `placeholder:text-slate-600` on the search input — Tailwind's own slate ramp, which is
-  //   not this palette at all and which no budget here governs (O1 put the built-in classes out
-  //   of the font-size ratchet's scope; the colour guard never saw this one because it carries
-  //   no literal). It becomes `placeholder:text-content-muted`.
-  'pages/SecurityLogs.jsx': 0,
+  // REMOVING THE PAGE REMOVED NO LOGGING. The backend security-event, authentication and audit
+  // records it read are still written and still queryable; Profile's *Recent access* panel
+  // still reads them through `api.user.getSecurityLogs`.
   // 5 -> 0 at retail-ui-simplification task 7.6, in the same commit that deleted this page's
   // font-size entry (24 -> 0). The first-run surface, so this is the page where an off-palette
   // hue is seen first by a new retail account.

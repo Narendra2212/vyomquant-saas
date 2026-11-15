@@ -82,10 +82,15 @@ import { SECONDARY_ROUTE_TITLES } from '../../../src/components/shell/navigation
 import { isOverlayOpen, resetOverlayRegistry } from '../../../src/components/ds/overlayRegistry';
 import { resetUnreadNotifications } from '../../../src/hooks/useUnreadNotifications';
 
-/** The seven routes §6.4 defers out of primary nav. The whole point of this component. */
+/**
+ * The routes §6.4 defers out of primary nav. The whole point of this component.
+ *
+ * SIX, not the seven §6.4 named: SECLOG-REMOVED-01 (2026-11-15) withdrew
+ * `/app/security-logs` from the product, so the account menu no longer offers it and this
+ * list no longer expects it.
+ */
 const DEFERRED_ROUTES = Object.freeze([
   '/app/profile',
-  '/app/security-logs',
   '/app/billing',
   '/app/exchange',
   '/app/risk',
@@ -217,8 +222,10 @@ describe('AccountMenu: the disclosure pattern', () => {
     expect(trigger().getAttribute('aria-haspopup')).toBeNull();
     expect(open.querySelector('[role="menu"]')).toBeNull();
     expect(open.querySelector('[role="menuitem"]')).toBeNull();
-    // The rows are announced as what they are.
-    expect(within(open).getAllByRole('link').length).toBeGreaterThanOrEqual(7);
+    // The rows are announced as what they are. SIX, not seven: SECLOG-REMOVED-01
+    // (2026-11-15) withdrew the `/app/security-logs` row. The floor tracks
+    // `DEFERRED_ROUTES` above, so it moves only when a row is genuinely added or removed.
+    expect(within(open).getAllByRole('link').length).toBeGreaterThanOrEqual(6);
   });
 
   it('names the panel’s navigation landmark, and keeps sign out outside it', () => {

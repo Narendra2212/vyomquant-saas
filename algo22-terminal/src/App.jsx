@@ -79,7 +79,7 @@ const ExchangeManager     = lazy(() => import('./pages/ExchangeManager'));
 const RiskSettings        = lazy(() => import('./pages/RiskSettings'));
 const Billing             = lazy(() => import('./pages/Billing'));
 const Profile             = lazy(() => import('./pages/Profile'));
-const SecurityLogs        = lazy(() => import('./pages/SecurityLogs'));
+// SECLOG-REMOVED-01 (2026-11-15): `SecurityLogs` is gone. See the route list below.
 const TradeHistory        = lazy(() => import('./pages/TradeHistory'));
 const PaperTrading        = lazy(() => import('./pages/PaperTrading'));
 
@@ -955,7 +955,17 @@ export default function AppWrapper() {
               <Route path="/app/risk" element={<Suspense fallback={SHELL_FALLBACK}><RiskSettings /></Suspense>} />
               <Route path="/app/billing" element={<Suspense fallback={SHELL_FALLBACK}><Billing /></Suspense>} />
               <Route path="/app/profile" element={<Suspense fallback={SHELL_FALLBACK}><Profile /></Suspense>} />
-              <Route path="/app/security-logs" element={<Suspense fallback={SHELL_FALLBACK}><SecurityLogs /></Suspense>} />
+              {/* SECLOG-REMOVED-01 (2026-11-15): `/app/security-logs` is withdrawn from the
+                product. NO redirect is declared for it: the `/app/*` catch-all at the end of
+                this block already sends unknown `/app` paths to the dashboard, so an old
+                bookmark lands somewhere real rather than on a dead route, and adding a
+                dedicated `<Navigate>` would only duplicate that.
+
+                THE BACKEND LOGGING IS UNTOUCHED. Security events, authentication logs and the
+                operational audit trail are still written and still queryable -- removing a
+                page does not authorise deleting the records behind it, and they are needed for
+                incident investigation. `api.user.getSecurityLogs` also stays, because
+                Profile's *Recent access* panel reads it. */}
               {/* PORTFOLIO-REMOVED-01: the page is gone; old bookmarks land on Trade History. */}
               <Route path="/app/portfolio/*" element={<Navigate to="/app/trades" replace />} />
               <Route path="/app/trades" element={<Suspense fallback={SHELL_FALLBACK}><TradeHistory /></Suspense>} />

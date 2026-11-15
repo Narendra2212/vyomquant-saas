@@ -133,7 +133,7 @@ import { ApiError } from '../../../src/apiClient';
 import Dashboard from '../../../src/pages/Dashboard';
 import TradeHistory from '../../../src/pages/TradeHistory';
 import StrategyMarketplace from '../../../src/pages/StrategyMarketplace';
-import SecurityLogs from '../../../src/pages/SecurityLogs';
+// `SecurityLogs` left with SECLOG-REMOVED-01 (2026-11-15) — see section 4 below.
 import ExchangeManager from '../../../src/pages/ExchangeManager';
 
 /*
@@ -419,53 +419,24 @@ describe('StrategyMarketplace: loading then a recoverable failure', () => {
 });
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
- * 4. SECURITY LOGS — the "Security events" panel
- * ══════════════════════════════════════════════════════════════════════════════════════ */
-
-describe('SecurityLogs: loading then a recoverable failure', () => {
-  // Exact title match, and scoped ("Account security summary" is a SECOND panel on this
-  // page whose own state is `summaryPanelState`, derived from this same `logsState` — so it
-  // legitimately enters `error` at the same moment `Security events` does, and a substring
-  // match or an unscoped `getByRole` would find both panels' retry buttons at once).
-  const logsPanel = () => panelTitled('Security events');
-
-  it('shows a loading indicator while the read is in flight, and it is not permanent', async () => {
-    const { promise, resolve } = controlledPromise();
-    user.getSecurityLogs.mockReturnValue(promise);
-
-    mount(<SecurityLogs />);
-
-    await waitFor(() => expect(logsPanel()?.getAttribute('data-panel-state')).toBe('loading'));
-    expect(loadingRegions(logsPanel()).length).toBeGreaterThan(0);
-
-    resolve([{ id: 'e1', event_type: 'login', ip_address: '10.0.0.1', created_at: new Date().toISOString() }]);
-
-    await waitFor(() => expect(logsPanel()?.getAttribute('data-panel-state')).not.toBe('loading'));
-    expect(loadingRegions(logsPanel())).toHaveLength(0);
-  });
-
-  it('shows a recoverable panel error on rejection, and recovers to ready on retry', async () => {
-    user.getSecurityLogs
-      .mockRejectedValueOnce(new Error('Security log read failed'))
-      .mockResolvedValue([
-        { id: 'e1', event_type: 'login', ip_address: '10.0.0.1', created_at: new Date().toISOString() },
-      ]);
-
-    mount(<SecurityLogs />);
-
-    await waitFor(() => expect(logsPanel()?.getAttribute('data-panel-state')).toBe('error'));
-    expect(alertRegions(logsPanel()).length).toBeGreaterThan(0);
-    expect(panelStatesWithoutChildren()).toContain(logsPanel());
-
-    fireEvent.click(within(logsPanel()).getByRole('button', { name: /try again/i }));
-
-    await waitFor(() => expect(logsPanel()?.getAttribute('data-panel-state')).toBe('ready'));
-    expect(alertRegions(logsPanel())).toHaveLength(0);
-    expect(user.getSecurityLogs).toHaveBeenCalledTimes(2);
-  });
-});
-
-/* ══════════════════════════════════════════════════════════════════════════════════════
+ * 4. SECURITY LOGS — REMOVED WITH THE PAGE (SECLOG-REMOVED-01, 2026-11-15)
+ * ══════════════════════════════════════════════════════════════════════════════════════
+ *
+ * Two tests stood here, holding `pages/SecurityLogs.jsx`'s "Security events" panel to the
+ * loading-then-recoverable-error contract this file exists to enforce. The user-facing
+ * Security log page is withdrawn from the product, so there is no surface left to hold and
+ * both tests left with it — along with the `SecurityLogs` import and the `logsPanel` helper.
+ *
+ * NOT A WEAKENING OF THIS FILE'S RULE. The contract is unchanged for every other surface
+ * here, and the removed page is the only one that stopped existing. Deleting the page while
+ * leaving a suite that imports it would not have "kept coverage": it would have failed to
+ * collect, which is a red suite rather than a held invariant.
+ *
+ * The api mock still declares `user.getSecurityLogs`. That is deliberate and is NOT dead:
+ * the endpoint is still served and Profile's *Recent access* panel still reads it, so the
+ * mock factory keeps the shape the real module has. Only the page-level tests are gone.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════
  * 5. EXCHANGE MANAGER — the "Connected exchanges" panel
  * ══════════════════════════════════════════════════════════════════════════════════════ */
 

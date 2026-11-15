@@ -148,8 +148,22 @@ describe('routeTitle', () => {
   it('names the deferred routes so their Suspense fallback is not untitled', () => {
     expect(routeTitle('/app/billing')).toBe('Billing & plan');
     expect(routeTitle('/app/exchange')).toBe('Exchange accounts');
-    expect(routeTitle('/app/security-logs')).toBe('Security log');
-    expect(routeTitle('/app/security-logs/')).toBe('Security log');
+    expect(routeTitle('/app/risk')).toBe('Risk settings');
+    expect(routeTitle('/app/support')).toBe('Support');
+  });
+
+  it('does not title the withdrawn security-log route', () => {
+    /*
+      SECLOG-REMOVED-01 (2026-11-15). These two asserted `'Security log'` while the route
+      existed. `App.jsx` no longer serves `/app/security-logs`, so it falls through the
+      `/app/*` catch-all to the dashboard — and a title here would label the shell header of a
+      page that is already navigating away.
+
+      `null` is the same answer `routeTitle` gives any unknown path, which is the point: the
+      route is gone, not merely untitled.
+    */
+    expect(routeTitle('/app/security-logs')).toBeNull();
+    expect(routeTitle('/app/security-logs/')).toBeNull();
   });
 
   it('returns null for an unknown route instead of inventing a heading', () => {
