@@ -306,9 +306,9 @@ def fill_report_of(
     simulator's slippage) read as 70.44 with a 0.05% slippage nobody measured.
 
     * price: ``trade_result.executed_price``; ``None`` when nothing filled.
-    * fee: ``trade_result.fee`` when it is in the symbol's quote currency (a paper fill's
-      fee, which the paper ledger books in quote, carries no currency); a fee in the base
-      asset -- Binance's default -- is not a quote figure and is reported as ``None``.
+    * fee: ``trade_result.fee`` in the quote currency (``core.fee_conversion``): a base-asset
+      fee -- Binance's default on a buy -- is converted at the fill price; any other asset,
+      or an accepted order's placeholder, is ``None``.
     * slippage: the signed fraction ``(fill - decision) / decision``.
     """
     filled = _decimal_or_none(filled_qty)
@@ -321,12 +321,15 @@ def fill_report_of(
     executed = _decimal_or_none(trade.get("executed_price"))
     if executed is not None and executed <= 0:
         executed = None
-    fee = _decimal_or_none(trade.get("fee"))
-    currency = str(trade.get("fee_currency") or "").strip().upper()
-    if fee is not None:
-        in_quote = currency == quote_coin_of(symbol) if currency else bool(trade.get("paper_ledger"))
-        if not in_quote:
-            fee = None
+    # LIVE-FEE-01: stated in quote -- a base-asset fee is converted at the fill price.
+    from backend_app.core.fee_conversion import fee_in_quote
+
+    fee = None
+    if trade.get("fill_state") != "accepted":
+        fee = fee_in_quote(
+            trade.get("fee"), trade.get("fee_currency"), symbol, executed,
+            paper=bool(trade.get("paper_ledger")),
+        )
     decision = _decimal_or_none(decision_price)
     slippage = None
     if executed is not None and decision is not None and decision > 0:
@@ -1658,7 +1661,7 @@ class BotRunner:
 
                 # ── Signal Trace Audit Trail Logging (Non-blocking) ───────
                 decision = str(order_payload.get("side", "BUY")).upper()
-                async def record_audit_signal(v_verdict, v_reason, v_exec_id=None, v_status="pending", v_fill=0.0, v_result=None):
+                async def record_audit_signal(v_verdict, v_reason, v_exec_id=None, v_status="pending", v_fill=0.0, v_result=None, v_latency_ms=None):
                     try:
                         from backend_app.backend.signal_service import get_signal_service
                         sig_svc = await get_signal_service()
@@ -1767,7 +1770,8 @@ class BotRunner:
                             average_price=fill_price,
                             fees=fill_fee,
                             slippage=fill_slippage,
-                            latency_ms=None,
+                            # TRACE-LAT-01: submission to the venue's answer, measured.
+                            latency_ms=v_latency_ms,
                         )
 
                         if order_st == "FILLED":
@@ -1892,6 +1896,9 @@ class BotRunner:
                     # is a `session_id`, which a BotRunner bot does not have.
                     # Recorded as an open item rather than attempted here.
                     # Regression: tests/test_execution_environment_is_stated_not_defaulted.py
+                    # TRACE-LAT-01: the order's round trip -- submission to the venue's
+                    # (or the paper simulator's) answer -- on a monotonic clock.
+                    _submitted_at = time.monotonic()
                     result = await self.execution_engine.execute_with_idempotency(
                         tenant_id=uuid.UUID(self.user_id),
                         strategy_id=self.blueprint.get("strategy_id", "default"),
@@ -1930,6 +1937,8 @@ class BotRunner:
                         risk_reason=str(reason or "risk approved"),
                     )
 
+                    order_latency_ms = round((time.monotonic() - _submitted_at) * 1000.0, 3)
+
                     # ── Record execution result ─────────────────────────────
                     # RT-06: see `settle_exposure` - only a `completed` result is a fill.
                     _status = result.get("status") if result else None
@@ -1967,7 +1976,8 @@ class BotRunner:
                         v_exec_id=execution_id,
                         v_status=_status if _status else "no_result",
                         v_fill=float(filled_qty),
-                        v_result=result
+                        v_result=result,
+                        v_latency_ms=order_latency_ms,
                     ))
 
                     # TRADE-13. Computed OUTSIDE `safe_log` below (a pure, synchronous read

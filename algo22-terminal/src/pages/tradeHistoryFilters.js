@@ -304,7 +304,9 @@ export const UNREPORTED_ON_LIVE = Object.freeze(
  *
  * @type {ReadonlyArray<string>}
  */
-export const PAPER_REPORTED_FIELDS = Object.freeze(['pnl', 'fees', 'strategy']);
+// PAPER-SLIP-01 (2026-11-15): `GET /api/paper/trades` now returns the slippage the ledger booked
+// (`paper_fills.slippage_minor`, in quote) and, via PAPER-STRAT-01, a real `strategy` name.
+export const PAPER_REPORTED_FIELDS = Object.freeze(['pnl', 'fees', 'slippage', 'strategy']);
 
 /**
  * TRADE-13. The ❌-on-live fields the LIVE read reports for an execution recorded AFTER
@@ -326,7 +328,8 @@ export const PAPER_REPORTED_FIELDS = Object.freeze(['pnl', 'fees', 'strategy']);
  */
 // LIVE-HIST-01 (2026-11-15): the live read is `execution_records`, which names the strategy
 // (`strategy`, joined from `strategies.name`, beside `strategy_id`) on every row.
-export const LIVE_REPORTED_FIELDS = Object.freeze(['fees', 'slippage', 'strategy']);
+// LIVE-PNL-01: and realised P&L, per sell, against the average cost of the position's buys.
+export const LIVE_REPORTED_FIELDS = Object.freeze(['fees', 'slippage', 'strategy', 'pnl']);
 
 /** The `pageFields` entry for one Trade History field, or `null`. */
 const historyEntry = (field) => HISTORY_FIELDS.find((f) => f.field === field) ?? null;

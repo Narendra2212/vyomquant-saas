@@ -54,6 +54,32 @@ _UNPERSISTED_SUFFIX = (
 )
 
 
+def _record_venue_fee(order: Any, status: Any) -> None:
+    """LIVE-FEE-01: write the venue's commission onto the execution's ``trade_result``.
+
+    An order the venue first ACCEPTED is filled here, and its ``trade_result`` still holds the
+    submission's placeholder (``fee: "0"``, no currency, ``fill_state: accepted``), which
+    Trade History cannot tell from a real zero. The fee the venue charged replaces it; with
+    none reported the placeholder is cleared to ``None`` so it never reads as free.
+    """
+    fee = getattr(status, "fee", None)
+    currency = getattr(status, "fee_currency", None)
+    result = dict(getattr(order, "result", None) or {})
+    trade = dict(result.get("trade_result") or {})
+    if fee is None and trade.get("fill_state") != "accepted" and trade.get("fee") not in (None, "0"):
+        return
+    trade["fee"] = fee
+    trade["fee_currency"] = currency
+    trade["fee_source"] = "venue" if fee is not None else None
+    trade["fill_state"] = "filled"
+    if status.avg_price is not None:
+        trade["executed_price"] = str(status.avg_price)
+    if status.filled_size is not None:
+        trade["size"] = str(status.filled_size)
+    result["trade_result"] = trade
+    order.result = result
+
+
 def venue_identifier(order: Any) -> Optional[str]:
     """The id the EXCHANGE knows this order by, from whichever column carries it.
 
@@ -1299,6 +1325,7 @@ class OrderWatchdog:
             order.exchange_status = status.status
             if getattr(order, "filled_at", None) is None:
                 order.filled_at = datetime.utcnow()
+            _record_venue_fee(order, status)
             
             logger.info(
                 f"Order marked FILLED by watchdog: {order.execution_id} | "
