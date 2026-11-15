@@ -3917,16 +3917,22 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
     
     rec = res.data[0]
-    if not rec.get("is_active") or rec.get("status") == "paused":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already paused.")
-    
+
     # RT-03/RT-08: stop through the canonical service (by each deployment's real symbol, with a
     # durable stop request when another process owns the bot) rather than `fleet.stop_bot`
     # keyed on the strategy row's symbol, which only ever matched a bot in THIS process.
     from backend_app.backend.strategy_service import get_strategy_service
 
     service = await get_strategy_service()
-    bot_stopped = (await service.stop_all_deployments(user, strategy_id)) >= 0
+    # PAUSE-01: the DEPLOYMENTS decide whether there is anything to pause, never the strategy
+    # row's `is_active` flag. The version deploy path sets `status='running'` and never sets
+    # `is_active`, so every strategy deployed through it read `is_active=false` and this route
+    # refused 409 "already paused" while its live bot kept trading -- found on 2026-11-15 with
+    # the owner unable to pause (and so unable to delete) a running live FROM bot.
+    stopped = await service.stop_all_deployments(user, strategy_id)
+    if stopped == 0 and rec.get("status") in ("paused", "stopped"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already paused.")
+    bot_stopped = stopped >= 0
 
     try:
         upd = await sb.table("strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
@@ -3954,7 +3960,10 @@ async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_use
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
     
     rec = res.data[0]
-    if rec.get("is_active") and rec.get("status") == "running":
+    # PAUSE-01: `status` alone decides; `is_active` is not maintained by the version deploy
+    # path, so `is_active and running` let a resume start a SECOND (paper) bot beside a live
+    # one that was still running.
+    if rec.get("status") == "running":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already running.")
     
     # SECURITY: Validate ML/DL strategies have trained models before resume
