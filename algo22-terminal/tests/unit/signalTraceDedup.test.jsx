@@ -474,15 +474,15 @@ describe('SignalTrace page across a reconnect', () => {
         signalFrame(STATUS_CHANGED, signalRow({ status: 'executed', order_lifecycle_state: 'FILLED' }), { seq: 1 }),
       );
     });
-    expect(screen.getByText('executed')).toBeTruthy();
+    expect(screen.getByText('FILLED')).toBeTruthy();
 
     // The socket drops; the signal closes while it is down. No frame will ever be pushed
     // for that transition on this page's behalf — the snapshot is the only way to learn it.
     served = [signalRow({ status: 'closed', order_lifecycle_state: 'CLOSED' })];
     await reconnect();
 
-    await waitFor(() => expect(screen.getByText('closed')).toBeTruthy());
-    expect(screen.queryByText('executed')).toBeNull();
+    await waitFor(() => expect(screen.getByText('CLOSED')).toBeTruthy());
+    expect(screen.queryByText('FILLED')).toBeNull();
   });
 
   it('ignores a replay of a state change already on screen after the snapshot', async () => {
@@ -506,7 +506,7 @@ describe('SignalTrace page across a reconnect', () => {
       reconnected.deliver(signalFrame(STATUS_CHANGED, filled, { seq: 2 }));
     });
 
-    expect(screen.getByText('executed')).toBeTruthy();
+    expect(screen.getByText('FILLED')).toBeTruthy();
     // No second read, no second application of one status change.
     expect(signalListUrls()).toHaveLength(readsAfterSnapshot);
   });

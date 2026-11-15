@@ -438,7 +438,7 @@ describe('SignalTrace connection indicator', () => {
       });
     });
 
-    expect(screen.getByText('executed')).toBeTruthy();
+    expect(screen.getByText('FILLED')).toBeTruthy();
     expect(status()).toBe(SIGNAL_REALTIME_STATES.CONNECTED);
   });
 });

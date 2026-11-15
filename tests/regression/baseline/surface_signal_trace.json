@@ -1,9 +1,9 @@
 {
   "_baseline_note_environment_filter_and_subscriber_projection": "Re-recorded for tasks 29.3 and 29.4 (Requirements 23.2, 23.3, 23.4, 23.6). Two ADDITIONS, nothing removed, renamed or retyped: (1) the `environment` query parameter on GET /api/signal-trace/signals and GET /api/signal-trace/signals/{signal_id} \u2014 Requirement 23.4's Execution_Environment filter, declared as a repeatable list like every other Requirement 17.2 filter category, with no default so Requirement 23.6's default (the caller's own signals across all environments) is unchanged; (2) the detail handler's `raises` gains {detail_type: computed, status_code: e.http_status} \u2014 the 400 for an environment value outside BACKTEST/PAPER/LIVE and the 404 an environment filter a pre-010 database cannot answer, both refused explicitly instead of being ignored. The list handler already recorded that entry. No path, method, rate limit or existing filter changed, and no response key was removed.",
-  "api_call_count": 2,
+  "_baseline_note_strategy_names": "AUTHORISED RE-RECORD (ST-UI-01, 2026-11-15) -- ONE ENTRY ADDED, `strategiesApi.list` -> GET /api/strategies, and api_call_count +1. Nothing removed, renamed or retyped. Found on production Signal Trace: the table and the strategy filter showed raw strategy ids (`e3ba0cbd-...`) because no read on this page names a strategy. The page now reads the same strategy list the Strategies page reads, once, to label ids with names; a failed read leaves the ids on screen as before.",
+  "api_call_count": 3,
   "api_calls": [
     {
-      "_baseline_note_entry": "AUTHORISED RE-RECORD of `path`/`path_template` \u2014 `/api/signal-trace/signals/{signalId}` to `/api/signal-trace/signals/{detailId}`. THE REQUEST IS UNCHANGED. The braced token in a recorded template is the name of the JavaScript expression interpolated at the call site, not a path parameter's name: the method, the route and the resolved handler (`backend_app.routers.signal_trace.get_signal`, `router.get('/signals/{signal_id}')`) are byte-identical either side of this re-record, and the handler's own parameter is still `signal_id`. The local was renamed when the page shell was rebuilt on the nine-stage projection (commits 990f8d6, 08f74de, adbd4b5 \u2014 spec tasks 21.4a, 21.4b, 21.5), which did not re-record this baseline. Because `path_template` is part of an entry's identity, a rename reads as one removal plus one addition rather than as a field change.",
       "handler_count": 1,
       "handlers": [
         {
@@ -61,10 +61,10 @@
       "path": "/api/signal-trace/signals/{detailId}",
       "path_template": "/api/signal-trace/signals/{detailId}",
       "resolved": true,
-      "via": "apiClient direct"
+      "via": "apiClient direct",
+      "_baseline_note_entry": "AUTHORISED RE-RECORD of `path`/`path_template` \u2014 `/api/signal-trace/signals/{signalId}` to `/api/signal-trace/signals/{detailId}`. THE REQUEST IS UNCHANGED. The braced token in a recorded template is the name of the JavaScript expression interpolated at the call site, not a path parameter's name: the method, the route and the resolved handler (`backend_app.routers.signal_trace.get_signal`, `router.get('/signals/{signal_id}')`) are byte-identical either side of this re-record, and the handler's own parameter is still `signal_id`. The local was renamed when the page shell was rebuilt on the nine-stage projection (commits 990f8d6, 08f74de, adbd4b5 \u2014 spec tasks 21.4a, 21.4b, 21.5), which did not re-record this baseline. Because `path_template` is part of an entry's identity, a rename reads as one removal plus one addition rather than as a field change."
     },
     {
-      "_baseline_note_entry": "AUTHORISED RE-RECORD of `path`/`path_template` \u2014 `/api/signal-trace/signals?{params}` to `/api/signal-trace/signals?{query}`. Same cause and same reasoning as the `{detailId}` entry above: the interpolated local was renamed by the nine-stage page rebuild, and the method, route, resolved handler (`backend_app.routers.signal_trace.list_signals`) and its nineteen declared parameters are byte-identical.",
       "handler_count": 1,
       "handlers": [
         {
@@ -175,7 +175,98 @@
       "path": "/api/signal-trace/signals?{query}",
       "path_template": "/api/signal-trace/signals?{query}",
       "resolved": true,
-      "via": "apiClient direct"
+      "via": "apiClient direct",
+      "_baseline_note_entry": "AUTHORISED RE-RECORD of `path`/`path_template` \u2014 `/api/signal-trace/signals?{params}` to `/api/signal-trace/signals?{query}`. Same cause and same reasoning as the `{detailId}` entry above: the interpolated local was renamed by the nine-stage page rebuild, and the method, route, resolved handler (`backend_app.routers.signal_trace.list_signals`) and its nineteen declared parameters are byte-identical."
+    },
+    {
+      "handler_count": 2,
+      "handlers": [
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_strategies",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "include_archived": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            },
+            {
+              "archived_total": "computed",
+              "include_archived": "computed",
+              "strategies": "computed",
+              "total": "int"
+            },
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/strategies"
+        },
+        {
+          "decorators": [
+            "router.get('')",
+            "router.get('/')"
+          ],
+          "handler": "list_strategies",
+          "module": "backend_app.routers.strategies",
+          "parameters": {
+            "include_archived": {
+              "annotation": "bool",
+              "has_default": true
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [],
+          "returns": [
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            },
+            {
+              "archived_total": "computed",
+              "include_archived": "computed",
+              "strategies": "computed",
+              "total": "int"
+            },
+            {
+              "archived_total": "int",
+              "include_archived": "computed",
+              "strategies": "list",
+              "total": "int"
+            }
+          ],
+          "route_path": "/api/strategies/"
+        }
+      ],
+      "method": "GET",
+      "path": "/api/strategies",
+      "path_template": "/api/strategies",
+      "resolved": true,
+      "via": "api.strategies.list"
     }
   ],
   "capture": "surface_signal_trace",

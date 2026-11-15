@@ -1583,6 +1583,12 @@ class BotRunner:
                             f"unmeasured for this tick."
                         )
 
+                # TRACE-EXP-01: the exposure the risk check judged, kept so the trace records
+                # THAT figure. The audit below runs after the fill, when the position (and so
+                # `recovered_exposure_coins`) already includes this trade: an approved signal
+                # showed post-trade exposure and a refused one pre-trade, so "approved at
+                # $4,993" sat beside "refused at $4,990" under a $5,000 cap.
+                checked_exposure = float(self.recovered_exposure_coins) * price  # Decimal * float is a TypeError
                 verdict, reason = await self.risk_manager.validate_trade_request(
                     TradeRequest(
                         user_id=self.user_id,
@@ -1591,7 +1597,7 @@ class BotRunner:
                         side=order_payload["side"],
                         amount=order_payload["qty"],
                         current_price=price,
-                        current_exposure=float(self.recovered_exposure_coins) * price,  # Decimal * float is a TypeError
+                        current_exposure=checked_exposure,
                         current_drawdown_pct=current_drawdown_pct,
                         daily_pnl_pct=daily_pnl_pct,
                         is_reduce_only=is_reduce,
@@ -1637,7 +1643,7 @@ class BotRunner:
                             ),
                             position_size=float(order_payload["qty"]),
                             capital=bal_usdt,
-                            exposure=float(self.recovered_exposure_coins * Decimal(str(price))),
+                            exposure=checked_exposure,
                             drawdown_check=bool(current_drawdown_pct < 0.2)
                         )
 
