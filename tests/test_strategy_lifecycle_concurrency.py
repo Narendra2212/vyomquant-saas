@@ -757,15 +757,26 @@ async def test_the_four_operations_can_land_running_but_deleted(_seeded_asset_un
 
 
 @pytest.mark.asyncio
-# DEPLOY-DUP-01: the application-level active-deployment pre-check closes this gap, so
-# the xfail marker is gone, as its reason asked.
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "DEPLOY-DUP-01 added an application-level pre-check that refuses a deploy while the "
+        "strategy already has an active deployment, which closes the SEQUENTIAL case. It is "
+        "check-then-act, so two deploys that both read before either inserts (this test's "
+        "stop + deploy + deploy interleaving) can still both pass it: CI saw 11/12 double "
+        "deploys on 2026-11-15 while a local run saw 0/12. Non-strict because the outcome "
+        "depends on scheduling. The DATABASE guards this: the partial unique index "
+        "uq_strategy_deployments_one_live_per_user makes the losing insert fail with 23505, "
+        "proven in tests/test_strategy_lifecycle_concurrency_postgres.py. This test drives "
+        "the SQLite-backed layer, which cannot see that index."
+    ),
+)
 async def test_deploy_can_race_itself_into_a_double_deploy(_seeded_asset_universe) -> None:
     """Two ``deploy`` attempts racing one ``stop``, on an already-running strategy, across
     12 seeds - the shape most directly named by "no double deploy".
 
-    Used to fail (xfail): two concurrent ``deploy_version`` calls each inserted their own
-    row. DEPLOY-DUP-01's pre-check now refuses a deploy while the strategy already has an
-    active deployment, and the DB unique index still backs it.
+    Two concurrent ``deploy_version`` calls can each pass the DEPLOY-DUP-01 pre-check and
+    insert their own row; see the xfail reason. The DB unique index is the real guard.
     """
     violations: List[str] = []
     for i in range(12):
