@@ -92,6 +92,12 @@ export const ROW_ACTION = Object.freeze({
   SIGNAL_TRACE: 'signal_trace',
   /** `POST /api/strategies/{id}/pause`. Neither destructive nor a live transition. */
   PAUSE: 'pause',
+  /** PAUSE-01: `POST /api/strategies/{id}/resume` — continues the PAUSED deployments (same
+   *  mode, same exchange account). Offered in place of Pause once the strategy is paused. */
+  RESUME: 'resume',
+  /** PAUSE-01: `POST /api/strategies/{id}/stop` — ends the running/paused deployments, which
+   *  is what makes a strategy deletable again. The safe direction; not separated. */
+  STOP: 'stop',
   /** The Live deployment. Separated. */
   DEPLOY_LIVE: 'deploy_live',
   /** A Paper session. **Not** separated — see {@link SEPARATION}. */
@@ -283,7 +289,14 @@ export function renderedActionIds(partition) {
  * @returns {ReadonlyArray<string>} Frozen, in §7.2's inline-then-separated order.
  */
 export function ownerRowActions(row) {
-  const running = (row === null || typeof row !== 'object' ? {} : row).status === 'running';
+  const status = (row === null || typeof row !== 'object' ? {} : row).status;
+  // PAUSE-01: a paused strategy offered Deploy, not Resume, so the trader had no way back to
+  // the deployment they paused; and neither state offered Stop, which is what Delete needs
+  // (it refuses while a deployment is still running or paused).
+  let lifecycle;
+  if (status === 'running') lifecycle = [ROW_ACTION.PAUSE, ROW_ACTION.STOP];
+  else if (status === 'paused') lifecycle = [ROW_ACTION.RESUME, ROW_ACTION.STOP];
+  else lifecycle = [ROW_ACTION.DEPLOY_LIVE];
 
   return Object.freeze([
     ROW_ACTION.RUN_BACKTEST,
@@ -291,7 +304,7 @@ export function ownerRowActions(row) {
     ROW_ACTION.CLONE,
     ROW_ACTION.RENAME,
     ROW_ACTION.SIGNAL_TRACE,
-    running ? ROW_ACTION.PAUSE : ROW_ACTION.DEPLOY_LIVE,
+    ...lifecycle,
     ROW_ACTION.ARCHIVE,
   ]);
 }

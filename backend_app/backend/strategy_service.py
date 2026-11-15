@@ -3381,11 +3381,13 @@ class StrategyService:
         if not sb:
             return 0
 
-        # Get all running deployments
+        # Get every deployment that is still live. PAUSE-01: `paused` too -- a paused
+        # deployment holds its bot slot and its exchange binding, and a Stop that skipped it
+        # left the strategy undeletable (archive refuses while one is active).
         q1 = (sb.table("strategy_deployments")
                         .select("*")
                         .eq("strategy_id", strategy_id)
-                        .eq("status", "running")
+                        .in_("status", ["running", "paused"])
                         .execute())
         running_res = await q1 if inspect.isawaitable(q1) else q1
 
@@ -3396,6 +3398,35 @@ class StrategyService:
 
         return stopped_count
     
+    async def transition_all_deployments(
+        self, user: dict, strategy_id: str, action: str, from_status: str
+    ) -> int:
+        """PAUSE-01: pause or resume every deployment of a strategy in ``from_status``.
+
+        Goes through :meth:`transition_deployment` -- the same gate, audit and lifecycle
+        write the per-deployment routes use -- so a strategy-level Pause is a real pause:
+        the deployment keeps its exchange binding and mode (a LIVE bot stays live), its bot
+        stops placing orders (the fleet heartbeat honours ``paused``), and Resume continues
+        the SAME deployment instead of starting a new paper one. Returns how many moved.
+        """
+        sb_res = self._get_supabase(user)
+        sb = await sb_res if inspect.isawaitable(sb_res) else sb_res
+        if not sb:
+            return 0
+        q = (sb.table("strategy_deployments").select("id")
+             .eq("strategy_id", strategy_id).eq("user_id", user["id"])
+             .eq("status", from_status).execute())
+        res = await q if inspect.isawaitable(q) else q
+        moved = 0
+        for row in (getattr(res, "data", None) or []):
+            try:
+                out = await self.transition_deployment(user, str(row["id"]), action)
+                if not out.get("idempotent"):
+                    moved += 1
+            except Exception as exc:  # noqa: BLE001 - one refusal must not strand the rest
+                logger.warning("%s of deployment %s refused: %s", action, row.get("id"), exc)
+        return moved
+
     async def pause_strategy(self, user: dict, strategy_id: str) -> bool:
         """
         Pause a running Strategy (stops all deployments).

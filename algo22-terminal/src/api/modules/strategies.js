@@ -504,6 +504,14 @@ export const strategiesApi = {
   pause: (id) => post(`/api/strategies/${id}/pause`),
 
   /**
+   * Resume a paused strategy: its PAUSED deployments continue (same mode and account).
+   * PAUSE-01 — 409 `NOTHING_TO_RESUME` when no deployment is paused.
+   * @param {string} id
+   * @returns {Promise<{status: string, resumed: number}>}
+   */
+  resume: (id) => post(`/api/strategies/${id}/resume`),
+
+  /**
    * Run backtest
    * @param {BacktestPayload} payload
    * @returns {Promise<BacktestResult>}

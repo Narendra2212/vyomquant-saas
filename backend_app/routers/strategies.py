@@ -2231,9 +2231,13 @@ async def stop_bot(
     user: dict = Depends(get_current_user),
     fleet=Depends(get_fleet),
     ws_mgr=Depends(get_ws_manager),
-    _feature=Depends(require_live_trading),
 ):
-    """Stops the bot loop and cancels all open orders for that symbol."""
+    """Stops the bot loop and cancels all open orders for that symbol.
+
+    PAUSE-01: not plan-gated. It required the live-trading entitlement, so a Free user -- or
+    a user whose paid plan had lapsed -- could not stop their own bot. Stopping is the safe
+    direction and is never refused for a plan reason.
+    """
     # SECURITY: Verify strategy belongs to authenticated user
     sb = await _sb(user)
     if not sb:
@@ -2250,11 +2254,7 @@ async def stop_bot(
         logger.error(f"[STRATEGIES] Strategy not found for stop: {strategy_id}")
         raise HTTPException(404, "Strategy not found.")
 
-    if resp.data[0].get("status") != "running":
-        logger.info(f"[STRATEGIES] Strategy {strategy_id} is already stopped.")
-        return {"status": "already_stopped"}
-
-    symbol = resp.data[0]["symbol"]
+    symbol = resp.data[0].get("symbol")
 
     # RT-03/RT-08: stop through the canonical service, which stops each running DEPLOYMENT of
     # this strategy by its real symbol and writes a durable stop request when the bot is owned
@@ -2263,8 +2263,13 @@ async def stop_bot(
     from backend_app.backend.strategy_service import get_strategy_service
 
     service = await get_strategy_service()
+    # PAUSE-01: the deployments decide, not the row -- a PAUSED deployment is stopped too,
+    # where the old `status != 'running'` early return left it holding the strategy
+    # undeletable.
     stopped = await service.stop_all_deployments(user, strategy_id)
     logger.info(f"[STRATEGIES] Strategy {strategy_id}: {stopped} deployment(s) stopped.")
+    if stopped == 0 and resp.data[0].get("status") not in ("running", "paused"):
+        return {"status": "already_stopped"}
 
     sb = await _sb(user)
     if sb:
@@ -3923,16 +3928,24 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
     # keyed on the strategy row's symbol, which only ever matched a bot in THIS process.
     from backend_app.backend.strategy_service import get_strategy_service
 
+    from backend_app.backend import strategy_lifecycle as _lc
+
     service = await get_strategy_service()
     # PAUSE-01: the DEPLOYMENTS decide whether there is anything to pause, never the strategy
     # row's `is_active` flag. The version deploy path sets `status='running'` and never sets
     # `is_active`, so every strategy deployed through it read `is_active=false` and this route
     # refused 409 "already paused" while its live bot kept trading -- found on 2026-11-15 with
     # the owner unable to pause (and so unable to delete) a running live FROM bot.
-    stopped = await service.stop_all_deployments(user, strategy_id)
-    if stopped == 0 and rec.get("status") in ("paused", "stopped"):
+    #
+    # And it is a real PAUSE now, not a stop: each running deployment moves to `paused`
+    # through the deployment lifecycle, keeping its mode and exchange binding, and its bot
+    # stops placing orders (the fleet heartbeat honours the row). Resume continues it.
+    paused = await service.transition_all_deployments(
+        user, strategy_id, _lc.ACTION_PAUSE, "running"
+    )
+    if paused == 0 and rec.get("status") in ("paused", "stopped"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already paused.")
-    bot_stopped = stopped >= 0
+    bot_stopped = paused >= 0
 
     try:
         upd = await sb.table("strategies").update({"is_active": False, "status": "paused"}).eq("id", strategy_id).execute()
@@ -3946,48 +3959,48 @@ async def pause_strategy(strategy_id: str, user: dict = Depends(get_current_user
 
 @router.post("/{strategy_id}/resume")
 async def resume_strategy(strategy_id: str, user: dict = Depends(get_current_user), fleet=Depends(get_fleet)):
-    """Resume live execution bot for a strategy with strict state checks."""
+    """Resume a paused strategy: every PAUSED deployment continues where it stopped.
+
+    PAUSE-01. This used to start a FRESH PAPER deployment of the current version, so
+    "Resume" on a paused LIVE bot silently turned it into a paper bot (and, because it gated
+    on `is_active and running`, could start one beside a live bot still running). Pause is
+    now a real pause, so Resume moves the same deployments back to `running` through the
+    deployment lifecycle -- same mode, same exchange account, same limits.
+    """
     sb = await _sb(user)
     if sb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
-        
+
     try:
-        res = await sb.table("strategies").select("symbol, is_active, status, dag_config").eq("id", strategy_id).eq("user_id", user["id"]).execute()
+        res = await sb.table("strategies").select("status").eq("id", strategy_id).eq("user_id", user["id"]).execute()
     except Exception as e:
         logger.error(f"[STRATEGIES] Failed to fetch strategy {strategy_id}, user {user['id']}: {e}")
         raise HTTPException(status_code=503, detail="Unable to retrieve strategy for resume. Please try again later.")
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Strategy '{strategy_id}' not found.")
-    
-    rec = res.data[0]
-    # PAUSE-01: `status` alone decides; `is_active` is not maintained by the version deploy
-    # path, so `is_active and running` let a resume start a SECOND (paper) bot beside a live
-    # one that was still running.
-    if rec.get("status") == "running":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Strategy '{strategy_id}' is already running.")
-    
-    # SECURITY: Validate ML/DL strategies have trained models before resume
-    blueprint = {
-        "nodes": rec.get("buy_logic", {}).get("_nodes", []),
-        "ml_model_path": rec.get("ml_model_path")
-    }
-    _validate_ml_models_present(blueprint)
-    
-    # RT-03: resume = a fresh PAPER deployment of the current version through the canonical
-    # deploy. This handler used to hand `dag_config` (no venue) to `fleet.start_bot`, which
-    # `BotRunner.__init__` refused, so a resume could never succeed.
-    msg = "Resumed successfully"
-    await _deploy_current_version_paper(user, strategy_id)
+
+    from backend_app.backend import strategy_lifecycle as _lc
+    from backend_app.backend.strategy_service import get_strategy_service
+
+    service = await get_strategy_service()
+    resumed = await service.transition_all_deployments(
+        user, strategy_id, _lc.ACTION_RESUME, "paused"
+    )
+    if resumed == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "NOTHING_TO_RESUME",
+                "message": "This strategy has no paused deployment to resume. Deploy it to start a new one.",
+            },
+        )
 
     try:
-        upd = await sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
-    except Exception as e:
-        logger.error(f"[STRATEGIES] Failed to update status for strategy {strategy_id}, user {user['id']}: {e}")
-        raise HTTPException(status_code=503, detail="Unable to update strategy status after resume. Please try again later.")
-    if not upd.data:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database update failed while resuming strategy.")
-        
-    return {"status": "running", "strategy_id": strategy_id, "message": msg}
+        await sb.table("strategies").update({"is_active": True, "status": "running"}).eq("id", strategy_id).execute()
+    except Exception as e:  # the deployments already resumed; the row catches up on its next settle
+        logger.warning(f"[STRATEGIES] Strategy {strategy_id} resumed but its row was not updated: {e}")
+
+    return {"status": "running", "strategy_id": strategy_id, "resumed": resumed, "message": "Resumed successfully"}
 
 def validate_dag(config):
     """Validate a strategy DAG configuration through the canonical validator.
