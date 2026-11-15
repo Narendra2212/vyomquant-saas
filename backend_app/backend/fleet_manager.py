@@ -25,6 +25,12 @@ logger = logging.getLogger("FleetManager")
 #: orphan sweep leaves it for the next pass.
 SWEEP_MIN_ROW_AGE_SECONDS = 120
 
+#: STOPPING-SWEEP-01: a ``stopping`` row whose user+symbol claim is held by a live bot is
+#: still finished once it is this old. The claim's owner honours a stop on its OWN row
+#: within one heartbeat (15 s), so a row still ``stopping`` after ten minutes is not that
+#: bot's -- typically a redeploy of the same symbol took the slot.
+STOPPING_ROW_STALE_SECONDS = 600
+
 
 def _updated_within(row: Dict[str, Any], seconds: float) -> bool:
     """True when the row's ``updated_at`` (or ``created_at``) is newer than ``seconds`` ago.
@@ -442,8 +448,36 @@ class FleetManager:
         """
         from backend_app.core.bot_ownership import claim_is_live
 
-        outcome = {"started": 0, "refused": 0, "failed": 0, "skipped": 0}
+        outcome = {"started": 0, "refused": 0, "failed": 0, "skipped": 0, "finalised_stop": 0}
         store = self._store()
+        # STOPPING-SWEEP-01: found in production on 2026-11-15 -- a Stop landed in a worker
+        # that did not run the bot, so it wrote the durable ``stopping`` request; but NO
+        # process ran that bot (it had been lost on a rolling deploy while paused), so no
+        # heartbeat ever confirmed it and the row said ``stopping`` for good. Only a reboot
+        # finalised such rows. Finish them here: not this process's bot, old enough for the
+        # owner's heartbeat to have acted, and either no live claim or stale beyond doubt.
+        for row in await store.rows_in(("stopping",)):
+            symbol = str(row.get("exchange_symbol") or "")
+            if (
+                symbol and self._bot_key(str(row.get("user_id")), symbol) in self._active_fleet
+            ) or _updated_within(row, SWEEP_MIN_ROW_AGE_SECONDS):
+                continue
+            live = False
+            if symbol:
+                try:
+                    live = await asyncio.to_thread(
+                        claim_is_live, str(row.get("user_id")), symbol
+                    )
+                except Exception:  # noqa: BLE001
+                    live = None
+            if live is None or (live and _updated_within(row, STOPPING_ROW_STALE_SECONDS)):
+                continue
+            if await store.mark_stopped(str(row["id"])):
+                outcome["finalised_stop"] += 1
+                logger.warning(
+                    "STOPPING-SWEEP-01: deployment %s was stopping with no runtime; "
+                    "recorded as stopped.", row["id"],
+                )
         # `running` only, never `deploying`: a deploy in flight in ANOTHER process writes its
         # row as `deploying` a moment before its `start_bot` takes the claim, and a sweep
         # landing in that gap must not race it. A row reaches `running` only after a start

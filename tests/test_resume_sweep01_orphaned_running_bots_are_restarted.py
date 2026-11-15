@@ -25,11 +25,15 @@ REPO = Path(__file__).resolve().parents[1]
 
 class _Store:
     def __init__(self, rows):
-        self.rows, self.failed, self.asked = rows, [], []
+        self.rows, self.failed, self.asked, self.stopped = rows, [], [], []
 
     async def rows_in(self, statuses):
         self.asked.append(statuses)
         return [r for r in self.rows if r["status"] in statuses]
+
+    async def mark_stopped(self, dep_id):
+        self.stopped.append(dep_id)
+        return True
 
     async def mark_failed(self, dep_id, reason):
         self.failed.append((dep_id, reason))
@@ -95,7 +99,8 @@ def test_a_freshly_written_row_waits_for_the_next_pass():
 
 def test_only_running_rows_are_considered():
     _outcome, started, store = _run([_row(status="deploying")], claim=False)
-    assert started == [] and store.asked == [("running",)]
+    assert started == [] and ("running",) in store.asked
+    assert not any("deploying" in a for a in store.asked)
 
 
 def test_a_row_that_cannot_be_rebuilt_is_marked_failed():
@@ -135,3 +140,37 @@ def test_the_loop_survives_a_failed_pass():
     except asyncio.CancelledError:
         pass
     assert len(calls) == 2
+
+
+# ── STOPPING-SWEEP-01: a stop nothing will ever confirm ─────────────────────────────────
+
+
+def test_a_stopping_row_with_no_runtime_is_finalised():
+    outcome, started, store = _run([_row(status="stopping")], claim=False)
+    assert store.stopped == ["d1"] and started == [] and outcome["finalised_stop"] == 1
+
+
+def test_a_stopping_row_in_this_process_is_left_to_its_heartbeat():
+    _o, _s, store = _run([_row(status="stopping")], claim=False, local=("u1_BTC_USDT",))
+    assert store.stopped == []
+
+
+def test_a_fresh_stopping_row_waits_for_the_owner():
+    _o, _s, store = _run([_row(status="stopping", updated=datetime.now(timezone.utc).isoformat())],
+                         claim=False)
+    assert store.stopped == []
+
+
+def test_a_stopping_row_behind_a_live_claim_waits_then_is_finalised():
+    five = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    _o, _s, store = _run([_row(status="stopping", updated=five)], claim=True)
+    assert store.stopped == []
+    old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    _o, _s, store = _run([_row(status="stopping", updated=old)], claim=True)
+    assert store.stopped == ["d1"]
+
+
+def test_an_unreadable_claim_never_finalises_a_stop():
+    old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    _o, _s, store = _run([_row(status="stopping", updated=old)], claim=None)
+    assert store.stopped == []

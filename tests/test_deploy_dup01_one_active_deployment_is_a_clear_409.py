@@ -66,12 +66,12 @@ def test_an_unreadable_table_is_pending_never_passed():
     assert cond.status != "passed"
 
 
-def test_the_conflict_is_a_409_and_carries_no_upgrade_link():
+def test_the_conflict_is_a_409_through_the_plan_refusal_mapping():
     assert ss.DeploymentConflict.http_status == 409
     assert issubclass(ss.DeploymentConflict, ss.PlanLimitRefused)
     for router in ("strategies.py", "strategy_operations.py"):
         src = (REPO / "backend_app" / "routers" / router).read_text()
-        assert "e.http_status == 403" in src, router
+        assert "status_code=e.http_status" in src, router
 
 
 def test_the_statuses_match_the_unique_index():
