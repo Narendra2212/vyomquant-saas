@@ -76,7 +76,7 @@ import re
 import time
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -1062,12 +1062,13 @@ async def cancel_all(
     return {"status": "ok" if result.get("success") else "partial", "cancelled": result}
 
 
-#: LIVE-HIST-01: quote currencies a fee can be summed in. A fee charged in the base asset
-#: (Binance's default without the BNB discount: 1E-7 BTC on a 0.0001 BTC buy) is not a
-#: dollar figure, so it is reported as unavailable rather than summed into "Total fees".
-_QUOTE_FEE_CURRENCIES = frozenset({"USDT", "USDC", "USD", "BUSD", "FDUSD", "TUSD", "DAI"})
+#: LIVE-HIST-01 / LIVE-PNL-01: how much of a user's live fill history the P&L walk reads.
+#: Average cost needs every fill of a position from its first buy, so the read is not the
+#: page size; past this cap the oldest fills are not read and a sell whose buys fell outside
+#: it reports no P&L rather than a wrong one.
+_LIVE_HISTORY_SCAN = 5000
 
-_LIVE_HISTORY_SQL = """
+_LIVE_HISTORY_SQL = r"""
     SELECT er.execution_id,
            er.venue_order_id                                      AS order_id,
            er.strategy_id,
@@ -1076,6 +1077,7 @@ _LIVE_HISTORY_SQL = """
            lower(er.side)                                         AS side,
            er.filled_size                                         AS quantity,
            coalesce(er.avg_price, er.price)                       AS price,
+           er.price                                               AS decision_price,
            er.exchange_id,
            coalesce(er.filled_at, er.submitted_at, er.created_at) AS executed_at,
            er.result -> 'trade_result' ->> 'fee'                  AS raw_fee,
@@ -1090,8 +1092,66 @@ _LIVE_HISTORY_SQL = """
        AND er.filled_size ~ '^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$'
        AND er.filled_size::numeric > 0{symbol_clause}
      ORDER BY coalesce(er.filled_at, er.submitted_at, er.created_at) DESC
-     LIMIT :limit
+     LIMIT :scan
 """
+
+
+def _as_decimal(value: Any) -> Optional[Decimal]:
+    if value is None:
+        return None
+    try:
+        number = Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+    return number if number.is_finite() else None
+
+
+def _money(value: Optional[Decimal]) -> Optional[str]:
+    if value is None:
+        return None
+    text = format(value.quantize(Decimal("0.00000001")).normalize(), "f")
+    return "0" if text in ("-0", "") else text
+
+
+def _with_realised_pnl(rows: list) -> None:
+    """LIVE-PNL-01: each row's realised P&L, average cost, per (strategy, market), in place.
+
+    ``rows`` must be OLDEST first. A buy opens or adds to the position and realises nothing
+    (``"0"``, as the paper ledger reports a buy). A sell realises
+    ``(sell price - average cost) * quantity sold - the sell's fee``, where the average cost
+    carries each buy's fee too. A sell larger than the position realises on the part that
+    has a cost basis; a sell with no position at all -- its buys predate this history --
+    reports ``None``, never a guess. ``pnl_complete`` is ``False`` when a fee in the
+    position could not be stated in quote, so the figure excludes it.
+    """
+    books: Dict[Tuple[Any, str], Dict[str, Any]] = {}
+    for row in rows:
+        key = (row.get("strategy_id"), str(row.get("symbol") or "").upper())
+        book = books.setdefault(key, {"qty": Decimal("0"), "cost": Decimal("0"), "complete": True})
+        qty = _as_decimal(row.get("quantity")) or Decimal("0")
+        price = _as_decimal(row.get("price"))
+        fee = _as_decimal(row.get("fee"))
+        if price is None or qty <= 0:
+            row["realized_pnl"], row["pnl_complete"] = None, False
+            continue
+        if row.get("side") == "buy":
+            book["qty"] += qty
+            book["cost"] += qty * price + (fee or Decimal("0"))
+            book["complete"] = book["complete"] and fee is not None
+            row["realized_pnl"], row["pnl_complete"] = "0", fee is not None
+            continue
+        if book["qty"] <= 0:
+            row["realized_pnl"], row["pnl_complete"] = None, False
+            continue
+        matched = min(qty, book["qty"])
+        average = book["cost"] / book["qty"]
+        pnl = (price - average) * matched - (fee or Decimal("0"))
+        book["cost"] -= average * matched
+        book["qty"] -= matched
+        complete = book["complete"] and fee is not None
+        if book["qty"] <= 0:
+            book.update(qty=Decimal("0"), cost=Decimal("0"), complete=True)
+        row["realized_pnl"], row["pnl_complete"] = _money(pnl), complete
 
 
 def _live_history_rows(user_id: str, symbol: Optional[str], limit: int) -> Optional[list]:
@@ -1099,7 +1159,8 @@ def _live_history_rows(user_id: str, symbol: Optional[str], limit: int) -> Optio
 
     A row is LIVE when ``exchange_id`` is set; paper fills carry none (they are the paper
     ledger, read by ``GET /api/paper/trades``). Only fills are trades: an order that never
-    filled is a signal outcome, which Signal Trace shows.
+    filled is a signal outcome, which Signal Trace shows. Fees are stated in the quote
+    currency (LIVE-FEE-01) and each row carries its realised P&L (LIVE-PNL-01).
     """
     try:
         tenant = UUID(str(user_id))
@@ -1109,9 +1170,10 @@ def _live_history_rows(user_id: str, symbol: Optional[str], limit: int) -> Optio
     from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
     from backend_app.core.database import get_db_context
+    from backend_app.core.fee_conversion import fee_in_quote
 
     symbol_clause = ""
-    params: Dict[str, Any] = {"tenant_id": tenant, "limit": max(1, min(int(limit), 500))}
+    params: Dict[str, Any] = {"tenant_id": tenant, "scan": _LIVE_HISTORY_SCAN}
     if symbol:
         symbol_clause = (
             "\n       AND upper(replace(replace(er.symbol, '-', '/'), '_', '/')) = :symbol"
@@ -1124,14 +1186,18 @@ def _live_history_rows(user_id: str, symbol: Optional[str], limit: int) -> Optio
         found = session.execute(statement, params).mappings().all()
 
     rows = []
-    for r in found:
-        currency = (r.get("fee_currency") or "").upper()
-        # A fee written while the order was only ACCEPTED is a placeholder "0", not a fee.
-        fee = (
-            r.get("raw_fee")
-            if currency in _QUOTE_FEE_CURRENCIES and r.get("fill_state") != "accepted"
-            else None
-        )
+    for r in reversed(found):  # oldest first, for the P&L walk
+        price = None if r.get("price") is None else str(r.get("price"))
+        fee = None
+        if r.get("fill_state") != "accepted":
+            fee = fee_in_quote(r.get("raw_fee"), r.get("fee_currency"), r.get("symbol"), price)
+        # Slippage as this page defines it on both ledgers: |fill - decision| x quantity, in
+        # quote. Only when the venue reported its own average (not the requested price).
+        slippage = None
+        fill_px, decision_px, qty = (_as_decimal(price), _as_decimal(r.get("decision_price")),
+                                     _as_decimal(r.get("quantity")))
+        if fill_px is not None and decision_px is not None and qty is not None:
+            slippage = abs(fill_px - decision_px) * qty
         executed_at = r.get("executed_at")
         rows.append({
             "execution_id": r.get("execution_id"),
@@ -1141,9 +1207,10 @@ def _live_history_rows(user_id: str, symbol: Optional[str], limit: int) -> Optio
             "symbol": r.get("symbol"),
             "side": r.get("side"),
             "quantity": None if r.get("quantity") is None else str(r.get("quantity")),
-            "price": None if r.get("price") is None else str(r.get("price")),
-            "fee": fee,
+            "price": price,
+            "fee": _money(fee),
             "fee_currency": r.get("fee_currency"),
+            "slippage": _money(slippage),
             "status": "FILLED",
             "exchange_id": r.get("exchange_id"),
             "executed_at": (
@@ -1152,7 +1219,9 @@ def _live_history_rows(user_id: str, symbol: Optional[str], limit: int) -> Optio
             "execution_environment": "LIVE",
             "is_simulated": False,
         })
-    return rows
+    _with_realised_pnl(rows)
+    rows.reverse()  # newest first, as the ledger is read
+    return rows[: max(1, min(int(limit), 500))]
 
 
 # ── GET /api/orders/history ───────────────────────────────────────────

@@ -549,6 +549,74 @@ PRICE_PRECISION = 8
 QUANTITY_PRECISION = 8
 
 
+#: PAPER-STRAT-01: the idempotency-key prefix ``BotRunner`` writes on every order it places,
+#: followed by the ``execution_records.execution_id`` of the execution that placed it.
+BOT_ORDER_KEY_PREFIX = "botrunner:"
+
+
+def get_bot_order_strategies(
+    user_id: Any, orders: Sequence[Mapping[str, Any]]
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """PAPER-STRAT-01: ``{order_id: {"strategy_id", "strategy"}}`` for the bot's paper orders.
+
+    The paper ledger does not record which strategy placed an order, but every bot order's
+    ``idempotency_key`` is ``botrunner:<execution_id>``, and that execution record names the
+    strategy. Read in ONE bound statement, scoped to this user on both tables
+    (``tenant_id`` / ``user_id`` = the caller); a manual order has no such key and is absent
+    from the answer. It lives here, outside ``backend/paper/``, because that package's
+    imports are bounded by ``tests/test_paper_no_random.py`` and the database session is
+    not on that list.
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        return {}
+    by_execution: Dict[str, str] = {}
+    for order in orders:
+        key = str(order.get("idempotency_key") or "")
+        if key.startswith(BOT_ORDER_KEY_PREFIX) and order.get("id") is not None:
+            by_execution[key[len(BOT_ORDER_KEY_PREFIX):]] = str(order.get("id"))
+    if not by_execution:
+        return {}
+    from uuid import UUID
+
+    from sqlalchemy import bindparam, text
+    from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+    from backend_app.core.database import get_db_context
+
+    statement = text(
+        """
+        SELECT er.execution_id, er.strategy_id, s.name AS strategy
+          FROM execution_records er
+          LEFT JOIN strategies s
+                 ON s.id::text = er.strategy_id AND s.user_id = er.tenant_id
+         WHERE er.tenant_id = :tenant_id
+           AND er.execution_id IN :ids
+        """
+    ).bindparams(
+        bindparam("tenant_id", type_=PG_UUID(as_uuid=True)),
+        bindparam("ids", expanding=True),
+    )
+    found: Dict[str, Dict[str, Optional[str]]] = {}
+    ids = list(by_execution)
+    with get_db_context() as session:
+        for start in range(0, len(ids), 500):
+            rows = session.execute(
+                statement, {"tenant_id": UUID(uid), "ids": ids[start:start + 500]}
+            ).mappings().all()
+            for row in rows:
+                if row.get("strategy_id"):
+                    found[str(row.get("execution_id"))] = {
+                        "strategy_id": str(row.get("strategy_id")),
+                        "strategy": row.get("strategy"),
+                    }
+    return {
+        order_id: found[execution_id]
+        for execution_id, order_id in by_execution.items()
+        if execution_id in found
+    }
+
+
 class PaperTradingService:
     """The Paper_Trading facade. Holds configuration; holds no figure.
 
@@ -1093,6 +1161,7 @@ class PaperTradingService:
         fill: Mapping[str, Any],
         order: Mapping[str, Any],
         realized_pnl: Decimal,
+        strategy: Optional[Mapping[str, Optional[str]]] = None,
     ) -> Dict[str, Any]:
         """One element of ``/api/paper/trades``: the fill history, key for key.
 
@@ -1107,7 +1176,9 @@ class PaperTradingService:
             "execution_id": str(fill.get("fill_event_id")),
             "order_id": str(fill.get("order_id")),
             "user_id": str(fill.get("user_id")),
-            "strategy_id": None,
+            # PAPER-STRAT-01: the strategy that placed it, resolved by ``get_trades``.
+            "strategy_id": (strategy or {}).get("strategy_id"),
+            "strategy": (strategy or {}).get("strategy"),
             "deployment_id": None,
             "symbol": str(order.get("symbol")),
             "side": str(order.get("side")),
@@ -1116,6 +1187,12 @@ class PaperTradingService:
             "fee": str(
                 self.config.money(
                     Decimal(int(fill.get("fee_minor") or 0)).scaleb(-MONEY_EXPONENT)
+                )
+            ),
+            # PAPER-SLIP-01: the slippage the ledger booked on this fill, in quote currency.
+            "slippage": str(
+                self.config.money(
+                    Decimal(int(fill.get("slippage_minor") or 0)).scaleb(-MONEY_EXPONENT)
                 )
             ),
             "realized_pnl": str(realized_pnl),
@@ -1288,6 +1365,12 @@ class PaperTradingService:
             )
         except repo.PaperPersistenceError as exc:
             raise self._read_failed(exc, "trades read") from exc
+        # PAPER-STRAT-01: best effort -- the fills stand without their strategy names.
+        try:
+            strategies = get_bot_order_strategies(uid, list(orders.values()))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PAPER-STRAT-01: strategy names unavailable for %s: %s", uid, exc)
+            strategies = {}
 
         trades: List[Dict[str, Any]] = []
         for fill in fills:
@@ -1305,7 +1388,12 @@ class PaperTradingService:
                 )
                 continue
             trades.append(
-                self._trade_body(fill, order, realized.get(str(fill.get("id")), Decimal("0")))
+                self._trade_body(
+                    fill,
+                    order,
+                    realized.get(str(fill.get("id")), Decimal("0")),
+                    strategies.get(str(fill.get("order_id"))),
+                )
             )
         return trades
 

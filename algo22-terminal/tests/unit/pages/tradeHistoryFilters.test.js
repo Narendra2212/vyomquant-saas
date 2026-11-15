@@ -99,17 +99,17 @@ describe('the declaration this module reads from pageFields', () => {
     expect([...UNREPORTED_ON_LIVE].sort()).toEqual(['fees', 'pnl', 'slippage', 'strategy']);
   });
 
-  it('reports market and side on both reads, and P&L on paper only', () => {
+  it('reports market, side and P&L on both reads', () => {
     expect(isFieldReported('market', ENVIRONMENTS.LIVE)).toBe(true);
     expect(isFieldReported('side', ENVIRONMENTS.LIVE)).toBe(true);
-    expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(false);
+    // LIVE-PNL-01: realised P&L per sell, average cost, computed by the live read.
+    expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(true);
     expect(isFieldReported('pnl', ENVIRONMENTS.PAPER)).toBe(true);
     // LIVE-HIST-01: the live read (`execution_records`) names the strategy on every row.
     expect(isFieldReported('strategy', ENVIRONMENTS.LIVE)).toBe(true);
-    // Slippage is unreported on the PAPER read specifically — no paper fill records one —
-    // which is why it is not in the paper set, even though TRADE-13 now reports it on LIVE.
-    expect(PAPER_REPORTED_FIELDS).not.toContain('slippage');
-    expect(isFieldReported('slippage', ENVIRONMENTS.PAPER)).toBe(false);
+    // PAPER-SLIP-01: the paper read returns the slippage its ledger booked on each fill.
+    expect(PAPER_REPORTED_FIELDS).toContain('slippage');
+    expect(isFieldReported('slippage', ENVIRONMENTS.PAPER)).toBe(true);
   });
 
   // TRADE-13: `log_execution` now persists `fee` and `slippage` per live execution (fee from
@@ -123,10 +123,10 @@ describe('the declaration this module reads from pageFields', () => {
     expect(isFieldReported('slippage', ENVIRONMENTS.LIVE)).toBe(true);
     expect(LIVE_REPORTED_FIELDS).toContain('fees');
     expect(LIVE_REPORTED_FIELDS).toContain('slippage');
-    // Realized P&L is NOT part of this: no cost-basis tracking sits on the live completion
-    // path, so a per-trade P&L figure would have to be guessed. It stays unavailable on LIVE.
-    expect(LIVE_REPORTED_FIELDS).not.toContain('pnl');
-    expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(false);
+    // LIVE-PNL-01: realised P&L is now computed per sell against the position's average
+    // cost, so it is reported too -- a sell with no recorded buys still reports null.
+    expect(LIVE_REPORTED_FIELDS).toContain('pnl');
+    expect(isFieldReported('pnl', ENVIRONMENTS.LIVE)).toBe(true);
   });
 
   it('carries a reason for every field it will not offer a control for', () => {
@@ -344,12 +344,15 @@ describe('a control over a field the read does not report is not offered', () =>
   it('drops an unanswerable dimension from the applied state instead of emptying the table', () => {
     const stale = { side: ALL_VALUE, outcome: 'PROFIT', market: ANY_VALUE, strategy: 'momentum v2' };
     const applied = normaliseFilters(stale, 'live');
-    expect(applied.outcome).toBe(ALL_VALUE);
+    // LIVE-PNL-01: outcome is a declared live dimension now, so the declaration keeps it ...
+    expect(applied.outcome).toBe('PROFIT');
     // LIVE-HIST-01: the strategy is a reported live dimension now, so the declaration keeps it;
     // with no row offering that value the control is withheld and the view does not apply it.
     expect(applied.strategy).toBe('momentum v2');
     const result = view(LIVE_ROWS, { filters: stale, environment: 'live' });
-    // TH-FILTER-01: and the withheld (no-values) strategy selection is not applied either.
+    // TH-FILTER-01: ... and these rows carry neither a P&L nor a strategy, so both controls
+    // are withheld and neither stale selection is applied.
+    expect(result.filters.outcome).toBe(ALL_VALUE);
     expect(result.filters.strategy).toBe(ANY_VALUE);
     expect(result.resultCount).toBe(3);
     expect(result.activeFilterCount).toBe(0);
@@ -360,11 +363,9 @@ describe('a control over a field the read does not report is not offered', () =>
   it('explains every control it withholds, and names which kind of absence it is', () => {
     const live = view(LIVE_ROWS, { environment: 'live' }).withheld;
     expect(live.map((entry) => entry.id)).toEqual([FILTER_IDS.OUTCOME, FILTER_IDS.STRATEGY]);
-    // Live: P&L is not recorded, so the outcome's reason is pageFields' own. The strategy IS
-    // reported since LIVE-HIST-01, so these fixture rows (which carry none) leave it with no
-    // values to offer rather than unreported.
-    expect(live[0].cause).toBe(WITHHELD_CAUSES.UNREPORTED);
-    expect(live[0].reason).toBe(fieldAbsenceReason(live[0].field));
+    // Live: P&L and the strategy are both reported since LIVE-PNL-01 / LIVE-HIST-01, so these
+    // fixture rows (which carry neither) leave both with no values rather than unreported.
+    expect(live[0].cause).toBe(WITHHELD_CAUSES.NO_VALUES);
     expect(live[1].cause).toBe(WITHHELD_CAUSES.NO_VALUES);
     for (const entry of live) expect(entry.reason).toMatch(/\S/);
     // Paper reports a `strategy_id` key, so the declaration allows it; `_trade_body` writes
@@ -458,8 +459,8 @@ describe("Requirement 11.5's two empty states", () => {
     expect(activeFilterCount({ side: 'BUY' }, '', 'paper')).toBe(1);
     expect(activeFilterCount({ side: 'BUY' }, 'btc', 'paper')).toBe(2);
     expect(activeFilterCount({ side: 'BUY', outcome: 'LOSS' }, 'btc', 'paper')).toBe(3);
-    // Outcome is not applied on live, so it is not something to clear.
-    expect(activeFilterCount({ side: 'BUY', outcome: 'LOSS' }, 'btc', 'live')).toBe(2);
+    // LIVE-PNL-01: outcome is a live dimension now, so it counts there too.
+    expect(activeFilterCount({ side: 'BUY', outcome: 'LOSS' }, 'btc', 'live')).toBe(3);
   });
 });
 

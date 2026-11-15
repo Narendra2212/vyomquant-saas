@@ -227,7 +227,9 @@
         "trades[].quantity",
         "trades[].realized_pnl",
         "trades[].side",
+        "trades[].slippage",
         "trades[].status",
+        "trades[].strategy",
         "trades[].strategy_id",
         "trades[].symbol",
         "trades[].user_id"
@@ -250,13 +252,16 @@
             "quantity": "str",
             "realized_pnl": "str",
             "side": "str",
+            "slippage": "str",
             "status": "str",
+            "strategy": "null",
             "strategy_id": "null",
             "symbol": "str",
             "user_id": "str"
           }
         }
-      }
+      },
+      "_baseline_note_paper_trade_strategy_and_slippage": "AUTHORISED RE-RECORD (PAPER-STRAT-01 / PAPER-SLIP-01, 2026-11-15) -- two keys ADDED per trade, nothing removed, renamed or retyped: `strategy` (the name of the strategy whose bot placed the order, resolved through paper_orders.idempotency_key 'botrunner:<execution_id>' -> execution_records.strategy_id -> strategies.name; null for a manual order and in this scenario, which places one) and `slippage` (the paper_fills.slippage_minor the ledger booked, in quote currency, a decimal string like `fee`). `strategy_id`, always null before, now carries that id for a bot order. Found testing production Trade History: every paper trade said 'Strategy: not available' and 'Slippage: not available' though the ledger stored both. Edited by hand: the capture needs live market data this sandbox cannot reach; the two entries are what test_paper_api_shape_compatibility captures."
     },
     "POST /api/paper/account/reset": {
       "keys": [

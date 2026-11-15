@@ -413,6 +413,39 @@ class OrderStatusResult:
     #: Additive with a default, so every existing construction of this dataclass is
     #: unaffected.
     venue_order_id: Optional[str] = None
+    #: LIVE-FEE-01: the commission the venue charged for this order's fills, and the asset it
+    #: was charged in (Binance charges the asset RECEIVED by default: base on a buy, quote
+    #: on a sell). ``None`` when the venue reported none. Additive with defaults.
+    fee: Optional[str] = None
+    fee_currency: Optional[str] = None
+
+
+def venue_fee_of(*records: Any) -> Tuple[Optional[str], Optional[str]]:
+    """LIVE-FEE-01: ``(total_cost, currency)`` from CCXT ``fee``/``fees`` on orders or trades.
+
+    Costs are summed only when every one is in the same currency; a mixed set (part BNB,
+    part base) has no single figure, so it is ``(None, None)`` rather than a wrong sum.
+    """
+    total = Decimal("0")
+    currency: Optional[str] = None
+    seen = False
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        fees = record.get("fees") if isinstance(record.get("fees"), list) and record.get("fees") else None
+        entries = fees if fees else ([record["fee"]] if isinstance(record.get("fee"), dict) else [])
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("cost") is None:
+                continue
+            code = str(entry.get("currency") or "").strip().upper() or None
+            try:
+                cost = Decimal(str(entry.get("cost")))
+            except Exception:  # noqa: BLE001
+                return None, None
+            if code is None or (currency is not None and code != currency):
+                return None, None
+            currency, total, seen = code, total + cost, True
+    return (str(total), currency) if seen else (None, None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2171,12 +2204,31 @@ class CCXTExchangeExecutor(BaseExchangeExecutor):
             raw_status = response.get("status")
             status_str = str(raw_status).lower() if raw_status is not None else "unknown"
 
+            # LIVE-FEE-01: the commission. Binance's order endpoint does not carry it (CCXT
+            # leaves `fee` empty), so a filled order's own trades are read for it -- once,
+            # when the order has filled, and never at the cost of the status itself.
+            fee, fee_currency = venue_fee_of(response)
+            if fee is None and status_str in ("closed", "filled") and float(filled_val or 0) > 0:
+                fetch_trades = getattr(self._exchange, "fetch_order_trades", None)
+                if fetch_trades is not None and getattr(self._exchange, "has", {}).get("fetchOrderTrades"):
+                    try:
+                        await self.rate_limiter.acquire("get_order")
+                        trades = await fetch_trades(exchange_order_id, ccxt_symbol)
+                        fee, fee_currency = venue_fee_of(*(trades or []))
+                    except Exception as fee_exc:  # noqa: BLE001 - the status stands without it
+                        logger.warning(
+                            "LIVE-FEE-01: could not read the fee for order %s: %s",
+                            exchange_order_id, fee_exc,
+                        )
+
             return OrderStatusResult(
                 success=True,
                 status=status_str,
                 filled_size=str(filled_val),
                 remaining_size=str(remaining_val),
-                avg_price=str(avg_price_val) if avg_price_val is not None else None
+                avg_price=str(avg_price_val) if avg_price_val is not None else None,
+                fee=fee,
+                fee_currency=fee_currency,
             )
             
         except Exception as e:
