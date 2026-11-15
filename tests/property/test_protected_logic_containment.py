@@ -664,6 +664,13 @@ for _handler, _name in (
 del _handler, _name
 
 
+#: The refusal sentence ``StrategyService.compare_versions`` raises for a non-owner, which the
+#: export route echoes VERBATIM as ``$.message``. Strategy-independent English: a generated token
+#: such as ``versions`` is a substring of it by spelling coincidence, not by disclosure (seen in a
+#: full local run on 2026-11-15), so it belongs to the corpus that skips such examples.
+_COMPARE_VERSIONS_NOT_FOUND = "One or both versions not found"
+
+
 class _NonOwnedStrategyService:
     """A ``StrategyService`` double that answers exactly as the real one does for a strategy id
     that resolves to no row under ``.eq("user_id", caller)`` — the shape every non-owner caller
@@ -683,7 +690,7 @@ class _NonOwnedStrategyService:
     async def compare_versions(
         self, *, user: Any, strategy_id: Any, version_a: Any, version_b: Any
     ) -> Any:
-        raise ValueError("One or both versions not found")
+        raise ValueError(_COMPARE_VERSIONS_NOT_FOUND)
 
 
 async def _get_non_owned_strategy_service() -> _NonOwnedStrategyService:
@@ -748,6 +755,7 @@ def test_trace_and_export_surfaces_contain_no_protected_logic(
         STRATEGY_INDEPENDENT_TEXT
         + (str(strategy_id),)
         + _OPERATION_NAMES_ECHOED_BY_REFUSALS
+        + (_COMPARE_VERSIONS_NOT_FOUND,)
     )
     assume(
         not any(
