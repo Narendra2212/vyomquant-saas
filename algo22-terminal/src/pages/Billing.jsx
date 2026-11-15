@@ -343,10 +343,17 @@
  * capability: there was no capability behind it. `POST /api/billing/portal` is Stripe-only and
  * Razorpay — the provider this platform actually bills through — publishes no hosted portal at
  * all, so the payment-methods panel's *Manage via provider portal* button could only ever
- * answer 500. It is gone. `handleOpenPortal` stays for the two call sites outside that panel
- * (the `past_due` alert's *Update payment method* and the current-plan panel's *Manage
- * billing*), which now surface the server's own structured refusal — the provider is named,
- * and so is where the payment instrument is really changed. No URL is invented anywhere.
+ * answer 500. It is gone.
+ *
+ * BILLING-PORTAL-02 (2026-11-15) finished that removal. The sentence that stood here said
+ * `handleOpenPortal` "stays for the two call sites outside that panel (the `past_due` alert's
+ * *Update payment method* and the current-plan panel's *Manage billing*), which now surface
+ * the server's own structured refusal". Surfacing a well-written refusal is still a refusal:
+ * both controls answered `501 PROVIDER_HAS_NO_BILLING_PORTAL` every time they were pressed,
+ * and one of them was the only control offered to a subscriber whose payment had just failed.
+ * Both are gone, and so are `handleOpenPortal`, `isPortalLoading` and
+ * `api.billing.openPortal`. The endpoint stays and still answers 501; no URL is invented
+ * anywhere, and nothing about subscribe, renew, cancel, resume or webhook handling moved.
  *
  * Three behaviours DID change, each because the old one lost information:
  *
@@ -377,7 +384,9 @@ import {
   CreditCard,
   Crown,
   Database,
-  ExternalLink,
+  // `ExternalLink` left with BILLING-PORTAL-02: its only two uses were the icons on
+  // *Manage billing* and *Update payment method*, and nothing on this page opens an
+  // external destination any more.
   FlaskConical,
   Gauge,
   GitBranch,
@@ -717,7 +726,7 @@ export default function Billing() {
   const [checkoutInterval, setCheckoutInterval] = useState('month');
   const [isCancelLoading, setIsCancelLoading] = useState(false);
   const [isResumeLoading, setIsResumeLoading] = useState(false);
-  const [isPortalLoading, setIsPortalLoading] = useState(false);
+  // BILLING-PORTAL-02: no `isPortalLoading`. Nothing opens a portal from this page any more.
   /** One `{ severity, message }`, where `billingError` and `actionSuccess` were two strings. */
   const [notice, setNotice] = useState(null);
 
@@ -1127,26 +1136,30 @@ export default function Billing() {
     }
   };
 
-  const handleOpenPortal = async () => {
-    if (isPortalLoading) return;
-    setIsPortalLoading(true);
-    setNotice(null);
-    try {
-      const data = await api.billing.openPortal();
-      if (data && data.url) {
-        window.open(data.url, '_blank', 'noopener,noreferrer');
-      } else {
-        throw new Error('Billing portal URL not returned by server.');
-      }
-    } catch (err) {
-      setNotice({
-        severity: 'error',
-        message: writeFailureMessage(err, 'Failed to open billing portal.'),
-      });
-    } finally {
-      setIsPortalLoading(false);
-    }
-  };
+  /*
+    BILLING-PORTAL-02 (2026-11-15): `handleOpenPortal` is GONE, and with it the last two
+    controls that called it — *Manage billing* in the current-plan panel and *Update payment
+    method* in the payment-failed alert.
+
+    An earlier pass (BILLING-PORTAL-01, see the docblock at the head of this file) removed the
+    payment-methods panel's portal button and left this handler "for the two call sites outside
+    that panel". That was the wrong half to keep. There is no portal behind ANY of the three:
+    `POST /api/billing/portal` answers `501 PROVIDER_HAS_NO_BILLING_PORTAL`
+    (`routers/billing.py:3042`) because Razorpay publishes no hosted self-serve billing portal
+    and the branch that once created a `stripe.billing_portal.Session` went with Stripe. So
+    both remaining buttons could only ever open a toast reporting their own failure.
+
+    The endpoint itself STAYS. Removing the control is not removing the provider integration:
+    subscribe, renew, cancel, resume and webhook processing are untouched, and the endpoint
+    keeps answering 501 for any client that still asks.
+
+    What replaces the payment-failed button is a sentence, not another button. Under Razorpay
+    the instrument is supplied to Checkout at the moment of purchase and is never held by
+    VyomQuant, so the real remedy for a failed charge is to buy again and choose a different
+    instrument at that checkout — which the plan buttons further down this page already do
+    through `handleCheckout`. A control that merely restated the remedy in a modal would be
+    the same dead end with more steps.
+  */
 
   // ── The declared figures (Requirement 4.2) ────────────────────────────────
 
@@ -1473,24 +1486,29 @@ export default function Billing() {
           from the server's own `past_due` / `payment_failed` now; it used to be computed from
           a status that defaulted to "active", so it never rendered for a failed read and it
           rendered for nobody else either. */}
+      {/*
+        BILLING-PORTAL-02: the alert STAYS, its button does not. *Update payment method*
+        called `POST /api/billing/portal` and so answered 501 to the one person on this page
+        with an urgent reason to press it.
+
+        The sentence now states the remedy that actually exists. Razorpay collects the card or
+        UPI instrument inside its own Checkout at the moment of purchase and VyomQuant never
+        holds it, so there is no stored instrument to edit and nothing to "update" in place —
+        a failed charge is retried by buying the plan again and choosing a different
+        instrument at that checkout. The plan buttons below this block do exactly that through
+        `handleCheckout`, which is why no second control is added here.
+      */}
       {isPaymentFailed ? (
         <div className="mt-3">
           <Alert
             severity="error"
             title="Payment failed — action required"
-            action={
-              <CommandButton
-                intent="secondary"
-                icon={ExternalLink}
-                onClick={handleOpenPortal}
-                loading={isPortalLoading}
-                loadingLabel="Opening the billing portal"
-              >
-                Update payment method
-              </CommandButton>
-            }
           >
-            Your subscription payment failed. Update your payment method to restore full access.
+            Your subscription payment failed, so full access is suspended. Your card or UPI
+            instrument is collected by Razorpay Checkout at the moment of purchase and is never
+            stored by VyomQuant, so there is nothing to update here. Choose your plan below and
+            pay again, selecting a different instrument at the checkout if the last one was
+            declined.
           </Alert>
         </div>
       ) : null}
@@ -1615,7 +1633,15 @@ export default function Billing() {
       {/* ══ THE ACCOUNT'S OWN SUBSCRIPTION ═══════════════════════════════════
           Requirement 4.4 finding 4: `money` is NOT passed. It requires an `environment`, and a
           subscription invoice has no trading environment — *ENVIRONMENT UNCONFIRMED* over a
-          real charge would state something false. */}
+          real charge would state something false.
+
+          BILLING-PORTAL-02 (2026-11-15): this Panel takes NO `actions` prop. *Manage billing*
+          stood there, behind `planIsPaid`, and called `POST /api/billing/portal` — which
+          answers 501 for every caller because Razorpay publishes no hosted portal. A paid
+          subscriber's only possible outcome from pressing it was an error toast.
+
+          Cancel and Resume, the two subscription commands that DO reach working endpoints, are
+          rendered inside this panel's body and are unaffected. */}
       <Panel
         className="mt-4"
         title="Current plan"
@@ -1630,19 +1656,6 @@ export default function Billing() {
         error={{ error: entitlements.error, onRetry: refetchEntitlements }}
         unavailable={{ reason: 'Your subscription cannot be read right now.' }}
         unauthorised={{ error: entitlements.error }}
-        actions={
-          planIsPaid ? (
-            <CommandButton
-              intent="secondary"
-              icon={ExternalLink}
-              onClick={handleOpenPortal}
-              loading={isPortalLoading}
-              loadingLabel="Opening the billing portal"
-            >
-              Manage billing
-            </CommandButton>
-          ) : null
-        }
       >
         <div className="flex flex-col gap-5">
           <div className="flex items-start gap-3">

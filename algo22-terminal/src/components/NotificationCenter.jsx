@@ -254,13 +254,13 @@ function NotificationCenter() {
 
   // ── Render Loading ─────────────────────────────────────────────────────────
   if (loading && notifications.length === 0) {
+    /*
+      LAYOUT-01: `100%`, not `100vh`. `/app/notifications` renders inside the shell's
+      `<main>`, which is the `1fr` row of App.jsx's `min-content 1fr` grid — so the height
+      available here is the viewport MINUS the TopBar and its strip. `100vh` overflowed the
+      document by exactly that chrome height and scrolled a centred spinner out of view.
+    */
     return (
-      {/*
-        LAYOUT-01: `100%`, not `100vh`. `/app/notifications` renders inside the shell's
-        `<main>`, which is the `1fr` row of App.jsx's `min-content 1fr` grid — so the height
-        available here is the viewport MINUS the TopBar and its strip. `100vh` overflowed the
-        document by exactly that chrome height and scrolled a centred spinner out of view.
-      */}
       <div style={{ 
         height: '100%', 
         minHeight: 0,
@@ -275,14 +275,14 @@ function NotificationCenter() {
     );
   }
 
+  /*
+    LAYOUT-01: `minHeight: '100%'`, not `'100vh'`. Same reason as the loading branch above —
+    this is an ordinary scrolling page, so it asks to be at least as tall as the `<main>` it
+    sits in (which is what makes the canvas background cover) and lets `<main>`'s own
+    `overflowY: 'auto'` do the scrolling when there are more notifications than fit. `100vh`
+    guaranteed a document scrollbar even with a single notification.
+  */
   return (
-    {/*
-      LAYOUT-01: `minHeight: '100%'`, not `'100vh'`. Same reason as the loading branch above —
-      this is an ordinary scrolling page, so it asks to be at least as tall as the `<main>` it
-      sits in (which is what makes the canvas background cover) and lets `<main>`'s own
-      `overflowY: 'auto'` do the scrolling when there are more notifications than fit. `100vh`
-      guaranteed a document scrollbar even with a single notification.
-    */}
     <div style={{ 
       padding: '24px', 
       maxWidth: '1200px', 
