@@ -215,6 +215,32 @@ def _background_sb():
     return create_client(supabase_url, supabase_key)
 
 
+def _is_duplicate_invoice(exc: Exception) -> bool:
+    """Is this a unique-constraint violation on the invoice ledger?
+
+    BILL-07. Migration 070 adds ``uq_billing_invoices_provider_payment``, so a
+    redelivered capture collides instead of filing a second invoice for one
+    charge. That collision is the index working: the row is already on file and
+    the desired end state is reached, so the caller treats it as success rather
+    than as a lost ledger row.
+
+    Detection mirrors ``core/webhook_idempotency._is_unique_violation``: the
+    supabase-py client surfaces a PostgREST error whose class varies by version,
+    so the SQLSTATE and the message are both checked rather than the exception
+    type. It is kept deliberately narrow -- anything that is not recognisably a
+    uniqueness conflict is treated as a real failure, because the cost of
+    misreading a genuine write error as "already recorded" is a payment missing
+    from the ledger with nothing logged at CRITICAL.
+    """
+    code = getattr(exc, "code", None)
+    if code == "23505":
+        return True
+    text = str(exc).lower()
+    return "23505" in text or "duplicate key" in text or (
+        "already exists" in text and "uq_billing_invoices" in text
+    )
+
+
 from backend_app.core.subscription_engine import PRICE_BASE_CURRENCY, Plan, SubscriptionEngine
 
 #: Every ``item_key`` ``_apply_billing_entitlement`` will write to ``profiles.subscription_tier``.
@@ -2711,12 +2737,30 @@ async def razorpay_webhook(
                 # `"currency": "INR"` are fixed, so writing a non-INR payment here would
                 # mislabel it. The refusal is logged at CRITICAL above.
                 if _currency_ok:
+                    # BILL-07: until migration 070 this insert named five columns
+                    # -- provider, provider_payment_id, amount_usd, amount_inr,
+                    # plan -- that the schema did not declare. PostgREST rejects
+                    # the whole statement on an undefined column, so with the
+                    # `except` below downgrading it to a log line, NO INVOICE ROW
+                    # HAD EVER BEEN WRITTEN. 070 declares all five, so the write
+                    # resolves; the handling here is what stops a residual
+                    # failure from being invisible again.
+                    #
+                    # `provider_payment_id` is now None rather than "" when the
+                    # payment carries no id. The empty string is a real value
+                    # that identifies nothing: it would satisfy
+                    # uq_billing_invoices_provider_payment and so let the FIRST
+                    # id-less capture block every later one, and it violates
+                    # chk_billing_invoices_payment_id_not_blank. NULL is the
+                    # honest unknown and is excluded from the partial index.
                     try:
                         sb_inv = _background_sb()
                         sb_inv.table("billing_invoices").insert({
                             "user_id": user_id,
                             "provider": "razorpay",
-                            "provider_payment_id": payment_id or "",
+                            "provider_payment_id": payment_id or None,
+                            # Zero USD is a true statement about an INR capture,
+                            # not a fabricated figure: no dollars were charged.
                             "amount_usd": 0,
                             "amount_inr": str(payment_amount) if payment_amount is not None else None,
                             "currency": "INR",
@@ -2725,7 +2769,45 @@ async def razorpay_webhook(
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         }).execute()
                     except Exception as inv_err:
-                        logger.warning(f"[BILLING] Could not insert billing_invoices (Razorpay): {inv_err}")
+                        # A unique violation means a previous delivery of this
+                        # same payment already filed the invoice. That is the
+                        # index doing its job -- the desired end state is
+                        # reached, so it is success, not an error. Without this
+                        # branch a redelivery would log CRITICAL on a correctly
+                        # de-duplicated charge.
+                        if _is_duplicate_invoice(inv_err):
+                            logger.info(
+                                "[BILLING] BILL-07: invoice for razorpay payment %s "
+                                "already on file; redelivery de-duplicated.",
+                                payment_id,
+                            )
+                        else:
+                            # CRITICAL, not WARNING. The customer has been
+                            # charged and the entitlement is granted, so this is
+                            # a money fact that exists everywhere except this
+                            # ledger -- it will be missing from the billing page
+                            # and, because the refund path finds a purchase by
+                            # (provider, provider_payment_id), A LATER FULL
+                            # REFUND WILL NOT REVOKE THE PLAN.
+                            #
+                            # It deliberately does NOT raise. Raising would
+                            # return non-2xx, Razorpay would redeliver, and
+                            # `_record_plan_period` extends the paid period from
+                            # its current end when the same plan is repurchased
+                            # -- so a redelivery would hand out a second month
+                            # for one payment. A lost ledger row is recoverable
+                            # from the fields below; a silently doubled
+                            # entitlement is not.
+                            logger.critical(
+                                "[BILLING] BILL-07: invoice NOT recorded for razorpay "
+                                "payment %s (user=%s plan=%s amount_inr=%s currency=INR "
+                                "status=paid): %s: %s. The charge and the entitlement "
+                                "both stand. Reconcile by inserting this row manually; "
+                                "every field needed is in this line.",
+                                payment_id, user_id, item_key,
+                                payment_amount if payment_amount is not None else "unreadable",
+                                type(inv_err).__name__, inv_err,
+                            )
 
                 # ── Dispatch payment_succeeded notification ──
                 try:

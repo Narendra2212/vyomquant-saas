@@ -29,6 +29,28 @@
     ],
     [
       "billing_invoices",
+      "amount_inr",
+      "numeric",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "billing_invoices",
+      "amount_usd",
+      "numeric",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "billing_invoices",
       "created_at",
       "timestamp with time zone",
       "",
@@ -97,6 +119,39 @@
       "billing_invoices",
       "period_start",
       "timestamp with time zone",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "billing_invoices",
+      "plan",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "billing_invoices",
+      "provider",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "billing_invoices",
+      "provider_payment_id",
+      "text",
       "",
       "YES",
       "",
@@ -15695,6 +15750,16 @@
       "CREATE INDEX idx_billing_invoices_user ON public.billing_invoices USING btree (user_id)"
     ],
     [
+      "billing_invoices",
+      "idx_billing_invoices_user_created",
+      "CREATE INDEX idx_billing_invoices_user_created ON public.billing_invoices USING btree (user_id, created_at DESC)"
+    ],
+    [
+      "billing_invoices",
+      "uq_billing_invoices_provider_payment",
+      "CREATE UNIQUE INDEX uq_billing_invoices_provider_payment ON public.billing_invoices USING btree (provider, provider_payment_id) WHERE ((provider IS NOT NULL) AND (provider_payment_id IS NOT NULL))"
+    ],
+    [
       "block_registry_snapshots",
       "block_registry_snapshots_pkey",
       "CREATE UNIQUE INDEX block_registry_snapshots_pkey ON public.block_registry_snapshots USING btree (registry_version)"
@@ -20418,43 +20483,8 @@
     ],
     [
       "billing_invoices",
-      "anon",
-      "DELETE"
-    ],
-    [
-      "billing_invoices",
-      "anon",
-      "INSERT"
-    ],
-    [
-      "billing_invoices",
-      "anon",
-      "SELECT"
-    ],
-    [
-      "billing_invoices",
-      "anon",
-      "UPDATE"
-    ],
-    [
-      "billing_invoices",
-      "authenticated",
-      "DELETE"
-    ],
-    [
-      "billing_invoices",
-      "authenticated",
-      "INSERT"
-    ],
-    [
-      "billing_invoices",
       "authenticated",
       "SELECT"
-    ],
-    [
-      "billing_invoices",
-      "authenticated",
-      "UPDATE"
     ],
     [
       "billing_invoices",
@@ -25895,7 +25925,7 @@
     ],
     [
       "hardening/999_privilege_hardening.sql",
-      "8fd3a37e08104146e165df0e4ae93398d6da25eab3a08390171f16194fa6b813",
+      "e82968828385795516c3b09ee13b9c5c82afc35d9fbe5b428907b0ce5de52bfb",
       "step4"
     ],
     [
@@ -26306,6 +26336,11 @@
     [
       "migrations/069_risk01_risk_violation_audit.sql",
       "2fd31c9d6b5885ac570621033e1248b96d2952575e113da9ed08efef5b3e68cd",
+      "step1"
+    ],
+    [
+      "migrations/070_bill07_billing_invoices_provider_columns.sql",
+      "bb0ac19b3bc18d1f376657101d192e5dcac87075f7f253b7a2c785b0dae32eaf",
       "step1"
     ],
     [
@@ -27687,6 +27722,30 @@
     ]
   ],
   "unique_and_check_constraints": [
+    [
+      "billing_invoices",
+      "chk_billing_invoices_amounts_nonnegative",
+      "c",
+      "CHECK ((((amount_usd IS NULL) OR (amount_usd >= (0)::numeric)) AND ((amount_inr IS NULL) OR (amount_inr >= (0)::numeric))))"
+    ],
+    [
+      "billing_invoices",
+      "chk_billing_invoices_payment_id_not_blank",
+      "c",
+      "CHECK (((provider_payment_id IS NULL) OR (btrim(provider_payment_id) <> ''::text)))"
+    ],
+    [
+      "billing_invoices",
+      "chk_billing_invoices_plan_not_blank",
+      "c",
+      "CHECK (((plan IS NULL) OR (btrim(plan) <> ''::text)))"
+    ],
+    [
+      "billing_invoices",
+      "chk_billing_invoices_provider_not_blank",
+      "c",
+      "CHECK (((provider IS NULL) OR (btrim(provider) <> ''::text)))"
+    ],
     [
       "block_registry_snapshots",
       "chk_brs_descriptors_shape",

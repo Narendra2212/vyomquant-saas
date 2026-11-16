@@ -1,7 +1,7 @@
 # Multi-stage build for optimized production backend image
 
 # Stage 1: Builder
-FROM python:3.11-slim as builder
+FROM python:3.15-slim as builder
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     find /opt/venv -type d -name '__pycache__' -delete
 
 # Stage 2: Production
-FROM python:3.11-slim as production
+FROM python:3.15-slim as production
 
 WORKDIR /app
 
