@@ -77,7 +77,22 @@ describe('EXCH-SAVE-01 ExchangeManager error shape and testnet toggle', () => {
   });
   afterEach(() => cleanup());
 
-  it('an MFA 403 on save tells the trader to set up two-factor authentication', async () => {
+  /*
+   * MFA-STEPUP-01 REWROTE THIS CASE, and the rewrite is the point rather than a fixup.
+   *
+   * It used to assert that an AAL2 refusal produced the sentence "Two-factor authentication
+   * is required to save or remove exchange keys. Open Security → Two-Factor Authentication
+   * (/app/2fa) ... then return here and save again." That sentence was the defect: the
+   * refusal is a step the trader can complete, and the page answered it by sending them to
+   * another route and asking them to retype an API key.
+   *
+   * The refusal is still recognised in exactly the same way — this case still proves the
+   * `ApiError` shape is read, which is what EXCH-SAVE-01 exists for — but the page now opens
+   * the step-up dialog in place. The full challenge, retry, failure and cancel behaviour
+   * lives in `exchange_manager_mfa_stepup.test.jsx`; this case asserts only the handoff,
+   * because that is the part EXCH-SAVE-01 is about.
+   */
+  it('an MFA 403 on save opens the step-up dialog instead of sending the trader away', async () => {
     api.exchange.saveKeys.mockRejectedValue(
       apiError(403, {
         detail:
@@ -87,8 +102,11 @@ describe('EXCH-SAVE-01 ExchangeManager error shape and testnet toggle', () => {
     await openBybitForm();
     fireEvent.click(screen.getByRole('button', { name: /Save Keys/i }));
 
-    expect(await screen.findByText(/Two-factor authentication is required to save or remove exchange keys/i)).toBeDefined();
+    expect(await screen.findByTestId('mfa-stepup-dialog')).toBeDefined();
+    // The generic fallback is still not what a recognised refusal produces.
     expect(screen.queryByText('Failed to save exchange keys.')).toBeNull();
+    // And the trader is no longer told to leave the page.
+    expect(screen.queryByText(/Open Security → Two-Factor Authentication/i)).toBeNull();
   });
 
   it('a structured server refusal reaches the trader instead of the generic fallback', async () => {

@@ -369,6 +369,7 @@ import {
 import { Alert } from '../components/ds/Alert';
 import { CommandButton } from '../components/ds/CommandButton';
 import { ConfirmDialog } from '../components/ds/ConfirmDialog';
+import { MfaStepUpDialog } from '../components/MfaStepUpDialog';
 import { ExchangeStatus } from '../components/ds/ExchangeStatus';
 import { Field } from '../components/ds/Field';
 import { Metric, NotAvailableMarker } from '../components/ds/Metric';
@@ -437,10 +438,48 @@ const Marker = ({ field, reason }) => (
  * vocabulary for (Requirement 4.4 finding 5). Its remaining `return detail` is the exposure
  * path this file's header reports.
  */
+/*
+ * MFA-STEPUP-01: this sentence is now the FALLBACK, not the workflow.
+ *
+ * It used to be the whole answer to an AAL2 refusal: a trader who had filled in an API key
+ * and pressed Save was told to leave the page, verify somewhere else, come back and retype
+ * everything. `MfaStepUpDialog` runs that challenge in place instead, and this copy is left
+ * for the one case the dialog cannot handle — a refusal whose shape says MFA but which
+ * arrives from a path with no step-up wired, so the trader still needs somewhere to go.
+ *
+ * The *cancelled* case has its own sentence below. Collapsing the two would tell someone who
+ * deliberately dismissed the dialog to go and do the thing they just declined.
+ */
 const MFA_REQUIRED_MESSAGE =
   "Two-factor authentication is required to save or remove exchange keys. " +
   "Open Security → Two-Factor Authentication (/app/2fa), set up or confirm your " +
   "authenticator code, then return here and save again. Nothing was stored.";
+
+/** Shown when the trader dismisses the step-up dialog rather than completing it. */
+const MFA_CANCELLED_MESSAGE =
+  "Verification was cancelled, so nothing was changed. Your details are still on the form — "
+  + "save again when you are ready to confirm with your authenticator.";
+
+/**
+ * Is this the `require_aal2` refusal — the one a trader can clear by verifying?
+ *
+ * ONE definition, read by both `sanitizeErrorMessage` (for its copy) and the write handlers
+ * (to decide whether to offer the step-up). These were about to be two copies of the same
+ * predicate, which is how one of them comes to recognise a refusal the other does not.
+ *
+ * Both error shapes are read for the reason `sanitizeErrorMessage` documents at length:
+ * `apiClient` rejects with an `ApiError` carrying `status`/`data` as own properties, while
+ * this page's tests (and any direct axios caller) use the `response` shape.
+ *
+ * The detail match stays a regex over the server's sentence rather than a code, because
+ * `core/dependencies.py` answers this one with a plain string and no `error` code. If that
+ * ever becomes structured, this is the single place that learns about it.
+ */
+function isMfaStepUpRequired(err) {
+  const status = err?.status ?? err?.response?.status;
+  const detail = err?.data?.detail ?? err?.response?.data?.detail;
+  return status === 403 && typeof detail === "string" && /two-factor|mfa/i.test(detail);
+}
 
 function sanitizeErrorMessage(err, fallback = "An error occurred. Please try again.") {
   if (!err) return fallback;
@@ -470,7 +509,12 @@ function sanitizeErrorMessage(err, fallback = "An error occurred. Please try aga
     // `require_aal2` (core/dependencies.py) answers 403 with a string naming two-factor
     // authentication. That refusal is a step the trader can complete, not a permission they
     // lack, so it gets its own instruction instead of "Access denied".
-    if (typeof detail === "string" && /two-factor|mfa/i.test(detail)) {
+    //
+    // MFA-STEPUP-01: the write handlers intercept this case BEFORE calling here and open
+    // `MfaStepUpDialog` instead, so on those paths this branch is not reached. It stays as
+    // the honest fallback for any other caller — returning "Access denied" for a refusal the
+    // trader can actually clear would be the original defect in a new place.
+    if (isMfaStepUpRequired(err)) {
       return MFA_REQUIRED_MESSAGE;
     }
     return "Access denied. Insufficient permissions.";
@@ -876,6 +920,21 @@ export default function ExchangeManager() {
   // reaches `handleConfirmDisconnect`, which is what actually calls `api.exchange.delete`.
   const [disconnectDialog, setDisconnectDialog] = useState(null);
 
+  /*
+    MFA-STEPUP-01. The pending AAL2 step-up: `{ label, operation }` or `null`.
+    `operation` is the thunk to re-run once the session actually holds `aal2`.
+
+    Held as ONE piece of state rather than an `open` flag beside a separate callback, so the
+    dialog and the thing it is gating cannot get out of step — there is no state in which the
+    dialog is open with nothing to retry, or a retry is armed with no dialog to authorise it.
+
+    It never coexists with `disconnectDialog`: `overlayRegistry.requestOverlay` THROWS on a
+    second concurrent overlay in development, and `handleConfirmDisconnect` clears the
+    confirmation before its request goes out, so a 403 always arrives with the confirm dialog
+    already closed. `exchange_manager_mfa_stepup.test.jsx` pins that ordering.
+  */
+  const [stepUp, setStepUp] = useState(null);
+
   const selectedExchangeId = selectedExchange?.id ?? null;
   const venueListRef = useRef(null);
 
@@ -1107,6 +1166,23 @@ export default function ExchangeManager() {
 
       refetchConnections();
     } catch (err) {
+      /*
+        MFA-STEPUP-01. The refusal a trader can clear is handled here instead of being
+        rendered as a sentence telling them to go somewhere else.
+
+        The form is deliberately NOT cleared on this path — the success branch above clears
+        `credentialValues` and the selection, and doing that here too would make the retry
+        submit an empty body. The whole point is that the key the trader just typed survives
+        the challenge.
+
+        `handleSaveKey` itself is the retry thunk. Safe to re-enter: `finally` below has
+        already released `isSaving` by the time the dialog can resolve, so the guard at the
+        top of this function does not refuse the second attempt.
+      */
+      if (isMfaStepUpRequired(err)) {
+        setStepUp({ label: 'connect this exchange', operation: handleSaveKey });
+        return;
+      }
       const msg = sanitizeErrorMessage(err, "Failed to save exchange keys.");
       if (msg) setNotice({ severity: 'error', message: msg });
     } finally {
@@ -1136,22 +1212,46 @@ export default function ExchangeManager() {
     setDisconnectDialog({ exchangeId, exchangeName });
   };
 
-  const handleConfirmDisconnect = async () => {
-    if (!disconnectDialog) return;
-    const { exchangeId } = disconnectDialog;
-    setDisconnectDialog(null);
+  /*
+    MFA-STEPUP-01: the disconnect WORK, split out from the confirmation.
 
+    `handleConfirmDisconnect` reads `disconnectDialog` and then clears it, so it cannot serve
+    as its own retry — by the time a step-up completes there is no dialog state left to read
+    the id from. This takes the id as an argument, which makes it callable twice: once from
+    the confirmation, once from the step-up.
+
+    The confirmation is NOT re-asked on the retry. The trader already confirmed the
+    irreversible action; the challenge that followed was about proving who they are, not about
+    whether they meant it, and asking again would read as the first confirm not having counted.
+  */
+  const disconnectExchange = async (exchangeId) => {
     setProcessingById((p) => ({ ...p, [exchangeId]: true }));
     try {
       await api.exchange.delete(exchangeId);
       setRemovedIds((ids) => (ids.includes(exchangeId) ? ids : [...ids, exchangeId]));
       setNotice({ severity: 'info', message: 'Exchange connection removed.' });
     } catch (err) {
+      if (isMfaStepUpRequired(err)) {
+        setStepUp({
+          label: 'remove this exchange connection',
+          operation: () => disconnectExchange(exchangeId),
+        });
+        return;
+      }
       const msg = sanitizeErrorMessage(err, "Failed to delete exchange connection.");
       if (msg) setNotice({ severity: 'error', message: msg });
     } finally {
       setProcessingById((p) => ({ ...p, [exchangeId]: false }));
     }
+  };
+
+  const handleConfirmDisconnect = async () => {
+    if (!disconnectDialog) return;
+    const { exchangeId } = disconnectDialog;
+    // Cleared BEFORE the request, which is also what keeps the step-up dialog from colliding
+    // with this one in the registry. See the note on `stepUp`.
+    setDisconnectDialog(null);
+    await disconnectExchange(exchangeId);
   };
 
   const handleTestStoredConnection = async (exchangeId) => {
@@ -1575,6 +1675,30 @@ export default function ExchangeManager() {
         ]}
         confirmLabel="Disconnect"
         cancelLabel="Cancel"
+      />
+
+      {/*
+        MFA-STEPUP-01. The AAL2 step-up, rendered as a sibling of the confirmation rather
+        than inside either write handler, so one dialog serves every guarded operation on
+        this page and neither handler owns overlay state.
+
+        `onVerified` reads the thunk BEFORE clearing `stepUp`, then runs it. Clearing first
+        and reading after would hand `undefined` to the retry — the operation would be
+        silently dropped after a successful challenge, which is the most expensive way this
+        feature could fail: the trader verifies, the dialog closes, and nothing happens.
+      */}
+      <MfaStepUpDialog
+        open={stepUp !== null}
+        operationLabel={stepUp?.label}
+        onCancel={() => {
+          setStepUp(null);
+          setNotice({ severity: 'guidance', message: MFA_CANCELLED_MESSAGE });
+        }}
+        onVerified={() => {
+          const operation = stepUp?.operation;
+          setStepUp(null);
+          if (typeof operation === 'function') operation();
+        }}
       />
     </div>
   );
