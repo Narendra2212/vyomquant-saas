@@ -133,6 +133,34 @@ BEGIN
         GRANT SELECT ON public.subscriptions TO authenticated;
     END IF;
 
+    -- BILL-07: `billing_invoices` is the billing-history ledger and was missed by this
+    -- section while its sibling `invoices` above was covered. It held the full set for
+    -- BOTH browser roles -- `anon` SELECT/INSERT/UPDATE/DELETE, and `authenticated` the
+    -- same four through a `FOR ALL` owner policy, so a customer could file an invoice
+    -- for a payment they never made or delete one for a payment they did.
+    --
+    -- WHY THE PREFLIGHT IN SECTION 4 DID NOT CATCH IT, since that is the obvious
+    -- question: that guard fires on tables which carry a per-customer column, grant
+    -- `anon` SELECT, **and have RLS disabled**. This table has RLS enabled with no anon
+    -- policy, so no anon row is actually reachable and the guard correctly skipped it.
+    -- That is why this is defence in depth rather than an open door, and it is stated at
+    -- that size. The privilege is still wrong: privilege is what RLS filters, and a
+    -- financial ledger should not be one dropped policy away from browser-writable.
+    --
+    -- Timing: migration 070 is what first makes this table actually hold rows (its
+    -- writer named five undeclared columns, so no invoice had ever been written). The
+    -- table is empty at the moment this lands, so the revoke cannot regress any
+    -- existing read. Nothing in `algo22-terminal/` touches the table directly -- the
+    -- page calls `GET /api/billing/invoices` -- and the only writer is the webhook
+    -- through the service-role client, so `authenticated` needs SELECT and nothing more.
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'billing_invoices') THEN
+        ALTER TABLE public.billing_invoices ENABLE ROW LEVEL SECURITY;
+        REVOKE ALL ON public.billing_invoices FROM anon;
+        REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+            ON public.billing_invoices FROM authenticated;
+        GRANT SELECT ON public.billing_invoices TO authenticated;
+    END IF;
     -- Stored-instrument metadata: brand, last4, expiry, and the provider's
     -- payment_method_id. 006 PART 11 declared no policy for this table at all, so it
     -- needs both. Served exclusively by the API over SQLAlchemy, so neither browser role

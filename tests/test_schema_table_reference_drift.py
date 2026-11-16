@@ -2422,13 +2422,10 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
 #: can fail on a NEW one; the count may SHRINK and may never grow.
 #:
 #: The value is (owning module, why it is not fixed here). Each reason is a
-#: statement about WHO decides, not an excuse. All ten remaining entries are now
-#: the SAME reason: the ``billing_invoices`` and ``profiles`` billing columns sit
-#: in the parallel pricing/entitlements workstream's files. ``routers/billing.py``
-#: carries their uncommitted changes; editing it here would collide.
+#: statement about WHO decides, not an excuse.
 #:
-#: THE REGISTER HAS GONE 24 -> 23 -> 10 ACROSS THREE TASKS, and every step was a
-#: read becoming correct rather than an exemption widening:
+#: THE REGISTER IS NOW EMPTY — 24 -> 23 -> 10 -> 5 -> 0 ACROSS FIVE TASKS, and
+#: every step was a read becoming correct rather than an exemption widening:
 #:
 #: * ``strategies.tenant_id`` was the 24th entry. FIXED in task 13.18: the
 #:   marketplace eligibility gate reads the tenant off ``user_id``, which is what
@@ -2451,17 +2448,44 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
 #:   at all, and ``POST /{signal_id}/replay`` was the one capability with no
 #:   equivalent, so it survived and now reads ``signals`` only. See
 #:   :data:`FIXED_SIGNAL_TRACE_SUPERSESSION`.
+#: * the five ``billing_invoices`` provider columns were the last. FIXED by
+#:   ``backend_app/migrations/070_bill07_billing_invoices_provider_columns.sql``,
+#:   which DECLARES them -- the opposite resolution to ``profiles.volume_usd``,
+#:   and for the opposite reason. There, nothing computed the figure, so
+#:   declaring a column would have fabricated it. Here the figures are real and
+#:   already in hand: the provider, its payment id, the exact captured amount and
+#:   the plan it bought all arrive on the webhook payload and were being written
+#:   on every capture. The column was the only thing missing, so declaring it
+#:   records a fact rather than inventing one.
 # BILL-01/BILL-05: profiles.cancel_at_period_end / next_billing_date / subscription_status /
 # trial_end_date are now declared by migration 037 and removed from this (shrink-only) register.
-KNOWN_UNDECLARED_COLUMN_DEFECTS = {
-    "billing_invoices.amount_inr": ("routers/billing.py", "parallel workstream"),
-    "billing_invoices.amount_usd": ("routers/billing.py", "parallel workstream"),
-    "billing_invoices.plan": ("routers/billing.py", "parallel workstream"),
-    "billing_invoices.provider": ("routers/billing.py", "parallel workstream"),
-    "billing_invoices.provider_payment_id": (
-        "routers/billing.py", "parallel workstream",
-    ),
-}
+# BILL-07: THE REGISTER IS NOW EMPTY. 24 -> 23 -> 10 -> 5 -> 0.
+#
+# The last five entries were the `billing_invoices` provider columns --
+# `amount_inr`, `amount_usd`, `plan`, `provider`, `provider_payment_id`. Their
+# stated reason was never that the defect was acceptable; it was that
+# `routers/billing.py` carried a parallel pricing workstream's uncommitted
+# changes and editing it would collide. That workstream landed in PR #285, so
+# the reason expired and the entries went with it.
+#
+# They are gone because the defect is FIXED, which is the only way this register
+# is allowed to shrink. `backend_app/migrations/070_bill07_billing_invoices_
+# provider_columns.sql` declares all five, so `_allowed_columns('billing_invoices')`
+# now contains them and `test_every_known_defect_is_still_a_defect` would refuse
+# the entries as stale if they were left behind.
+#
+# What the five were hiding, since "undeclared column" understates it: PostgREST
+# rejects a whole statement on an undefined column, and the writer sat inside
+# `try/except ... logger.warning`, so NO INVOICE ROW HAD EVER BEEN WRITTEN --
+# production held zero. The same three names are also the filter
+# `_revoke_plan_for_refunded_razorpay_payment` uses, and that read is NOT
+# wrapped, so a full refund raised instead of revoking the plan.
+#
+# An empty register is the goal state, not a reason to delete the guard. Every
+# test below still runs against it: the point is that a NEW undeclared column
+# now has nowhere to hide, and re-adding an entry for a column that has since
+# been declared is refused by name at lines 4130 and 4192.
+KNOWN_UNDECLARED_COLUMN_DEFECTS: dict = {}
 
 # RAZORPAY-ONLY: profiles.pending_downgrade_tier is removed from the register above because
 # the defect is GONE, not because it became inconvenient. This register may only shrink, and
