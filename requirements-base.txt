@@ -81,7 +81,7 @@ cryptography==50.0.0
 # pin. Leaving an import-audit that no longer audits anything is worse than neither.
 passlib[bcrypt]==1.7.4
 PyJWT==2.15.0
-sqlalchemy==2.0.35
+sqlalchemy==2.1.8
 alembic==1.13.3
 psycopg2-binary==2.9.9
 asyncpg==0.29.0
