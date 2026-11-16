@@ -202,7 +202,8 @@
  * — none of which can do anything without a strategy — and the results region stays.
  */
 
-import { lazy, Suspense, useCallback, useMemo, useState } from "react";
+// `lazy` and `Suspense` left with the chart bindings — see CHART-MODAL-01 below.
+import { useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download, FlaskConical } from "lucide-react";
 
@@ -213,12 +214,14 @@ import { AssetSelector } from "../components/builder/AssetSelector";
 import { TimeframeSelector } from "../components/builder/TimeframeSelector";
 import { Accordion, partitionAdvanced } from "../components/ds/Accordion";
 import { Alert } from "../components/ds/Alert";
+// CHART-MODAL-01 (task 06): inline chart + an enlarged modal from one description.
+import { ExpandableChart } from "../components/ExpandableChart";
 import { CommandButton } from "../components/ds/CommandButton";
 import { DataTable } from "../components/ds/DataTable";
 import { EmptyState } from "../components/ds/EmptyState";
 import { ErrorState } from "../components/ds/ErrorState";
 import { Field } from "../components/ds/Field";
-import { LoadingState } from "../components/ds/LoadingState";
+// `LoadingState` left with the chart `Suspense` fallbacks — see CHART-MODAL-01 below.
 import { Metric } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
 import { Panel } from "../components/ds/Panel";
@@ -249,7 +252,18 @@ import {
  * exactly this call site. Task 23.2 is what took `pages/Backtester.jsx` off the static
  * recharts importer list `tests/unit/ds/Chart.test.jsx` pins.
  */
-const Chart = lazy(() => import("../components/ds/Chart"));
+/*
+ * CHART-MODAL-01: the lazy `ds/Chart` binding that stood here is GONE, and with it this
+ * page's `Suspense` and `LoadingState` imports.
+ *
+ * All three charts render through `components/ExpandableChart` now, which owns the same
+ * `lazy(() => import('./ds/Chart'))` boundary and wraps both of its render sites in the same
+ * `skeleton-chart` fallback. So the bundle split this page maintained for recharts (~350 KB)
+ * and the loading behaviour are both unchanged — they just live one module along.
+ *
+ * Kept as a note rather than deleted silently because the lazy import was deliberate and
+ * documented, and a reader who finds it absent should be able to see where it went.
+ */
 
 /* ══════════════════════════════════════════════════════════════════════════
  * THE RUN LIFECYCLE (Requirement 6.5, Property 11)
@@ -1703,19 +1717,23 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
         <div className="flex min-w-0 flex-col gap-4">
           {/* P&L per trade — wins and losses side by side, from the engine's own net P&L.
               Two series so the colour carries the sign without this page deciding anything. */}
-          <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading trade results" />}>
-            <Chart
-              kind="bar"
-              data={tradePnlRows(tradeRows)}
-              xAxis={{ key: "trade", label: "Trade number", format: "number" }}
-              yAxis={{ label: "Net P&L per trade (quote currency)", format: "number" }}
-              series={[
+          {/* CHART-MODAL-01 (task 06): the chart is described once, as data, and rendered
+              inline and enlarged from that one description. `ExpandableChart` owns the lazy
+              `ds/Chart` boundary this `Suspense` used to own. */}
+          <ExpandableChart
+            title="Net P&L per trade"
+            chart={{
+              kind: "bar",
+              data: tradePnlRows(tradeRows),
+              xAxis: { key: "trade", label: "Trade number", format: "number" },
+              yAxis: { label: "Net P&L per trade (quote currency)", format: "number" },
+              series: [
                 { key: "win", name: "Winning trade", token: "profit" },
                 { key: "loss", name: "Losing trade", token: "loss" },
-              ]}
-              emptyMessage="No trade results to draw"
-            />
-          </Suspense>
+              ],
+              emptyMessage: "No trade results to draw",
+            }}
+          />
           <DataTable
             caption="Simulated trades, in the order the run reported them"
             columns={TRADE_COLUMNS}
@@ -2259,18 +2277,19 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                   )}
                   data-region="equityCurve"
                 >
-                  <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading the equity curve" />}>
-                    <Chart
-                      kind="area"
-                      data={curves.rows}
-                      xAxis={curves.dated
+                  <ExpandableChart
+                    title="Equity curve"
+                    chart={{
+                      kind: "area",
+                      data: curves.rows,
+                      xAxis: curves.dated
                         ? { key: "date", label: "Date", format: "date" }
-                        : { key: "point", label: "Point in the run", format: "number" }}
-                      yAxis={{ label: "Equity (quote currency)", format: "number" }}
-                      series={[{ key: "equity", name: "Equity", token: "brand" }]}
-                      emptyMessage="This run produced no equity series"
-                    />
-                  </Suspense>
+                        : { key: "point", label: "Point in the run", format: "number" },
+                      yAxis: { label: "Equity (quote currency)", format: "number" },
+                      series: [{ key: "equity", name: "Equity", token: "brand" }],
+                      emptyMessage: "This run produced no equity series",
+                    }}
+                  />
                 </Panel>
 
                 <Panel
@@ -2297,22 +2316,23 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                         {REASON_UNREADABLE_EQUITY}
                       </Alert>
                     )}
-                    <Suspense fallback={<LoadingState kind="skeleton-chart" label="Loading the drawdown curve" />}>
-                      <Chart
-                        kind="area"
-                        data={curves.rows}
-                        xAxis={curves.dated
-                        ? { key: "date", label: "Date", format: "date" }
-                        : { key: "point", label: "Point in the run", format: "number" }}
+                    <ExpandableChart
+                      title="Drawdown curve"
+                      chart={{
+                        kind: "area",
+                        data: curves.rows,
+                        xAxis: curves.dated
+                          ? { key: "date", label: "Date", format: "date" }
+                          : { key: "point", label: "Point in the run", format: "number" },
                         // Absolute, in the equity curve's own units — the derivation is
                         // `peak − current`, not a percentage. Tier 1's max drawdown is the
                         // engine's `max_drawdown_pct` and stays the only percentage on
                         // screen, so the two cannot contradict each other.
-                        yAxis={{ label: "Drawdown from peak (quote currency)", format: "number" }}
-                        series={[{ key: "drawdown", name: "Drawdown from peak", token: "loss" }]}
-                        emptyMessage="No drawdown curve can be drawn without an equity series"
-                      />
-                    </Suspense>
+                        yAxis: { label: "Drawdown from peak (quote currency)", format: "number" },
+                        series: [{ key: "drawdown", name: "Drawdown from peak", token: "loss" }],
+                        emptyMessage: "No drawdown curve can be drawn without an equity series",
+                      }}
+                    />
                   </div>
                 </Panel>
               </div>
