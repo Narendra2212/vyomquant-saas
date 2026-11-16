@@ -312,7 +312,7 @@ psutil==6.0.0
 # protobuf floor is >=5.0 in the same change -- the two cannot move independently. Then
 # actually wire TracingManager into main.py's lifespan, which has never been done.
 # ─────────────────────────────────────────────────────────────────────────────────
-wrapt==1.16.0
+wrapt==2.5.2
 elasticsearch==8.14.0
 aiosmtplib==5.1.2
 asgi-correlation-id==4.3.1
