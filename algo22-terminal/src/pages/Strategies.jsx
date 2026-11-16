@@ -629,12 +629,36 @@ const OWNERSHIP_DL_CLASS = "m-0 grid gap-1 font-mono text-micro";
 const OWNERSHIP_DL_COLUMNS = Object.freeze({ gridTemplateColumns: "auto 1fr" });
 
 /**
- * The entry grid. `repeat(auto-fit, minmax(300px, 1fr))` has no Tailwind utility and no token
+ * The entry grid. `repeat(auto-fill, minmax(300px, 1fr))` has no Tailwind utility and no token
  * — it is a content dimension, the same class of value as `ds/LoadingState`'s
  * `SKELETON_GEOMETRY` — so it stays an inline style. It carries no colour.
+ *
+ * ---------------------------------------------------------------------------
+ * STRAT-CARDS-01 (2026-11-16): `auto-fill`, NOT `auto-fit`. This is the whole of the
+ * reported "long horizontal strategy strips" defect.
+ * ---------------------------------------------------------------------------
+ * The two keywords differ in exactly one behaviour, and it is the one that matters here:
+ *
+ *   `auto-fit`  COLLAPSES tracks that hold no item, then distributes the freed space to the
+ *               tracks that remain. With one entry there is therefore ONE track, and its
+ *               `1fr` maximum stretches it across the entire container.
+ *   `auto-fill` KEEPS the empty tracks. One entry occupies one track of several, so it stays
+ *               the ~300px card the `minmax` asks for.
+ *
+ * So an account with a single owned strategy — which is the common case for a new account,
+ * and the case in the report — got a full-width band rather than a card. Nothing was wrong
+ * with the card itself: each entry is already a `ds/Panel` in a grid. The grid was told to
+ * collapse itself down to the number of items it happened to hold.
+ *
+ * `auto-fit` is the right choice when a grid should always consume its row (a dashboard
+ * metric strip). It is the wrong choice for a collection whose item count the user controls,
+ * because the layout then changes shape with the data: two strategies read as cards, one
+ * reads as a banner.
+ *
+ * Regression: tests/unit/pages/strategiesCardGrid.test.js
  */
 const OWNERSHIP_GRID_COLUMNS = Object.freeze({
-  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
