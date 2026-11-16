@@ -44,6 +44,9 @@ import wsClient from '../websocketClient';
 // already returned (design.md §17.2).
 // ═══════════════════════════════════════════════════════════════════════════
 import { token } from '../design/tokens';
+// PROFILE-REORG-01 / Task 10: preferences live with the notifications they govern, not on
+// Profile. Self-contained — it reads and writes its own settings, so this page passes nothing.
+import { NotificationPreferences } from './NotificationPreferences';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CATEGORY CONFIGURATION
@@ -741,6 +744,15 @@ function NotificationCenter() {
           })
         )}
       </div>
+
+      {/*
+        PROFILE-REORG-01: the dispatch preferences, now in the module they govern.
+
+        Placed AFTER the notification list, not before it. Someone opening this page has come
+        to read what happened, not to configure what will happen next; eight switches above
+        the feed would make the common case scroll past the rare one.
+      */}
+      <NotificationPreferences className="mt-6" />
 
       <style>{`
         @keyframes spin {

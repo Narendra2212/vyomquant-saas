@@ -123,12 +123,31 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     expect(await screen.findByText('Alpha Quant')).toBeDefined();
     expect(screen.getByText('trader@vyomquant.com')).toBeDefined();
-    expect(screen.getByText('Pro Tier')).toBeDefined();
+    /*
+      PROFILE-REORG-01: matched as `Tier: Pro Tier` now, not `Pro Tier`.
+
+      The tier is reported in ONE place since the Subscription & Plan panel was removed: the
+      page header's `meta` chip, whose text node is `Tier: ${planLabel(value)}` — a single
+      node, so an exact match on the bare label no longer finds it. The old assertion was
+      passing against the removed panel's separate element.
+
+      This is the assertion that proves `getBillingPlan` is still read and still rendered,
+      which is why it is corrected rather than deleted.
+    */
+    expect(screen.getByText(/Tier: Pro Tier/)).toBeDefined();
     expect(screen.getByText('VQ-ALPHA99')).toBeDefined();
-    // Was `'$5430.20'` — `(stats?.total_pnl || 0).toFixed(2)`. Through `ds/Metric` the
-    // figure is grouped and carries an explicit unit, because `GET /api/stats` reports
-    // across all accounts and `total_pnl` is filled from the aggregator's `today_pnl`.
-    expect(screen.getByText('5,430.20')).toBeDefined();
+    /*
+      PROFILE-REORG-01: the `5,430.20` assertion is INVERTED, not corrected.
+
+      It was the platform-wide P&L figure, from `GET /api/stats`. The note it carried said as
+      much — "`GET /api/stats` reports across all accounts" — which is precisely why Task 13
+      removes that panel from an ACCOUNT page: the figure was never this trader's.
+
+      So the panel is gone and the figure with it. Asserting its absence keeps the removal
+      held; the account's own figures are unaffected and still asserted above and below.
+    */
+    expect(screen.queryByText('5,430.20')).toBeNull();
+    expect(screen.queryByText('Platform-wide statistics')).toBeNull();
     expect(screen.getByText('User Login via MFA')).toBeDefined();
     // Was `'IP: 192.168.1.100'` — one text node holding the label and an address that fell
     // back to the literal `'127.0.0.1'`. The address is its own node now.
@@ -244,31 +263,24 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText('Notification Preferences')).toBeDefined();
+    /*
+      PROFILE-REORG-01 MOVED THE SUBJECT OF THIS CASE.
 
-    // Find and toggle Email Notifications
-    const emailToggle = screen.getByText('Email Notifications').closest('div[style*="cursor: pointer"]');
-    fireEvent.click(emailToggle);
+      The exact-payload assertion — eight event flags and three channels, written in full on
+      every toggle because `NotificationSettingsRequest` validates the whole object — now
+      lives in `tests/unit/components/notificationPreferences.test.jsx`, unchanged, against
+      the component Task 13 extracted.
 
-    await waitFor(() => {
-      expect(updateNotifSpy).toHaveBeenCalledWith({
-        channels: {
-          email: false,
-          telegram: false,
-          mobile: false
-        },
-        events: {
-          trade_executed: true,
-          stop_loss_triggered: true,
-          daily_pnl_summary: true,
-          bot_state_change: false,
-          kill_switch_activated: true,
-          new_login_detected: true,
-          api_key_expiring: true,
-          backtest_complete: false
-        }
-      });
-    });
+      What remains here is the statement this file can still make: Profile does not write a
+      notification preference. That matters as much as the payload itself — two pages writing
+      the same settings through two code paths is exactly what the extraction prevents, and
+      without this assertion a later pass could reinstate the panel on Profile and nothing
+      would complain.
+    */
+    expect(await screen.findByText('Account identity')).toBeDefined();
+    expect(screen.queryByText('Notification Preferences')).toBeNull();
+    expect(screen.queryByText('Email Notifications')).toBeNull();
+    expect(updateNotifSpy).not.toHaveBeenCalled();
   });
 
   // 15, 16. Notification PUT Error Handling and State Restoration
@@ -284,14 +296,17 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText('Notification Preferences')).toBeDefined();
+    /*
+      PROFILE-REORG-01: also moved. The revert-on-failure behaviour is asserted in
+      `tests/unit/components/notificationPreferences.test.jsx`, and STRENGTHENED there — the
+      version here only checked that the call happened, whereas the new one also holds the
+      sentence the panel shows, which is the half Requirement 11.3 is about.
 
-    const emailToggle = screen.getByText('Email Notifications').closest('div[style*="cursor: pointer"]');
-    fireEvent.click(emailToggle);
-
-    await waitFor(() => {
-      expect(updateNotifSpy).toHaveBeenCalled();
-    });
+      Profile cannot revert a preference it no longer writes, so what is left to assert is
+      that it does not try.
+    */
+    expect(await screen.findByText('Account identity')).toBeDefined();
+    expect(updateNotifSpy).not.toHaveBeenCalled();
   });
 
   // 17, 18, 19. Billing & Security Log Field Normalization
@@ -316,7 +331,9 @@ describe('Phase 5B Profile Remediation Test Battery', () => {
 
     render(<MemoryRouter><Profile /></MemoryRouter>);
 
-    expect(await screen.findByText('Enterprise Tier')).toBeDefined();
+    // PROFILE-REORG-01: the header's meta chip, matched with its `Tier:` prefix — see the
+    // note on test 1. Still proves the billing read reaches the page.
+    expect(await screen.findByText(/Tier: Enterprise Tier/)).toBeDefined();
     expect(screen.getByText('API Key Generated')).toBeDefined();
     // Was `'IP: 10.0.0.45'` — see the note on test 1.
     expect(screen.getByText('10.0.0.45')).toBeDefined();
