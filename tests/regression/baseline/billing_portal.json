@@ -1,13 +1,9 @@
 {
+  "_baseline_note_billing_portal_02": "BILLING-PORTAL-02 AUTHORISES this re-record: `frontend_bindings.openPortal` goes from the recorded one-element call list to the capture's own `\"MISSING\"` sentinel, because NO FRONTEND METHOD BINDS THIS ROUTE ANY MORE. `api/modules/billing.js` no longer declares `openPortal`, so `billing_module.get('openPortal', 'MISSING')` returns the sentinel. The note in this file and in surface_billing.json already recorded why the handler has no success path: Razorpay publishes no hosted self-serve billing portal, so POST /api/billing/portal answers 501 PROVIDER_HAS_NO_BILLING_PORTAL to every caller. This change finishes that work on the client side. The two controls that called it -- the past_due alert's *Update payment method* and the current-plan panel's *Manage billing* -- are removed from Billing.jsx, because a button whose only possible outcome is a coded refusal is not a feature; the refusal's own sentence now appears in the payment-failed alert as standing copy instead, stating that the instrument is collected by Razorpay Checkout at purchase and is changed by paying again. THE ROUTE AND BOTH ITS REFUSALS ARE UNCHANGED, and `routes` below still records them: it stays reachable for any client that has not been updated, which is exactly the reasoning the earlier note gives for keeping it rather than 404ing. The spec key is deliberately NOT removed from `_BILLING_PATHS['billing_portal']['frontend']` -- recording that this route is EXPECTED to have no binding is a stronger statement than not looking, and it is what makes a future re-binding show up here as a difference.",
   "_baseline_note_razorpay_only_portal": "RAZORPAY-ONLY AUTHORISES this re-record: the single recorded return `{url: computed}` is REMOVED because this handler no longer has a success path. The route is KEPT and still refuses with the two coded errors in `raises` below; see surface_billing.json's _baseline_note_razorpay_only_portal for the full reasoning, including why deleting the route was a worse answer than the honest 501 (Billing.jsx renders this handler's own message verbatim, and a 404 carries no coded detail). Razorpay publishes no hosted self-serve billing portal, so there is no URL to return and none is fabricated.",
   "capture": "billing_portal",
   "frontend_bindings": {
-    "openPortal": [
-      {
-        "method": "POST",
-        "path_template": "/api/billing/portal"
-      }
-    ]
+    "openPortal": "MISSING"
   },
   "requirement": "25.2 \u2014 portal",
   "routes": [
