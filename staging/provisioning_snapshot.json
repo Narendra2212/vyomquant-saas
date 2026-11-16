@@ -10049,6 +10049,72 @@
       "NEVER"
     ],
     [
+      "risk_violation_audit",
+      "detail",
+      "jsonb",
+      "",
+      "NO",
+      "'{}'::jsonb",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "risk_violation_audit",
+      "reason",
+      "text",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "risk_violation_audit",
+      "recorded_at",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "now()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "risk_violation_audit",
+      "rule",
+      "text",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "risk_violation_audit",
+      "user_id",
+      "uuid",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "risk_violation_audit",
+      "violation_id",
+      "uuid",
+      "",
+      "NO",
+      "gen_random_uuid()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
       "safety_control_audit",
       "action",
       "text",
@@ -14945,6 +15011,11 @@
       "FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE RESTRICT"
     ],
     [
+      "risk_violation_audit",
+      "risk_violation_audit_user_id_fkey",
+      "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+    ],
+    [
       "security_logs",
       "fk_bug049_security_logs_user_id",
       "FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE RESTRICT"
@@ -17214,6 +17285,26 @@
       "CREATE UNIQUE INDEX risk_settings_audit_pkey ON public.risk_settings_audit USING btree (id)"
     ],
     [
+      "risk_violation_audit",
+      "idx_risk_violation_audit_kill_switch",
+      "CREATE INDEX idx_risk_violation_audit_kill_switch ON public.risk_violation_audit USING btree (user_id, recorded_at DESC) WHERE (rule ~~ 'KILL_SWITCH%'::text)"
+    ],
+    [
+      "risk_violation_audit",
+      "idx_risk_violation_audit_rule_time",
+      "CREATE INDEX idx_risk_violation_audit_rule_time ON public.risk_violation_audit USING btree (rule, recorded_at DESC)"
+    ],
+    [
+      "risk_violation_audit",
+      "idx_risk_violation_audit_user_time",
+      "CREATE INDEX idx_risk_violation_audit_user_time ON public.risk_violation_audit USING btree (user_id, recorded_at DESC)"
+    ],
+    [
+      "risk_violation_audit",
+      "risk_violation_audit_pkey",
+      "CREATE UNIQUE INDEX risk_violation_audit_pkey ON public.risk_violation_audit USING btree (violation_id)"
+    ],
+    [
       "safety_control_audit",
       "idx_safety_control_audit_control_time",
       "CREATE INDEX idx_safety_control_audit_control_time ON public.safety_control_audit USING btree (control, recorded_at DESC)"
@@ -19273,6 +19364,24 @@
       ""
     ],
     [
+      "risk_violation_audit",
+      "risk_violation_audit_owner_select",
+      "PERMISSIVE",
+      "authenticated",
+      "SELECT",
+      "(user_id = auth.uid())",
+      ""
+    ],
+    [
+      "risk_violation_audit",
+      "risk_violation_audit_service_all",
+      "PERMISSIVE",
+      "service_role",
+      "ALL",
+      "true",
+      "true"
+    ],
+    [
       "safety_control_audit",
       "safety_control_audit_service_role",
       "PERMISSIVE",
@@ -20144,6 +20253,11 @@
       "risk_settings_audit",
       "risk_settings_audit_pkey",
       "id"
+    ],
+    [
+      "risk_violation_audit",
+      "risk_violation_audit_pkey",
+      "violation_id"
     ],
     [
       "safety_control_audit",
@@ -24363,6 +24477,21 @@
       "UPDATE"
     ],
     [
+      "risk_violation_audit",
+      "authenticated",
+      "SELECT"
+    ],
+    [
+      "risk_violation_audit",
+      "service_role",
+      "INSERT"
+    ],
+    [
+      "risk_violation_audit",
+      "service_role",
+      "SELECT"
+    ],
+    [
       "safety_control_audit",
       "service_role",
       "INSERT"
@@ -26175,6 +26304,11 @@
       "step1"
     ],
     [
+      "migrations/069_risk01_risk_violation_audit.sql",
+      "2fd31c9d6b5885ac570621033e1248b96d2952575e113da9ed08efef5b3e68cd",
+      "step1"
+    ],
+    [
       "migrations/add_billing_currency_and_dag_hash.sql",
       "4b2ac2899820d0a43407671ab4b4648af994d98210a66347c6c05a022740719f",
       "step1"
@@ -26642,6 +26776,11 @@
       false
     ],
     [
+      "risk_violation_audit",
+      true,
+      false
+    ],
+    [
       "safety_control_audit",
       true,
       false
@@ -27077,6 +27216,10 @@
     ],
     [
       "risk_settings_audit",
+      "postgres"
+    ],
+    [
+      "risk_violation_audit",
       "postgres"
     ],
     [
@@ -28269,6 +28412,24 @@
       "risk_settings_user_id_key",
       "u",
       "UNIQUE (user_id)"
+    ],
+    [
+      "risk_violation_audit",
+      "chk_risk_violation_audit_detail_object",
+      "c",
+      "CHECK ((jsonb_typeof(detail) = 'object'::text))"
+    ],
+    [
+      "risk_violation_audit",
+      "chk_risk_violation_audit_reason_not_blank",
+      "c",
+      "CHECK ((btrim(reason) <> ''::text))"
+    ],
+    [
+      "risk_violation_audit",
+      "chk_risk_violation_audit_rule_not_blank",
+      "c",
+      "CHECK ((btrim(rule) <> ''::text))"
     ],
     [
       "safety_control_audit",
