@@ -24,7 +24,7 @@
 # attribute, renamed/moved to ModelField.field_info.is_required() as of fastapi 0.135.0's
 # _compat.v2 shim.
 fastapi==0.135.0
-uvicorn[standard]==0.30.6
+uvicorn[standard]==0.54.0
 websockets==12.0
 # CVE-2024-53981, CVE-2026-24486, CVE-2026-42561, CVE-2026-53539 (all fixed by 0.0.30)
 # have no reachable call site in this codebase - see
