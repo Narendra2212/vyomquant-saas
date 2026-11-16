@@ -2233,7 +2233,25 @@ _SURFACES: Dict[str, List[str]] = {
     "billing": ["pages/Billing.jsx"],
     "notifications": ["components/NotificationCenter.jsx"],
     "profile": ["pages/Profile.jsx"],
-    "security_logs": ["pages/SecurityLogs.jsx"],
+    # SECLOG-REMOVED-01 (2026-11-15): `"security_logs": ["pages/SecurityLogs.jsx"]` stood here.
+    #
+    # The user-facing Security log page is withdrawn from the product, so there is no surface
+    # left to capture. The entry is removed rather than pointed somewhere else, and
+    # ``baseline/surface_security_logs.json`` is deleted with it -- ``CAPTURES`` is built from
+    # this dict, and ``test_every_baseline_file_has_a_capture`` holds the two in step, so a
+    # baseline file left behind here would fail as an orphan.
+    #
+    # Leaving the entry in place was not an option: the capture reads its API calls out of the
+    # named source file, so it raised FileNotFoundError rather than recording anything.
+    #
+    # REMOVING THE SURFACE LOSES NO COVERAGE, which was checked rather than assumed. The one
+    # call that surface recorded was ``GET /api/security/logs`` via
+    # ``api.user.getSecurityLogs`` -- and ``surface_profile`` records the SAME call, because
+    # Profile's *Recent access* panel reads it. So that route is still under test here, by a
+    # baseline this change does not touch and which is still passing.
+    #
+    # The route itself is untouched in ``backend_app.routers.user``, as are the backend
+    # security-event, authentication and audit writes behind it.
     "support": ["components/SupportCenter.jsx"],
 }
 
