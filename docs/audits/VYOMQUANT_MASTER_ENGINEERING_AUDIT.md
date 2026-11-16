@@ -370,11 +370,59 @@ which is precisely the "Save this strategy before backtesting / before deploying
 supplied screenshot.
 
 So the behaviour Task 04 asks for is present in the UI, and the screenshot the task cites as
-evidence of a problem is actually a picture of the feature working. What remains genuinely
-open is Task 04's real requirement: **that eligibility is enforced on the backend, not just
-in frontend state.** That is an audit of the `strategies`/`strategy_operations` deploy and
-backtest endpoints, and it is **UNVERIFIED**. Rebuilding the frontend gating would be wasted
-work and would risk regressing a shipped feature.
+evidence of a problem is actually a picture of the feature working.
+
+**UPDATE 2026-11-16 — the backend half is VERIFIED too, and Task 04 needs no change.**
+
+The open question was Task 04's real requirement: *"Enforce all eligibility checks on the
+backend. Do not simply enable buttons through frontend state."* It is already met, on both
+sides, and it is already pinned by tests.
+
+**The frontend gate is an observation, not a flag.** `StrategyBuilder.jsx:3722` derives
+`unsaved` from two facts and nothing else — no strategy id issued by the server, or the
+on-screen `graphKey` differing from the last-saved one. `deployRefusal` additionally requires
+`savedVersion !== null`, a label only a save response can supply. There is no hand-set boolean
+anyone can forget to clear.
+
+**The backtest endpoint cannot run an unsaved strategy, and the bypass that would have let it
+is already closed.** `strategy_operations.execute_backtest` (`:1235`) loads the version row
+and runs its persisted `compiled_plan`. Its own docstring records that it *used* to accept a
+client-posted `execution_graph` and why that was wrong: "the backtest executed an artifact
+assembled in the browser rather than the version's own persisted `compiled_plan` — the one
+thing Requirements 5.2/5.7 and 22.3 exist to prevent, because a backtest and a live run could
+then disagree about the same version." Ownership is a 404 (not a 403), an archived strategy is
+a 409, and a version with no runnable graph is a 422 — all before any `strategy_backtests` row
+is written.
+
+**The deploy endpoint gates before any side effect.** `deploy_version` (`:2942`) delegates to
+`StrategyService.deploy_version`, which refuses on: ownership (404), version lifecycle state
+not `READY` (409 `DEPLOY_PREREQUISITE_NOT_MET`), a symbol or timeframe the target venue does
+not serve (422), `mode='live'` without an exchange account (422), synthetic gap filling on a
+live binding (422), and plan limits (403). The request model `DeploymentBindingRequest`
+declares `extra="forbid"`, so there is no field a client could add to assert its own
+eligibility — **the preflight is read-only and advisory, and the deploy re-derives its own
+verdict rather than trusting a client-supplied result.**
+
+**Existing test coverage, which is why no test was added here** (adding more would duplicate
+it, against Rule 3):
+
+| Property | Test |
+|---|---|
+| unsaved strategy cannot be backtested | `test_task_6_1_backtest_execute.py::test_a_strategy_with_no_saved_version_is_refused_naming_the_version` |
+| client graph is ignored, not executed | `…::test_a_supplied_execution_graph_changes_nothing_and_is_named_as_ignored`, `…::test_execution_graph_is_no_longer_required` |
+| another tenant's version is not backtestable | `…::test_another_strategys_version_id_is_not_backtestable_here`, `…::test_another_tenant_gets_404_and_nothing_runs` |
+| market/venue cannot be injected | `…::test_a_market_or_venue_field_is_refused_rather_than_silently_dropped`, `…::test_a_version_declaring_no_market_is_refused_not_substituted` |
+| non-deployable version refused **before any write** | `test_task_4_3_deploy_prerequisite_gate.py::test_invalid_validation_state_is_refused_before_any_side_effect`, `…test_null_dag_hash_…`, `…test_null_compiled_plan_…` |
+| refusal reaches the client as 409 | `…::test_deploy_version_endpoint_maps_gate_rejection_to_409`, `…::test_deploy_strategy_endpoint_maps_gate_rejection_to_409` |
+| unapplicable deploy parameters refused by name, pre-insert | `test_deploy_strategy_accepts_only_what_it_applies.py::test_a_supplied_value_is_refused_by_name`, `…::test_the_gate_runs_before_the_deployment_row_is_inserted` |
+| a save never runs a backtest (Property 24) | `test_save_performs_no_backtest.py` (42 tests) |
+
+All of these run in CI's `Unit & Integration Tests` lane, which passed on `main` at `878cec87`
+(15,900+ tests). That is the evidence they hold, rather than an assumption that they do.
+
+**Conclusion: Task 04 is closed with no code change.** Rebuilding the frontend gating, or
+adding a parallel set of backend checks, would have duplicated working, tested infrastructure
+and risked regressing a shipped feature.
 
 **TASKS 09, 10, 11 — Support, Notifications, Risk. RISK: HIGH (Risk engine). Confidence: LOW
 on correctness; HIGH that implementations exist.**
@@ -657,6 +705,7 @@ Confirmed present and not to be regressed:
 | 14 | No theming layer (T17) | MEDIUM | VERIFIED | no |
 | 15 | Colour literals outside tokens (T17) | MEDIUM | MEASURED | no |
 | 16 | Dead *Manage billing* control (T08) | LOW | VERIFIED | no |
+| — | ~~Builder action gating (T04)~~ | **NOT A DEFECT** | VERIFIED both sides | closed, §5.3 |
 | 17 | Security Logs page removal (T12) | LOW | VERIFIED | no |
 | 18 | No backtest chart modal (T06) | LOW | VERIFIED | no |
 | 19 | Dashboard layout (T02) | LOW | LOW | needs current screenshots |
@@ -684,7 +733,7 @@ own tests; none is "done" until they pass.
 | Task | Work | Verification |
 |---|---|---|
 | T01 | inline MFA step-up; 403-`aal2` interceptor in `apiClient.js`; single-flight retry; cover `exchange.py:848` too | component tests for success/invalid/expired/rate-limited; assert `test_connection` still needs no AAL2 |
-| T04 | audit backend deploy/backtest eligibility enforcement; add server-side checks if missing. **Do not touch working frontend gating** | backend tests asserting refusal without a saved version |
+| ~~T04~~ | **CLOSED 2026-11-16, no change required.** Backend enforcement verified present and already pinned by `test_task_6_1_backtest_execute.py`, `test_task_4_3_deploy_prerequisite_gate.py`, `test_deploy_strategy_accepts_only_what_it_applies.py` and `test_save_performs_no_backtest.py`. See §5.3 | existing CI coverage |
 | §6.4 | inventory every endpoint `dependencies.py` says needs AAL2; wire the gaps | extend `test_auth01_require_aal2_is_wired.py` |
 | T13 | remove Subscription & Plan, platform-wide statistics, Notification Preferences from Profile; move preferences into Notifications | profile and notifications tests |
 | T14 | Strategies page → cards; consolidate Owned/Subscribed | preserve search, filters, all row actions |
