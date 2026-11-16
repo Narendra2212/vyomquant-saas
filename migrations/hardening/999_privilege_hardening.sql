@@ -161,6 +161,34 @@ BEGIN
             ON public.billing_invoices FROM authenticated;
         GRANT SELECT ON public.billing_invoices TO authenticated;
     END IF;
+    -- NOTIF-01: `notifications` carries a per-customer feed and was never listed here.
+    -- A database built from repository source grants `anon` SELECT/INSERT/UPDATE/DELETE
+    -- on it; production grants `anon` SELECT only, so the two have drifted and this
+    -- settles both at none.
+    --
+    -- `authenticated` loses INSERT specifically. The notifications router exposes GET,
+    -- GET /unread-count, PUT /{id}/read, PUT /read-all, DELETE /{id} and DELETE --
+    -- grepped, and there is NO POST -- so nothing inserts through the caller's own
+    -- client. Notifications are produced by the dispatcher through the service-role
+    -- client. Leaving INSERT would let a customer seed their own feed, which in a
+    -- trading product means a fabricated "risk alert cleared" sitting beside the real
+    -- ones. SELECT, UPDATE and DELETE stay: marking read and dismissing are the
+    -- customer's own operations and go through `get_request_supabase`, which resolves
+    -- to `authenticated`.
+    --
+    -- Same preflight blind spot as billing_invoices: section 4's guard fires on tables
+    -- that grant anon SELECT **with RLS disabled**, and this table has RLS enabled with
+    -- an owner policy, so no anon row was reachable and the guard correctly skipped it.
+    -- Defence in depth, stated at that size. Both databases hold zero notification
+    -- rows, so the revoke cannot regress an existing read.
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'notifications') THEN
+        ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+        REVOKE ALL ON public.notifications FROM anon;
+        REVOKE INSERT, TRUNCATE, REFERENCES, TRIGGER
+            ON public.notifications FROM authenticated;
+        GRANT SELECT, UPDATE, DELETE ON public.notifications TO authenticated;
+    END IF;
     -- Stored-instrument metadata: brand, last4, expiry, and the provider's
     -- payment_method_id. 006 PART 11 declared no policy for this table at all, so it
     -- needs both. Served exclusively by the API over SQLAlchemy, so neither browser role
