@@ -2093,9 +2093,27 @@ async def get_invoices(
 
     if not supabase:
         return []
-    
+
     try:
-        res = supabase.table("billing_invoices").select("*").eq("user_id", user["id"]).order("created_at", desc=True).execute()
+        # BILL-HIST-01: `provider` and `provider_payment_id` were already being
+        # SELECTed (via "*") and then dropped on the floor by the projection
+        # below. They are the only provider metadata this schema persists on the
+        # plan path, and they are what lets a user reconcile a charge against
+        # their Razorpay statement or quote it to support. Projecting them costs
+        # nothing -- the rows were already fetched.
+        #
+        # A row limit is applied because there was none: the endpoint returned a
+        # user's entire billing history on every call, and `_revoke_plan_for_
+        # refunded_razorpay_payment` shows these rows accumulate one per
+        # payment. 200 is generous for a billing page and bounds the response.
+        res = (
+            supabase.table("billing_invoices")
+            .select("*")
+            .eq("user_id", user["id"])
+            .order("created_at", desc=True)
+            .limit(200)
+            .execute()
+        )
         resp = await res if inspect.isawaitable(res) else res
         invoices = []
         rows = resp.data if resp and hasattr(resp, "data") and resp.data else []
@@ -2107,6 +2125,12 @@ async def get_invoices(
                 "amtINR": inv.get("amount_inr", 0),
                 "status": inv.get("status", "unknown"),
                 "currency": inv.get("currency", "USD"),
+                # Provider metadata. Nullable on purpose: rows predating the
+                # Razorpay migration carry neither, and a null is honest where
+                # a fabricated "razorpay" would not be.
+                "provider": inv.get("provider"),
+                "providerPaymentId": inv.get("provider_payment_id"),
+                "plan": inv.get("plan"),
             })
         try:
             from backend_app.core.cache.redis_manager import redis_manager
@@ -2116,7 +2140,15 @@ async def get_invoices(
             pass
         return invoices
     except Exception as e:
-        logger.warning(f"Failed to fetch invoices for user {user['id']}: {e}")
+        # Deliberately still not raising: a billing page that renders empty is
+        # less harmful than one that 500s. But the previous version logged at
+        # WARNING and was indistinguishable from "this user has no invoices",
+        # so a read failure could hide indefinitely. ERROR + the exception type
+        # makes it findable in CloudWatch.
+        logger.error(
+            "[BILLING] invoice history read FAILED for user %s: %s: %s",
+            user["id"], type(e).__name__, e,
+        )
         return []
 
 
