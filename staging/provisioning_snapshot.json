@@ -17454,6 +17454,11 @@
       "CREATE UNIQUE INDEX strategies_pkey ON public.strategies USING btree (id)"
     ],
     [
+      "strategies",
+      "uq_strategies_owner_name_live",
+      "CREATE UNIQUE INDEX uq_strategies_owner_name_live ON public.strategies USING btree (user_id, lower(name)) WHERE (archived_at IS NULL)"
+    ],
+    [
       "strategy_backtests",
       "idx_sb_user_strategy_status",
       "CREATE INDEX idx_sb_user_strategy_status ON public.strategy_backtests USING btree (user_id, strategy_id, status)"
@@ -26157,6 +26162,16 @@
     [
       "migrations/066_obs01_deployment_runtime_status.sql",
       "3e68f93cb12f8a6afd19c234296b5895d70f89b9ab3baa163c205188f4de5c07",
+      "step1"
+    ],
+    [
+      "migrations/067_pos_schema01_positions_canonical_shape.sql",
+      "18c761a384be43993ea37b845ce6d1283e1fcb95db4d38e40a8a523b94a0d371",
+      "step1"
+    ],
+    [
+      "migrations/068_strat01_strategy_name_uniqueness.sql",
+      "5430ee6fa57a82e57e31440ffd385445e52e117d049ca5e2368ab852e55dcdc1",
       "step1"
     ],
     [
