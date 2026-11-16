@@ -92,6 +92,43 @@ default, enumerate them:
 The right shape is therefore two exports: `token` emitting references, and a narrow
 `tokenLiteral` for the enumerated consumers above — not a blanket switch.
 
+### 4.1 MEASURED 2026-11-16 — two of the four risks are empty, the third is the real blocker
+
+Each class was counted rather than assumed:
+
+| Risk | Occurrences | Verdict |
+|---|---|---|
+| `token.compat.*` | **0** | The decision's own stated reason no longer applies anywhere. |
+| `getContext(` (canvas) | **0** | No canvas consumer exists. |
+| Colour arithmetic | **~35, live** | **This is the blocker.** |
+| recharts JS-computed colours | not yet counted | still to check |
+
+The arithmetic sites are `${token.brand.base}15`-style hex-alpha concatenations in
+`common/primitives.jsx` (7), `NotificationCenter.jsx` (9), `SupportCenter.jsx` (5),
+`StrategyDetail.jsx` (4), `ResearchConsole.jsx` (2), plus `PaperTrading.jsx`,
+`FirstTradeWizard.jsx` and `App.jsx`.
+
+If `token.brand.base` becomes `var(--color-brand)`, every one of them produces
+`var(--color-brand)15` — **not a colour**. They would fail silently as transparent
+backgrounds and invisible borders, and no existing guard would catch it: the pattern carries
+no `#`, which is why `no-colour-literals` has never counted it. `tokens.css` and four page
+docblocks already record this construct as a defect that was removed *in those files*; ~35
+instances survive elsewhere.
+
+**So the generator flip is the SECOND step, not the first.** The order is:
+
+1. **Remove the ~35 hand-mixed alphas.** This needs new declared tokens, because the alphas
+   in use (`4D` ≈ 30%, `26` ≈ 15%, `15` ≈ 8%, `40` ≈ 25%) have no equivalent beyond the
+   single `-wash` at 12%. An edge/border alpha per status hue is the obvious addition.
+   Independently valuable: it retires a documented defect class and makes it guardable.
+2. Flip the generator to `var()` references.
+3. Light palette, provider, no-flash script, toggle.
+
+**Step 1 cannot be left partial.** `prebuild` runs `gen-tokens.mjs --check` and CI fails on a
+stale `tokens.js`, so adding tokens to `tokens.css` without regenerating — or regenerating
+without converting every call site — turns the lane red. It is one change or none, which is
+the same reason §6 gives for the task as a whole.
+
 ## 5. Remaining work after that
 
 1. **A `[data-theme="light"]` block in `tokens.css`** redefining the ~40 colour tokens.
