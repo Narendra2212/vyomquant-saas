@@ -42,7 +42,16 @@ RISK_SETTINGS_CACHE_TTL = 300
 _user_risk_settings: Dict[str, Dict[str, Any]] = {}
 _user_strategy_limits: Dict[str, Dict[str, Dict[str, Any]]] = {} # user_id -> {strategy_id: limit_dict}
 _user_kill_switch_state: Dict[str, bool] = {} # user_id -> is_active
+
+# RISK-01: a per-process MIRROR of the durable trail in
+# `public.risk_violation_audit`, not the trail itself. Kept because
+# `record_risk_violation` is called from synchronous code on the per-bar
+# evaluation path and must not block on a network write, and because it still
+# answers `/violations` when no service-role client is configured. Bounded --
+# the unbounded version grew until a strategy refused on every bar OOM-killed
+# the task.
 _risk_violations_log: Dict[str, List[Dict[str, Any]]] = {} # user_id -> list of violations
+_VIOLATION_MIRROR_MAX_PER_USER = 200  # matches the /violations limit ceiling
 
 
 def get_user_risk_settings_store(user_id: str) -> Dict[str, Any]:
@@ -87,18 +96,114 @@ def is_user_kill_switched(user_id: str) -> bool:
     return mirror_is_halted(uid)
 
 
+async def _persist_risk_violation(
+    uid: str, rule: str, reason: str, detail: Dict[str, Any]
+) -> bool:
+    """Append one refusal to ``public.risk_violation_audit`` (RISK-01).
+
+    Best effort by design. A risk refusal has already been decided by the time
+    this runs; failing to record it must not un-refuse the order, and must not
+    raise into the caller's path. Every failure is logged at ERROR because a
+    silent gap in a safety audit trail is itself the defect.
+
+    Returns True only when a row was accepted, so the caller's tests can
+    distinguish "wrote" from "degraded to the mirror".
+    """
+    try:
+        from backend_app.core.dependencies import get_service_supabase_async
+
+        sb = await get_service_supabase_async()
+    except Exception as exc:  # noqa: BLE001 - never propagate
+        logger.error(
+            "[RISK_VIOLATION] service client unavailable, refusal recorded in "
+            "memory only: user=%s rule=%s err=%s", uid, rule, exc
+        )
+        return False
+
+    if sb is None:
+        # Ordinary shape of a local/dev/test environment with no
+        # SUPABASE_SERVICE_ROLE_KEY. The mirror and the log line are all there
+        # is, which is the pre-RISK-01 behaviour -- not a regression, but not
+        # evidence either. Debug rather than error so local runs stay quiet.
+        logger.debug(
+            "[RISK_VIOLATION] no service-role client configured; refusal for "
+            "user=%s rule=%s is in-memory only", uid, rule
+        )
+        return False
+
+    try:
+        result = sb.table("risk_violation_audit").insert({
+            "user_id": uid,
+            "rule": rule,
+            "reason": reason,
+            "detail": detail,
+        }).execute()
+        if inspect.isawaitable(result):
+            await result
+        return True
+    except Exception as exc:  # noqa: BLE001 - never propagate
+        logger.error(
+            "[RISK_VIOLATION] durable write FAILED, refusal recorded in memory "
+            "only: user=%s rule=%s err=%s", uid, rule, exc
+        )
+        return False
+
+
 def record_risk_violation(user_id: str, rule: str, reason: str, details: Optional[Dict[str, Any]] = None) -> None:
+    """Record a risk refusal durably, and mirror it in-process for fast reads.
+
+    RISK-01. This used to append to ``_risk_violations_log`` and nothing else,
+    which meant the trail died on restart (all seven services were replaced on
+    2026-11-16 during the credential repair), could only ever answer for the
+    one task that served the refusal, and grew without bound until a strategy
+    refused every bar OOM-killed the task.
+
+    The durable append is SCHEDULED, not awaited: this function is called from
+    synchronous code on the per-bar evaluation path
+    (``backend/paper_trading_service.py``, eight rules) and a refusal must
+    neither wait on an audit write nor fail because one failed.
+    """
     uid = str(user_id)
+    detail = details or {}
     entry = {
         "id": f"violation_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
         "user_id": uid,
         "rule": rule,
         "reason": reason,
-        "details": details or {},
+        "details": detail,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
-    _risk_violations_log.setdefault(uid, []).append(entry)
+
+    # Bounded mirror. The cap is what stops the unbounded growth described
+    # above; the endpoint's own `limit` is capped at 200, so retaining more
+    # than this per user would serve no read.
+    mirror = _risk_violations_log.setdefault(uid, [])
+    mirror.append(entry)
+    if len(mirror) > _VIOLATION_MIRROR_MAX_PER_USER:
+        del mirror[:-_VIOLATION_MIRROR_MAX_PER_USER]
+
     logger.warning(f"[RISK_VIOLATION] user={uid} rule={rule} reason={reason}")
+
+    # No running loop means a synchronous caller outside the server (a CLI or a
+    # sync test). There is nothing to schedule onto, and blocking here would
+    # put a network write on the refusal path, so the mirror and the log line
+    # stand alone. Checked rather than caught from create_task so the failure
+    # mode is explicit.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    try:
+        fire_and_forget_task(
+            _persist_risk_violation(uid, rule, reason, detail),
+            name=f"risk-violation-audit:{rule}",
+        )
+    except Exception as exc:  # noqa: BLE001 - never propagate
+        logger.error(
+            "[RISK_VIOLATION] could not schedule durable write: user=%s "
+            "rule=%s err=%s", uid, rule, exc
+        )
 
 
 def _safe_uid(uid: str) -> str:
@@ -867,12 +972,64 @@ async def get_risk_violations(
 ):
     """
     Get audit history of risk rejections and policy violations for user.
+
+    RISK-01. Reads the durable trail in ``public.risk_violation_audit``, which
+    survives restarts and is shared across workers. The in-process mirror is
+    the fallback for deployments with no service-role client configured, and
+    for the window before a scheduled write lands.
+
+    ``source`` names which one answered, so a caller can tell "you have no
+    violations" from "this deployment cannot see them".
     """
     uid = str(user.get("id") or user.get("sub"))
+
+    try:
+        from backend_app.core.dependencies import get_service_supabase_async
+
+        sb = await get_service_supabase_async()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[RISK_VIOLATION] read: service client error: %s", exc)
+        sb = None
+
+    if sb is not None:
+        try:
+            result = sb.table("risk_violation_audit").select(
+                "violation_id, user_id, rule, reason, detail, recorded_at"
+            ).eq("user_id", uid).order(
+                "recorded_at", desc=True
+            ).limit(limit).execute()
+            if inspect.isawaitable(result):
+                result = await result
+
+            rows = getattr(result, "data", None) or []
+            return {
+                "violations": [
+                    {
+                        "id": str(r.get("violation_id")),
+                        "user_id": r.get("user_id"),
+                        "rule": r.get("rule"),
+                        "reason": r.get("reason"),
+                        "details": r.get("detail") or {},
+                        "timestamp": r.get("recorded_at"),
+                    }
+                    for r in rows
+                ],
+                "count": len(rows),
+                "source": "durable",
+            }
+        except Exception as exc:  # noqa: BLE001
+            # Falling through to the mirror is deliberate: a reporting endpoint
+            # going dark is worse than serving a partial, labelled answer.
+            logger.warning(
+                "[RISK_VIOLATION] read: durable query failed, serving mirror: %s",
+                exc,
+            )
+
     violations = _risk_violations_log.get(uid, [])
     return {
         "violations": sorted(violations, key=lambda x: x.get("timestamp", ""), reverse=True)[:limit],
-        "count": len(violations)
+        "count": len(violations),
+        "source": "memory",
     }
 
 
