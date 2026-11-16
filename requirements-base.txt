@@ -25,7 +25,27 @@
 # _compat.v2 shim.
 fastapi==0.135.0
 uvicorn[standard]==0.54.0
-websockets==12.0
+# Raised from 12.0 with the uvicorn bump in #300, which is what made the old pin
+# unsatisfiable: `uvicorn[standard]==0.54.0` requires `websockets>=13.0`, so pip
+# answered ResolutionImpossible and every install-dependent job on main failed.
+# Measured: uvicorn[standard] 0.53.0 and 0.52.4 conflict with websockets 12.0 too,
+# so the >=13 floor predates 0.54 and reverting one minor version would not have
+# helped -- only reverting uvicorn to 0.30.6 would, which would give back the
+# bump's security fixes.
+#
+# 13.1 rather than the 17.4 pip would pick on its own: it is the smallest step that
+# satisfies the floor, and it is the last line that still ships `websockets.legacy`,
+# so nothing anywhere changes behaviour. 14.0 removed that package.
+#
+# Checked before choosing, rather than assumed safe: the only production import of
+# this library is `backend_app/backend/dag_event_loop.py`, one
+# `async with websockets.connect(self.ws_url)`. That form is valid in every version
+# from 12 through 17. Nothing in the tree touches `WebSocketClientProtocol`,
+# `WebSocketServerProtocol`, `websockets.client` or `websockets.server` -- the names
+# 14.0 actually removed. Everything else importing it is under archive/, scripts/ or
+# tests/. The FastAPI/Starlette `WebSocket` used by the application's own endpoints
+# is a different library and is unaffected.
+websockets==13.1
 # CVE-2024-53981, CVE-2026-24486, CVE-2026-42561, CVE-2026-53539 (all fixed by 0.0.30)
 # have no reachable call site in this codebase - see
 # .kiro/specs/production-launch-hardening/dependency-triage.md - but the bump is free
