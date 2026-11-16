@@ -221,7 +221,7 @@ xgboost==2.1.1
 # .kiro/specs/production-launch-hardening/dependency-triage.md.
 lightgbm==4.6.0
 catboost==1.2.3
-scikit-learn==1.5.1
+scikit-learn==1.9.1
 joblib==1.4.2
 
 # --- Deep Learning -------------------------------------------------------
