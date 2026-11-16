@@ -771,6 +771,7 @@ jobs:
           pytest tests/test_aud01_signal_audit_log.py \
                  tests/test_aud02_order_audit_trail_is_durable.py \
                  tests/test_bill01_razorpay_plans_expire.py \
+                 tests/test_bill07_billing_invoices_postgres.py \
                  tests/test_bug056_library_subscriptions_updated_at_postgres.py \
                  tests/test_bug057_listing_moderation_authz_postgres.py \
                  tests/test_d5_watchdog_adjudication_repair.py \
