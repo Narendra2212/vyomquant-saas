@@ -2473,7 +2473,13 @@ export default function Dashboard() {
       >
         <div
           {...{ [TIER_PAGE_ATTRIBUTE]: PAGES.DASHBOARD, [TIER_ATTRIBUTE]: 1 }}
-          className="grid grid-cols-4 gap-4"
+          /* Four figures across at every width meant four ~180px columns at 1024px,
+             where "CURRENT DRAWDOWN" wrapped to two lines beside three that did not.
+             Two-up below xl keeps each label on one line; the four-across reading
+             returns at the width that fits it. The figures, their order and their
+             tier-1 container are unchanged — Requirement 3.4 and Property 4 (task 19.5)
+             both key off this single `data-page-tier="1"` element, not its columns. */
+          className="grid grid-cols-2 gap-4 xl:grid-cols-4"
         >
           {TIER_ONE.map(({ key, label }) => {
             const { format, precision } = TIER_ONE_FORMAT[key];
@@ -2515,8 +2521,25 @@ export default function Dashboard() {
         className="flex min-w-0 flex-col gap-4"
       >
 
-        {/* ── ROW 1: the fleet, the positions, the venues ─────────────────────────── */}
-        <div className="grid min-w-0 grid-cols-4 gap-4">
+        {/* ── ROW 1: the fleet, the positions, the venues ───────────────────────────
+            `grid-cols-4` was unconditional, so the 1|2|1 split held at EVERY width.
+            At 1024px that gives the two outer panels ~200px each, which is why
+            `Panel`'s header (`truncate`, Panel.jsx) rendered the right-hand title as
+            "System & exchang…" and the metric labels inside it wrapped onto three
+            lines. Below about 900px the `col-span-2` middle cell cannot hold the
+            positions table and the row overflows horizontally.
+
+            So the dense split is now scoped to `xl` (80rem/1280px) and the row stacks
+            to one full-width column below it. Stacking rather than an intermediate
+            two-column step is deliberate: DOM order here is strategies → positions →
+            health, and a 2-column grid would place the `col-span-2` positions panel on
+            its own row, leaving an empty cell beside strategies and another beside
+            health — reintroducing exactly the dead space this task removes.
+
+            `lg:`/`xl:` rather than the `--breakpoint-laptop`/`-desktop` tokens because
+            those tokens are read through `var()` (see tokens.css) and the 167 existing
+            responsive classes in `src/` are all built on Tailwind's own scale. */}
+        <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-4">
 
           {/* ── ACTIVE STRATEGIES — `strategies.active`, `.paused`, `.items[].status` ──
               `items` IS the fleet: the aggregation service builds `total` as
@@ -2579,7 +2602,27 @@ export default function Dashboard() {
                 `health` verbatim and says "Status not reported" for an absent one — the
                 `|| "paused"` / `|| "idle"` defaults this list used to substitute claimed a
                 running strategy was stopped. */}
-            <ul className="flex min-w-0 flex-col gap-2">
+            {/* BOUNDED HEIGHT, NOT A TRUNCATED LIST (task 02 — dashboard layout).
+                This list was unbounded, and it is the only region on the page whose
+                height grows with account size: one `<li>` per deployment at ~52px, so
+                an account with 13 strategies made this panel ~900px tall. Row 1 is a
+                grid, and a grid row is as tall as its tallest cell, so that one list
+                stretched "Open positions" and "System & exchange health" to ~900px of
+                mostly empty panel beside it — and pushed Recent signals, Recent orders
+                and the equity curve a full screen below the fold.
+
+                `max-h-72` with `overflow-y-auto` bounds the REGION, not the DATA: every
+                deployment is still rendered and still reachable, which is why this is
+                preferred over showing the top five. The "top five + link" shape the
+                positions panel uses is right THERE because the full ledger is another
+                page's subject; here the panel IS the fleet, and silently dropping eight
+                of thirteen strategies from the one place that lists them would be a
+                change in what the page reports, not in how it is laid out.
+
+                `pr-1` keeps the scrollbar off the card borders. The scroll container is
+                the list rather than the panel so the two count metrics above stay put
+                while the fleet scrolls under them. */}
+            <ul className="flex min-w-0 flex-col gap-2 max-h-72 overflow-y-auto pr-1">
               {strategies.map((strategy) => (
                 <li
                   key={strategy.id}
@@ -2623,7 +2666,12 @@ export default function Dashboard() {
               an attribute, and holds the degraded alert ABOVE the panel so the server's
               account of the failure precedes the panel it explains. */}
           <div
-            className="col-span-2 flex min-w-0 flex-col gap-3"
+            /* `xl:col-span-2` matches the row's breakpoint above: below xl the row is a
+               single column and a span would be meaningless. `gap-4` rather than the
+               `gap-3` this carried, so the distance between the degraded alert and the
+               panel it explains equals every other gap on the page — this was the one
+               12px gap in a 16px layout. */
+            className="flex min-w-0 flex-col gap-4 xl:col-span-2"
             data-region="positionsDegraded"
             data-positions-read={positionsDegraded === null ? "complete" : "degraded"}
           >
@@ -2643,6 +2691,13 @@ export default function Dashboard() {
             )}
 
             <Panel
+              /* The other two panels in row 1 are direct grid children, so the grid's
+                 default `align-items: stretch` already squares their bottoms off against
+                 the row. This one is nested inside the wrapper above (it has to be — the
+                 degraded alert sits above it), and a flex child sizes to its content, so
+                 without `flex-1` it ended short and the row's three cards finished at two
+                 different heights. */
+              className="flex-1"
               title={labelOf("openPositions")}
               money
               environment={panelEnvironment}
@@ -2748,7 +2803,9 @@ export default function Dashboard() {
                 readings that moved are `ds/StatusBadge`, so the hue comes from
                 `design/semantic.js` through the state word rather than from a ternary
                 picking a hex. */}
-            <div className="mb-3 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2">
+            {/* `mb-4` to match every other vertical gap in this panel and on the page;
+                this was the one 12px step in a 16px rhythm. */}
+            <div className="mb-4 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2">
               <HealthReading label="Trade permission" reading="canTrade">
                 <StatusBadge
                   state={canTrade === true ? "ok" : (canTrade === false ? "blocked" : "unknown")}
@@ -2828,7 +2885,10 @@ export default function Dashboard() {
             two lists that arrive and empty independently: one panel would have to pick a
             single §11.1 state for both, and the first empty list would either suppress the
             other or be described by a message that is only true of half the panel. */}
-        <div className="grid min-w-0 grid-cols-2 gap-4">
+        {/* Two tables side by side needs width for both: at 1024px each got ~470px and
+            the signal column ("Signal BUY: BTC/USDC on BINANCE (Risk: APPROVED)") had no
+            room beside its timestamp. They pair from `lg` up and stack below it. */}
+        <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
 
           <Panel
             title={labelOf("recentSignals")}
