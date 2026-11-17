@@ -13108,6 +13108,17 @@
     ],
     [
       "support_tickets",
+      "attachment",
+      "jsonb",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "support_tickets",
       "category",
       "character varying",
       "50",
@@ -13174,11 +13185,33 @@
     ],
     [
       "support_tickets",
+      "order_id",
+      "character varying",
+      "100",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "support_tickets",
       "priority",
       "character varying",
       "20",
       "NO",
       "'medium'::character varying",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "support_tickets",
+      "related_feature",
+      "character varying",
+      "100",
+      "YES",
+      "",
       "NO",
       "",
       "NEVER"
@@ -13201,6 +13234,17 @@
       "20",
       "NO",
       "'open'::character varying",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "support_tickets",
+      "strategy_id",
+      "character varying",
+      "100",
+      "YES",
+      "",
       "NO",
       "",
       "NEVER"
@@ -13233,6 +13277,17 @@
       "uuid",
       "",
       "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "ticket_comments",
+      "attachment",
+      "jsonb",
+      "",
+      "YES",
       "",
       "NO",
       "",
@@ -26337,6 +26392,11 @@
     [
       "migrations/071_notif01_durable_dedupe_and_severity.sql",
       "f1118c9774b6b0753c39b6fb251d5f3609b39854ef988b79374b38ff20109f5b",
+      "step1"
+    ],
+    [
+      "migrations/072_sup02_support_ticket_declared_columns.sql",
+      "2eb7661635244230a1c0abe82cca98f4e7ecabfac2b496dc3bc1cab52422003f",
       "step1"
     ],
     [
