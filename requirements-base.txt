@@ -101,7 +101,41 @@ cryptography==50.0.0
 # pin. Leaving an import-audit that no longer audits anything is worse than neither.
 passlib[bcrypt]==1.7.4
 PyJWT==2.15.0
-sqlalchemy==2.1.8
+# HELD AT 2.0.x DELIBERATELY. Do not let a bump past this line through without
+# doing the driver migration below first.
+#
+# SQLAlchemy 2.1 changed the DBAPI that the bare `postgresql://` scheme resolves
+# to, from psycopg2 to psycopg (v3). This project installs `psycopg2-binary` and
+# not `psycopg`, so under 2.1.8 every `create_engine("postgresql://...")` raised:
+#
+#     File ".../sqlalchemy/dialects/postgresql/psycopg.py", in import_dbapi
+#         import psycopg
+#     ModuleNotFoundError: No module named 'psycopg'
+#
+# That took down `Database Tests (PostgreSQL)` and `Provisioning, Privilege
+# Hardening & Tenant Isolation` on main -- the second at STEP 0c, `alembic upgrade
+# head`, before any migration ran. Both pass at 2.0.35, which is what main was
+# fully green on at 4aeb8510.
+#
+# WHY THIS IS A HOLD AND NOT A FIX. Adopting 2.1 means choosing one of:
+#
+#   (a) install `psycopg[binary]` and let the application talk to Postgres through
+#       psycopg3. That is a REAL DRIVER MIGRATION for a trading platform's database
+#       layer, not a dependency bump: 9 engine-creation sites across database.py,
+#       database_pool.py, database_scaling.py, restricted_db.py,
+#       state_persistence.py and state_service.py, four direct
+#       `psycopg2.connect(dsn)` calls in core/bot_ownership.py, and psycopg2-
+#       specific exception handling that core/db_isolation.py, routers/library.py
+#       and marketplace/subscription_period.py all reason about by name.
+#   (b) make the driver explicit at every DSN -- `postgresql+psycopg2://` for the
+#       sync engines, `postgresql+asyncpg://` for the two async ones -- in the
+#       workflow env vars, Secrets Manager, and every code path that builds a URL.
+#       Immune to future default changes, but one missed DSN fails the same way.
+#
+# Either is a reviewed change with its own tests. Neither is something to do as a
+# side effect of getting CI green, so the version is pinned back and the choice is
+# left stated rather than taken quietly.
+sqlalchemy==2.0.35
 alembic==1.13.3
 psycopg2-binary==2.9.9
 asyncpg==0.29.0

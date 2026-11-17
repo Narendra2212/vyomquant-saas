@@ -5001,6 +5001,17 @@
     ],
     [
       "notifications",
+      "idempotency_key",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "notifications",
       "link",
       "character varying",
       "255",
@@ -16590,6 +16601,11 @@
       "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (id)"
     ],
     [
+      "notifications",
+      "uq_notifications_user_idempotency",
+      "CREATE UNIQUE INDEX uq_notifications_user_idempotency ON public.notifications USING btree (user_id, idempotency_key) WHERE (idempotency_key IS NOT NULL)"
+    ],
+    [
       "order_audit_log",
       "idx_order_audit_log_execution",
       "CREATE INDEX idx_order_audit_log_execution ON public.order_audit_log USING btree (execution_id, occurred_at)"
@@ -22473,33 +22489,8 @@
     ],
     [
       "notifications",
-      "anon",
-      "DELETE"
-    ],
-    [
-      "notifications",
-      "anon",
-      "INSERT"
-    ],
-    [
-      "notifications",
-      "anon",
-      "SELECT"
-    ],
-    [
-      "notifications",
-      "anon",
-      "UPDATE"
-    ],
-    [
-      "notifications",
       "authenticated",
       "DELETE"
-    ],
-    [
-      "notifications",
-      "authenticated",
-      "INSERT"
     ],
     [
       "notifications",
@@ -25925,7 +25916,7 @@
     ],
     [
       "hardening/999_privilege_hardening.sql",
-      "e82968828385795516c3b09ee13b9c5c82afc35d9fbe5b428907b0ce5de52bfb",
+      "dc8300e46d59f798e9af3ffeb221a5e8147f7a4cb92cbb1884111764d453e22e",
       "step4"
     ],
     [
@@ -26341,6 +26332,11 @@
     [
       "migrations/070_bill07_billing_invoices_provider_columns.sql",
       "bb0ac19b3bc18d1f376657101d192e5dcac87075f7f253b7a2c785b0dae32eaf",
+      "step1"
+    ],
+    [
+      "migrations/071_notif01_durable_dedupe_and_severity.sql",
+      "f1118c9774b6b0753c39b6fb251d5f3609b39854ef988b79374b38ff20109f5b",
       "step1"
     ],
     [
@@ -28051,6 +28047,18 @@
       "uq_mv_version_node",
       "u",
       "UNIQUE (version_id, node_id, model_version)"
+    ],
+    [
+      "notifications",
+      "chk_notifications_idempotency_key_not_blank",
+      "c",
+      "CHECK (((idempotency_key IS NULL) OR (btrim(idempotency_key) <> ''::text)))"
+    ],
+    [
+      "notifications",
+      "chk_notifications_severity",
+      "c",
+      "CHECK (((severity)::text = ANY ((ARRAY['info'::character varying, 'success'::character varying, 'warning'::character varying, 'error'::character varying, 'critical'::character varying])::text[])))"
     ],
     [
       "order_lifecycle_transitions",
