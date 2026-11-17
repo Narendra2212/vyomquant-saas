@@ -147,7 +147,16 @@ describe('ErrorState: it is announced', () => {
     mount({ error: new Error(LEAK), context: 'positions' });
     const icon = screen.getByRole('alert').querySelector('svg');
     expect(icon.getAttribute('aria-hidden')).toBe('true');
-    // `#EF5350` is `--color-status-error`, reached through `statusToken('error')`.
-    expect(icon.style.color).toBe('rgb(239, 83, 80)');
+    // THEME-01: the hue is `--color-status-error`, reached through
+    // `statusToken('error')`. It now arrives as a `var()` reference rather than
+    // the literal `#EF5350` (which jsdom reported as `rgb(239, 83, 80)`), so
+    // that one colour follows the active theme — in light it resolves to
+    // `#B91C1C`, not the dark theme's red.
+    //
+    // Asserting the token NAME is the stronger form of this test's own claim:
+    // the point is that the hue comes from `semantic.js` and not from a prop, and
+    // a reference proves the component never saw a colour at all. A hex
+    // comparison would now pass for a hard-coded literal that ignores the theme.
+    expect(icon.style.color).toBe('var(--color-status-error)');
   });
 });

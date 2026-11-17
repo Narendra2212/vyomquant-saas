@@ -158,6 +158,21 @@
   <!-- FE-02: local-dev detection, Sentry and GA/Clarity wiring now live in /src/bootstrap.js,
        a same-origin module loaded in body ahead of main.jsx -- see that file's header
        comment for why these are no longer inline script blocks. -->
+  <!-- THEME-01: applies the stored theme BEFORE the first paint.
+       CLASSIC and SYNCHRONOUS, in <head>, which is the whole point and is why it is not
+       part of bootstrap.js: module scripts are deferred, so they run after the document is
+       parsed and the browser may already have painted <body class="bg-surface-canvas"> in
+       the DARK canvas colour. For a user whose stored theme is light, that paint is the
+       flash this file exists to remove, and no amount of ordering among module scripts
+       fixes it.
+       It is also not inline, because script-src here carries no 'unsafe-inline' (see the
+       CSP comment above and bootstrap.js's header): the resolution for this build is that
+       every script is a same-origin FILE, which 'self' already covers. It lives in public/
+       rather than src/ because Vite copies public/ verbatim to the dist root — a file under
+       src/ would be bundled as a module and lose the synchronous property.
+       Placed BEFORE the stylesheet link deliberately: the attribute it sets is what the
+       token overrides key off, so it must exist before any CSS is applied. -->
+  <script src="/theme-boot.js"></script>
 </head>
 
 <!-- Token utilities, not hex literals. These four arbitrary values were a fifth palette:

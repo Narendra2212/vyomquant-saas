@@ -109,6 +109,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { ArrowUpRight, XCircle, Bot, Info } from "lucide-react";
 import { token } from "../../design/tokens";
+import { alpha } from "../../design/alpha";
 
 // ── Micro components ──────────────────────────────────────────────────────────
 
@@ -156,14 +157,14 @@ export const Tag2 = ({ c = "accent", children, interactive = false }) => {
   const [isHovered, setIsHovered] = useState(false);
   const m = {
     accent: { bg: token.surface.inset, border: token.line.strong, text: token.brand.base, hoverBg: token.surface.inset },
-    profit: { bg: token.status.profit.wash, border: `${token.status.profit.fg}4D`, text: token.status.profit.fg, hoverBg: `${token.status.profit.fg}26` },
-    loss: { bg: token.status.loss.wash, border: `${token.status.loss.fg}4D`, text: token.status.loss.fg, hoverBg: `${token.status.loss.fg}26` },
-    warning: { bg: token.status.warning.wash, border: `${token.status.warning.fg}4D`, text: token.status.warning.fg, hoverBg: `${token.status.warning.fg}26` },
-    purple: { bg: token.status.neutral.wash, border: `${token.status.neutral.fg}4D`, text: token.status.neutral.fg, hoverBg: `${token.status.neutral.fg}26` },
-    gold: { bg: token.status.warning.wash, border: `${token.status.warning.fg}4D`, text: token.status.warning.fg, hoverBg: `${token.status.warning.fg}26` },
+    profit: { bg: token.status.profit.wash, border: `${alpha(token.status.profit.fg, 30)}`, text: token.status.profit.fg, hoverBg: `${alpha(token.status.profit.fg, 15)}` },
+    loss: { bg: token.status.loss.wash, border: `${alpha(token.status.loss.fg, 30)}`, text: token.status.loss.fg, hoverBg: `${alpha(token.status.loss.fg, 15)}` },
+    warning: { bg: token.status.warning.wash, border: `${alpha(token.status.warning.fg, 30)}`, text: token.status.warning.fg, hoverBg: `${alpha(token.status.warning.fg, 15)}` },
+    purple: { bg: token.status.neutral.wash, border: `${alpha(token.status.neutral.fg, 30)}`, text: token.status.neutral.fg, hoverBg: `${alpha(token.status.neutral.fg, 15)}` },
+    gold: { bg: token.status.warning.wash, border: `${alpha(token.status.warning.fg, 30)}`, text: token.status.warning.fg, hoverBg: `${alpha(token.status.warning.fg, 15)}` },
     cyan: { bg: token.surface.inset, border: token.line.strong, text: token.brand.base, hoverBg: token.surface.inset },
-    green: { bg: token.status.profit.wash, border: `${token.status.profit.fg}4D`, text: token.status.profit.fg, hoverBg: `${token.status.profit.fg}26` },
-    red: { bg: token.status.loss.wash, border: `${token.status.loss.fg}4D`, text: token.status.loss.fg, hoverBg: `${token.status.loss.fg}26` },
+    green: { bg: token.status.profit.wash, border: `${alpha(token.status.profit.fg, 30)}`, text: token.status.profit.fg, hoverBg: `${alpha(token.status.profit.fg, 15)}` },
+    red: { bg: token.status.loss.wash, border: `${alpha(token.status.loss.fg, 30)}`, text: token.status.loss.fg, hoverBg: `${alpha(token.status.loss.fg, 15)}` },
   };
   const style = m[c] || m.accent;
   return (
@@ -222,7 +223,7 @@ export const Inp = ({ id, lbl, ph, type = "text", icon: Icon, hint, val, onChang
             opacity: disabled ? 0.45 : 1, cursor: disabled ? "not-allowed" : "text",
             borderRadius: token.radius.md, fontSize: 12, fontFamily: "monospace",
             width: "100%", outline: isFocused ? `2px solid ${token.brand.base}` : "none", outlineOffset: "1px",
-            boxShadow: isFocused ? `0 0 0 3px ${token.brand.base}20` : "none",
+            boxShadow: isFocused ? `0 0 0 3px ${alpha(token.brand.base, 13)}` : "none",
             transition: "all 0.15s cubic-bezier(0.4, 0, 0.2, 1)"
           }}
           {...rest}

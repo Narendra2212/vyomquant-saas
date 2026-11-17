@@ -26,6 +26,7 @@ import { NotAvailableMarker } from "../components/ds/Metric";
 import { PageHeader } from "../components/ds/PageHeader";
 import { pnlToken } from "../design/semantic";
 import { token } from "../design/tokens";
+import { alpha } from "../design/alpha";
 import { deployPresentation } from "../lib/deployFlow";
 // The Minor_Units formatter, from the module that owns the ISO 4217 exponent table. The
 // creator-earnings ledger is served in integer Minor_Units per currency
@@ -536,7 +537,7 @@ export default function StrategyDetail() {
           // The 8-bit alpha suffixes stay: `status.error.wash` is a 12% rgba and these two
           // washes are ~8% and ~19%, so only the SOURCE of the hue changes here. Guidance
           // note 4 — keep the composition, retarget where the colour comes from.
-          background: token.status.error.fg + "15", border: `1px solid ${token.status.error.fg}30`,
+          background: alpha(token.status.error.fg, 8), border: `1px solid ${alpha(token.status.error.fg, 19)}`,
           color: token.status.error.fg,
           // fontSize: 11 → --text-body (sentence). Q1: every string that reaches `actionError`
           // is a whole sentence from a refused deploy, delete or publish, and it wraps.
@@ -629,9 +630,9 @@ export default function StrategyDetail() {
               alignItems: "center",
               gap: 6,
               padding: "8px 12px",
-              background: activeTab === tab.id ? token.brand.base + "15" : "transparent",
+              background: activeTab === tab.id ? alpha(token.brand.base, 8) : "transparent",
               color: activeTab === tab.id ? token.brand.base : token.content.muted,
-              border: activeTab === tab.id ? `1px solid ${token.brand.base + "30"}` : "1px solid transparent",
+              border: activeTab === tab.id ? `1px solid ${alpha(token.brand.base, 19)}` : "1px solid transparent",
               borderRadius: 6,
               // fontSize: 11 → --text-title (control). Slice 1 recorded this strip and the
               // metrics time-range strip as controls rather than chips, and settled them here:
@@ -1137,7 +1138,7 @@ function VersionsTab({ strategyId }) {
       {error && (
         <div style={{
           marginBottom: 12, padding: "8px 12px", borderRadius: token.radius.md,
-          background: token.status.error.fg + "15", border: `1px solid ${token.status.error.fg}30`,
+          background: alpha(token.status.error.fg, 8), border: `1px solid ${alpha(token.status.error.fg, 19)}`,
           color: token.status.error.fg,
           // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1 — a restore or deploy
           // failure arrives as a sentence, and this is the one place the trader learns a
@@ -1151,7 +1152,7 @@ function VersionsTab({ strategyId }) {
       {compareWith && (
         <div style={{
           marginBottom: 12, padding: "8px 12px", borderRadius: 6,
-          background: token.brand.base + "15", border: `1px solid ${token.brand.base}30`,
+          background: alpha(token.brand.base, 8), border: `1px solid ${alpha(token.brand.base, 19)}`,
           color: token.brand.base,
           // fontSize: 11 → --text-body (sentence); monospace DROPPED. Q1: a finite verb and a
           // terminal full stop, and it is an instruction about what to do next. Not a word of
@@ -1354,9 +1355,9 @@ function MetricsTab({ strategyId }) {
             onClick={() => setTimeRange(range)}
             style={{
               padding: "6px 12px",
-              background: timeRange === range ? token.brand.base + "15" : "transparent",
+              background: timeRange === range ? alpha(token.brand.base, 8) : "transparent",
               color: timeRange === range ? token.brand.base : token.content.muted,
-              border: timeRange === range ? `1px solid ${token.brand.base + "30"}` : `1px solid ${token.line.default}`,
+              border: timeRange === range ? `1px solid ${alpha(token.brand.base, 19)}` : `1px solid ${token.line.default}`,
               borderRadius: 6,
               // fontSize: 10 → --text-title (control). Resolved with the tab strip above and for
               // the same reason: slice 1 recorded both as controls, not chips, and `ds/Tabs.jsx:328`
@@ -1619,7 +1620,7 @@ function ExecutionsTab({ strategyId }) {
             // hand-rolled table now reads the same as every tokened one. It was a 5% pure
             // white, which is not in the palette. (The retired utility is not spelled out:
             // Tailwind v4 scans comments as text and would emit it as dead CSS.)
-            <tr key={ex.id || Math.random()} style={{ borderBottom: `1px solid ${token.line.default}15` }} className="hover:bg-surface-raised transition-colors">
+            <tr key={ex.id || Math.random()} style={{ borderBottom: `1px solid ${alpha(token.line.default, 8)}` }} className="hover:bg-surface-raised transition-colors">
               <td style={{ padding: "8px 14px", color: token.brand.base, fontWeight: 700 }}>
                 {ex.id ? (String(ex.id).length > 12 ? `${String(ex.id).slice(0, 8)}...` : ex.id) : "—"}
               </td>

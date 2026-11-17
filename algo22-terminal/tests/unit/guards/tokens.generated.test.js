@@ -163,7 +163,14 @@ describe('the generated token mirror', () => {
     // And the token count it verified is the count the mirror's own header states,
     // so the two ends of the comparison are the files named above.
     const verified = /is up to date \((\d+) tokens\)/.exec(check.stdout)?.[1];
-    const declared = /^\/\/ (\d+) tokens, mirrored verbatim/m.exec(readFileSync(MIRROR, 'utf8'))?.[1];
+    // Anchored on the COUNT and the word `tokens` only. It previously also
+    // required the phrase "mirrored verbatim", which was prose: THEME-01 rewrote
+    // that header to explain why colours are now `var()` references, and this
+    // assertion failed with `declared === undefined` even though the count was
+    // still right there. A guard that breaks when a comment is reworded reports
+    // on the comment, not on the mirror.
+    const declared = /^\/\/ (\d+) tokens\b/m.exec(readFileSync(MIRROR, 'utf8'))?.[1];
+    expect(declared, 'the mirror header no longer states a token count').toBeDefined();
     expect(verified).toBe(declared);
     expect(Number(verified)).toBeGreaterThan(80);
   });
@@ -192,7 +199,17 @@ describe('the generated token mirror', () => {
 
     // Normalising is not a blanket "close enough": it collapses newline style and
     // nothing else, so one changed character in one token value still differs.
-    const perturbed = lf.replace("canvas: '#080A0E'", "canvas: '#080A0F'");
+    // The anchor is a NON-COLOUR token, deliberately. It used to be
+    // `canvas: '#080A0E'`, and THEME-01 made every colour a `var(--…)` reference
+    // so that literal left the mirror — the `.replace()` then matched nothing,
+    // `perturbed === lf`, and this assertion caught its own anchor going stale
+    // (which is exactly what the message says it is for).
+    //
+    // `tablet: '768px'` is a better anchor than any colour now: breakpoints are
+    // read as NUMBERS by `shell/ResponsiveGate`, so they are the tokens that must
+    // keep a literal value, and the line cannot turn into a reference the way a
+    // colour did.
+    const perturbed = lf.replace("tablet: '768px'", "tablet: '769px'");
     expect(perturbed, 'the anchor this assertion perturbs has moved').not.toBe(lf);
     expect(perturbed.replace(/\r\n/g, '\n')).not.toBe(lf);
   });

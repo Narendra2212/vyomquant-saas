@@ -44,6 +44,7 @@ import wsClient from '../websocketClient';
 // already returned (design.md §17.2).
 // ═══════════════════════════════════════════════════════════════════════════
 import { token } from '../design/tokens';
+import { alpha } from '../design/alpha';
 // PROFILE-REORG-01 / Task 10: preferences live with the notifications they govern, not on
 // Profile. Self-contained — it reads and writes its own settings, so this page passes nothing.
 import { NotificationPreferences } from './NotificationPreferences';
@@ -297,7 +298,7 @@ function NotificationCenter() {
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ background: `${token.brand.base}15`, border: `1px solid ${token.brand.base}40`, borderRadius: 10, padding: 8 }}>
+            <div style={{ background: `${alpha(token.brand.base, 8)}`, border: `1px solid ${alpha(token.brand.base, 25)}`, borderRadius: 10, padding: 8 }}>
               <Bell size={24} color={token.brand.base} />
             </div>
             <div>
@@ -332,8 +333,8 @@ function NotificationCenter() {
               display: 'flex', 
               alignItems: 'center', 
               gap: 6,
-              background: wsConnected ? `${token.status.profit.fg}15` : `${token.status.loss.fg}15`,
-              border: `1px solid ${wsConnected ? token.status.profit.fg : token.status.loss.fg}40`,
+              background: wsConnected ? `${alpha(token.status.profit.fg, 8)}` : `${alpha(token.status.loss.fg, 8)}`,
+              border: `1px solid ${alpha(wsConnected ? token.status.profit.fg : token.status.loss.fg, 25)}`,
               borderRadius: 20,
               padding: '4px 12px',
             }}>
@@ -379,8 +380,8 @@ function NotificationCenter() {
               <button
                 onClick={markAllAsRead}
                 style={{
-                  background: `${token.brand.base}15`,
-                  border: `1px solid ${token.brand.base}50`,
+                  background: `${alpha(token.brand.base, 8)}`,
+                  border: `1px solid ${alpha(token.brand.base, 31)}`,
                   borderRadius: 8,
                   padding: '8px 14px',
                   color: token.brand.base,
@@ -464,7 +465,7 @@ function NotificationCenter() {
           <button
             onClick={() => setUnreadOnly(!unreadOnly)}
             style={{
-              background: unreadOnly ? `${token.brand.base}20` : token.surface.raised,
+              background: unreadOnly ? `${alpha(token.brand.base, 13)}` : token.surface.raised,
               border: `1px solid ${unreadOnly ? token.brand.base : token.line.default}`,
               borderRadius: 8,
               padding: '6px 14px',
@@ -497,7 +498,7 @@ function NotificationCenter() {
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
                 style={{
-                  background: active ? `${token.brand.base}18` : token.surface.raised,
+                  background: active ? `${alpha(token.brand.base, 9)}` : token.surface.raised,
                   border: `1px solid ${active ? token.brand.base : token.line.default}`,
                   borderRadius: 6,
                   padding: '6px 12px',
@@ -523,8 +524,8 @@ function NotificationCenter() {
       {/* Error Banner */}
       {error && (
         <div style={{
-          background: `${token.status.loss.fg}15`,
-          border: `1px solid ${token.status.loss.fg}40`,
+          background: `${alpha(token.status.loss.fg, 8)}`,
+          border: `1px solid ${alpha(token.status.loss.fg, 25)}`,
           borderRadius: 8,
           padding: '12px 16px',
           marginBottom: 20,
@@ -595,7 +596,7 @@ function NotificationCenter() {
                 style={{
                   padding: '16px 20px',
                   borderBottom: idx < filteredNotifications.length - 1 ? `1px solid ${token.line.default}` : 'none',
-                  background: isUnread ? `${token.brand.base}07` : 'transparent',
+                  background: isUnread ? `${alpha(token.brand.base, 3)}` : 'transparent',
                   borderLeft: `3px solid ${isUnread ? token.brand.base : 'transparent'}`,
                   cursor: 'pointer',
                   transition: 'background 0.15s',
@@ -607,8 +608,8 @@ function NotificationCenter() {
                     width: 32,
                     height: 32,
                     borderRadius: 8,
-                    background: `${SEVERITY_COLORS[notification.severity] || token.brand.base}18`,
-                    border: `1px solid ${SEVERITY_COLORS[notification.severity] || token.brand.base}35`,
+                    background: `${alpha(SEVERITY_COLORS[notification.severity] || token.brand.base, 9)}`,
+                    border: `1px solid ${alpha(SEVERITY_COLORS[notification.severity] || token.brand.base, 21)}`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -636,7 +637,7 @@ function NotificationCenter() {
                           {notification.title}
                         </span>
                         <span style={{
-                          background: `${token.brand.base}15`,
+                          background: `${alpha(token.brand.base, 8)}`,
                           color: token.brand.base,
                           fontSize: 10,
                           padding: '1px 6px',

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import * as Sentry from "@sentry/react";
 import App from "./App";
+import { ThemeProvider } from "./design/theme";
 import './App.css';
 
 // Initialize Sentry dynamically for Aerora Observability Certification
@@ -25,10 +26,18 @@ if (!isDummySentry) {
   });
 }
 
+// THEME-01: `ThemeProvider` is OUTSIDE `BrowserRouter` on purpose. The theme is
+// a device preference, not route state — nothing about it should re-resolve on
+// navigation, and a provider inside the router would remount with it. It does
+// not apply the theme at mount either: `public/theme-boot.js` has already done
+// that synchronously before the first paint, and this provider initialises
+// itself FROM the document so the two cannot disagree.
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </ThemeProvider>
   </React.StrictMode>,
 );

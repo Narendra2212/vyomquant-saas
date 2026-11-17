@@ -303,7 +303,26 @@ export const STAGE_BAND = Object.freeze({
     label: 'Market data',
     categories: Object.freeze(['DATA']),
     icons: Object.freeze({ DATA: 'Database' }),
-    fg: token.content.secondary,
+    // THEME-01: `token.status.neutral.fg`, not `token.content.secondary`.
+    //
+    // §9.1 gives stage 4 "a distinct border, not a new hue", and
+    // `semantic.test.js` asserts that by comparing MODEL.fg with this value.
+    // That assertion passed for the wrong reason: MODEL.fg reads
+    // `status.neutral.fg` and this read `content.secondary`, two DIFFERENT
+    // tokens that happened to carry the same literal (#8B95A5) in the only
+    // theme that existed. The band was also internally inconsistent — its
+    // `wash` below was already the neutral token's.
+    //
+    // Making the mirror emit var() references exposed it: the two names stopped
+    // being interchangeable strings even though they still resolve to the same
+    // colour. Pointing both at the neutral token makes the shared hue
+    // STRUCTURAL instead of coincidental, so a future change to either token
+    // cannot silently break §9.1's rule in one direction while the test keeps
+    // passing.
+    //
+    // No visual change in either theme: the two tokens are the same colour in
+    // dark (#8B95A5) and in light (#4A5361).
+    fg: token.status.neutral.fg,
     wash: token.status.neutral.wash,
     border: 'solid',
   }),

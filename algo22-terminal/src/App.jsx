@@ -47,6 +47,7 @@ import {
   LoadingProvider,
 } from './components/common/primitives';
 import { token } from './design/tokens';
+import { alpha } from './design/alpha';
 import { Button } from './components/ui/Button';
 // The one auth-redirect origin derivation (see `config.js`). Used by the local
 // `UpdatePasswordPage` below, which is the component `/reset-password` actually renders.
@@ -243,7 +244,7 @@ function UpdatePasswordPage() {
           Reset Password
         </h1>
         {success ? (
-          <div style={{ color: token.status.profit.fg, fontSize: 13, textAlign: "center", background: `${token.status.profit.fg}12`, padding: 12, borderRadius: 8 }}>
+          <div style={{ color: token.status.profit.fg, fontSize: 13, textAlign: "center", background: `${alpha(token.status.profit.fg, 7)}`, padding: 12, borderRadius: 8 }}>
             Password updated! Redirecting to dashboard...
           </div>
         ) : (
