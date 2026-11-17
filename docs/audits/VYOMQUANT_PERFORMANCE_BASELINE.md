@@ -146,7 +146,82 @@ other route.
 That is 92 kB of the 283 kB critical path, roughly a third, for a dependency one
 route uses.
 
-### The obvious fix was tried and does not work
+**Lighthouse confirms it independently**, against production:
+
+> `vendor-reactflow-NYqE6Gbt.js` — **94 kB transferred, 58 kB of it unused** on
+> the landing page.
+
+### ROOT CAUSE — a static import defeating a lazy one
+
+Two attempts missed it, so the evidence trail is worth keeping.
+
+**Attempt 1 — drop the `manualChunks` branch.** Removed reactflow's 92 kB
+preload and its 2 kB blocking stylesheet, and promoted `vendor-recharts`
+(110 kB) into the preload instead: a net **~18 kB regression**. Reverted.
+
+**Attempt 2 — `build.modulepreload.resolveDependencies` filtering `vendor-*`.**
+**No effect at all**; the critical path stayed at exactly 283 kB with reactflow
+still preloaded. That option governs the *runtime* preload helper for **dynamic**
+imports. It does not touch the `<link rel="modulepreload">` tags Vite injects
+into `index.html`, which are emitted for the entry chunk's **static** import
+graph. Reverted.
+
+Attempt 2 failing is what identifies the cause: if the tag is emitted for the
+entry's *static* graph, then reactflow **is** in that graph. It is:
+
+```
+App.jsx:76          const StrategyBuilder = lazy(() => import('./pages/StrategyBuilder'));   correctly lazy
+Strategies.jsx:36   import StrategyBuilder from "./StrategyBuilder";                          STATIC
+```
+
+`Strategies.jsx` imports `StrategyBuilder` **statically**, so React Flow is
+pulled in through that edge regardless of the `lazy()` in `App.jsx`. One static
+import anywhere in the reachable graph defeats a `lazy()` elsewhere — the
+`lazy()` still produces a chunk, which is why the split *looks* correct in the
+output, while the dependency is loaded eagerly anyway.
+
+**Attempt 3 — make `Strategies.jsx:36` lazy.** Implemented
+(`lazy()` + a `Suspense` boundary with `LoadingState kind="page"`) and measured.
+It did exactly what it was supposed to, and the critical path still got worse:
+
+| | before | after |
+|---|---|---|
+| `vendor-reactflow` preload | 92 kB gz | **gone** |
+| `vendor-reactflow` CSS, render-blocking | 2 kB gz | **gone** |
+| `vendor-recharts` preload | not preloaded | **161 kB gz appeared** |
+| requests on the critical path | 5 | 4 |
+| **critical path total** | **283 kB gz** | **351 kB gz** |
+
+**A 68 kB regression.** Reverted — a change that makes the measured number
+worse is not an optimisation, however correct its premise.
+
+### What the three attempts actually established
+
+The critical path is not "reactflow's fault". It is **whichever heavy vendor
+chunk is reachable from the entry's static graph gets a `modulepreload`**, and
+there are at least two candidates:
+
+| Vendor | gzipped | reached via |
+|---|---|---|
+| `vendor-recharts` | **161 kB** | `ds/Chart.jsx:205` — the only direct importer — then some eagerly-reachable importer of `ds/Chart`, **not yet traced** |
+| `vendor-reactflow` | 92 kB | `Strategies.jsx:36` → `StrategyBuilder.jsx:116` — **traced** |
+
+Removing one hands the slot to the other, and recharts is the *larger* of the
+two, which is why fixing the traced one alone is a regression. Note also that
+recharts' chunk grew from 386 kB to 540 kB raw once reactflow left the eager
+graph, so more of it was being shared than the chunk sizes suggested.
+
+**Both paths have to be cut in the same change, or neither.** The remaining
+unknown is small and specific: which eagerly-reachable module imports
+`ds/Chart`. `Strategies.jsx:19` carries a comment saying `ds/*` components are
+imported individually rather than through the barrel *precisely* to keep
+recharts out of that file's graph — so the convention is already understood
+here, and some other file is likely breaking it.
+
+**Not attempted further.** The next step is one grep for `ds/Chart` importers
+and a repeat of this same before/after measurement.
+
+### Measurement note that nearly produced a false positive
 
 The hypothesis was that `vite.config.js:69-78` forces reactflow into a named
 chunk via `manualChunks`, that `StrategyBuilder.jsx:128`'s
@@ -179,25 +254,183 @@ manual chunk. A fix needs `build.modulepreload` configuration or an explicit
 same way: measure the whole critical path before and after, not just the chunk
 that was targeted. **Not attempted further in this change.**
 
-## 4. Build time
+## 4. Render behaviour
+
+Lighthouse 12.8.2 against **production** (`https://app.vyomquant.in/`),
+desktop form factor, `--throttling-method=provided` (so these are this host's
+real network, not a simulated 4G profile), headless Chromium via Edge.
+Fetched 2026-11-17 21:16 UTC.
+
+### Performance score: **8 / 100**
+
+| Metric | Measured | Target | |
+|---|---|---|---|
+| Largest Contentful Paint | **6.2 s** | < 2.5 s | POOR |
+| Total Blocking Time | **1,230 ms** | < 200 ms | POOR |
+| Cumulative Layout Shift | **0.41** | < 0.1 | POOR |
+| First Contentful Paint | 3.4 s | < 1.8 s | POOR |
+| Speed Index | 5.8 s | < 3.4 s | POOR |
+| Time to Interactive | 6.4 s | — | POOR |
+| Max Potential FID | 1,080 ms | — | POOR |
+| Server response (TTFB) | **440 ms** | < 600 ms | good |
+
+**TTFB is the only healthy number.** The server answers promptly; everything
+after it is client-side cost. That is consistent with the API measurements in
+§1 — the backend is not what users are waiting for.
+
+### What Lighthouse itself blames
+
+| Saving | | Opportunity |
+|---|---|---|
+| — | 177 kB | Reduce unused JavaScript |
+| 157 ms | — | Eliminate render-blocking resources |
+
+Unused JavaScript, by file:
+
+| Transferred | Unused | File |
+|---|---|---|
+| 178 kB | **119 kB** | `index-*.js` (the entry) |
+| 94 kB | **58 kB** | `vendor-reactflow-*.js` |
+
+### Largest resources actually fetched
+
+| Size | Type | |
+|---|---|---|
+| 179 kB | script | `index-*.js` |
+| 94 kB | script | `vendor-reactflow-*.js` |
+| **83 + 48 + 31 kB** | **font** | **three Inter/woff2 files — 162 kB total** |
+| 29 kB | script | `pageFields-*.js` |
+| 20 kB | script | `LandingPage-*.js` |
+| 13 kB | stylesheet | `index-*.css` |
+
+**Three web fonts totalling 162 kB** is the second-largest cost after the entry
+chunk, and larger than the reactflow chunk. Fonts block text paint, so they are
+a plausible contributor to both the 3.4 s FCP and the 0.41 CLS (reflow when a
+fallback is swapped for the real face). Not investigated further here.
+
+**CLS 0.41 is not diagnosed.** It is four times the "poor" threshold and is the
+metric most likely to be a visible annoyance rather than just a slow load.
+
+## 5. Build time
 
 Three consecutive production builds: **39.82 s, 33.88 s, 33.9 s** (vite, Node
-20, cold module graph each time).
+20, cold module graph each time). Two further builds during the optimisation
+attempts above took 37.62 s and 1 m 16 s; the outlier was a cold
+`node_modules` cache, not a code change.
 
-## 5. Explicitly not measured
+## 6. Sentry — an error tracker, not an APM
+
+**Correction.** §0 of this document said Sentry was wired and therefore
+"collecting the real user latency distribution". That was an inference from
+`traces_sample_rate=0.1` appearing in `sentry_config.py`. Read with an org
+token, the data says otherwise.
+
+Org `aerora-dynamics-private-limited`, two projects, both Python:
+
+| Project | Platform | Events, 24h |
+|---|---|---|
+| `vyomquant-api-production` | `python-fastapi` | 495 |
+| `vyomquant-saas` | `python` | 0 |
+
+**There is no JavaScript/browser project at all**, so browser web vitals have
+nowhere to land regardless of whether `VITE_SENTRY_DSN` is populated.
+
+Ingest outcomes, last 30 days:
+
+| Category | accepted | client_discard | filtered |
+|---|---|---|---|
+| error | **11,481** | 33 | — |
+| transaction | 545 | 87,014 | 9,220 |
+| replay | — | — | **never arrived** |
+
+Reading that:
+
+- **Errors work.** 11,481 accepted.
+- **Transactions are nearly all thrown away before sending.** 87,014 client
+  discards is `traces_sample_rate=0.1` dropping 90%, plus 9,220 rejected by
+  inbound filters. 545 survived.
+- **Those 545 are not queryable.** Zero rows for transaction percentiles across
+  the `transactions`, `discover` and `metrics` datasets, and `count()` of 0. So
+  there are no p50/p75/p95 figures, no web vitals, and **no INP** — the one
+  metric Lighthouse structurally cannot produce.
+- **No session replay has ever arrived**, despite
+  `replaysSessionSampleRate: 0.1` in `src/main.jsx`. Together with the absent
+  browser project, that means **the frontend SDK is not reporting at all.**
+
+So Sentry cannot currently answer "what do users experience". Closing that needs
+configuration, not access: a browser project, a populated `VITE_SENTRY_DSN`,
+and a `traces_sample_rate` that leaves something to query.
+
+### What the errors did reveal, which is worth more
+
+Top issues on the API project, last 24 hours:
+
+| Count | Issue |
+|---|---|
+| 170 + 45 + 30 = **245** | `PaperPersistenceError: the paper_orders open-limit-pairs read did not complete` |
+| 71 + 47 + 1 = **119** | `DETECT_STUCK_TASKS_ERROR: (psycopg2.OperationalError) SSL connection has been closed unexpectedly` / `server didn't return client encoding` |
+| **58** | `[BILLING] plan-expiry sweep failed: APIError` |
+| 25 + 24 = **49** | `RECOVERY_STEP_2_ERROR` — the same psycopg2 `OperationalError` |
+| **12** | `ConnectionResetError` |
+| 4 | `PRODUCTION MODE: Live trading enabled!` (an INFO log being sent as an event) |
+
+**Roughly 425 of 495 events in 24 hours trace to database connectivity or
+timeouts** — and `SSL connection has been closed unexpectedly` is verbatim what
+my own probes received during the 2026-11-17 outage. This is independent
+confirmation that the NANO instance's degradation is causing **continuous
+application-level failure**, not a single incident. The outage was the visible
+part of something ongoing.
+
+Two items here are not performance findings and want their own work:
+
+1. **`PaperPersistenceError` on `paper_orders`, 245 times in a day** — the
+   single loudest error in the product.
+2. **`[BILLING] plan-expiry sweep failed`, 58 times in a day** — a money-path
+   job failing repeatedly. Plan expiry not running means subscriptions outliving
+   what was paid for.
+
+## 7. Explicitly not measured
 
 Naming these so nobody reads a gap as a zero:
 
 - **Authenticated API latency.** Needs a live session token.
-- **Real user latency distribution.** Sentry is collecting it; this document
-  does not read Sentry. That is the next step for T16 and it needs dashboard
-  access, not code.
-- **Render performance / Core Web Vitals.** No LCP, CLS or INP figures. jsdom
-  has no layout engine, so the test suite cannot produce them; this needs
-  Lighthouse against the deployed site.
+- **Real user latency distribution.** Sentry is live and collecting it; this
+  document does not read Sentry. Needs dashboard or API-token access.
+- **INP** (Interaction to Next Paint). Lighthouse's lab run cannot produce it —
+  it needs field data, which is what Sentry has.
 - **WebSocket throughput and latency.**
 - **Worker throughput** (DAG execution, backtest duration).
 - **The 12.8% rollback rate's cause.**
+- **The CLS 0.41 cause.**
+- **Whether the 162 kB of fonts can be reduced** (subsetting, fewer weights,
+  `font-display`).
+
+## 7. This is the baseline half of T16 only
+
+`VYOMQUANT_MASTER_ENGINEERING_AUDIT.md:757` states T16 as *"performance
+baseline **then optimisation**"*. This document is the baseline. **No
+optimisation has landed.** Two were attempted against the reactflow preload and
+both were reverted — one made things ~18 kB worse, the other did nothing — and
+the exercise identified the real cause (`Strategies.jsx:36`) rather than fixing
+it.
+
+Ranked by confidence × value, the candidates this baseline produces:
+
+| | Candidate | Evidence | Risk |
+|---|---|---|---|
+| 1 | Make `Strategies.jsx:36`'s `StrategyBuilder` import lazy | 92 kB gz / 283 kB raw off the critical path, Lighthouse says 58 kB of it is unused | page behaviour change, needs a `Suspense` boundary |
+| 2 | Reduce the 162 kB of fonts | three woff2 files, larger than the reactflow chunk | low, but affects visual identity |
+| 3 | Diagnose CLS 0.41 | 4× the poor threshold | unknown until diagnosed |
+| 4 | Drop the eight zero-scan indexes on `signal_audit_log` / `signals` | ~3.4 MB, write cost on every insert, 0 reads in 3h49m | 3h49m is not proof of "never"; needs a longer window or static proof no query uses them |
+| 5 | Investigate `pgbouncer.get_auth` at 31% of DB time | 804 new pooler connections in 3h49m | cause not yet established — see below |
+
+On candidate 5: the readiness probe was the leading suspect, since the ALB polls
+`/health/ready` every 15 s (4/min) and 804 calls over 3h49m is 3.5/min. It is
+**not** the cause — `core/readiness.py:189` uses a pooled `SessionLocal()`, which
+checks a connection out rather than dialling. The 796 `SELECT $1` calls in
+`pg_stat_statements` are SQLAlchemy's `pool_pre_ping`, which is cheap. What does
+open 3.5 connections a minute is still unidentified; `pool_recycle` across seven
+services is the next thing to check.
 
 ## 6. One caveat that frames all of it
 
