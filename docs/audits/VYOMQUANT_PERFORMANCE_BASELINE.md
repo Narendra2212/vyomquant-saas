@@ -180,13 +180,46 @@ import anywhere in the reachable graph defeats a `lazy()` elsewhere — the
 `lazy()` still produces a chunk, which is why the split *looks* correct in the
 output, while the dependency is loaded eagerly anyway.
 
-**The fix is therefore in `Strategies.jsx`, not in `vite.config.js`** — make
-that import lazy too, or extract whatever `Strategies` actually needs from
-`StrategyBuilder` so it does not drag the canvas in. **Not attempted:** it is a
-behavioural change to a page (`Suspense` boundary, loading state) rather than a
-build-config tweak, it needs the before/after critical-path measurement to
-confirm, and it needs the page's tests run. It is the single clearest
-performance win identified here.
+**Attempt 3 — make `Strategies.jsx:36` lazy.** Implemented
+(`lazy()` + a `Suspense` boundary with `LoadingState kind="page"`) and measured.
+It did exactly what it was supposed to, and the critical path still got worse:
+
+| | before | after |
+|---|---|---|
+| `vendor-reactflow` preload | 92 kB gz | **gone** |
+| `vendor-reactflow` CSS, render-blocking | 2 kB gz | **gone** |
+| `vendor-recharts` preload | not preloaded | **161 kB gz appeared** |
+| requests on the critical path | 5 | 4 |
+| **critical path total** | **283 kB gz** | **351 kB gz** |
+
+**A 68 kB regression.** Reverted — a change that makes the measured number
+worse is not an optimisation, however correct its premise.
+
+### What the three attempts actually established
+
+The critical path is not "reactflow's fault". It is **whichever heavy vendor
+chunk is reachable from the entry's static graph gets a `modulepreload`**, and
+there are at least two candidates:
+
+| Vendor | gzipped | reached via |
+|---|---|---|
+| `vendor-recharts` | **161 kB** | `ds/Chart.jsx:205` — the only direct importer — then some eagerly-reachable importer of `ds/Chart`, **not yet traced** |
+| `vendor-reactflow` | 92 kB | `Strategies.jsx:36` → `StrategyBuilder.jsx:116` — **traced** |
+
+Removing one hands the slot to the other, and recharts is the *larger* of the
+two, which is why fixing the traced one alone is a regression. Note also that
+recharts' chunk grew from 386 kB to 540 kB raw once reactflow left the eager
+graph, so more of it was being shared than the chunk sizes suggested.
+
+**Both paths have to be cut in the same change, or neither.** The remaining
+unknown is small and specific: which eagerly-reachable module imports
+`ds/Chart`. `Strategies.jsx:19` carries a comment saying `ds/*` components are
+imported individually rather than through the barrel *precisely* to keep
+recharts out of that file's graph — so the convention is already understood
+here, and some other file is likely breaking it.
+
+**Not attempted further.** The next step is one grep for `ds/Chart` importers
+and a repeat of this same before/after measurement.
 
 ### Measurement note that nearly produced a false positive
 
