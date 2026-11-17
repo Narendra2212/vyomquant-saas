@@ -64,20 +64,14 @@ export default defineConfig(async () => ({
     // Produce hidden source maps so they can be uploaded to Sentry but not publicly served
     sourcemap: 'hidden',
     outDir: 'dist',
-    rollupOptions: {
-      output: {
-        manualChunks: (id) => {
-          if (id.includes('node_modules')) {
-            if (id.includes('reactflow') || id.includes('@reactflow')) {
-              return 'vendor-reactflow';
-            }
-            if (id.includes('recharts')) {
-              return 'vendor-recharts';
-            }
-          }
-        },
-      },
-    },
+    // PERF-01 EXPERIMENT: manualChunks removed. See the measurement before
+    // keeping this. Forcing a vendor into a NAMED chunk that several lazily
+    // loaded chunks share makes Rollup hoist that chunk into the entry's static
+    // graph (so it is not duplicated), and Vite then emits a modulepreload for
+    // it in index.html. Both of these packages are correctly lazy in source --
+    // ds/index.js documents at length why `Chart` is deliberately NOT in the
+    // barrel, and all six importers of ds/Chart are dynamic -- so the config was
+    // undoing the architecture the code had set up.
   },
   test: {
     include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}', 'tests/**/*.{test,spec}.{js,jsx,ts,tsx}'],
