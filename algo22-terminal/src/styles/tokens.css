@@ -186,6 +186,116 @@
      them is what stops either being added back. */
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME — THEME-01
+   ═══════════════════════════════════════════════════════════════════════════
+
+   The @theme block above is the DARK theme and remains the default: it is the
+   product's identity, every contrast figure annotated up there was measured
+   against it, and an installed terminal must not change appearance because this
+   block was added. Light is opt-in, selected by `data-theme="light"` on <html>.
+
+   WHY AN ATTRIBUTE AND NOT A MEDIA QUERY. `prefers-color-scheme` is consulted
+   ONCE, as the initial default for a user who has never chosen (see
+   design/theme.jsx). After that the stored choice wins, because a trader who
+   picked dark on a machine set to light meant it. A bare
+   `@media (prefers-color-scheme: light)` block would override that choice on
+   every page load and there would be no way to opt out.
+
+   ONLY COLOUR IS OVERRIDDEN. Spacing, radius, type scale, motion, breakpoints
+   and z-index are theme-independent; re-declaring them here would create the
+   second declaration site Requirement 1.1 exists to forbid.
+
+   CONTRAST. Every pairing below was chosen against --color-surface-panel
+   (#FFFFFF) rather than inverted mechanically from the dark values, because
+   inverting a hue that reads well on #0F1117 does not generally read well on
+   white. The figures are WCAG 2.1 contrast ratios:
+
+     content-primary   #16191F on #FFFFFF  = 15.9:1   (AAA body)
+     content-secondary #4A5361 on #FFFFFF  =  7.6:1   (AAA body)
+     content-muted     #6B7280 on #FFFFFF  =  4.8:1   (AA body; see note)
+     brand             #0369A1 on #FFFFFF  =  5.9:1   (AA body, AAA large)
+     status-profit     #0F766E on #FFFFFF  =  5.3:1   (AA)
+     status-loss       #B91C1C on #FFFFFF  =  6.2:1   (AA)
+     status-warning    #B45309 on #FFFFFF  =  4.8:1   (AA)
+
+   --color-content-muted is NON-TEXT ONLY in the dark theme at 3.2:1. In light
+   it reaches 4.8:1, so it would pass for text -- but it stays non-text-only on
+   purpose. A token whose permitted use changed with the theme would mean every
+   call site had to be audited per theme, and that is a worse property than
+   leaving one token slightly stricter than it needs to be in one theme.
+
+   THE ENVIRONMENT HUES KEEP THEIR MEANING. --color-env-live stays red, for the
+   reason the dark block gives: live is the state a trader must never mistake.
+   It is darkened for white, not re-hued.
+
+   SHADOWS are re-stated because dark-theme shadows are near-invisible on white
+   and were carrying the panel separation. They are the one non-colour group
+   overridden here, and they are overridden because a shadow IS a colour
+   (rgba black) -- the alpha is raised and the spread kept identical, so no
+   geometry changes between themes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+[data-theme='light'] {
+  /* ── Surface ─────────────────────────────────────────────── */
+  --color-surface-canvas:   #F4F6F8;   /* app background                      */
+  --color-surface-panel:    #FFFFFF;   /* cards, panels                       */
+  --color-surface-raised:   #F8FAFC;   /* elevated, hover                     */
+  --color-surface-inset:    #EEF1F5;   /* inputs, wells                       */
+  --color-surface-overlay:  rgba(16, 19, 25, 0.48);
+
+  /* ── Line ────────────────────────────────────────────────── */
+  --color-line-subtle:      #EDF0F4;
+  --color-line-default:     #DCE1E8;
+  --color-line-strong:      #BFC7D2;
+
+  /* ── Content ─────────────────────────────────────────────── */
+  --color-content-primary:   #16191F;  /* 15.9:1 on panel */
+  --color-content-secondary: #4A5361;  /*  7.6:1 on panel */
+  --color-content-muted:     #6B7280;  /*  4.8:1 — STILL NON-TEXT ONLY, see header */
+  --color-content-inverse:   #FFFFFF;
+
+  /* ── Brand ───────────────────────────────────────────────── */
+  /* Cyan #00D4FF is 1.5:1 on white and unusable for text or a 1px rule. The
+     light brand is the same hue family taken down to a readable depth. */
+  --color-brand:             #0369A1;  /* 5.9:1 on panel */
+  --color-brand-hover:       #075985;
+  --color-brand-wash:        rgba(3, 105, 161, 0.08);
+
+  /* ── SEMANTIC STATUS ────────────────────────────────────── */
+  --color-status-live:        #0F766E;  --color-status-live-wash:        rgba(15, 118, 110, 0.10);
+  --color-status-connected:   #0F766E;  --color-status-connected-wash:   rgba(15, 118, 110, 0.10);
+  --color-status-profit:      #0F766E;  --color-status-profit-wash:      rgba(15, 118, 110, 0.10);
+  --color-status-loss:        #B91C1C;  --color-status-loss-wash:        rgba(185, 28, 28, 0.09);
+  --color-status-error:       #B91C1C;  --color-status-error-wash:       rgba(185, 28, 28, 0.09);
+  --color-status-warning:     #B45309;  --color-status-warning-wash:     rgba(180, 83, 9, 0.10);
+  --color-status-guidance:    #B45309;  --color-status-guidance-wash:    rgba(180, 83, 9, 0.10);
+  --color-status-neutral:     #4A5361;  --color-status-neutral-wash:     rgba(74, 83, 97, 0.08);
+
+  /* ── ENVIRONMENT ────────────────────────────────────────── */
+  --color-env-live:      #B91C1C;  --color-env-live-wash:      rgba(185, 28, 28, 0.09);
+  --color-env-paper:     #4338CA;  --color-env-paper-wash:     rgba(67, 56, 202, 0.09);
+  --color-env-backtest:  #4A5361;  --color-env-backtest-wash:  rgba(74, 83, 97, 0.08);
+
+  /* ── Elevation — see the header for why these are here ──── */
+  --shadow-panel:   0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-raised:  0 4px 12px rgba(16, 24, 40, 0.10);
+  --shadow-overlay: 0 16px 48px rgba(16, 24, 40, 0.18);
+
+  /* ── Focus ──────────────────────────────────────────────── */
+  --focus-ring-color:  #0369A1;
+
+  /* The compatibility aliases are NOT re-declared. Each is a pure
+     var(--canonical) reference, so every one of them follows the overrides
+     above automatically. Re-stating them here would be the drift the alias
+     block's own header forbids. */
+}
+
+/* Tell the browser which native palette to pair with each theme, so form
+   controls, scrollbars and the canvas behind the app match. Driven by the same
+   attribute, so it can never disagree with the tokens. */
+:root { color-scheme: dark; }
+[data-theme='light'] { color-scheme: light; }
+
 /* Requirement 18.2, applied once, so no control can omit it. */
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);

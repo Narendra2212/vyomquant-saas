@@ -2,79 +2,84 @@
 // DO NOT EDIT. Run `npm run tokens` after changing tokens.css.
 // CI fails if this file is stale (see design.md §15).
 //
-// 107 tokens, mirrored verbatim as strings. var() aliases are resolved to
-// their literal here so JS consumers get a usable value; tokens.css keeps the
-// indirection for CSS consumers.
+// 107 tokens. COLOURS are emitted as var() references so they follow the
+// active theme (see the [data-theme="light"] block in tokens.css); every other
+// token keeps its resolved literal, because some are read as numbers in JS --
+// ResponsiveGate parses token.breakpoint.*, PaperTrading parses token.space.
+//
+// To make a colour translucent use alpha() from design/alpha.js. Concatenating
+// hex digits onto a colour no longer works and fails SILENTLY: 'var(--x)15' is
+// not a colour, so the browser drops the declaration without an error.
 export const token = Object.freeze({
   surface: Object.freeze({
-    canvas: '#080A0E',
-    panel: '#0F1117',
-    raised: '#151821',
-    inset: '#1A202C',
-    overlay: 'rgba(8, 10, 14, 0.88)',
+    canvas: 'var(--color-surface-canvas)',
+    panel: 'var(--color-surface-panel)',
+    raised: 'var(--color-surface-raised)',
+    inset: 'var(--color-surface-inset)',
+    overlay: 'var(--color-surface-overlay)',
   }),
   line: Object.freeze({
-    subtle: '#141922',
-    default: '#1E2530',
-    strong: '#2A3441',
+    subtle: 'var(--color-line-subtle)',
+    default: 'var(--color-line-default)',
+    strong: 'var(--color-line-strong)',
   }),
   content: Object.freeze({
-    primary: '#F0F2F5',
-    secondary: '#8B95A5',
-    muted: '#5A6578',
-    inverse: '#080A0E',
+    primary: 'var(--color-content-primary)',
+    secondary: 'var(--color-content-secondary)',
+    muted: 'var(--color-content-muted)',
+    inverse: 'var(--color-content-inverse)',
   }),
   brand: Object.freeze({
-    base: '#00D4FF',
-    hover: '#33E0FF',
-    wash: 'rgba(0, 212, 255, 0.10)',
+    base: 'var(--color-brand)',
+    hover: 'var(--color-brand-hover)',
+    wash: 'var(--color-brand-wash)',
   }),
   status: Object.freeze({
     live: Object.freeze({
-      fg: '#26A69A',
-      wash: 'rgba(38, 166, 154, 0.12)',
+      fg: 'var(--color-status-live)',
+      wash: 'var(--color-status-live-wash)',
     }),
     connected: Object.freeze({
-      fg: '#26A69A',
-      wash: 'rgba(38, 166, 154, 0.12)',
+      fg: 'var(--color-status-connected)',
+      wash: 'var(--color-status-connected-wash)',
     }),
     profit: Object.freeze({
-      fg: '#26A69A',
-      wash: 'rgba(38, 166, 154, 0.12)',
+      fg: 'var(--color-status-profit)',
+      wash: 'var(--color-status-profit-wash)',
     }),
     loss: Object.freeze({
-      fg: '#EF5350',
-      wash: 'rgba(239, 83, 80, 0.12)',
+      fg: 'var(--color-status-loss)',
+      wash: 'var(--color-status-loss-wash)',
     }),
     error: Object.freeze({
-      fg: '#EF5350',
-      wash: 'rgba(239, 83, 80, 0.12)',
+      fg: 'var(--color-status-error)',
+      wash: 'var(--color-status-error-wash)',
     }),
     warning: Object.freeze({
-      fg: '#F59E0B',
-      wash: 'rgba(245, 158, 11, 0.12)',
+      fg: 'var(--color-status-warning)',
+      wash: 'var(--color-status-warning-wash)',
     }),
     guidance: Object.freeze({
-      fg: '#F59E0B',
-      wash: 'rgba(245, 158, 11, 0.12)',
+      fg: 'var(--color-status-guidance)',
+      wash: 'var(--color-status-guidance-wash)',
     }),
     neutral: Object.freeze({
-      fg: '#8B95A5',
-      wash: 'rgba(139, 149, 165, 0.10)',
+      fg: 'var(--color-status-neutral)',
+      wash: 'var(--color-status-neutral-wash)',
     }),
   }),
   env: Object.freeze({
     live: Object.freeze({
-      fg: '#EF5350',
-      wash: 'rgba(239, 83, 80, 0.12)',
+      fg: 'var(--color-env-live)',
+      wash: 'var(--color-env-live-wash)',
     }),
     paper: Object.freeze({
-      fg: '#818CF8',
-      wash: 'rgba(99, 102, 241, 0.12)',
+      fg: 'var(--color-env-paper)',
+      wash: 'var(--color-env-paper-wash)',
     }),
     backtest: Object.freeze({
-      fg: '#8B95A5',
-      wash: 'rgba(139, 149, 165, 0.10)',
+      fg: 'var(--color-env-backtest)',
+      wash: 'var(--color-env-backtest-wash)',
     }),
   }),
   font: Object.freeze({
@@ -145,36 +150,36 @@ export const token = Object.freeze({
   focusRing: Object.freeze({
     width: '2px',
     offset: '2px',
-    color: '#00D4FF',
+    color: 'var(--focus-ring-color)',
   }),
   compat: Object.freeze({
     accent: Object.freeze({
-      cyan: '#00D4FF',
-      profit: '#26A69A',
-      loss: '#EF5350',
-      gold: '#F59E0B',
-      cyanDim: 'rgba(0, 212, 255, 0.10)',
-      profitDim: 'rgba(38, 166, 154, 0.12)',
-      lossDim: 'rgba(239, 83, 80, 0.12)',
-      goldDim: 'rgba(245, 158, 11, 0.12)',
+      cyan: 'var(--color-accent-cyan)',
+      profit: 'var(--color-accent-profit)',
+      loss: 'var(--color-accent-loss)',
+      gold: 'var(--color-accent-gold)',
+      cyanDim: 'var(--color-accent-cyan-dim)',
+      profitDim: 'var(--color-accent-profit-dim)',
+      lossDim: 'var(--color-accent-loss-dim)',
+      goldDim: 'var(--color-accent-gold-dim)',
     }),
     text: Object.freeze({
-      primary: '#F0F2F5',
-      muted: '#5A6578',
-      secondary: '#8B95A5',
-      inverse: '#080A0E',
+      primary: 'var(--color-text-primary)',
+      muted: 'var(--color-text-muted)',
+      secondary: 'var(--color-text-secondary)',
+      inverse: 'var(--color-text-inverse)',
     }),
     border: Object.freeze({
-      default: '#1E2530',
-      active: '#2A3441',
-      subtle: '#141922',
-      base: '#1E2530',
+      default: 'var(--color-border-default)',
+      active: 'var(--color-border-active)',
+      subtle: 'var(--color-border-subtle)',
+      base: 'var(--color-border)',
     }),
     bg: Object.freeze({
-      '3': '#1A202C',
-      elevated: '#151821',
-      surface: '#0F1117',
-      primary: '#080A0E',
+      '3': 'var(--color-bg-3)',
+      elevated: 'var(--color-bg-elevated)',
+      surface: 'var(--color-bg-surface)',
+      primary: 'var(--color-bg-primary)',
     }),
   }),
 });

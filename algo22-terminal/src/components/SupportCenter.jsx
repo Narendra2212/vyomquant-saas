@@ -13,6 +13,7 @@ import {
 // directly now (task 27.2). The layout is unchanged — every value below is the one
 // the shim already returned (§17.2).
 import { token } from "../design/tokens";
+import { alpha } from "../design/alpha";
 
 /*
  * ── Ticket status and priority, on the one palette ────────────────────────
@@ -252,7 +253,7 @@ export default function SupportCenter() {
       {/* Top Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, borderBottom: `1px solid ${token.line.default}`, paddingBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ background: token.brand.wash, border: `1px solid ${token.brand.base}40`, padding: 8, borderRadius: 10 }}>
+          <div style={{ background: token.brand.wash, border: `1px solid ${alpha(token.brand.base, 25)}`, padding: 8, borderRadius: 10 }}>
             <HelpCircle size={22} color={token.brand.base} />
           </div>
           <div>
@@ -312,14 +313,14 @@ export default function SupportCenter() {
 
       {/* Global Alerts */}
       {successMessage && (
-        <div style={{ background: token.status.profit.wash, border: `1px solid ${token.status.profit.fg}40`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: token.status.profit.fg, fontSize: 12, fontFamily: "monospace" }}>
+        <div style={{ background: token.status.profit.wash, border: `1px solid ${alpha(token.status.profit.fg, 25)}`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: token.status.profit.fg, fontSize: 12, fontFamily: "monospace" }}>
           <CheckCircle size={16} />
           {successMessage}
         </div>
       )}
 
       {error && (
-        <div style={{ background: token.status.loss.wash, border: `1px solid ${token.status.loss.fg}40`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: token.status.loss.fg, fontSize: 12, fontFamily: "monospace" }}>
+        <div style={{ background: token.status.loss.wash, border: `1px solid ${alpha(token.status.loss.fg, 25)}`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: token.status.loss.fg, fontSize: 12, fontFamily: "monospace" }}>
           <AlertCircle size={16} />
           <span style={{ flex: 1 }}>{error}</span>
           <button onClick={() => setError(null)} style={{ background: "transparent", border: "none", color: token.status.loss.fg, cursor: "pointer" }}><X size={14} /></button>
@@ -755,14 +756,14 @@ export default function SupportCenter() {
                 {selectedTicket.status !== 'closed' ? (
                   <button
                     onClick={() => handleStatusTransition('closed')}
-                    style={{ background: token.status.loss.wash, border: `1px solid ${token.status.loss.fg}40`, color: token.status.loss.fg, padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "monospace", cursor: "pointer" }}
+                    style={{ background: token.status.loss.wash, border: `1px solid ${alpha(token.status.loss.fg, 25)}`, color: token.status.loss.fg, padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "monospace", cursor: "pointer" }}
                   >
                     Close Ticket
                   </button>
                 ) : (
                   <button
                     onClick={() => handleStatusTransition('reopen')}
-                    style={{ background: token.status.profit.wash, border: `1px solid ${token.status.profit.fg}40`, color: token.status.profit.fg, padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "monospace", cursor: "pointer" }}
+                    style={{ background: token.status.profit.wash, border: `1px solid ${alpha(token.status.profit.fg, 25)}`, color: token.status.profit.fg, padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "monospace", cursor: "pointer" }}
                   >
                     Reopen Ticket
                   </button>
@@ -821,7 +822,7 @@ export default function SupportCenter() {
                     background: c.is_staff ? token.brand.wash : token.surface.raised,
                     // `4D` is the 0.30 alpha this border already carried, now taken off the
                     // brand token instead of a hand-spelled `rgba(0, 212, 255, 0.3)`.
-                    border: `1px solid ${c.is_staff ? `${token.brand.base}4D` : token.line.default}`,
+                    border: `1px solid ${c.is_staff ? `${alpha(token.brand.base, 30)}` : token.line.default}`,
                     borderRadius: 8, padding: 14
                   }}
                 >

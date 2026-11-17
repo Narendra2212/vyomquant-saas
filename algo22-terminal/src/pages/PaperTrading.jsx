@@ -326,6 +326,7 @@ import { Tabs } from '../components/ds/Tabs';
 // everything that is NOT a state — surfaces, rules, the three content greys, radii and spacing.
 import { ENVIRONMENT, statusToken } from '../design/semantic';
 import { token } from '../design/tokens';
+import { alpha } from '../design/alpha';
 import { useAppState } from '../AppState';
 import { api } from '../api';
 import websocketClient from '../websocketClient';
@@ -729,7 +730,7 @@ const StatusPill = ({ tone = 'muted', label, Icon = null, title }) => (
       letterSpacing: 0.6,
       textTransform: 'uppercase',
       color: toneColour(tone) || token.content.secondary,
-      border: `1px solid ${toneColour(tone) || token.content.secondary}55`,
+      border: `1px solid ${alpha(toneColour(tone) || token.content.secondary, 33)}`,
       borderRadius: token.radius.sm,
       padding: '2px 7px',
     }}
@@ -1226,7 +1227,7 @@ const DataTable = ({ caption, columns, rows, rowKey, stacked }) => {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={rowKey(row)} style={{ borderBottom: `1px solid ${token.line.default}55` }}>
+            <tr key={rowKey(row)} style={{ borderBottom: `1px solid ${alpha(token.line.default, 33)}` }}>
               {columns.map((column) => (
                 <td key={column.key} style={{ ...tdStyle, ...(column.cellStyle ? column.cellStyle(row) : null) }}>
                   {column.render(row)}

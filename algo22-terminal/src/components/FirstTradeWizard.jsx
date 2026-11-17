@@ -6,6 +6,7 @@ import {
 import { useAppState } from '../AppState';
 
 import { token } from '../design/tokens';
+import { alpha } from '../design/alpha';
 
 
 const STEPS = [
@@ -138,7 +139,7 @@ export default function FirstTradeWizard({ onComplete }) {
                     : token.content.muted,
                 marginBottom: 8,
                 transition: "all 0.3s ease",
-                boxShadow: isActive ? `0 0 10px ${token.brand.base}80` : "none"
+                boxShadow: isActive ? `0 0 10px ${alpha(token.brand.base, 50)}` : "none"
               }}>
                 {isCompleted ? <CheckCircle size={16} /> : <step.icon size={16} />}
               </div>
