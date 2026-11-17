@@ -787,6 +787,7 @@ jobs:
                  tests/test_money01_referral_commission_idempotence_postgres.py \
                  tests/test_money04_referral_ledger_is_single_currency_postgres.py \
                  tests/test_money06_referral_obligations_postgres.py \
+                 tests/test_notif01_durable_dedupe_postgres.py \
                  tests/test_p10d_fee_summary_does_not_mix_denominations_postgres.py \
                  tests/test_p10d_referral_settlement_lifecycle_postgres.py \
                  tests/test_p10j_probe_pg_ready_uses_shared_classification.py \

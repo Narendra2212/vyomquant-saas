@@ -136,6 +136,60 @@ def _evict_oldest_until_within_capacity_locked() -> None:
         _forget_notification_locked(oldest_id)
 
 
+def _is_duplicate_notification(exc: Exception) -> bool:
+    """Is this a unique violation on uq_notifications_user_idempotency?
+
+    NOTIF-01. Migration 071 is what makes duplicate suppression durable, so a
+    collision here means "this event was already delivered" -- the desired end
+    state -- rather than a lost notification.
+
+    Narrow on purpose, and the same shape as
+    ``core/webhook_idempotency._is_unique_violation`` and
+    ``routers/billing._is_duplicate_invoice``: the client surfaces a PostgREST error
+    whose class varies by version, so SQLSTATE and message are both checked rather
+    than the exception type. Anything not recognisably a uniqueness conflict is
+    treated as a real failure, because misreading a genuine write error as "already
+    delivered" would drop a notification and log nothing.
+    """
+    code = getattr(exc, "code", None)
+    if code == "23505":
+        return True
+    text = str(exc).lower()
+    return "23505" in text or "duplicate key" in text or (
+        "already exists" in text and "uq_notifications_user_idempotency" in text
+    )
+
+
+async def _existing_notification_id(
+    supabase: Any, user_id: str, idempotency_key: str
+) -> Optional[str]:
+    """The id of the notification that already claimed this (user, key).
+
+    Read back rather than invented: the caller may use the returned id, and the
+    first delivery is the one that actually happened. Returns ``None`` if the row
+    cannot be read, in which case the caller falls through to its failure path
+    rather than fabricating an id.
+    """
+    try:
+        res = (
+            supabase.table("notifications")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("idempotency_key", idempotency_key)
+            .limit(1)
+            .execute()
+        )
+        result = await res if inspect.isawaitable(res) else res
+        rows = getattr(result, "data", None) or []
+        return rows[0].get("id") if rows else None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "[NOTIFICATIONS] could not read back the de-duplicated notification "
+            "for user %s: %s", user_id, exc,
+        )
+        return None
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # NOTIFICATION SERVICE
 # ══════════════════════════════════════════════════════════════════════════
@@ -156,11 +210,29 @@ async def create_notification(
             if existing_id is not None and existing_id in _in_memory_notifications:
                 return existing_id
 
+    #: The id used ONLY when this notification does not reach the database. The
+    #: `notif_` prefix is deliberate and pinned by
+    #: tests/test_notifications_feature_e2e.py -- it marks an id that exists in this
+    #: process and nowhere else.
     notification_id = f"notif_{uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
-    
+
+    # ══════════════════════════════════════════════════════════════════════
+    # NOTIF-01: `id` IS NOT SENT. THE COLUMN ALREADY GENERATES IT.
+    # ══════════════════════════════════════════════════════════════════════
+    # `notifications.id` is `uuid NOT NULL DEFAULT gen_random_uuid()`, and this
+    # payload used to send `"id": "notif_<12 hex>"`. That is not a uuid, so Postgres
+    # rejected the whole insert with `invalid input syntax for type uuid` -- EVERY
+    # time, for every notification, on both databases. Combined with the dispatcher
+    # defect (18 of 19 call sites passed no client at all), it is the complete
+    # explanation for production holding ZERO notification rows.
+    #
+    # Omitting the key lets the column's own default produce a real uuid, which is
+    # then read back below. The local `notification_id` above stays as the
+    # in-memory fallback id, so the two stores keep distinguishable id shapes and
+    # the existing tests that assert the `notif_` prefix still describe exactly
+    # what they did before: a notification that never reached the database.
     data = {
-        "id": notification_id,
         "user_id": notification.user_id,
         "type": notification.type,
         "category": notification.category,
@@ -171,7 +243,11 @@ async def create_notification(
         "exchange": notification.exchange,
         "metadata": notification.metadata or {},
         "read": False,
-        "created_at": now_iso
+        "created_at": now_iso,
+        # NOTIF-01: promoted out of `metadata` so migration 071's partial unique
+        # index can enforce it. Still written inside `metadata` too (above), which
+        # is what makes 071 cheaply reversible -- see its rollback header.
+        "idempotency_key": idempotency_key or None,
     }
 
     persisted = False
@@ -184,7 +260,55 @@ async def create_notification(
                 notification_id = data.get("id", notification_id)
                 persisted = True
         except Exception as sb_err:
-            logger.debug(f"[NOTIFICATIONS] Supabase insert fallback: {sb_err}")
+            # ══════════════════════════════════════════════════════════════
+            # NOTIF-01: A COLLISION IS THE DEDUPE WORKING, NOT A FAILURE
+            # ══════════════════════════════════════════════════════════════
+            # `uq_notifications_user_idempotency` makes the duplicate check
+            # durable: the dict consulted at the top of this function dies on
+            # restart, cannot see another task's entries, and evicts at 5,000, so
+            # before 071 a redelivered event produced a second notification in all
+            # three of those situations. Postgres now refuses it.
+            #
+            # The first notification is the one that happened, so the correct
+            # answer is its id -- read back over the same client rather than
+            # invented, because the caller may use it.
+            recovered = None
+            if idempotency_key and _is_duplicate_notification(sb_err):
+                recovered = await _existing_notification_id(
+                    supabase, notification.user_id, idempotency_key
+                )
+                if recovered:
+                    logger.info(
+                        "[NOTIFICATIONS] NOTIF-01: event '%s' for user %s already "
+                        "delivered as %s; redelivery de-duplicated.",
+                        notification.type, notification.user_id, recovered,
+                    )
+                    return recovered
+
+            # A real failure. Level matches what was lost: an actionable alert
+            # that never persisted is the NOTIF-01 defect happening, and DEBUG is
+            # not enabled in production, so it would leave no trace at all.
+            if str(notification.severity).lower() in ("warning", "error", "critical"):
+                logger.error(
+                    "[NOTIFICATIONS] %s notification '%s' for user %s was NOT "
+                    "persisted (%s: %s). It survives only in this process and is "
+                    "lost on restart.",
+                    notification.severity, notification.type,
+                    notification.user_id, type(sb_err).__name__, sb_err,
+                )
+            else:
+                logger.debug(f"[NOTIFICATIONS] Supabase insert fallback: {sb_err}")
+
+    # NOTIF-01: `id` is no longer part of the INSERT payload (the column generates
+    # it), so it has to be put back before this dict becomes the in-memory record --
+    # the listing endpoints read `id` straight off it, and without this they answer
+    # the literal string "None" for every notification served from memory.
+    #
+    # `setdefault`, not assignment: when the insert succeeded, `data` is the row
+    # Postgres returned and already carries the real uuid. Overwriting it with the
+    # local `notif_`-prefixed id would make the memory copy disagree with the
+    # database about the identity of the same notification.
+    data.setdefault("id", notification_id)
 
     with _notifications_lock:
         _in_memory_notifications[notification_id] = data
