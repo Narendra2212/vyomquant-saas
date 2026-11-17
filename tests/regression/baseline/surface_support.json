@@ -105,7 +105,7 @@
       "handler_count": 1,
       "handlers": [
         {
-          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.support.get_tickets`, GET /api/support/tickets) \u2014 ONE ADDED entry, `503 / TICKETS_FETCH_FAILED`, and nothing removed or retyped. Authorised by the committed guard that requires it: `tests/test_exception_swallow_regression.py::TestGetTicketsExceptionSwallow::test_db_error_returns_503_not_empty_200`, whose own docstring records the before and after \u2014 the handler used to answer `{\"tickets\": [], \"count\": 0}` with HTTP 200 when the Supabase read raised, so a trader whose database was unreachable was told they had no tickets. It now fails closed (`routers/support.py:358-369`); the in-memory store below that branch remains the substitute for a deliberately unconfigured backend, never for a broken one. The baseline recorded the empty-200 behaviour, so this entry's absence was a record of the defect.",
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.support.get_tickets`, GET /api/support/tickets) — ONE ADDED entry, `503 / TICKETS_FETCH_FAILED`, and nothing removed or retyped. Authorised by the committed guard that requires it: `tests/test_exception_swallow_regression.py::TestGetTicketsExceptionSwallow::test_db_error_returns_503_not_empty_200`, whose own docstring records the before and after — the handler used to answer `{\"tickets\": [], \"count\": 0}` with HTTP 200 when the Supabase read raised, so a trader whose database was unreachable was told they had no tickets. It now fails closed (`routers/support.py:358-369`); the in-memory store below that branch remains the substitute for a deliberately unconfigured backend, never for a broken one. The baseline recorded the empty-200 behaviour, so this entry's absence was a record of the defect.",
           "decorators": [
             "router.get('/tickets')"
           ],
@@ -207,7 +207,12 @@
               "depends_on": "get_ws_manager"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
           "returns": [
             {
               "created_at": "computed",
@@ -217,7 +222,8 @@
               "ticket_id": "computed"
             }
           ],
-          "route_path": "/api/support/tickets"
+          "route_path": "/api/support/tickets",
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.support.create_ticket`, POST /api/support/tickets) — ONE ADDED entry, `503 / str`, and nothing removed or retyped. Authorised by the committed guard that requires it: `tests/test_exception_swallow_regression.py::TestCreateTicketExceptionSwallow::test_db_error_returns_503_not_a_fabricated_ticket_id`. SUP-02: the insert named four columns `support_tickets` did not declare (related_feature, strategy_id, order_id, attachment), so PostgREST rejected every statement with PGRST204; the handler caught it, logged a WARNING, parked the ticket in a process-local `_in_memory_tickets` dict and returned 200 with a real ticket id. Users were told reports were filed that nothing stored, from 2026-08-29 until migration 072. The 503 is a genuine contract change and is recorded as one: a caller must now treat 503 as 'not filed, safe to retry'."
         }
       ],
       "method": "POST",
@@ -267,6 +273,10 @@
             {
               "detail_type": "str",
               "status_code": 404
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
             }
           ],
           "returns": [
@@ -276,7 +286,8 @@
               "status": "str"
             }
           ],
-          "route_path": "/api/support/tickets/{ticket_id}/comments"
+          "route_path": "/api/support/tickets/{ticket_id}/comments",
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.support.add_comment`, POST /api/support/tickets/{ticket_id}/comments) — ONE ADDED entry, `503 / str`, beside the existing 400 and 404, and nothing removed or retyped. Authorised by the committed guard that requires it: `tests/test_exception_swallow_regression.py::TestAddCommentExceptionSwallow::test_db_error_returns_503_rather_than_reporting_the_reply_sent`. Same SUP-02 cause as api_calls[3]: `ticket_comments` had no `attachment` column, so a reply carrying attachment metadata was rejected while the caller received 200. Both comment writes were also fire-and-forget (`.execute()` unawaited), so against an async client the statement never reached the database at all — the bug class commit 475cf655 went through this codebase for."
         }
       ],
       "method": "POST",

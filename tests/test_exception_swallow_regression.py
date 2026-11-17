@@ -68,6 +68,98 @@ class TestGetTicketsExceptionSwallow:
 
 
 # ---------------------------------------------------------------------------
+# support.py — create_ticket and add_comment  (SUP-02)
+#
+# The class above covers the READ path: get_tickets used to answer an empty 200
+# when the database crashed, and now refuses. The two WRITE paths had the same
+# shape and a worse consequence, and were missed at the time.
+#
+# `POST /tickets` caught the insert failure, logged a WARNING, copied the ticket
+# into a module-level `_in_memory_tickets` dict and returned 200 with a real
+# ticket id. So the caller was told their report was filed. It was not: the API
+# runs WORKERS=2, so a follow-up GET landing on the other worker answers 404,
+# and the dict dies with the process.
+#
+# This was not hypothetical. Until migration 072, `support_tickets` did not
+# declare `related_feature`, `strategy_id`, `order_id` or `attachment`, and
+# `ticket_comments` did not declare `attachment` -- all of which the inserts
+# name -- so PostgREST rejected every statement with PGRST204 and these except
+# bodies ran on EVERY ticket and EVERY reply from 2026-08-29 onward.
+#
+# These two tests are what `surface_support.json`'s `_baseline_note_raises`
+# members on api_calls[3] and api_calls[4] cite as the authorisation for the
+# added 503, in the same way the note on api_calls[2] cites the read-path test
+# above.
+# ---------------------------------------------------------------------------
+
+class TestCreateTicketExceptionSwallow:
+    def test_db_error_returns_503_not_a_fabricated_ticket_id(self):
+        """
+        Before fix: returned HTTP 200 and a real-looking ticket id for a ticket
+                    the database had rejected and nothing had stored.
+        After fix:  returns HTTP 503 and says nothing was saved.
+        """
+        app.dependency_overrides[get_current_user] = lambda: _user()
+        app.dependency_overrides[get_request_supabase] = lambda: _crashing_supabase()
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            r = client.post(
+                "/api/support/tickets",
+                json={
+                    "subject": "Order rejected with no reason",
+                    "description": "A market order was rejected and the log is empty.",
+                    "category": "technical",
+                    "priority": "high",
+                },
+            )
+            assert r.status_code == 503, (
+                f"Expected 503 (db crash on insert), got {r.status_code}: {r.text}"
+            )
+            # The specific thing that must not come back is a ticket id, because
+            # that is what made the old behaviour convincing.
+            assert "ticket_id" not in r.text, (
+                "A ticket id was returned for a ticket that was never stored. "
+                f"Body: {r.text[:300]}"
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+
+class TestAddCommentExceptionSwallow:
+    def test_db_error_returns_503_rather_than_reporting_the_reply_sent(self):
+        """
+        Before fix: logged a warning, appended the reply to an in-memory dict
+                    and returned HTTP 200.
+        After fix:  returns HTTP 503.
+
+        The crashing client makes the ownership SELECT raise too, so this
+        handler refuses before reaching the insert. 404 is therefore also a
+        correct answer here -- what must not happen is a 200, which would mean
+        a reply was reported as saved while nothing stored it. Asserting
+        "not 200" rather than "exactly 503" keeps the test about the defect
+        instead of about which of two honest refusals arrives first.
+        """
+        app.dependency_overrides[get_current_user] = lambda: _user()
+        app.dependency_overrides[get_request_supabase] = lambda: _crashing_supabase()
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            r = client.post(
+                "/api/support/tickets/11111111-2222-4333-8444-555555555555/comments",
+                json={"message": "Attaching the execution log."},
+            )
+            assert r.status_code != 200, (
+                "A reply was reported as saved while the database was refusing "
+                f"every statement. Body: {r.text[:300]}"
+            )
+            assert r.status_code in (404, 503), (
+                f"Expected an honest refusal (404 or 503), got {r.status_code}: "
+                f"{r.text[:200]}"
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
 # signals.py — list_signal_traces: RESOLVED BY DELETION (task 13.19)
 # ---------------------------------------------------------------------------
 
