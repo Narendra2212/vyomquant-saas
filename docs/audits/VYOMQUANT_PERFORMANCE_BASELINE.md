@@ -285,7 +285,78 @@ Three consecutive production builds: **39.82 s, 33.88 s, 33.9 s** (vite, Node
 attempts above took 37.62 s and 1 m 16 s; the outlier was a cold
 `node_modules` cache, not a code change.
 
-## 6. Explicitly not measured
+## 6. Sentry — an error tracker, not an APM
+
+**Correction.** §0 of this document said Sentry was wired and therefore
+"collecting the real user latency distribution". That was an inference from
+`traces_sample_rate=0.1` appearing in `sentry_config.py`. Read with an org
+token, the data says otherwise.
+
+Org `aerora-dynamics-private-limited`, two projects, both Python:
+
+| Project | Platform | Events, 24h |
+|---|---|---|
+| `vyomquant-api-production` | `python-fastapi` | 495 |
+| `vyomquant-saas` | `python` | 0 |
+
+**There is no JavaScript/browser project at all**, so browser web vitals have
+nowhere to land regardless of whether `VITE_SENTRY_DSN` is populated.
+
+Ingest outcomes, last 30 days:
+
+| Category | accepted | client_discard | filtered |
+|---|---|---|---|
+| error | **11,481** | 33 | — |
+| transaction | 545 | 87,014 | 9,220 |
+| replay | — | — | **never arrived** |
+
+Reading that:
+
+- **Errors work.** 11,481 accepted.
+- **Transactions are nearly all thrown away before sending.** 87,014 client
+  discards is `traces_sample_rate=0.1` dropping 90%, plus 9,220 rejected by
+  inbound filters. 545 survived.
+- **Those 545 are not queryable.** Zero rows for transaction percentiles across
+  the `transactions`, `discover` and `metrics` datasets, and `count()` of 0. So
+  there are no p50/p75/p95 figures, no web vitals, and **no INP** — the one
+  metric Lighthouse structurally cannot produce.
+- **No session replay has ever arrived**, despite
+  `replaysSessionSampleRate: 0.1` in `src/main.jsx`. Together with the absent
+  browser project, that means **the frontend SDK is not reporting at all.**
+
+So Sentry cannot currently answer "what do users experience". Closing that needs
+configuration, not access: a browser project, a populated `VITE_SENTRY_DSN`,
+and a `traces_sample_rate` that leaves something to query.
+
+### What the errors did reveal, which is worth more
+
+Top issues on the API project, last 24 hours:
+
+| Count | Issue |
+|---|---|
+| 170 + 45 + 30 = **245** | `PaperPersistenceError: the paper_orders open-limit-pairs read did not complete` |
+| 71 + 47 + 1 = **119** | `DETECT_STUCK_TASKS_ERROR: (psycopg2.OperationalError) SSL connection has been closed unexpectedly` / `server didn't return client encoding` |
+| **58** | `[BILLING] plan-expiry sweep failed: APIError` |
+| 25 + 24 = **49** | `RECOVERY_STEP_2_ERROR` — the same psycopg2 `OperationalError` |
+| **12** | `ConnectionResetError` |
+| 4 | `PRODUCTION MODE: Live trading enabled!` (an INFO log being sent as an event) |
+
+**Roughly 425 of 495 events in 24 hours trace to database connectivity or
+timeouts** — and `SSL connection has been closed unexpectedly` is verbatim what
+my own probes received during the 2026-11-17 outage. This is independent
+confirmation that the NANO instance's degradation is causing **continuous
+application-level failure**, not a single incident. The outage was the visible
+part of something ongoing.
+
+Two items here are not performance findings and want their own work:
+
+1. **`PaperPersistenceError` on `paper_orders`, 245 times in a day** — the
+   single loudest error in the product.
+2. **`[BILLING] plan-expiry sweep failed`, 58 times in a day** — a money-path
+   job failing repeatedly. Plan expiry not running means subscriptions outliving
+   what was paid for.
+
+## 7. Explicitly not measured
 
 Naming these so nobody reads a gap as a zero:
 
