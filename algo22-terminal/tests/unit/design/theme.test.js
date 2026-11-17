@@ -20,13 +20,24 @@
  * The first four read source files rather than a rendered DOM, because that is
  * where those defects live.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 const ROOT = resolve(__dirname, '../../..');
 const read = (rel) => readFileSync(resolve(ROOT, rel), 'utf8');
+
+/** Every .js/.jsx under `dir`, as paths relative to ROOT. Node 20 compatible. */
+function walk(dir) {
+  const out = [];
+  for (const entry of readdirSync(resolve(ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...walk(rel));
+    else if (/\.jsx?$/.test(entry.name)) out.push(rel);
+  }
+  return out;
+}
 
 const TOKENS_CSS = read('src/styles/tokens.css');
 const TOKENS_JS = read('src/design/tokens.js');
@@ -133,11 +144,13 @@ describe('the JS mirror is theme-aware', () => {
 });
 
 describe('no colour is made translucent by string concatenation', () => {
-  it('has no hex-alpha concatenation left in src/', async () => {
+  it('has no hex-alpha concatenation left in src/', () => {
     // `${token.x.y}15` and `token.x.y + "15"` both produce `var(--…)15`, which
     // is invalid CSS that the browser drops without complaint.
-    const { globSync } = await import('node:fs');
-    const files = globSync('src/**/*.{js,jsx}', { cwd: ROOT });
+    //
+    // Walked with readdirSync rather than `fs.globSync`: that landed in Node 22
+    // and CI pins NODE_VERSION 20, so it threw there while passing locally.
+    const files = walk('src');
     const offenders = [];
     for (const rel of files) {
       const text = read(rel);
