@@ -292,3 +292,89 @@ prerequisite is to confirm whether production actually sets
 `SUPABASE_SERVICE_ROLE_KEY` — if it does not, the durable layer is off in
 production and the fix is configuration plus a startup assertion, not a code
 change.
+
+
+---
+
+## 9. Session three — T10 closed, and a four-cause dependency incident
+
+### T10 notifications — CLOSED. Two root causes, either fatal alone
+
+`public.notifications` held **zero rows in production**.
+
+**(a) The payload could not insert.** `create_notification` sent
+`"id": f"notif_{uuid4().hex[:12]}"` into a column declared
+`id uuid NOT NULL DEFAULT gen_random_uuid()`. PostgreSQL rejects that with
+SQLSTATE **22P02**. Every notification, every time, on both databases.
+
+**(b) Almost no caller asked for persistence.** `create_notification` writes to
+Supabase only inside `if supabase:`, and `dispatch_user_notification` defaulted
+`supabase=None` and forwarded it. AST over `backend_app`: **1 of 19 call sites
+passed a client.** The sharpest case was `routers/risk.py` — all three sites pass
+`ws_manager` but not `supabase`, so a risk-limit breach was broadcast to a live
+socket and never stored. A customer not watching that tab never learned.
+
+Fixed by `_resolve_persistence_client` in the dispatcher (one change, not 18) and
+by omitting `id` so the column default generates it. Migration **071** adds
+`idempotency_key` with a partial unique index, replacing an in-process dict that
+died on restart, could not see a second task, and evicted at 5,000 — so the
+docstring's "skips duplicate events" claim is now true. Severity gained a CHECK
+whose permitted set was **derived by AST** from the call sites unioned with what
+the frontend styles; narrowing it to the UI's set would have rejected the one
+real `critical` alert (the risk kill-switch). Failed dispatch of a
+warning/error/critical now logs at ERROR instead of DEBUG.
+
+Deleted `dispatch_user_notification_sync`: zero references, and unsafe twice over
+(`get_event_loop()` raises in a thread with no loop; `create_task` with no
+retained reference can be GC'd before running).
+
+**Still open in T10, stated plainly:** no retry/outbox; no preference filtering
+(nothing on the dispatch path reads `notification_settings`, so no preference
+suppresses anything today — a test pins that absence beside the mandatory event
+set); and **trade-execution and order-failure notifications are not wired at
+all** because the execution engine and bot runner are synchronous.
+
+### The dependency incident — four root causes behind one another
+
+Seven auto-merged dependabot PRs (#296–#302) turned main red with **five failing
+workflows**. Only two were resolver errors, and because every job downstream of
+"install the dependencies" was *skipped* rather than attempted, the other three
+were invisible until the resolver was fixed. They had to be peeled one at a time:
+
+| # | cause | symptom |
+|---|---|---|
+| 1 | `@vitejs/plugin-react` 6.x needs peer `vite@^8`; vite stayed at 7 | npm ERESOLVE |
+| 2 | `uvicorn[standard]` 0.54 needs `websockets>=13`; pin was 12.0 | pip ResolutionImpossible |
+| 3 | **SQLAlchemy 2.1 resolves bare `postgresql://` to psycopg v3**, not psycopg2 | `ModuleNotFoundError: No module named 'psycopg'` — Database Tests + Provisioning, the latter at STEP 0c before any migration ran |
+| 4 | **jsdom 31 requires Node `>=22`**; CI runs Node 20 | `[vitest-pool]: Failed to start forks worker`, 190 unhandled errors — ESLint and `vite build` both passed; the suite never executed |
+| 5 | Docker base images jumped `python:3.11-slim` → `python:3.15-slim`; `numpy==1.26.4` supports `<3.13` | image would not build, so Trivy never scanned |
+
+Fixes: `websockets` → 13.1 and `@vitejs/plugin-react` → 5.2.0 (the newest
+accepting vite 7 *and* 8); `sqlalchemy` **held** at 2.0.35 with the driver
+decision written at the pin; the frontend set restored to the last green commit;
+all seven `FROM python:` lines back to 3.11.
+
+**The frontend restore was not laziness.** #301/#302 also took `react`/`react-dom`
+from ^18.3.1 to **^19.3.1** — a framework major by auto-merge, with
+`@testing-library/react` bumped 14→16 to compensate. Whether the app is correct
+under React 19 is unknown *and untested*, because jsdom 31 meant the suite never
+ran on any commit carrying it.
+
+### Two process lessons, both earned the hard way
+
+1. **The owner merges PRs quickly and manually** (auto-merge is disabled
+   repo-wide; #303, #304 and #305 were all merged by `Narendra2212` within
+   minutes of going green). So a paired artifact commit must be pushed **before**
+   the PR is opened, or the PR must carry a visible hold notice. #303 merged
+   without its snapshot for exactly this reason, leaving main with 071 against
+   the pre-071 baseline.
+2. **A force-push does not always fire `synchronize`.** #304 merged at the
+   *earlier* head, shipping half the fix. Verify the merged SHA is the one you
+   intended, not just that the PR is green.
+
+### Dependabot configuration is the standing recommendation
+
+Grouping a **major** plugin bump with a **minor** bump of the package it peers on
+produces a set that installs for neither. Second occurrence (`216b7481` was the
+first), and this time it cost five workflows and five root causes. Either split
+the frontend group or add `ignore` rules for majors. Not done.

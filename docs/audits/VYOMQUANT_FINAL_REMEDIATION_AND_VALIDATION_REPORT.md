@@ -454,3 +454,73 @@ The single most valuable follow-up is not on the task list: **the CI guard that
 fails a migration landing without its paired artifact re-record.** Three CI
 outages have now come from that one gap, and the third happened despite the
 procedure being documented.
+
+
+---
+
+## 10. Session three addendum
+
+### T10 — notifications. **CLOSED**
+
+Production held **zero** notification rows. Two independent causes, either
+sufficient alone:
+
+1. **The payload could not insert.** `"id": f"notif_{uuid4().hex[:12]}"` sent
+   into `id uuid NOT NULL DEFAULT gen_random_uuid()` → SQLSTATE **22P02**, every
+   time. Fixed by not sending `id`; the column default generates it and the
+   insert response already returned it.
+2. **Almost no caller asked for persistence.** AST over `backend_app`: **1 of 19**
+   dispatch call sites passed a Supabase client. `create_notification` persists
+   only inside `if supabase:`. The remaining 18 wrote to a bounded in-process
+   dict. `routers/risk.py` passed `ws_manager` but not `supabase` on all three
+   sites, so a risk-limit breach was broadcast live and never stored.
+   Fixed centrally in the dispatcher — one resolver, not 18 edits.
+
+Migration **071** replaces an in-process dedupe dict (died on restart,
+per-process, evicting at 5,000) with `idempotency_key` + a partial unique index,
+making the module docstring's idempotency claim true. `severity` gained a CHECK
+whose permitted set was derived by AST rather than chosen — narrowing it to what
+the UI styles would have rejected the one real `critical` alert, the risk
+kill-switch. Privilege: `anon` lost all four DML grants and `authenticated` lost
+`INSERT` (the router has no POST), while keeping SELECT/UPDATE/DELETE so marking
+read and dismissing still work.
+
+**Evidence:** 176 local tests passed (new 24-case PostgreSQL file + notifications
+e2e + HY-04 memory bounds + support e2e + the postgres-lane guard + the drift
+register); 19 migration checks against PostgreSQL 16.2 including rollback and
+re-apply; and in CI the new file ran **17 passed in the PostgreSQL lane**.
+
+**Not claimed:** no retry/outbox; no preference filtering (nothing reads
+`notification_settings` on the dispatch path); trade-execution and order-failure
+events are still not wired because those producers are synchronous.
+
+### A four-cause dependency incident, and main is green again
+
+Seven auto-merged dependabot PRs took main from green to five failing workflows.
+Two were resolver failures; because everything downstream of dependency install
+was *skipped*, three more were hidden behind them. Full table and fixes are in
+`VYOMQUANT_SESSION_HANDOFF.md` §9. The notable one for this report:
+
+**SQLAlchemy 2.1 silently changed database drivers** — it resolves bare
+`postgresql://` to psycopg v3, and this project installs `psycopg2-binary`. It is
+**held at 2.0.35**, not fixed forward, because adopting 2.1 means migrating 9
+engine-creation sites, four direct `psycopg2.connect(dsn)` calls, and the
+psycopg2-specific exception handling that three modules reason about by name.
+Changing a trading platform's database driver as a side effect of getting CI
+green is not acceptable.
+
+Final state on `53c93d93`: **all 7 workflows green, including `03 Deploy` and
+`06 Frontend Deploy`.**
+
+### Remaining tasks, unchanged in substance
+
+**T09** (blocked on a storage-backend decision for attachments), **T17**
+(~35 hex-alpha call sites, must land atomically), **T02** (needs fresh
+screenshots to confirm the symptom survives), **T16** (partially blocked — no
+Sentry, so API/DB latency cannot be baselined), **T15** (largest; should not be
+started without the budget to finish it).
+
+Three follow-ups now also stand named and undone: **React 18→19** with the suite
+actually running, **SQLAlchemy 2.1** with the driver decision made explicitly,
+and **jsdom past 29** with `NODE_VERSION` raised across the gate, the deploy and
+the Dockerfiles.
