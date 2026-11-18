@@ -24784,43 +24784,8 @@
     ],
     [
       "strategy_backtests",
-      "anon",
-      "DELETE"
-    ],
-    [
-      "strategy_backtests",
-      "anon",
-      "INSERT"
-    ],
-    [
-      "strategy_backtests",
-      "anon",
-      "SELECT"
-    ],
-    [
-      "strategy_backtests",
-      "anon",
-      "UPDATE"
-    ],
-    [
-      "strategy_backtests",
-      "authenticated",
-      "DELETE"
-    ],
-    [
-      "strategy_backtests",
-      "authenticated",
-      "INSERT"
-    ],
-    [
-      "strategy_backtests",
       "authenticated",
       "SELECT"
-    ],
-    [
-      "strategy_backtests",
-      "authenticated",
-      "UPDATE"
     ],
     [
       "strategy_backtests",

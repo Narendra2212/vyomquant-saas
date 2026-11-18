@@ -662,7 +662,14 @@ class TestOneSynchronousResponse:
         async def _client(user):
             return _Client()
 
+        # `create_backtest` inserts through the service-role seam (see the
+        # backtest_service module header); this test is about the INSERT payload
+        # carrying `version_id`, so both seams return the same recorder.
+        async def _write_client():
+            return _Client()
+
         service._get_supabase = _client
+        service._get_write_supabase = _write_client
 
         import asyncio
 
