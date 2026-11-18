@@ -223,6 +223,101 @@ async def _sb(user: dict):
         return None
 
 
+def _persistence_configured() -> bool:
+    """Whether a configuration store is attached to this deployment at all.
+
+    RISK-06. The discriminator between "deliberately unconfigured" and "broken" is the
+    CONFIG, not whether the caller presented a token. An authenticated request carrying a
+    perfectly good JWT still has nowhere to persist to when `SUPABASE_URL` /
+    `SUPABASE_ANON_KEY` are unset -- which is the normal state in DEV_MODE and in the test
+    suite, and the first version of this fix wrongly answered 503 for it.
+
+    Mirrors `core/dependencies.get_supabase`'s own test on the same two variables. Note
+    that dependencies.py already fails CLOSED on a missing config in production (it raises
+    rather than returning None), so in production this returning False means the
+    deployment genuinely has no store and a 503 is the honest answer either way.
+    """
+    return bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_ANON_KEY"))
+
+
+#: Columns `public.strategy_limits` actually declares, measured against production
+#: 2026-11-18. The payload model carries a subset; `max_allocation_usd`, `max_leverage`
+#: and `is_active` exist in the table with defaults and are deliberately NOT written here
+#: -- this endpoint has no field for them and writing a default would silently reset a
+#: value some other path set.
+_STRATEGY_LIMIT_COLUMNS = (
+    "max_position_size",
+    "max_daily_trades",
+    "allowed_symbols",
+    "max_drawdown_pct",
+    "enabled",
+)
+
+
+def _strategy_limit_row(uid: str, strategy_id: str, data: dict) -> dict:
+    """One `strategy_limits` row from an API payload.
+
+    Only keys the caller actually supplied are included, so a partial update does not
+    overwrite unmentioned columns with model defaults. `user_id`/`strategy_id` carry the
+    UNIQUE key (`uq_strategy_limits`) the upsert conflicts on.
+    """
+    row = {"user_id": uid, "strategy_id": str(strategy_id)}
+    for col in _STRATEGY_LIMIT_COLUMNS:
+        if col in data and data[col] is not None:
+            row[col] = data[col]
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    return row
+
+
+async def _persist_strategy_limits(user: dict, uid: str, rows: list[dict]) -> bool:
+    """Upsert per-strategy limits, refusing rather than reporting a save that failed.
+
+    Returns True when the rows are durable, False only on the tokenless path (service and
+    test contexts, where the in-memory store is the deliberate behaviour). Raises 503 when
+    a store should have been reachable and was not -- same contract as the risk-settings
+    save above, and the same reason: a limit a trader is told was saved must be stored.
+    """
+    if not rows:
+        return False
+    if not user.get("access_token") or not _persistence_configured():
+        return False
+
+    sb = await _sb(user)
+    if sb is None:
+        logger.error(
+            "[RISK-07] could not build a database client for %s; refusing to report a "
+            "strategy-limit save", uid,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "STRATEGY_LIMITS_PERSISTENCE_UNAVAILABLE",
+                "message": "Strategy limits were not saved: the configuration store is "
+                           "unavailable. Your existing limits remain in force.",
+            },
+        )
+    try:
+        q = sb.table("strategy_limits").upsert(
+            rows, on_conflict="user_id,strategy_id"
+        ).execute()
+        await q if inspect.isawaitable(q) else q
+        return True
+    except Exception as exc:
+        logger.error(
+            "[RISK-07] strategy_limits upsert failed for %s, nothing was saved: %s",
+            uid, exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "STRATEGY_LIMITS_PERSIST_FAILED",
+                "message": "Strategy limits were not saved. Your existing limits remain "
+                           "in force -- please retry.",
+                "reason": str(exc)[:300],
+            },
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SCHEMAS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -464,16 +559,71 @@ async def update_risk_settings(
             exc,
         )
 
-    _user_risk_settings[uid] = updated_record
-
-    # Persist to database if available
-    sb = await _sb(user)
-    if sb:
+    # ── RISK-06: persist FIRST, and refuse rather than report a save that failed ──
+    #
+    # This block used to run AFTER `_user_risk_settings[uid] = updated_record` and to
+    # swallow the failure:
+    #
+    #     except Exception as e:
+    #         logger.warning(f"Database persist for risk_settings skipped: {e}")
+    #
+    # ...after which the handler returned {"status": "ok", "message": "Risk settings
+    # saved successfully"} unconditionally. In production that except branch was taken on
+    # EVERY request: `circuit_breaker_armed` was undeclared, so PostgREST rejected the
+    # whole upsert with 42703 (migration 075 declares it). The trader's limits lived only
+    # in the process-local dict below -- invisible to the other gunicorn workers and to
+    # the five worker services, gone on restart -- and the response said they were saved.
+    #
+    # Two things changed, and the ORDER is the point:
+    #
+    #   1. The upsert runs BEFORE the in-memory store is mutated. On failure this worker
+    #      must not start serving a value the database does not hold; that divergence is
+    #      what made the defect invisible from inside the app.
+    #   2. A failure refuses with 503. Following the SUP-02 precedent in
+    #      routers/support.py: the in-memory store is a substitute for a DELIBERATELY
+    #      UNCONFIGURED backend, never for a broken one.
+    #
+    # Risk configuration is the one thing in this system where "saved" must mean stored.
+    # A trader who lowers their daily-loss limit and is told it saved has been given a
+    # false assurance about money.
+    persisted = False
+    if user.get("access_token") and _persistence_configured():
+        sb = await _sb(user)
+        if sb is None:
+            # A token was presented but no client could be built -- that is a broken
+            # dependency, not an unconfigured one. Do not fall through to memory.
+            logger.error(
+                "[RISK-06] could not build a database client for %s; refusing to report "
+                "a save", uid,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "RISK_SETTINGS_PERSISTENCE_UNAVAILABLE",
+                    "message": "Risk settings were not saved: the configuration store is "
+                               "unavailable. Your existing limits remain in force.",
+                },
+            )
         try:
             q = sb.table("risk_settings").upsert(updated_record, on_conflict="user_id").execute()
             await q if inspect.isawaitable(q) else q
+            persisted = True
         except Exception as e:
-            logger.warning(f"Database persist for risk_settings skipped: {e}")
+            logger.error(
+                "[RISK-06] risk_settings upsert failed for %s, nothing was saved: %s",
+                uid, e,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "RISK_SETTINGS_PERSIST_FAILED",
+                    "message": "Risk settings were not saved. Your existing limits remain "
+                               "in force -- please retry.",
+                    "reason": str(e)[:300],
+                },
+            )
+
+    _user_risk_settings[uid] = updated_record
 
     # Invalidate Redis cache
     try:
@@ -525,14 +675,32 @@ async def update_risk_settings(
     except Exception as notif_err:
         logger.debug(f"[RISK] Notification dispatch error: {notif_err}")
 
+    # RISK-06: the message must match what actually happened. `persisted` is False only
+    # on the tokenless path (no access_token at all -- service and test contexts), where
+    # the in-memory store is the deliberate behaviour. Every other outcome either
+    # persisted or already raised 503 above, so "saved" is never printed over a failure.
+    # Durability and clamping are INDEPENDENT facts and the message has to carry both.
+    # The first version of this branch replaced the message wholesale when `persisted` was
+    # False and dropped the clamp reasons with it, which broke RISK-03's guarantee that a
+    # trader is told their limit was lowered and to what. Both halves now compose.
+    if persisted:
+        message_parts = [
+            "Risk settings saved." if limit_adjustments
+            else "Risk settings saved successfully"
+        ]
+    else:
+        message_parts = [
+            "Risk settings applied to this process only -- no configuration store is "
+            "attached to this session. They will not survive a restart."
+        ]
+    message_parts.extend(a["reason"] for a in limit_adjustments)
+    saved_message = " ".join(message_parts)
+
     return {
         "status": "ok",
-        "message": (
-            "Risk settings saved successfully"
-            if not limit_adjustments
-            else "Risk settings saved. "
-            + " ".join(a["reason"] for a in limit_adjustments)
-        ),
+        "message": saved_message,
+        # RISK-06: explicit so a client never has to infer durability from prose.
+        "persisted": persisted,
         # RISK-03: empty on the ordinary path, so a client can treat a non-empty list as
         # "tell the user their limit was lowered, and to what".
         "limit_adjustments": limit_adjustments,
@@ -1157,18 +1325,35 @@ async def update_strategy_limits(
     uid = str(user.get("id") or user.get("sub"))
     store = _user_strategy_limits.setdefault(uid, {})
     updated = []
+    records = []
     if body.limits:
         for item in body.limits:
             sid = item.strategy_id or f"strat_{len(store)+1}"
             data = item.dict(exclude_none=True)
             data["strategy_id"] = sid
-            store[sid] = data
-            updated.append(sid)
+            records.append(_strategy_limit_row(uid, sid, data))
+            updated.append((sid, data))
+
+    # ── RISK-07: write to the table the GET reads ──
+    #
+    # This endpoint used to write ONLY to `_user_strategy_limits`, a process-local dict,
+    # and return {"status": "ok"}. `GET /strategy-limits` reads `public.strategy_limits`
+    # and merges the dict over it, so a save appeared to work for as long as the request
+    # happened to land on the same worker, then vanished -- on restart, on redeploy, or
+    # on the next request routed elsewhere. Per-strategy allocation was the one T11
+    # control with no persistence at all.
+    persisted = await _persist_strategy_limits(user, uid, records)
+
+    # Only mirror into the process cache once the row is durable, so this worker cannot
+    # serve a limit the database does not hold.
+    for sid, data in updated:
+        store[sid] = data
 
     return {
         "status": "ok",
-        "updated": updated,
-        "count": len(updated)
+        "updated": [sid for sid, _ in updated],
+        "count": len(updated),
+        "persisted": persisted,
     }
 
 
@@ -1195,12 +1380,19 @@ async def update_single_strategy_limit(
         limit_data = {}
 
     limit_data["strategy_id"] = str(strategy_id)
+
+    # RISK-07: same defect as the batch endpoint above -- persist, then mirror.
+    persisted = await _persist_strategy_limits(
+        user, uid, [_strategy_limit_row(uid, str(strategy_id), limit_data)]
+    )
     store[str(strategy_id)] = limit_data
+
     return {
         "status": "ok",
         "updated": str(strategy_id),
         "data": limit_data,
-        "count": 1
+        "count": 1,
+        "persisted": persisted,
     }
 
 
