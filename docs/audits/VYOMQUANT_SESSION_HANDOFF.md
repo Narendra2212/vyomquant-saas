@@ -58,7 +58,62 @@ with no uncommitted work), `wt-rzp` (345 MB), `ci_logs` (100 MB).
 
 ---
 
-## 2a. URGENT — every production deploy is blocked (found 2026-11-18)
+## 2a. Production is current again, and two corrections worth carrying
+
+**RESOLVED 2026-11-18.** Backend was **13 commits stale** (live at `b44628cd`
+from 17 Nov 19:38 while `main` was 13 ahead). Now at `main` head, ECS revision
+352, 1/1 healthy. Frontend is current in substance — `06-frontend-deploy.yml` is
+`paths`-filtered on `algo22-terminal/**` and no file under that path changed since
+the deployed commit, so `release.json` naming an older SHA is correct.
+
+**Verify both tiers this way, it takes two requests:**
+
+```
+https://app.vyomquant.in/release.json       -> frontend bundle's commit
+https://app.vyomquant.in/api/release.json   -> backend image's commit
+```
+
+### TWO SEQUENTIAL CAUSES, and the first is the one to remember
+
+1. **#309 merged without re-recording `surface_support.json`,** so `01 PR Check`
+   went red on `main`. `03 Deploy`'s pre-deployment gate refuses a commit whose
+   test workflow did not pass — `REFUSING: 01 PR Check concluded 'failure' for
+   00d7e3fc`. **Every deploy was refused from then on.** The paired-artifact gap
+   does not just annoy CI; it silently stopped deployment for a day.
+2. Then an out-of-band ECS revision (memory 4096 against a gate expecting 2048)
+   blocked the next stage. Fixed in #322 by moving the expectation to
+   `EXPECTED_TASK_MEMORY` **on evidence** — CloudWatch showed the container's
+   steady-state working set is ~2.07–2.11 GB, i.e. above a 2048 limit.
+
+### CORRECTION — the execution_records forgery was never reachable in production
+
+I reported it as a live exposure. Production holds `authenticated = SELECT` only
+on `execution_records`, `orders` and `positions`; the full DML set exists only in
+a database built from `scripts/provision_database.py`. **Production is narrower
+than its own provisioning source.** Real defect, latent not live.
+
+**And the half I under-weighted is the live one.** `strategy_backtests` IS
+customer-writable in production (`authenticated` holds INSERT/UPDATE/DELETE), and
+that is the five-backtest half of the Eligibility_Gate's evidence. Moving
+`backend/backtest_service.py`'s three writes to the service-role client is now
+the highest-severity open item in T15.
+
+**The lesson: measure the grant on the database it matters on, not on the one you
+happen to have provisioned.**
+
+### The full hardening file cannot be applied to a live database
+
+Dry-run against production (applied in a transaction, rolled back) hit
+`statement timeout`, then `lock timeout`. The file issues
+`ALTER TABLE … ENABLE ROW LEVEL SECURITY` across every table in `public`, which
+needs ACCESS EXCLUSIVE locks that contend with live traffic. **It needs a
+maintenance window.** What was applied instead was migration 073 plus the four
+measured `REVOKE … FROM anon` statements, with `lock_timeout = 5s` so a contended
+revoke fails fast and changes nothing.
+
+---
+
+## 2b. The original diagnosis, kept for the record
 
 `03 Deploy` fails on `main` at task-definition registration:
 
