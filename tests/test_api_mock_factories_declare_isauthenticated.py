@@ -91,16 +91,37 @@ KNOWN_INCOMPLETE_API_MOCKS = frozenset(
         "tests/unit/strategyArchive.test.jsx",
         "tests/unit/builder/enginePaths.test.jsx",
         "src/pages/__tests__/PaperTrading.test.jsx",
-        "src/pages/__tests__/Strategies.test.jsx",
+        # `src/pages/__tests__/Strategies.test.jsx` LEFT THIS LIST at MKT-07. The note above
+        # says the entries are green only because none of them renders a component reaching
+        # `useEntitlements` -- "a property of what they render today, not a guarantee". That
+        # property expired for this one the moment the Strategies page started reading
+        # `useFeature(FEATURES.MARKETPLACE_PUBLISH)` to decide whether the "List on
+        # marketplace" row action is enabled: the suite began throwing an unhandled rejection
+        # out of a `useEffect` while every assertion still reported as passed, and vitest
+        # exited non-zero. The factory now declares `isAuthenticated: () => false`.
     }
 )
+
+
+#: A nested clone of the whole repository that some working copies carry at
+#: `algo22-terminal/vyomquant-saas/` — 3,000-odd files, untracked, and recorded in
+#: `VYOMQUANT_SESSION_HANDOFF.md` §1 as a hazard to keep out of commits.
+#:
+#: Excluded because including it makes this guard UNUSABLE LOCALLY: it reports eighteen
+#: "missing" factories that are copies of files already on the pinned list, under paths
+#: nothing in CI has. A guard that fails for a reason the reader cannot act on is a guard the
+#: reader learns to ignore, and then a real omission arrives behind the noise. CI has no such
+#: directory, so this changes nothing there.
+NESTED_CLONE = "vyomquant-saas"
 
 
 def _test_files() -> list[pathlib.Path]:
     return sorted(
         p
         for p in FRONTEND.rglob("*.test.jsx")
-        if "node_modules" not in p.parts and "dist" not in p.parts
+        if "node_modules" not in p.parts
+        and "dist" not in p.parts
+        and NESTED_CLONE not in p.relative_to(FRONTEND).parts
     )
 
 

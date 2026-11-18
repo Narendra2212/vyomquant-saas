@@ -939,7 +939,13 @@ def test_p36_differing_datasets_are_always_distinct() -> None:
 #: Requirement 3.1's bounds, 3.7's two floors and 3.8's minimum, written as the requirement
 #: writes them. :func:`test_p37_evidence_set_admission_iff_every_criterion` asserts the module
 #: still agrees with them, so the oracle cannot drift into re-reading whatever the code says.
-_P37_MIN_CONDITIONS = 3
+#:
+#: MKT-07: the lower bound is **5**, not Requirement 3.1's three. The owner's remediation brief
+#: (Task 15 D, requirement 1) requires "at least five valid, completed, persisted backtest
+#: results", which supersedes the requirement text. Restated here rather than imported for the
+#: reason this block exists: if the oracle read ``THRESHOLDS`` the assertion below would be a
+#: tautology, and a wrong edit to the constant would silence this file instead of failing it.
+_P37_MIN_CONDITIONS = 5
 _P37_MAX_CONDITIONS = 10
 _P37_MIN_WINDOW_DAYS = 90
 _P37_MIN_TRADES = 20

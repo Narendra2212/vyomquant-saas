@@ -1016,9 +1016,9 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         method="POST",
         path="/api/library/submissions",
         handler="backend_app.routers.library:create_submission_route",
-        # `SubmissionCreateRequest.strategy_id: UUID` required;
-        # `backtest_ids: List[UUID] = Field(..., min_items=3, max_items=10)` - one id
-        # violates the minimum.
+        # `SubmissionCreateRequest.strategy_id: UUID` required; `backtest_ids` is bounded
+        # `min_items=evidence_validator.MIN_CONDITIONS, max_items=MAX_CONDITIONS` (5..10
+        # since MKT-07, 3..10 before it) - one id violates the minimum under either.
         body={"backtest_ids": ["only-one"]},
     ),
     MutatingRoute(

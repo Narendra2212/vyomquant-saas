@@ -9,6 +9,8 @@ import { endpoints, api, publicGet } from "../api";
 import { readRefusal } from "../design/entitlements";
 import { apiErrorMessage } from "../design/apiErrors";
 import { UpgradePrompt } from "../components/gates/UpgradePrompt";
+import { useFeature } from "../components/gates/FeatureGate";
+import { FEATURES } from "../design/entitlements";
 import { Button } from "../components/ui/Button";
 // Task 10.3: two of the three confirmation surfaces (archive and rename); task 17.2's last
 // part made the deploy modal the third, so `ConfirmDialog` is now this page's only overlay
@@ -812,6 +814,36 @@ export default function Strategies() {
   // calls. Keyed by the server's own `entry_id`, so nothing is keyed on an index.
   const [disclosed, setDisclosed] = useState({});
   const [subscriptionAction, setSubscriptionAction] = useState({});
+
+  // MKT-07 / Task 15 B: whether this account's plan includes publishing to the Marketplace.
+  //
+  // `permitted` is false until entitlements are READ, not merely false by default — that is
+  // `useFeature`'s stated behaviour and the right direction here: a control that looks enabled
+  // before the plan is known is a control that 403s. While the read is in flight the row action
+  // is disabled and says so.
+  //
+  // This decides the control's APPEARANCE and nothing else. The authorisation is
+  // `Depends(require_marketplace_publish)` on `POST /api/library/submissions`,
+  // `POST /api/library` and the price routes, plus `check_marketplace_publish_quota`; a caller
+  // who reaches those endpoints another way is refused by them.
+  const publishFeature = useFeature(FEATURES.MARKETPLACE_PUBLISH);
+  const marketplacePublish = useMemo(() => {
+    if (publishFeature.permitted) return { permitted: true, reason: undefined };
+    if (!publishFeature.isReady) {
+      return { permitted: false, reason: "Checking what your plan includes…" };
+    }
+    // The server's own refusal copy, composed exactly as `UpgradePrompt`'s `command` variant
+    // composes it, so the plan this names cannot drift from the plan the 403 would name. The
+    // fallback is reached only when the server sent no copy for the feature.
+    const refusal = publishFeature.refusal;
+    const sentence = [refusal?.message, refusal?.upgrade_message]
+      .filter((part) => typeof part === "string" && part.trim() !== "")
+      .join(" ");
+    return {
+      permitted: false,
+      reason: sentence || "Publishing to the marketplace is not included in your plan.",
+    };
+  }, [publishFeature.permitted, publishFeature.isReady, publishFeature.refusal]);
 
   const resumeBuilderStrategy = location.state?.resumeBuilderStrategy || null;
 
@@ -1729,6 +1761,23 @@ export default function Strategies() {
       icon: Activity,
       onSelect: (row) => navigate(`/app/signal-trace?strategy_id=${row.id}`),
     },
+    // MKT-07 / Task 15 B. Opens the strategy's own Marketplace tab, which is where
+    // `CreatorMarketplacePanel` already implements the listing -> evidence -> price flow. A
+    // second listing surface on this page would be a second opinion about eligibility, and
+    // the brief's own instruction for Task 15 is not to build a second listing system.
+    //
+    // `disabled`/`disabledReason` are read from the account's entitlements, so the control is
+    // VISIBLE on every plan and ENABLED only where publishing is included. The reason is the
+    // server's own refusal copy (`lockedFeatureRefusal`), not a sentence written here, so the
+    // plan named in the tooltip cannot drift from the plan the 403 would name.
+    [ROW_ACTION.LIST_MARKETPLACE]: {
+      label: "List on marketplace",
+      icon: Globe,
+      disabled: !marketplacePublish.permitted,
+      disabledReason: marketplacePublish.reason,
+      onSelect: (row) =>
+        navigate(`/app/strategies/${row.id}`, { state: { activeTab: "marketplace" } }),
+    },
     // Pausing a running strategy stops it placing new orders. That is the safe direction of
     // a live transition and destroys nothing, so it stays inline — `lib/rowActions.js`'s
     // classifier rejects it, and this entry does not get to disagree.
@@ -1799,14 +1848,20 @@ export default function Strategies() {
         ) : null}
         {inline.map((id) => {
           const action = rowActionCatalog[id];
+          // MKT-07: an inline action may be offered-but-not-permitted. Before this, `busy`
+          // was the only reason a row control could be disabled, so a catalogue entry that
+          // wanted to say "visible, disabled, and here is why" had nowhere to say it. The
+          // reason reaches the user as the button's `title`, which is also what the overflow
+          // branch does with `disabledReason` — one vocabulary, two renderings.
+          const blocked = Boolean(action.disabled);
           return (
             <Button
               key={id}
               variant="ghost"
               size="xs"
               icon={action.icon}
-              title={title}
-              disabled={busy}
+              title={blocked ? action.disabledReason || undefined : title}
+              disabled={busy || blocked}
               onClick={() => action.onSelect(row)}
             >
               {action.label}
@@ -1829,8 +1884,10 @@ export default function Strategies() {
                 // wrong one (Requirement 4.3).
                 intent: separationOf(id),
                 separated: true,
-                disabled: busy,
-                disabledReason: busy ? BUSY_TITLE : undefined,
+                disabled: busy || Boolean(action.disabled),
+                disabledReason: busy
+                  ? BUSY_TITLE
+                  : (action.disabled ? action.disabledReason : undefined),
                 onSelect: () => action.onSelect(row),
               };
             })}

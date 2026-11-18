@@ -37,9 +37,9 @@ a caller lacking it is refused with 403 by the framework *before* this function 
 before any read is issued. Putting it here would both duplicate an existing control and issue
 reads for a caller who must never reach them.
 
-THE FOUR OWNER-SCOPED ROUND TRIPS (Requirements 2.2 - 2.7)
-----------------------------------------------------------
-:func:`evaluate` issues exactly four reads, in this order, each scoped to the owner:
+THE FIVE OWNER-SCOPED ROUND TRIPS (Requirements 2.2 - 2.7, and MKT-07)
+----------------------------------------------------------------------
+:func:`evaluate` issues exactly five reads, in this order, each scoped to the owner:
 
 1. ``strategies``          - ``id, user_id, archived_at`` for ``strategy_id``, filtered
    ``.eq("user_id", caller.id)``. The row's existence and its owner are Criterion 2.2's two
@@ -62,8 +62,12 @@ THE FOUR OWNER-SCOPED ROUND TRIPS (Requirements 2.2 - 2.7)
    already an open Submission for this strategy, or a ``PUBLISHED`` Listing for this
    ``source_strategy_id`` (Criterion 2.7)? One round trip: the two reads are issued together
    and a failure of either fails the probe.
+5. ``execution_records`` - the strategy's **live** fills, filtered ``.eq("strategy_id", …)``
+   and ``.eq("tenant_id", caller.id)``, so ``MP_LIVE_HISTORY`` can be decided (MKT-07; the
+   owner brief's Task 15 D requirement 2, "at least 24 hours of verifiable live algorithmic
+   trading history"). See :func:`_read_live_executions` for why this ledger and no other.
 
-A failure of **any** of the four reads short-circuits the whole evaluation to
+A failure of **any** of the five reads short-circuits the whole evaluation to
 ``unevaluable = True`` with no admit decision and the single code
 ``MARKETPLACE_ELIGIBILITY_UNEVALUABLE`` (Requirement 2.13). That outcome is distinct by code
 from a criteria failure (``MARKETPLACE_ELIGIBILITY_FAILED``): a read that did not complete
@@ -142,8 +146,10 @@ from backend_app.backend.marketplace.submission_state import (
 __all__ = [
     "EVALUATOR_VERSION",
     "METRIC_FIELDS",
+    "MIN_LIVE_HISTORY_HOURS",
     "MP_CODES",
     "MP_EXECUTION_OK",
+    "MP_LIVE_HISTORY",
     "MP_METRICS_COMPLETE",
     "MP_OWNERSHIP",
     "MP_PUBLIC_MESSAGES",
@@ -167,7 +173,35 @@ __all__ = [
 #: Admin_Reviewer replaying an old audit record can tell which gate produced it. The delegated
 #: ``EV_*`` rules carry their own versioning through ``evidence_validator.THRESHOLDS``; this
 #: string versions the gate criteria this module owns.
-EVALUATOR_VERSION = "eligibility-gate/1.0.0"
+#: 1.1.0 (MKT-07): ``MP_LIVE_HISTORY`` joined the criterion set and the backtest-count floor
+#: moved from three to five. Both change what an admission *means*, so an evaluation stored
+#: under 1.0.0 was decided under weaker rules and must not be read as though it were not.
+EVALUATOR_VERSION = "eligibility-gate/1.1.0"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE LIVE-HISTORY THRESHOLD (MKT-07)
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The owner brief's Task 15 D requirement 2: "at least 24 hours of verifiable live
+#: algorithmic trading history". Expressed in hours because that is the unit the requirement
+#: is written in, and named once so ``MP_LIVE_HISTORY`` and any later reader cannot drift.
+MIN_LIVE_HISTORY_HOURS = 24
+
+#: Rows read from each END of the strategy's live fill history when measuring the window.
+#:
+#: The criterion needs two instants - the earliest verified live fill and the latest - so read
+#: 5 asks for a bounded window from each end (ascending, then descending) rather than for the
+#: whole history. A single capped read would be wrong in a way that is easy to miss: a
+#: high-frequency strategy with more fills than the cap inside its first hour would return a
+#: slice spanning an hour and FAIL a strategy that has traded live for a month. Reading both
+#: ends makes the measurement independent of how many fills sit between them.
+#:
+#: The window is 200 rather than 1 because ``filled_size`` is a ``character varying`` column,
+#: so "a positive fill" cannot be expressed as a PostgREST filter and is applied here instead.
+#: Taking one row from each end would let a single malformed or zero-size row at an end decide
+#: the verdict; 200 means a false fail needs that many consecutive unusable rows at one end.
+LIVE_HISTORY_END_WINDOW = 200
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -188,8 +222,10 @@ MP_EXECUTION_OK = "MP_EXECUTION_OK"
 MP_METRICS_COMPLETE = "MP_METRICS_COMPLETE"
 #: Requirement 2.7 - no open Submission and no PUBLISHED Listing for this strategy.
 MP_SUBMISSION_OPEN = "MP_SUBMISSION_OPEN"
+#: MKT-07 - the strategy's verified live fills span at least :data:`MIN_LIVE_HISTORY_HOURS`.
+MP_LIVE_HISTORY = "MP_LIVE_HISTORY"
 
-#: The gate's seven codes, in the order :func:`evaluate` emits them.
+#: The gate's eight codes, in the order :func:`evaluate` emits them.
 MP_CODES: Tuple[str, ...] = (
     MP_OWNERSHIP,
     MP_TENANT,
@@ -198,6 +234,7 @@ MP_CODES: Tuple[str, ...] = (
     MP_EXECUTION_OK,
     MP_METRICS_COMPLETE,
     MP_SUBMISSION_OPEN,
+    MP_LIVE_HISTORY,
 )
 
 #: One owner-actionable sentence per gate code, carrying no threshold digit, no internal
@@ -233,6 +270,16 @@ MP_PUBLIC_MESSAGES: Mapping[str, str] = MappingProxyType(
         MP_SUBMISSION_OPEN: (
             "This strategy already has a submission in progress or a published listing. "
             "Complete or withdraw it before submitting again."
+        ),
+        # Carries no digit, per Requirement 2.10 and the deny-list
+        # `tests/test_marketplace_error_surface.py` holds these sentences to. "At least a
+        # full day" is the threshold in words; the number lives in
+        # :data:`MIN_LIVE_HISTORY_HOURS` and reaches the owner through the listing surface,
+        # not through this sentence.
+        MP_LIVE_HISTORY: (
+            "This strategy must have traded live for at least a full day before it can be "
+            "published. Deploy it to live trading and let it run; paper trading does not "
+            "count towards this."
         ),
     }
 )
@@ -331,6 +378,7 @@ async def evaluate(
         open_submission_states, has_published_listing = _read_open_state(
             supabase, strategy_id
         )
+        live_execution_rows = _read_live_executions(supabase, strategy_id, caller_id)
     except Exception as exc:  # noqa: BLE001 - a read that did not complete is unevaluable
         # No admit decision, no per-criterion outcomes: eligibility is *unknown*, which is
         # distinct by code from "not eligible" (Requirement 2.13). The audit record still
@@ -419,6 +467,12 @@ async def evaluate(
             MP_SUBMISSION_OPEN,
             not has_open_submission and not has_published_listing,
         )
+    )
+
+    # ── MKT-07: 24 hours of verified live trading history ──────────────
+    outcomes.append(
+        _mp_outcome(MP_LIVE_HISTORY, _live_history_hours(live_execution_rows)
+                    >= MIN_LIVE_HISTORY_HOURS)
     )
 
     admitted = all(o.passed for o in outcomes)
@@ -553,6 +607,105 @@ def _read_open_state(
     return submission_states, has_published_listing
 
 
+#: The columns read 5 needs, and nothing more. No price, no size beyond the fill quantity, no
+#: venue order id: the criterion is about *when* the strategy traded, so the projection carries
+#: the three instants a fill can be stamped with, the two discriminators that make a row a
+#: verified live fill, and the identity that lets two rows be told apart.
+_LIVE_EXECUTION_PROJECTION = (
+    "execution_id, strategy_id, status, exchange_id, filled_size, "
+    "filled_at, submitted_at, created_at"
+)
+
+#: The one status that means the venue filled the order. `routers/orders.py`'s LIVE history
+#: read uses the same value, so Trade History and this criterion agree on what a completed
+#: live execution is rather than each deciding separately.
+_LIVE_EXECUTION_STATUS = "COMPLETED"
+
+#: The column the two end-windows are ORDERED by, which is deliberately not the column the
+#: span is DATED by.
+#:
+#: Dating prefers `filled_at` (:func:`_live_history_hours`), but `filled_at` is nullable, and
+#: ordering by a nullable column puts the nulls at one end: PostgreSQL defaults to NULLS LAST
+#: ascending and NULLS FIRST descending. A strategy with more than
+#: :data:`LIVE_HISTORY_END_WINDOW` fills whose `filled_at` was never stamped would therefore
+#: have its *descending* window filled entirely with those rows, and the genuinely latest fill
+#: would fall outside the slice — reporting a short span for a strategy that has traded live
+#: for a month. A false FAIL, not a false pass, but a user-visible one: "I have traded live for
+#: weeks and it says I have not."
+#:
+#: `created_at` is `NOT NULL` on this table (measured against production's column list), so
+#: ordering by it has no null end to misplace. A record is created and then filled, so the
+#: earliest-created and latest-created rows are the extremes of the history within the gap
+#: between creation and fill — which is seconds, against a 24-hour threshold.
+_LIVE_EXECUTION_ORDER_COLUMN = "created_at"
+
+
+def _read_live_executions(
+    supabase: Any, strategy_id: Any, caller_id: Any
+) -> List[Mapping[str, Any]]:
+    """Read 5: the strategy's verified **live** fills, from each end of its history (MKT-07).
+
+    WHY ``execution_records`` AND NO OTHER LEDGER
+    ---------------------------------------------
+    The brief requires "verifiable live algorithmic trading history" from "actual persisted
+    execution/runtime data", and forbids counting paper trading. Three candidate sources
+    exist and only one answers all three clauses:
+
+    * ``execution_records`` - the strategy-execution ledger. A row means this platform
+      submitted that order; ``exchange_reconciliation.py`` is explicit that a venue order the
+      platform cannot attribute is **reported, never written** here. Paper trading has its own
+      store (``paper_sessions``) and, by ``test_paper01_paper_live_isolation``, no module under
+      ``backend/paper`` reaches a venue at all - so a paper fill cannot appear in this table.
+      Written exclusively through SQLAlchemy as the table owner, and since MKT-07's privilege
+      change the ``authenticated`` role holds SELECT and nothing else, so **the account being
+      judged cannot write its own evidence.**
+    * ``strategy_deployments`` - would give deployment *runtime* directly, which is arguably
+      the more natural reading of "24 hours". Rejected: ``authenticated`` holds
+      INSERT/UPDATE/DELETE on it and the application's own writer uses the caller's client
+      (``backend/strategy_service.py``), so the runtime figure is forgeable by the seller. A
+      gate that reads forgeable evidence is not a gate.
+    * ``strategies.backtest_result`` and the paper ledger - neither is live execution.
+
+    WHAT IS READ
+    ------------
+    Two bounded end-windows (:data:`LIVE_HISTORY_END_WINDOW` rows each), ascending by the fill
+    instant and then descending, scoped ``.eq("strategy_id", …)`` and
+    ``.eq("tenant_id", caller_id)``. Two requests rather than one because the criterion needs
+    the earliest and latest instants and a single capped read would measure only one end -
+    see :data:`LIVE_HISTORY_END_WINDOW`.
+
+    ``tenant_id`` is the owner scope here, not ``user_id``: the table declares both, the
+    not-null one is ``tenant_id``, and it is what ``routers/orders.py``'s LIVE history read
+    filters on. Under tenant == user the caller's id is their tenant, which is why
+    ``caller_id`` is the value passed.
+
+    The ``filled_size > 0`` clause is **not** sent as a filter. The column is
+    ``character varying``, so a PostgREST comparison would be lexicographic - ``"0.5" > "0"``
+    is true by luck, ``"10" > "9"`` is false - and a wrong filter here would silently drop real
+    fills. It is applied in :func:`_live_history_hours` against a parsed number instead.
+
+    Ordering is explicit for the same reason the cap exists: PostgREST's unordered default
+    would make the returned slice, and therefore the verdict, arbitrary. It orders by
+    :data:`_LIVE_EXECUTION_ORDER_COLUMN` rather than by the column the span is dated from —
+    see that constant for why a nullable sort key would produce a false fail.
+    """
+    def _end(descending: bool) -> List[Mapping[str, Any]]:
+        response = (
+            supabase.table("execution_records")
+            .select(_LIVE_EXECUTION_PROJECTION)
+            .eq("strategy_id", strategy_id)
+            .eq("tenant_id", caller_id)
+            .eq("status", _LIVE_EXECUTION_STATUS)
+            .not_.is_("exchange_id", "null")
+            .order(_LIVE_EXECUTION_ORDER_COLUMN, desc=descending)
+            .limit(LIVE_HISTORY_END_WINDOW)
+            .execute()
+        )
+        return list(_rows(response))
+
+    return _end(descending=False) + _end(descending=True)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # THE GATE CRITERIA
 # ══════════════════════════════════════════════════════════════════════════
@@ -597,6 +750,103 @@ def _metrics_complete(rows: Sequence[Mapping[str, Any]]) -> bool:
         all(_is_finite_number(row.get(field_name)) for field_name in METRIC_FIELDS)
         for row in rows
     )
+
+
+def _live_history_hours(rows: Sequence[Mapping[str, Any]]) -> float:
+    """``MP_LIVE_HISTORY``: hours between the strategy's earliest and latest verified live fill.
+
+    A row counts as a verified live fill when every clause holds, each read from the row and
+    none inferred:
+
+    * ``status`` is ``COMPLETED`` - the venue filled it. Re-checked here as well as in the
+      filter, so a driver or test double that ignores a filter cannot widen the criterion.
+    * ``exchange_id`` is present - a venue was involved. This is the clause that excludes
+      anything not placed at an exchange.
+    * ``filled_size`` parses to a number greater than zero - something actually traded. A
+      ``NULL``, a blank, or unparseable text is not a fill and is dropped rather than read as
+      zero or as "probably fine".
+    * the row carries a readable instant: ``filled_at``, else ``submitted_at``, else
+      ``created_at``, in that order. Same coalesce order as ``routers/orders.py``'s LIVE
+      history read, so the two surfaces date the same fill identically.
+
+    Returns ``0.0`` when fewer than two such rows exist. **Fewer than two fills is not 24
+    hours of trading history**, whatever the deployment ran for: one fill demonstrates one
+    order. Returning a float rather than a bool keeps the comparison against
+    :data:`MIN_LIVE_HISTORY_HOURS` at the call site, where the threshold is visible.
+
+    Duplicates across the two end-windows are harmless - a strategy with fewer fills than the
+    window returns the same rows twice, and ``min``/``max`` over a duplicated set is the same
+    pair of instants. Distinctness is enforced on ``execution_id`` so two readings of one fill
+    cannot be counted as two fills.
+    """
+    instants: dict = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        status = _as_text(row.get("status"))
+        if status is None or status.strip().upper() != _LIVE_EXECUTION_STATUS:
+            continue
+        if not _is_present(row.get("exchange_id")):
+            continue
+        filled = _as_float(row.get("filled_size"))
+        if filled is None or filled <= 0:
+            continue
+        stamped = _as_instant(
+            row.get("filled_at"), row.get("submitted_at"), row.get("created_at")
+        )
+        if stamped is None:
+            continue
+        key = _as_text(row.get("execution_id"))
+        instants[key if key is not None else id(row)] = stamped
+
+    if len(instants) < 2:
+        return 0.0
+    moments = sorted(instants.values())
+    return (moments[-1] - moments[0]).total_seconds() / 3600.0
+
+
+def _as_float(value: Any) -> Optional[float]:
+    """``value`` as a finite float, or ``None`` when it is absent or unreadable.
+
+    ``bool`` is rejected the same way :func:`_is_finite_number` rejects it: ``True`` is not a
+    fill quantity. A non-finite result is ``None`` rather than a number, so ``NaN`` cannot pass
+    a ``> 0`` test by accident - it would not, but relying on that is relying on a detail.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _as_instant(*candidates: Any) -> Optional[datetime]:
+    """The first candidate that reads as a timezone-aware instant, or ``None``.
+
+    A driver may hand back a ``datetime`` or an ISO-8601 string, and PostgREST's ``Z`` suffix
+    is not accepted by :meth:`datetime.fromisoformat` before Python 3.11, so it is normalised.
+    A naive datetime is read as UTC: every column in the projection is
+    ``timestamp with time zone``, so a naive value means the driver dropped the offset rather
+    than that the instant is local, and treating it as UTC keeps the subtraction well-defined
+    instead of raising inside a criterion.
+    """
+    for value in candidates:
+        if value is None:
+            continue
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        text = str(value).strip()
+        if not text:
+            continue
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            continue
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
 
 
 def _version_graph_is_valid(version_row: Mapping[str, Any]) -> bool:

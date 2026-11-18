@@ -5,7 +5,7 @@
  *
  *   1. LISTING. `POST /api/library` creates the Listing (moderation `pending`) the Submission
  *      references. Shown as done once `/api/library/me` returns a row for this strategy.
- *   2. SUBMIT FOR REVIEW. Pick 3–10 completed backtests and `POST /api/library/submissions`. The
+ *   2. SUBMIT FOR REVIEW. Pick 5–10 completed backtests and `POST /api/library/submissions`. The
  *      Eligibility_Gate decides; a refusal names EVERY failed criterion, and each is shown in the
  *      gate's own owner-facing words. The newest Submission's state is read back with
  *      `GET /api/library/submissions?strategy_id=` on every load, so a reload loses nothing.
@@ -26,6 +26,7 @@ import { token } from '../../design/tokens';
 import {
   EVIDENCE_THRESHOLDS,
   LISTING_CATEGORIES,
+  MIN_LIVE_HISTORY_HOURS,
   PRICE_CURRENCIES,
   SUBMISSION_STATE_TEXT,
   canStartSubmission,
@@ -285,6 +286,19 @@ export default function CreatorMarketplacePanel({ strategy }) {
               same saved version, each over a different stretch of market history: at least{' '}
               {EVIDENCE_THRESHOLDS.minWindowDays} days, {EVIDENCE_THRESHOLDS.minTrades} trades and{' '}
               {EVIDENCE_THRESHOLDS.minBars} bars each.
+            </div>
+            {/*
+              MKT-07: the live-history requirement is stated here rather than only in the
+              refusal, because it is the one criterion the owner cannot satisfy in the moment.
+              Every other failure is fixable by re-running something; this one needs a live
+              deployment to have been running for a day, so learning about it only after
+              pressing Submit wastes a day rather than a minute. The requirement is checked
+              server-side against `execution_records`, which the browser cannot write.
+            */}
+            <div style={body}>
+              The strategy must also have traded live for at least {MIN_LIVE_HISTORY_HOURS} hours.
+              That history comes from real venue fills recorded by the platform — paper trading
+              does not count towards it.
             </div>
             {runs.length === 0 ? (
               <div style={body}>No completed backtests yet. Run some in the Backtester first.</div>

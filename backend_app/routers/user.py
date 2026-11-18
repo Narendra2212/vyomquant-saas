@@ -18,6 +18,7 @@ from backend_app.core.database import get_db
 from backend_app.core.dependencies import (get_current_user,
                                            get_request_supabase)
 from backend_app.core.models import NotificationSettingsRequest
+from backend_app.core.models.pydantic_models import MANDATORY_NOTIFICATION_EVENTS
 from supabase import Client as SupabaseClient
 
 router = APIRouter()
@@ -148,9 +149,45 @@ async def update_notif_settings(
         "channels": body.channels.model_dump(),
         "events": body.events.model_dump(),
     }
-    res = supabase.table("notification_settings").upsert(data).execute()
-    if inspect.isawaitable(res):
-        await res
+    try:
+        res = supabase.table("notification_settings").upsert(data).execute()
+        if inspect.isawaitable(res):
+            await res
+    except Exception as exc:  # noqa: BLE001 - classified below, never swallowed
+        # NOTIF-02. Before this, the upsert was unguarded, so any refusal became a 500 with
+        # no sentence a customer could act on — and from migration 073 onward there is a
+        # refusal this endpoint can legitimately provoke:
+        # `chk_notification_settings_mandatory_alerts`.
+        #
+        # The model's own validator should have caught that payload and answered 422 before
+        # reaching here, so arriving at this branch means the two disagree. It is still
+        # reported as the 409 it is rather than as a 500, because the customer's request IS
+        # the thing that was refused and they are entitled to know which switch did it.
+        text = str(exc)
+        if "chk_notification_settings_mandatory_alerts" in text:
+            logger.error(
+                "Notification settings write for user %s was refused by the mandatory-alert "
+                "floor, which means the request-model validator and the database constraint "
+                "disagree about %s. Payload keys: %s",
+                user["id"],
+                list(MANDATORY_NOTIFICATION_EVENTS),
+                sorted(data["events"].keys()),
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "These alerts cannot be switched off: "
+                    + ", ".join(sorted(MANDATORY_NOTIFICATION_EVENTS))
+                    + ". The platform delivers them regardless of preference."
+                ),
+            )
+        logger.error(
+            "Failed to store notification settings for user %s: %s", user["id"], exc
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Your notification preferences could not be saved. Please try again.",
+        )
     return {"status": "ok"}
 
 

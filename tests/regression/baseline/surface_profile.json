@@ -194,6 +194,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.user.update_notif_settings`, PUT /api/notifications/settings) — TWO ADDED entries, `409` and `503`, and nothing removed or retyped. Required by NOTIF-02. THE 409 is the mandatory-alert floor: `components/NotificationPreferences.jsx` ended with \"Mandatory risk alerts (global kill switch triggers) cannot be disabled\" and rendered, directly above that sentence, the switch that disabled them. Nothing enforced the claim — readers of `notification_settings` across `backend_app` are two, both in this router, and nothing on the dispatch path reads it. Migration 073 adds `chk_notification_settings_mandatory_alerts`, and this status is what a payload refused by it now answers instead of a 500. THE 503 replaces an unguarded `.upsert().execute()`: before this, ANY write failure became a 500 with no sentence a customer could act on. NEITHER IS A NEW REFUSAL OF A LEGAL REQUEST: the request model's own validator (`NotificationEvents.mandatory_alerts_stay_on`) answers 422 first, so the 409 is reachable only when the model and the constraint disagree — which is logged at ERROR with the offending keys, because that disagreement is a defect rather than a customer mistake.",
           "decorators": [
             "router.put('/notifications/settings')"
           ],
@@ -212,7 +213,16 @@
               "depends_on": "get_current_user"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": "computed",
+              "status_code": 409
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
           "returns": [
             {
               "status": "str"

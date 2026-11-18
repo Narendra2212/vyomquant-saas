@@ -42,9 +42,16 @@ const storedSettings = {
   },
 };
 
-/** The switch rows are the one inline-styled construct in the panel. */
-const switchFor = (label) =>
-  screen.getByText(label).closest('div[style*="cursor: pointer"]');
+/**
+ * The switch row, by its accessible name.
+ *
+ * NOTIF-02 changed this from `getByText(label).closest('div[style*="cursor: pointer"]')`. That
+ * form stopped finding the three mandatory rows the moment they rendered `cursor: not-allowed`
+ * — it located a control by a presentational detail, so a styling change read as a missing
+ * control. `role="switch"` plus `aria-label` is the contract the panel documents and the one a
+ * screen-reader user actually has.
+ */
+const switchFor = (label) => screen.getByRole('switch', { name: label });
 
 describe('PROFILE-REORG-01: notification preferences, in their new home', () => {
   beforeEach(() => {
@@ -66,13 +73,56 @@ describe('PROFILE-REORG-01: notification preferences, in their new home', () => 
     expect(screen.getByText('Security & Login Events')).toBeDefined();
   });
 
-  it('states that mandatory risk alerts cannot be switched off', async () => {
+  it('states that mandatory alerts cannot be switched off, and names all three', async () => {
     render(<NotificationPreferences />);
-    // Carried across because it is a claim about what the platform does whatever the switches
-    // say, and the panel would be misleading without it.
-    expect(
-      await screen.findByText(/Mandatory risk alerts \(global kill switch triggers\) cannot be disabled/i),
-    ).toBeDefined();
+    // NOTIF-02 widened the sentence. It used to name only the kill switch while three alerts
+    // are on the floor, so a customer would reasonably read the other two as theirs to mute.
+    const sentence = await screen.findByText(/cannot be disabled/i);
+    expect(sentence.textContent).toMatch(/Emergency halt/i);
+    expect(sentence.textContent).toMatch(/stop-loss/i);
+    expect(sentence.textContent).toMatch(/new sign-in/i);
+  });
+
+  it('locks the three mandatory switches, and only those three', async () => {
+    render(<NotificationPreferences />);
+    await screen.findByText('Email Notifications');
+
+    // The defect NOTIF-02 fixed was a sentence and a control disagreeing: the panel said
+    // mandatory alerts could not be disabled and rendered the switch that disabled them.
+    for (const label of [
+      'Emergency Kill Switch & Liquidations',
+      'Stop Loss & Margin Alerts',
+      'Security & Login Events',
+    ]) {
+      expect(switchFor(label).getAttribute('aria-disabled')).toBe('true');
+    }
+    for (const label of [
+      'Trade Executions',
+      'Daily PnL Summaries',
+      'Email Notifications',
+      'Strategy Lifecycle State Changes',
+    ]) {
+      expect(switchFor(label).getAttribute('aria-disabled')).toBeNull();
+    }
+  });
+
+  it('a locked switch issues no write when clicked or keyed', async () => {
+    const updateNotifSpy = vi
+      .spyOn(userModule.userApi, 'updateNotificationSettings')
+      .mockResolvedValue({ status: 'ok' });
+
+    render(<NotificationPreferences />);
+    await screen.findByText('Emergency Kill Switch & Liquidations');
+
+    const control = switchFor('Emergency Kill Switch & Liquidations');
+    fireEvent.click(control);
+    fireEvent.keyDown(control, { key: 'Enter' });
+    fireEvent.keyDown(control, { key: ' ' });
+
+    // Still on, and nothing was sent. A control that moved and then sprang back would be the
+    // worse outcome: the customer would believe the write happened.
+    expect(control.getAttribute('aria-checked')).toBe('true');
+    expect(updateNotifSpy).not.toHaveBeenCalled();
   });
 
   // Was profile_phase5b case 12, 13, 14.

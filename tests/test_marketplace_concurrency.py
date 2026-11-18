@@ -21,7 +21,7 @@ import os
 import sys
 import uuid
 from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 # ``Dict`` is used by ``_ConcurrentFakeDB.stores`` below. It was missing, which made this file a
 # hard ``F821 undefined name 'Dict'`` under the repository's CI gate
 # (``flake8 ... --select=E9,F63,F7,F82`` over ``backend_app`` and over ``tests`` -
@@ -200,6 +200,7 @@ import copy as _copy
 from unittest.mock import patch as _patch
 
 from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
+from backend_app.backend.marketplace import evidence_validator as _evidence_validator
 from backend_app.backend.marketplace import submission_service as _submission_service
 from backend_app.backend.marketplace.submission_service import (
     MARKETPLACE_SUBMISSION_ALREADY_OPEN,
@@ -273,6 +274,17 @@ class _ConcurrentSubmissionsTable:
         return self
 
     def limit(self, *a, **k):
+        return self
+
+    # MKT-07: the Eligibility_Gate's fifth read spells `exchange_id IS NOT NULL` as
+    # `.not_.is_(...)`, so `not_` is a PROPERTY returning something that carries `is_`.
+    # Without it the read raised AttributeError and every verdict in this battery came
+    # back `unevaluable` rather than admitted.
+    @property
+    def not_(self):
+        return self
+
+    def is_(self, *a, **k):
         return self
 
     def single(self):
@@ -439,8 +451,53 @@ def _conc_backtest_row(start_date, end_date, dataset, checksum):
     }
 
 
+#: The distinct half-year windows the eligible evidence is built from, one per required
+#: Backtest_Condition. Non-overlapping, because ``MIN_CONDITIONS`` windows must each span
+#: ``MIN_WINDOW_DAYS`` and intersect pairwise by at most 25 percent.
+_CONC_WINDOWS = (
+    ("2024-01-01", "2024-06-30", "BTCUSD-2024H1", "chk-btc-h1"),
+    ("2024-07-01", "2024-12-31", "ETHUSD-2024H2", "chk-eth-h2"),
+    ("2023-01-01", "2023-06-30", "SOLUSD-2023H1", "chk-sol-h1"),
+    ("2023-07-01", "2023-12-31", "ADAUSD-2023H2", "chk-ada-h2"),
+    ("2022-01-01", "2022-06-30", "XRPUSD-2022H1", "chk-xrp-h1"),
+    ("2022-07-01", "2022-12-31", "DOTUSD-2022H2", "chk-dot-h2"),
+    ("2021-01-01", "2021-06-30", "LTCUSD-2021H1", "chk-ltc-h1"),
+    ("2021-07-01", "2021-12-31", "LNKUSD-2021H2", "chk-lnk-h2"),
+    ("2020-01-01", "2020-06-30", "BCHUSD-2020H1", "chk-bch-h1"),
+    ("2020-07-01", "2020-12-31", "ATOMUS-2020H2", "chk-atm-h2"),
+)
+
+
+def _conc_live_history_rows():
+    """Two verified live fills spanning past ``MIN_LIVE_HISTORY_HOURS`` (MKT-07).
+
+    ``MP_LIVE_HISTORY`` reads ``execution_records``, so an eligible strategy in this battery
+    needs live history as well as backtests — otherwise every attempt is refused on that
+    criterion and the create race these tests exist to arbitrate is never reached.
+    """
+    latest = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    earliest = latest - timedelta(
+        hours=_eligibility_gate.MIN_LIVE_HISTORY_HOURS + 1
+    )
+    return [
+        {
+            "execution_id": f"exec-{uuid.uuid4().hex[:12]}",
+            "strategy_id": _CONC_STRATEGY_ID,
+            "tenant_id": _CONC_OWNER_ID,
+            "user_id": _CONC_OWNER_ID,
+            "status": "COMPLETED",
+            "exchange_id": "binance",
+            "filled_size": "0.0100",
+            "filled_at": stamp.isoformat(),
+            "submitted_at": stamp.isoformat(),
+            "created_at": stamp.isoformat(),
+        }
+        for stamp in (earliest, latest)
+    ]
+
+
 def _seed_conc_eligible(db):
-    """Seed the saved version + three distinct eligible backtests; return their ids.
+    """Seed the saved version, the required backtests and the live history; return their ids.
 
     Leaves ``marketplace_submissions`` and ``library_strategies`` EMPTY so MP_SUBMISSION_OPEN
     passes for every concurrent attempt — each one is admitted and reaches the create race.
@@ -456,11 +513,11 @@ def _seed_conc_eligible(db):
     )
     db.stores["strategy_versions"].append(_conc_version_row())
     rows = [
-        _conc_backtest_row("2024-01-01", "2024-06-30", "BTCUSD-2024H1", "chk-btc-h1"),
-        _conc_backtest_row("2024-07-01", "2024-12-31", "ETHUSD-2024H2", "chk-eth-h2"),
-        _conc_backtest_row("2023-01-01", "2023-06-30", "SOLUSD-2023H1", "chk-sol-h1"),
+        _conc_backtest_row(*window)
+        for window in _CONC_WINDOWS[: _evidence_validator.MIN_CONDITIONS]
     ]
     db.stores["strategy_backtests"].extend(rows)
+    db.stores.setdefault("execution_records", []).extend(_conc_live_history_rows())
     return [r["id"] for r in rows]
 
 
@@ -573,7 +630,10 @@ class TestConcurrentSubmissionBattery:
         assert returned["submission_state"] == "SUBMITTED"
 
         evidence = db.stores["marketplace_backtest_evidence"]
-        assert len(evidence) == 3, f"expected only the winner's 3 evidence rows, got {len(evidence)}"
+        expected = _evidence_validator.MIN_CONDITIONS
+        assert len(evidence) == expected, (
+            f"expected only the winner's {expected} evidence rows, got {len(evidence)}"
+        )
         assert all(e["submission_id"] == winner_row["id"] for e in evidence)
 
         transitions = db.stores["marketplace_submission_transitions"]

@@ -145,9 +145,21 @@ __all__ = [
 # THE THRESHOLDS (Requirements 3.1, 3.5, 3.7, 3.8)
 # ══════════════════════════════════════════════════════════════════════════
 
-#: Requirement 3.1 - at least three conditions, so no single window can be sold as a track
-#: record.
-MIN_CONDITIONS = 3
+#: At least five conditions, so no single window can be sold as a track record.
+#:
+#: MKT-07 RAISED THIS FROM THREE. Requirement 3.1 says "at least three"; the owner's
+#: remediation brief (Task 15 D, requirement 1) says "at least five valid, completed,
+#: persisted backtest results must exist for that strategy". The brief is the newer
+#: instruction and the stricter one, so the floor moves to five and the requirement text is
+#: the thing now out of date -- recorded here rather than left as an undocumented
+#: disagreement between a spec and a constant.
+#:
+#: WHAT RAISING IT COSTS, since the thresholds interact: five windows must each span
+#: :data:`MIN_WINDOW_DAYS` and overlap pairwise by at most 25 percent
+#: (:data:`MAX_OVERLAP_NUMERATOR`), so the evidence set now needs materially more distinct
+#: market history than three did. That is the intent -- five near-identical windows were
+#: never the point of the count -- and it is satisfiable from non-overlapping quarters.
+MIN_CONDITIONS = 5
 #: Requirement 3.1 - at most ten, so one Submission cannot make the review surface unbounded.
 MAX_CONDITIONS = 10
 #: Requirement 3.7 - inclusive calendar days each condition must span.

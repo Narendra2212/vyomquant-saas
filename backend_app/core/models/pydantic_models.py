@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator, validator
 
 # ── AUTH ──────────────────────────────────────────────────────────────────
 
@@ -593,6 +593,36 @@ class NotificationChannels(BaseModel):
     mobile: bool = False
 
 
+#: NOTIF-02 — the alerts a preference may not switch off.
+#:
+#: `components/NotificationPreferences.jsx` ends with "Mandatory risk alerts (global kill
+#: switch triggers) cannot be disabled", and until migration 073 nothing enforced it: the
+#: panel offered the switch that disabled them. These three are the floor, and the reason each
+#: is on the list rather than the others is that its suppression leaves a customer unaware
+#: that their money is at risk or their account was reached.
+#:
+#:   * `kill_switch_activated` — the emergency halt. `routers/risk.py:849` is the only
+#:     `severity="critical"` dispatch in the tree, and it is the switch the sentence names.
+#:   * `stop_loss_triggered` — a stop-loss firing.
+#:   * `new_login_detected` — an authentication event; the person who would want it is not
+#:     necessarily the person who turned it off.
+#:
+#: Deliberately NOT here, because a floor that swallows everything stops being a floor:
+#: `api_key_expiring` (a maintenance warning a customer may legitimately mute),
+#: `trade_executed`, `daily_pnl_summary`, `bot_state_change`, `backtest_complete`, and all
+#: three delivery channels.
+#:
+#: Declared beside the model rather than in the router so the schema constraint
+#: (`chk_notification_settings_mandatory_alerts`), the API refusal and any later reader all
+#: name one list. `tests/test_notif02_mandatory_alert_floor_postgres.py` asserts this tuple
+#: and the constraint's predicate still agree.
+MANDATORY_NOTIFICATION_EVENTS: tuple = (
+    "kill_switch_activated",
+    "stop_loss_triggered",
+    "new_login_detected",
+)
+
+
 class NotificationEvents(BaseModel):
     trade_executed: bool = True
     stop_loss_triggered: bool = True
@@ -602,6 +632,32 @@ class NotificationEvents(BaseModel):
     new_login_detected: bool = True
     api_key_expiring: bool = True
     backtest_complete: bool = False
+
+    @model_validator(mode="after")
+    def mandatory_alerts_stay_on(self) -> "NotificationEvents":
+        """Refuse a payload that switches a mandatory safety alert off (NOTIF-02).
+
+        Refused rather than silently coerced to ``True``. A coercion would store the right
+        value and tell the customer their change was saved, so the switch would spring back on
+        the next read with no explanation — which is the behaviour the panel's own error
+        handling calls out as the only signal a trader used to get.
+
+        This is the readable refusal, not the control: the database constraint is what holds
+        when a payload reaches the table by another route.
+        """
+        disabled = [
+            name
+            for name in MANDATORY_NOTIFICATION_EVENTS
+            if getattr(self, name, True) is False
+        ]
+        if disabled:
+            raise ValueError(
+                "These alerts cannot be switched off: "
+                + ", ".join(sorted(disabled))
+                + ". They report an emergency halt, a stop-loss firing and a new sign-in, "
+                "and the platform delivers them regardless of preference."
+            )
+        return self
 
 
 class NotificationSettingsRequest(BaseModel):

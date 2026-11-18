@@ -189,6 +189,31 @@ BEGIN
             ON public.notifications FROM authenticated;
         GRANT SELECT, UPDATE, DELETE ON public.notifications TO authenticated;
     END IF;
+    -- NOTIF-02: `notification_settings` holds one row per customer and decides which
+    -- alerts they are willing to receive. `anon` held SELECT/INSERT/UPDATE/DELETE on it.
+    --
+    -- RLS is enabled with an owner policy, so no anon row is reachable -- defence in
+    -- depth, stated at that size, same as `billing_invoices` and `notifications` above.
+    -- The privilege is still wrong: this table now carries the mandatory-alert floor
+    -- (migration 073's `chk_notification_settings_mandatory_alerts`), and a constraint is
+    -- only as good as the set of roles that can reach the table at all.
+    --
+    -- `authenticated` KEEPS SELECT, INSERT and UPDATE. The panel's own write is
+    -- `supabase.table("notification_settings").upsert(...)` through the caller's
+    -- request-scoped client (`routers/user.py:151`, the only PostgREST writer in the
+    -- tree), and an upsert needs both verbs. DELETE goes: no endpoint deletes a
+    -- preference row, and a deleted row reads as "no preference stored", which the panel
+    -- renders as the contract defaults -- so a delete is a silent reset, not an erasure
+    -- the customer would see.
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'notification_settings') THEN
+        ALTER TABLE public.notification_settings ENABLE ROW LEVEL SECURITY;
+        REVOKE ALL ON public.notification_settings FROM anon;
+        REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER
+            ON public.notification_settings FROM authenticated;
+        GRANT SELECT, INSERT, UPDATE ON public.notification_settings TO authenticated;
+    END IF;
+
     -- Stored-instrument metadata: brand, last4, expiry, and the provider's
     -- payment_method_id. 006 PART 11 declared no policy for this table at all, so it
     -- needs both. Served exclusively by the API over SQLAlchemy, so neither browser role
@@ -249,6 +274,81 @@ BEGIN
         REVOKE ALL ON public.transaction_rollbacks FROM anon;
         REVOKE ALL ON public.transaction_rollbacks FROM authenticated;
     END IF;
+END $$;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- SECTION 1b: the execution ledgers are evidence, not a client surface
+-- ───────────────────────────────────────────────────────────────────────────
+-- MKT-07. `execution_records` is the live-execution ledger. It is what Trade History's
+-- LIVE tab reads (`routers/orders.py::_live_history_rows`), what realised P&L is derived
+-- from, and -- from this change onward -- what the Marketplace Eligibility_Gate reads to
+-- decide whether a strategy has the 24 hours of live trading history that publication
+-- requires. `orders` and `positions` are the same ledger seen from the order and
+-- exposure side.
+--
+-- MEASURED on the local cluster provisioned from repository source, as role
+-- `authenticated` with `request.jwt.claim.sub` set to the customer's own id
+-- (`.kiro-tmp/probe_exec_ledger.py`):
+--
+--     INSERT a fabricated COMPLETED fill, exchange_id='binance',
+--            filled_at = now() - 48 hours          *** SUCCEEDED ***
+--     UPDATE an existing own row's filled_size      *** SUCCEEDED ***
+--     DELETE an existing own row                    *** SUCCEEDED ***
+--
+-- The owner policy `execution_records_user_access` is `FOR ALL` with
+-- `auth.uid() = user_id OR auth.uid() = tenant_id`, so the customer satisfies it for
+-- their own rows by construction. RLS was doing exactly what it was written to do; the
+-- defect is the privilege underneath it. The browser holds the anon key
+-- (`algo22-terminal/src/supabase.js`), so any logged-in customer reaches PostgREST
+-- directly with their own session.
+--
+-- WHY THAT MATTERS MORE THAN AN ORDINARY OVER-GRANT: a gate is only as good as the
+-- evidence it reads. A seller who can write this table can manufacture the live history
+-- that publication requires, backdate it, and delete the losses -- which is precisely
+-- what "do not fabricate or manipulate live trading performance data" forbids. The same
+-- rows feed daily-loss and drawdown risk calculations.
+--
+-- WHY THE REVOKE IS SAFE: nothing in the repository writes these three tables through
+-- PostgREST. Measured by AST over every `.table("<name>").insert/update/upsert/delete`
+-- chain in `backend_app` and by grep across `api_ws/`, `scripts/`, `dev_tools/` and
+-- `algo22-terminal/src` (`.kiro-tmp/probe_table_writers.py`): zero writers, and the one
+-- `.select()` is a fake client in a test. Every real write goes through SQLAlchemy as the
+-- table owner (`backend/execution_engine.py`, `backend/order_control.py`), which is
+-- exempt from both the grant and the policy. So this closes a path no supported code
+-- path uses.
+--
+-- SELECT is retained for `authenticated` and removed for `anon`, matching the
+-- `billing_invoices` and `notifications` decisions above. A read is not a forgery, and
+-- leaving it means a future owner-scoped read needs no privilege change.
+--
+-- NOT CLOSED BY THIS SECTION, and recorded rather than quietly skipped:
+-- `strategy_backtests` is the OTHER half of the Eligibility_Gate's evidence, and it is
+-- writable by the same customer for the same reason -- except that there the application
+-- itself writes through the caller's own client (`backend/backtest_service.py:336`
+-- resolves `create_request_supabase_async(user["access_token"])`, used by the insert at
+-- :451, the result update at :582 and the delete at :807). Revoking `authenticated`
+-- there would stop every backtest persisting. Closing it means moving those three writes
+-- to the service-role client while keeping their existing `.eq("user_id", …)`
+-- predicates, which then become the only ownership scope. Production does configure
+-- `SUPABASE_SERVICE_ROLE_KEY` -- verified on all 7 ECS services in
+-- `vyomquant-cluster`, names only -- so the prerequisite that blocked this is resolved;
+-- the change itself is a separate PR because it touches the backtest result path.
+DO $$
+DECLARE
+    t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['execution_records', 'orders', 'positions']
+    LOOP
+        IF EXISTS (SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = t) THEN
+            EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+            EXECUTE format('REVOKE ALL ON public.%I FROM anon', t);
+            EXECUTE format(
+                'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER '
+                'ON public.%I FROM authenticated', t);
+            EXECUTE format('GRANT SELECT ON public.%I TO authenticated', t);
+        END IF;
+    END LOOP;
 END $$;
 
 -- ───────────────────────────────────────────────────────────────────────────

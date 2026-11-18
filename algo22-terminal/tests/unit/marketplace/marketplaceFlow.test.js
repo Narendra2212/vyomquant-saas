@@ -1,6 +1,8 @@
 /** MKT-04: the pure rules behind the gated Marketplace screens. */
 import { describe, expect, it } from 'vitest';
 import {
+  EVIDENCE_THRESHOLDS,
+  MIN_LIVE_HISTORY_HOURS,
   adminActionsFor,
   canStartSubmission,
   currentSubmission,
@@ -31,10 +33,29 @@ describe('which backtests qualify as evidence', () => {
     expect(runShortfall(run({ executed_bar_count: 10 }))).toMatch(/10 bars; needs 50\+/);
     expect(runShortfall(run({ status: 'failed' }))).toBe('Did not complete');
   });
-  it('requires 3 to 10 selected runs', () => {
-    expect(selectionProblem(['a', 'b'])).toMatch(/at least 3/);
-    expect(selectionProblem(['a', 'b', 'c'])).toBeNull();
-    expect(selectionProblem(Array.from({ length: 11 }, (_, i) => String(i)))).toMatch(/at most 10/);
+  it('requires minConditions to maxConditions selected runs', () => {
+    // MKT-07 moved the floor from 3 to 5. Read from EVIDENCE_THRESHOLDS rather than restated,
+    // so the next move needs no edit here — and asserted on both sides of the boundary, which
+    // is what makes it a bound rather than a number that appears in a message.
+    const { minConditions, maxConditions } = EVIDENCE_THRESHOLDS;
+    const ids = (n) => Array.from({ length: n }, (_, i) => String(i));
+
+    expect(selectionProblem(ids(minConditions - 1))).toMatch(
+      new RegExp(`at least ${minConditions}`),
+    );
+    expect(selectionProblem(ids(minConditions))).toBeNull();
+    expect(selectionProblem(ids(maxConditions))).toBeNull();
+    expect(selectionProblem(ids(maxConditions + 1))).toMatch(
+      new RegExp(`at most ${maxConditions}`),
+    );
+  });
+
+  it('states the live-history requirement the gate enforces', () => {
+    // Task 15 D requirement 2. The constant is what the panel renders; the criterion itself is
+    // decided server-side from `execution_records`.
+    expect(MIN_LIVE_HISTORY_HOURS).toBe(24);
+    expect(eligibilityFailureText('MP_LIVE_HISTORY')).toMatch(/traded live/);
+    expect(eligibilityFailureText('MP_LIVE_HISTORY')).toMatch(/paper trading does not count/);
   });
 });
 

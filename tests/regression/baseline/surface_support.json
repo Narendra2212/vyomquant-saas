@@ -105,7 +105,7 @@
       "handler_count": 1,
       "handlers": [
         {
-          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.support.get_tickets`, GET /api/support/tickets) \u2014 ONE ADDED entry, `503 / TICKETS_FETCH_FAILED`, and nothing removed or retyped. Authorised by the committed guard that requires it: `tests/test_exception_swallow_regression.py::TestGetTicketsExceptionSwallow::test_db_error_returns_503_not_empty_200`, whose own docstring records the before and after \u2014 the handler used to answer `{\"tickets\": [], \"count\": 0}` with HTTP 200 when the Supabase read raised, so a trader whose database was unreachable was told they had no tickets. It now fails closed (`routers/support.py:358-369`); the in-memory store below that branch remains the substitute for a deliberately unconfigured backend, never for a broken one. The baseline recorded the empty-200 behaviour, so this entry's absence was a record of the defect.",
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only (`backend_app.routers.support.get_tickets`, GET /api/support/tickets) — ONE ADDED entry, `503 / TICKETS_FETCH_FAILED`, and nothing removed or retyped. Authorised by the committed guard that requires it: `tests/test_exception_swallow_regression.py::TestGetTicketsExceptionSwallow::test_db_error_returns_503_not_empty_200`, whose own docstring records the before and after — the handler used to answer `{\"tickets\": [], \"count\": 0}` with HTTP 200 when the Supabase read raised, so a trader whose database was unreachable was told they had no tickets. It now fails closed (`routers/support.py:358-369`); the in-memory store below that branch remains the substitute for a deliberately unconfigured backend, never for a broken one. The baseline recorded the empty-200 behaviour, so this entry's absence was a record of the defect.",
           "decorators": [
             "router.get('/tickets')"
           ],
@@ -181,6 +181,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only — ONE ADDED entry, `503`, and nothing removed or retyped. Required by SUP-02 (PR #309, commit f646cd87), which made the ticket and comment writes fail closed: the insert named five columns the schema never declared, so PostgREST rejected the whole statement and the handler returned HTTP 200 with a ticket id for a ticket that was never stored. It now returns 503 and stores nothing, which is the honest answer. WHY THIS RE-RECORD IS SEPARATE FROM THAT PR: #309 changed the handler and did not re-record this baseline, so `tests/regression/test_baseline_unchanged.py::test_baseline_unchanged[surface_support]` has failed on `main` ever since — and CI runs the whole of `tests/` at `01-pr-check.yml:251`, so every PR inherited it. This is the FOURTH occurrence of a change merged without its paired artifact (`surface_profile.json` at Task 13, then migrations 067 and 069 against the provisioning snapshot). The standing recommendation, still not built, is a `paths`-triggered CI guard that fails when a router or migration changes without its paired artifact in the same push.",
           "decorators": [
             "router.post('/tickets')",
             "limiter.limit('10/minute')"
@@ -207,7 +208,12 @@
               "depends_on": "get_ws_manager"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": "str",
+              "status_code": 503
+            }
+          ],
           "returns": [
             {
               "created_at": "computed",
@@ -230,6 +236,7 @@
       "handler_count": 1,
       "handlers": [
         {
+          "_baseline_note_raises": "AUTHORISED RE-RECORD of `raises` on THIS handler only — ONE ADDED entry, `503`, and nothing removed or retyped. Required by SUP-02 (PR #309, commit f646cd87), which made the ticket and comment writes fail closed: the insert named five columns the schema never declared, so PostgREST rejected the whole statement and the handler returned HTTP 200 with a ticket id for a ticket that was never stored. It now returns 503 and stores nothing, which is the honest answer. WHY THIS RE-RECORD IS SEPARATE FROM THAT PR: #309 changed the handler and did not re-record this baseline, so `tests/regression/test_baseline_unchanged.py::test_baseline_unchanged[surface_support]` has failed on `main` ever since — and CI runs the whole of `tests/` at `01-pr-check.yml:251`, so every PR inherited it. This is the FOURTH occurrence of a change merged without its paired artifact (`surface_profile.json` at Task 13, then migrations 067 and 069 against the provisioning snapshot). The standing recommendation, still not built, is a `paths`-triggered CI guard that fails when a router or migration changes without its paired artifact in the same push.",
           "decorators": [
             "router.post('/tickets/{ticket_id}/comments')",
             "limiter.limit('30/minute')"
@@ -267,6 +274,10 @@
             {
               "detail_type": "str",
               "status_code": 404
+            },
+            {
+              "detail_type": "str",
+              "status_code": 503
             }
           ],
           "returns": [

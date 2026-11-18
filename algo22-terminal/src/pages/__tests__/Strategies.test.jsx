@@ -65,6 +65,16 @@ vi.mock('../../api', () => ({
   default: mockApi,
   api: mockApi,
   endpoints: mockApi,
+  // MKT-07: the page now reads `useFeature(FEATURES.MARKETPLACE_PUBLISH)` to decide whether the
+  // "List on marketplace" row action is enabled, and `hooks/useEntitlements` calls
+  // `isAuthenticated()` before issuing its read. A mock missing it threw an unhandled rejection
+  // out of a `useEffect` — the assertions still passed, and vitest still exited non-zero.
+  //
+  // `false`, not `true`: an unauthenticated reader makes the entitlements hook return without
+  // fetching, which is what keeps this file's `publicGet` expectations exact. The row action is
+  // then rendered disabled, which is the state these tests do not assert on either way.
+  isAuthenticated: () => false,
+  publicGet: vi.fn(async () => ({})),
 }));
 
 // The builder is an entire alternate view; the ownership section never renders it.

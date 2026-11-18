@@ -142,6 +142,7 @@ from fastapi.testclient import TestClient
 # ── production code under test ────────────────────────────────────────────────────────────
 from backend_app.backend.marketplace import checkout_service as _checkout
 from backend_app.backend.marketplace import entitlement_resolver as _entitlement
+from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
 from backend_app.backend.marketplace import evidence_validator as _evidence
 from backend_app.backend.marketplace import expiry_sweep as _sweep
 from backend_app.backend.marketplace import library_entries as _entries
@@ -298,6 +299,10 @@ class _JourneyStore(MatrixStore):
         self._minted = 0
         super().__init__(**kwargs)
         self._declare("signals")
+        # MKT-07: the Eligibility_Gate's fifth read. Declared here so the journey can seed the
+        # live-execution history `MP_LIVE_HISTORY` measures; without the table the read raises
+        # and the whole evaluation answers `unevaluable` (a 503) rather than a verdict.
+        self._declare("execution_records")
 
     def _execute(self, q: Any) -> Any:
         if q.op == "insert" and isinstance(q.payload, list):
@@ -894,15 +899,36 @@ def test_the_marketplace_and_paper_trading_journey(
     version_row = store.one("strategy_versions", id=version_id)
 
     # ══════════════════════════════════════════════════════════════════
-    # STEP 3. Three backtests satisfying Requirement 3.
-    # Asserts: the three recorded runs pass EVERY criterion the production evidence_validator
+    # STEP 3. `MIN_CONDITIONS` backtests satisfying Requirement 3.
+    # Asserts: every recorded run passes EVERY criterion the production evidence_validator
     # evaluates - all ten codes, none failing - so "satisfying Requirement 3" is the validator's
     # verdict rather than this test's opinion.
+    #
+    # The count is read from the validator rather than written here. MKT-07 raised the floor
+    # from three to five and this journey failed on EV_COUNT; a literal would have to be edited
+    # again on the next move, and the number appearing in four places in this step was what made
+    # the failure read as a puzzle rather than a threshold change.
+    #
+    # The windows are consecutive, non-overlapping half-years, which matters at five: each must
+    # span MIN_WINDOW_DAYS and intersect pairwise by at most 25 percent, so a set built by
+    # nudging one window five times would fail EV_DISTINCT instead of exercising it.
     # ══════════════════════════════════════════════════════════════════
+    required_conditions = _evidence.MIN_CONDITIONS
     windows = (
         ("2025-01-01", "2025-06-30", "BTCUSD-2025H1", "chk-btc-h1"),
         ("2025-07-01", "2025-12-31", "ETHUSD-2025H2", "chk-eth-h2"),
         ("2024-01-01", "2024-06-30", "SOLUSD-2024H1", "chk-sol-h1"),
+        ("2024-07-01", "2024-12-31", "ADAUSD-2024H2", "chk-ada-h2"),
+        ("2023-01-01", "2023-06-30", "XRPUSD-2023H1", "chk-xrp-h1"),
+        ("2023-07-01", "2023-12-31", "DOTUSD-2023H2", "chk-dot-h2"),
+        ("2022-01-01", "2022-06-30", "LTCUSD-2022H1", "chk-ltc-h1"),
+        ("2022-07-01", "2022-12-31", "LNKUSD-2022H2", "chk-lnk-h2"),
+        ("2021-01-01", "2021-06-30", "BCHUSD-2021H1", "chk-bch-h1"),
+        ("2021-07-01", "2021-12-31", "ATOMUS-2021H2", "chk-atm-h2"),
+    )[:required_conditions]
+    assert len(windows) == required_conditions, (
+        "MIN_CONDITIONS has risen past the distinct windows this step declares. Add windows "
+        "rather than reusing one, or EV_DISTINCT stops being exercised."
     )
     for start, end, dataset, checksum in windows:
         store.seed(
@@ -921,7 +947,37 @@ def test_the_marketplace_and_paper_trading_journey(
         for row in store.rows_of("strategy_backtests")
         if str(row.get("strategy_id")) == str(strategy_id)
     ]
-    assert len(backtest_rows) == 3
+    assert len(backtest_rows) == required_conditions
+
+    # MKT-07's second listing gate: 24 hours of verified live trading, measured from
+    # `execution_records`. Two fills, because the criterion is a SPAN and one fill is one
+    # order. Seeded here rather than in a later step because publication in step 7 depends on
+    # it, and a journey that seeded it afterwards would pass for the wrong reason.
+    #
+    # `filled_size` is a string: the column is `character varying` in production and the gate
+    # parses it, so a float here would skip that parse.
+    _live_latest = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    _live_earliest = _live_latest - timedelta(
+        hours=_eligibility_gate.MIN_LIVE_HISTORY_HOURS + 1
+    )
+    for stamp in (_live_earliest, _live_latest):
+        store.seed(
+            "execution_records",
+            {
+                "execution_id": str(
+                    uuid.uuid5(_JOURNEY_NAMESPACE, f"exec-{strategy_id}-{stamp.isoformat()}")
+                ),
+                "strategy_id": str(strategy_id),
+                "tenant_id": OWNER,
+                "user_id": OWNER,
+                "status": "COMPLETED",
+                "exchange_id": "binance",
+                "filled_size": "0.0100",
+                "filled_at": stamp.isoformat(),
+                "submitted_at": stamp.isoformat(),
+                "created_at": stamp.isoformat(),
+            },
+        )
 
     outcomes = _evidence.validate(backtest_rows, OWNER, strategy_id)
     assert _evidence.failed_outcomes(outcomes) == [], [
@@ -931,23 +987,25 @@ def test_the_marketplace_and_paper_trading_journey(
     assert set(o.code for o in outcomes) == set(_evidence.EV_CODES)
 
     # ══════════════════════════════════════════════════════════════════
-    # STEP 4. Three DISTINCT Backtest_Conditions.
+    # STEP 4. `MIN_CONDITIONS` DISTINCT Backtest_Conditions.
     # Asserts: every unordered pair satisfies the production distinctness predicate, and the
-    # validator emitted one EV_DISTINCT verdict per pair - three pairs for three conditions.
+    # validator emitted one EV_DISTINCT verdict per pair - n(n-1)/2 pairs for n conditions,
+    # which is 10 at five and was 3 at three.
     # ══════════════════════════════════════════════════════════════════
     pairs = [
         (backtest_rows[i], backtest_rows[j])
-        for i in range(3)
-        for j in range(i + 1, 3)
+        for i in range(required_conditions)
+        for j in range(i + 1, required_conditions)
     ]
-    assert len(pairs) == 3
+    expected_pairs = required_conditions * (required_conditions - 1) // 2
+    assert len(pairs) == expected_pairs
     for left, right in pairs:
         assert _evidence.distinct(left, right) is True, (
             f"{left['dataset']} and {right['dataset']} are not distinct "
             f"Backtest_Conditions (Requirement 3.5)"
         )
     assert (
-        sum(1 for o in outcomes if o.code == _evidence.EV_DISTINCT) == 3
+        sum(1 for o in outcomes if o.code == _evidence.EV_DISTINCT) == expected_pairs
     ), "one EV_DISTINCT verdict per unordered pair (Requirement 3.5)"
 
     # The Listing row the Submission references and the catalogue reads. Created by the
@@ -992,7 +1050,7 @@ def test_the_marketplace_and_paper_trading_journey(
     submission_row = store.one("marketplace_submissions", id=submission_id)
     assert submission_row["owner_id"] == OWNER
     assert str(submission_row["source_strategy_id"]) == str(strategy_id)
-    assert len(store.rows_of("marketplace_backtest_evidence")) == 3
+    assert len(store.rows_of("marketplace_backtest_evidence")) == required_conditions
     assert any(
         row.get("from_state") == "DRAFT" and row.get("to_state") == "SUBMITTED"
         for row in store.rows_of("marketplace_submission_transitions")
