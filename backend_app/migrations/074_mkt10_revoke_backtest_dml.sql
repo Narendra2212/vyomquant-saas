@@ -56,10 +56,28 @@
 
 BEGIN;
 
--- A contended revoke must fail fast and change nothing rather than queue behind live
--- traffic holding the table. 5s is the same budget the MKT-07/NOTIF-02 production apply
--- used. REVOKE needs only ACCESS EXCLUSIVE on the catalog row, not the table's data,
--- but it still waits behind open transactions that hold the table.
+-- CORRECTION TO WHAT THIS COMMENT USED TO SAY. It read: REVOKE "needs only ACCESS
+-- EXCLUSIVE on the catalog row, not the table's data, but it still waits behind open
+-- transactions that hold the table." The second half is wrong, and it was asserted
+-- rather than measured.
+--
+-- MEASURED on PostgreSQL 16.2 by reading `pg_locks` for the issuing backend from inside
+-- the transaction, before rollback:
+--
+--   REVOKE INSERT,UPDATE,DELETE ON public.strategy_backtests FROM authenticated
+--       -> no relation lock on strategy_backtests at all
+--   GRANT SELECT ON public.strategy_backtests TO authenticated
+--       -> no relation lock on strategy_backtests at all
+--   ALTER TABLE public.strategy_backtests ENABLE ROW LEVEL SECURITY  (already enabled)
+--       -> AccessExclusiveLock on public.strategy_backtests
+--
+-- So this migration does not contend with live traffic on the table, and the
+-- `lock_timeout` below is cheap insurance rather than the thing that makes it safe.
+--
+-- The correction matters beyond this file: the statement that made the full hardening
+-- file unapplicable to a live database is the ALTER, not the REVOKE -- and `ALTER TABLE`
+-- takes that lock even when the change is a no-op. See SECTION 0b of
+-- `migrations/hardening/999_privilege_hardening.sql`, which now guards those.
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
