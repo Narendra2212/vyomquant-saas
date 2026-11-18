@@ -501,6 +501,13 @@ const STRATEGIES_READ = 'strategiesApi.list';
 const STRATEGIES_ENDPOINT = 'GET /api/strategies';
 const STRATEGIES_MODULE = 'src/api/modules/strategies.js';
 
+// The SECOND read this page makes. Named separately because an absence from the ownership
+// read and an absence from the strategy list are different facts, and a field's `reason`
+// has to be able to say which one it means.
+const OWNERSHIP_READ = 'libraryApi.myStrategies';
+const OWNERSHIP_ENDPOINT = 'GET /api/library/my-strategies';
+const OWNERSHIP_MODULE = 'src/api/modules/library.js';
+
 const STRATEGIES_FIELDS = [
   entry({
     page: PAGES.STRATEGIES,
@@ -584,6 +591,52 @@ const STRATEGIES_FIELDS = [
       + 'change for them, so this is permanent until a listing widening is registered. The '
       + 'figures exist per BACKTEST (`GET /api/backtests`) and are declared on the backtester '
       + 'page. A zero here would read as a strategy that has never made money.',
+  }),
+  // ── Task 14's two undeclared ownership/listing facts ──────────────────────
+  //
+  // Task 14 asks the strategy card to carry ownership, subscription status and
+  // marketplace listing status. `subscription` was already declared; these two were not,
+  // so a card had two fields with no declaration to read a label or a reason from.
+  //
+  // Both come from a DIFFERENT read than the rest of this page -- the ownership read, not
+  // the strategy list -- and that distinction carries the meaning of an absence here: it
+  // means "the ownership read did not report it", which is not the same fact as "the
+  // strategy list did not carry it".
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'ownership',
+    label: 'Ownership',
+    requirement: '4.1',
+    read: OWNERSHIP_READ,
+    endpoint: OWNERSHIP_ENDPOINT,
+    path: 'items[].ownership',
+    documentedIn: OWNERSHIP_MODULE,
+    note: 'The server writes `OWNED` / `SUBSCRIBED` (`library_entries.py`) and the card '
+      + 'humanises whichever it receives, with no mapping table here to drift from the '
+      + 'wire -- a code this build has never seen renders as whatever the server called it '
+      + 'rather than being dropped, so the offer can never be misreported. Absent when the '
+      + 'ownership read failed or reported no entry for the strategy, and reported as '
+      + 'UNKNOWN in that case: defaulting to OWNED would claim an ownership nobody stated.',
+  }),
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'marketplaceListing',
+    label: 'Marketplace listing',
+    requirement: '4.1',
+    read: OWNERSHIP_READ,
+    endpoint: OWNERSHIP_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    reason: 'Not reported: neither the strategy list nor the ownership read carries whether '
+      + 'your own strategy is listed on the marketplace.',
+    documentedIn: OWNERSHIP_MODULE,
+    note: 'MEASURED, and the DIRECTION of the error is why this is UNAVAILABLE rather than a '
+      + 'derived "Not listed": `_LIST_COLUMNS` carries no listing key, and '
+      + '`library_entries.py`\'s OWNED entry has no `listing` either -- only a SUBSCRIBED '
+      + 'entry does, and those are OTHER AUTHORS\' listings. So "Not listed" on an owned card '
+      + 'would state a negative about the one author it would mislead: the one who HAS '
+      + 'listed. The marker says the fact is unreported, which is true. Closing this needs a '
+      + 'listing key on one of the two reads, not a frontend change.',
   }),
   entry({
     page: PAGES.STRATEGIES,
