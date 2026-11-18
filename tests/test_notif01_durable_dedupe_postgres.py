@@ -505,28 +505,48 @@ class TestDurabilityDoesNotDependOnTheCallSite:
 # ═════════════════════════════════════════════════════════════════════════════
 @pg_only
 class TestTheMandatoryAlertFloor:
-    def test_no_preference_filtering_exists_on_the_dispatch_path(self):
-        """Honest statement of the current position, asserted so it cannot change silently.
+    def test_every_mandatory_event_survives_preference_filtering(self):
+        """The floor, asserted DIRECTLY -- which is what this test's predecessor asked for.
 
-        `notification_settings` is read by `routers/user.py` only, to serve and store
-        the preferences UI. Nothing on the dispatch path reads it, so no preference
-        can suppress any alert today. If that changes, this test fails and whoever
-        changed it has to satisfy the floor below deliberately.
+        It used to assert that nothing on the dispatch path read `notification_settings`,
+        and its failure message named the exact follow-up: *"confirm that every event in
+        MANDATORY_EVENT_TYPES is still delivered regardless of preference, then update
+        this test to assert the floor directly rather than its absence."*
+
+        NOTIF-04 introduced the filtering, and that instruction caught a real defect in
+        it: the first version keyed the floor on `MANDATORY_NOTIFICATION_EVENTS`, which
+        has THREE members, while this file has pinned SIX since before any filter
+        existed. Four of the six -- `emergency_halt`, `risk_limit_breached`,
+        `margin_call`, `exchange_auth_failed` -- have no preference switch and no
+        producer, so they were passing only because they were unmapped. That is luck,
+        not a floor, and it would have become a live suppressed risk alert the day
+        somebody wrote the producer.
         """
+        from backend_app.core import notification_dispatcher as nd
+
+        missing = sorted(MANDATORY_EVENT_TYPES - nd.SAFETY_CRITICAL_EVENT_TYPES)
+        assert not missing, (
+            f"these mandatory event types are not in the dispatcher's safety floor: "
+            f"{missing}. A stored preference -- or a row predating migration 073's "
+            "CHECK -- could suppress them."
+        )
+
+    def test_the_floor_is_consulted_before_anything_is_persisted(self):
+        """A filter applied after the insert would leave the row and hide only the socket
+        frame, so the user would still see the notification on the next page load."""
         import inspect as _inspect
 
         from backend_app.core import notification_dispatcher as nd
-        from backend_app.routers import notifications as nr
 
-        for module in (nd, nr):
-            src = _inspect.getsource(module)
-            assert "notification_settings" not in src, (
-                f"{module.__name__} now reads notification_settings. Preference "
-                "filtering has been introduced -- confirm that every event in "
-                f"MANDATORY_EVENT_TYPES ({sorted(MANDATORY_EVENT_TYPES)}) is still "
-                "delivered regardless of preference, then update this test to "
-                "assert the floor directly rather than its absence."
-            )
+        src = _inspect.getsource(nd.dispatch_user_notification)
+        gate = src.find("_preference_allows")
+        write = src.find("create_notification(")
+        assert gate != -1, "dispatch_user_notification no longer consults preferences"
+        assert write != -1, "dispatch_user_notification no longer persists"
+        assert gate < write, (
+            "the preference gate runs AFTER the write, so a suppressed notification is "
+            "still stored"
+        )
 
     def test_the_mandatory_alert_set_is_pinned(self):
         """The floor itself, as data, so the intent survives this file."""
