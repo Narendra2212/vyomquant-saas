@@ -107,6 +107,7 @@
       "via": "api.risk.getStrategyLimits"
     },
     {
+      "_baseline_note_risk06": "AUTHORISED RE-RECORD \u2014 RISK-06/RISK-07. `PUT /api/risk/settings` gained two 503 raises and a `persisted` key, and `PUT /api/risk/strategy-limits` gained `persisted`. The reason is that this endpoint HAD NEVER PERSISTED ANYTHING in production: the handler upserts one record naming seven columns and `circuit_breaker_armed` was declared by no migration, so PostgREST rejected the whole statement with 42703 on every request \u2014 and because the upsert is atomic, max_daily_loss, max_positions, max_leverage and kill_switches never landed either. Measured read-only against production 2026-11-18; migration 075 declares the column and was applied. The failure was invisible because the upsert sat in `except Exception: logger.warning(\"Database persist for risk_settings skipped\")` and the handler then returned `{\"status\": \"ok\", \"message\": \"Risk settings saved successfully\"}` unconditionally, having already written the record to the process-local `_user_risk_settings` dict BEFORE attempting the upsert \u2014 so the worker that served the request read back exactly what was submitted and every other worker read the old value. The success-path contract is UNCHANGED: `status`, `message`, `data`, `limit_adjustments`, `platform_ceilings` and the spread record keep their names, types and meaning, so no existing client breaks; `persisted` is additive and exists so a client never has to infer durability from prose. What changed is that a failed write now REFUSES instead of reporting a save that did not happen \u2014 the SUP-02 precedent, for the same reason: the in-memory store is a substitute for a deliberately unconfigured backend, never for a broken one. This PARTIALLY CLOSES the `sb is None` fall-through recorded in the strategy-limits note below: for the two WRITE endpoints a `None` client is now distinguished from an unconfigured deployment (`_persistence_configured()` tests SUPABASE_URL / SUPABASE_ANON_KEY, mirroring `core/dependencies.get_supabase`) and answers 503 rather than falling through. The READ endpoints are unchanged and still fall through, so that note stands for them.",
       "handler_count": 1,
       "handlers": [
         {
@@ -128,7 +129,25 @@
               "depends_on": "get_ws_manager"
             }
           },
-          "raises": [],
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str",
+                "reason": "computed"
+              },
+              "error_code": "RISK_SETTINGS_PERSIST_FAILED",
+              "status_code": 503
+            },
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "RISK_SETTINGS_PERSISTENCE_UNAVAILABLE",
+              "status_code": 503
+            }
+          ],
           "returns": [
             "dict_with_spread"
           ],
@@ -167,6 +186,7 @@
             {
               "count": "int",
               "data": "computed",
+              "persisted": "computed",
               "status": "str",
               "updated": "str"
             }

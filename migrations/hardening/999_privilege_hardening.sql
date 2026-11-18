@@ -102,6 +102,80 @@ BEGIN
 END $$;
 
 -- ───────────────────────────────────────────────────────────────────────────
+-- SECTION 0b: WHY EVERY `ENABLE ROW LEVEL SECURITY` BELOW IS GUARDED
+-- ───────────────────────────────────────────────────────────────────────────
+-- THIS FILE COULD NOT BE APPLIED TO A LIVE DATABASE, and the cause was one statement
+-- shape repeated ten times.
+--
+-- A true dry run against production -- the whole file inside a transaction, rolled back
+-- -- failed twice: `canceling statement due to statement timeout`, then, with the budget
+-- raised, `canceling statement due to lock timeout`. What was recorded at the time was
+-- "it needs a maintenance window, because the file issues ALTER TABLE ... ENABLE ROW
+-- LEVEL SECURITY across every table in public". The first half of that conclusion was
+-- wrong and the second half was imprecise, and both are worth correcting because the
+-- real cause is fixable and no maintenance window is needed.
+--
+-- MEASURED, PostgreSQL 16.2, reading `pg_locks` for the issuing backend from inside the
+-- transaction before rollback:
+--
+--   REVOKE INSERT,UPDATE,DELETE ON public.strategy_backtests FROM authenticated
+--       -> no relation lock on the table at all
+--   GRANT SELECT ON public.strategy_backtests TO authenticated
+--       -> no relation lock on the table at all
+--   REVOKE TRUNCATE,REFERENCES,TRIGGER ON ALL TABLES IN SCHEMA public FROM anon
+--       -> no relation locks at all, so SECTION 0's loop is not the problem either
+--   ALTER TABLE public.strategy_backtests ENABLE ROW LEVEL SECURITY
+--       -> AccessExclusiveLock on public.strategy_backtests
+--          *** AND IT TAKES IT EVEN WHEN RLS IS ALREADY ENABLED ***
+--
+-- That last line is the finding. `ALTER TABLE` is unconditional: PostgreSQL does not
+-- check whether the change would be a no-op before taking the lock. So an ENABLE on a
+-- table that already has RLS on achieves nothing and still serialises against every
+-- open transaction touching that table. On a live API those contend, and the lock
+-- timeout was reporting exactly that.
+--
+-- IT IS NOT "EVERY TABLE IN PUBLIC" -- it is ten named ones. But ALL of them already
+-- have RLS enabled on any database provisioned even once: measured 13/13 across this
+-- file's targets on a cluster built from this repository's own source. The file was
+-- taking ten ACCESS EXCLUSIVE locks to change nothing.
+--
+-- THE GUARD. Every site now tests `pg_class.relrowsecurity` first and skips the ALTER
+-- when RLS is already on. Measured: the guarded form holds NO relation lock where the
+-- unguarded form holds AccessExclusiveLock.
+--
+-- WHAT STILL TAKES A LOCK, AND WHY IT IS KEPT. Applying the whole file to a provisioned
+-- cluster now shows FOUR AccessExclusiveLocks instead of fourteen, and every one comes
+-- from policy DDL (`DROP POLICY` / `CREATE POLICY`) rather than from an RLS enable:
+--
+--     payment_methods          2 policies replaced   (SECTION 1)
+--     creator_analytics        2 policies replaced   (SECTION 1)
+--     marketplace_analytics    1 policy  replaced    (SECTION 1)
+--     library_ratings          1 policy  replaced    (SECTION 3b)
+--
+-- Those four are deliberately NOT guarded, for a correctness reason: the point of the
+-- statement is to install the CORRECT predicate, and skipping it because a policy of
+-- that name already exists would silently keep a wrong one. Deciding by comparing
+-- predicate text would make the guard the fragile part.
+--
+-- The remaining exposure is bounded and unlike what it replaces. All four are
+-- low-traffic tables -- two analytics rollups, a payment-method list, a ratings table --
+-- with no high-frequency writer between them; the swap is catalog-only and fast; and
+-- `lock_timeout` makes a contended one fail fast and roll the whole transaction back
+-- rather than queue. Four short locks on four quiet tables is not a maintenance window.
+-- Fourteen, on tables including the execution ledgers, was.
+--
+-- SO: APPLY WITH `SET lock_timeout = '5s'` AND BE READY TO RETRY. A failure is now a
+-- clean no-op that can simply be run again, never a half-applied schema.
+--
+-- `COALESCE(..., false)` on each guard: `pg_class` yields no row if the table vanished
+-- between the existence check above it and the guard, and a NULL would make
+-- `IF NOT ... THEN` skip the ALTER silently. Treating unknown as "not enabled" makes the
+-- ALTER run and fail loudly instead.
+--
+-- SECTION 4 remains the backstop: if a guard ever wrongly skips a table that genuinely
+-- needs RLS, SECTION 4 aborts with that table named rather than reporting success.
+
+-- ───────────────────────────────────────────────────────────────────────────
 -- SECTION 1: per-customer financial and commercial tables
 -- ───────────────────────────────────────────────────────────────────────────
 -- RLS enabled so the owner-access policies 006 PART 11 writes actually bind -- PART 11
@@ -117,7 +191,11 @@ DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'invoices') THEN
-        ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.invoices'::regclass), false) THEN
+            ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
+        END IF;
         REVOKE ALL ON public.invoices FROM anon;
         REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
             ON public.invoices FROM authenticated;
@@ -126,7 +204,11 @@ BEGIN
 
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'subscriptions') THEN
-        ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.subscriptions'::regclass), false) THEN
+            ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
+        END IF;
         REVOKE ALL ON public.subscriptions FROM anon;
         REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
             ON public.subscriptions FROM authenticated;
@@ -155,7 +237,11 @@ BEGIN
     -- through the service-role client, so `authenticated` needs SELECT and nothing more.
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'billing_invoices') THEN
-        ALTER TABLE public.billing_invoices ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.billing_invoices'::regclass), false) THEN
+            ALTER TABLE public.billing_invoices ENABLE ROW LEVEL SECURITY;
+        END IF;
         REVOKE ALL ON public.billing_invoices FROM anon;
         REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
             ON public.billing_invoices FROM authenticated;
@@ -183,7 +269,11 @@ BEGIN
     -- rows, so the revoke cannot regress an existing read.
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'notifications') THEN
-        ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.notifications'::regclass), false) THEN
+            ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+        END IF;
         REVOKE ALL ON public.notifications FROM anon;
         REVOKE INSERT, TRUNCATE, REFERENCES, TRIGGER
             ON public.notifications FROM authenticated;
@@ -207,7 +297,11 @@ BEGIN
     -- the customer would see.
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'notification_settings') THEN
-        ALTER TABLE public.notification_settings ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.notification_settings'::regclass), false) THEN
+            ALTER TABLE public.notification_settings ENABLE ROW LEVEL SECURITY;
+        END IF;
         REVOKE ALL ON public.notification_settings FROM anon;
         REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER
             ON public.notification_settings FROM authenticated;
@@ -220,7 +314,11 @@ BEGIN
     -- needs any privilege; the owner policy is defence in depth for a future path.
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'payment_methods') THEN
-        ALTER TABLE public.payment_methods ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.payment_methods'::regclass), false) THEN
+            ALTER TABLE public.payment_methods ENABLE ROW LEVEL SECURITY;
+        END IF;
         DROP POLICY IF EXISTS "payment_methods_owner_access" ON public.payment_methods;
         DROP POLICY IF EXISTS "payment_methods_service_role" ON public.payment_methods;
         CREATE POLICY "payment_methods_owner_access" ON public.payment_methods
@@ -240,7 +338,11 @@ BEGIN
     -- granted; the policy is there for a future path.
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'creator_analytics') THEN
-        ALTER TABLE public.creator_analytics ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.creator_analytics'::regclass), false) THEN
+            ALTER TABLE public.creator_analytics ENABLE ROW LEVEL SECURITY;
+        END IF;
         DROP POLICY IF EXISTS "creator_analytics_owner_access" ON public.creator_analytics;
         DROP POLICY IF EXISTS "creator_analytics_service_role" ON public.creator_analytics;
         CREATE POLICY "creator_analytics_owner_access" ON public.creator_analytics
@@ -257,7 +359,11 @@ BEGIN
     -- revoked outright rather than given a policy that would have to read `USING (true)`.
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'marketplace_analytics') THEN
-        ALTER TABLE public.marketplace_analytics ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.marketplace_analytics'::regclass), false) THEN
+            ALTER TABLE public.marketplace_analytics ENABLE ROW LEVEL SECURITY;
+        END IF;
         DROP POLICY IF EXISTS "marketplace_analytics_service_role" ON public.marketplace_analytics;
         CREATE POLICY "marketplace_analytics_service_role" ON public.marketplace_analytics
             FOR ALL TO service_role USING (true) WITH CHECK (true);
@@ -270,7 +376,11 @@ BEGIN
     -- filter, and adding one would imply a client surface that does not exist.
     IF EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'transaction_rollbacks') THEN
-        ALTER TABLE public.transaction_rollbacks ENABLE ROW LEVEL SECURITY;
+        -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+        IF NOT COALESCE((SELECT relrowsecurity FROM pg_class
+                          WHERE oid = 'public.transaction_rollbacks'::regclass), false) THEN
+            ALTER TABLE public.transaction_rollbacks ENABLE ROW LEVEL SECURITY;
+        END IF;
         REVOKE ALL ON public.transaction_rollbacks FROM anon;
         REVOKE ALL ON public.transaction_rollbacks FROM authenticated;
     END IF;
@@ -371,7 +481,12 @@ BEGIN
     LOOP
         IF EXISTS (SELECT 1 FROM information_schema.tables
                     WHERE table_schema = 'public' AND table_name = t) THEN
-            EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+            -- Guarded: a redundant ENABLE still takes AccessExclusiveLock. SECTION 0b.
+            IF NOT COALESCE((SELECT c.relrowsecurity FROM pg_class c
+                              JOIN pg_namespace ns ON ns.oid = c.relnamespace
+                             WHERE ns.nspname = 'public' AND c.relname = t), false) THEN
+                EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+            END IF;
             EXECUTE format('REVOKE ALL ON public.%I FROM anon', t);
             EXECUTE format(
                 'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER '

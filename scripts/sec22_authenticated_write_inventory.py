@@ -503,8 +503,21 @@ print("\n=== NEGATIVE CONTROL: the tables three manual passes MISSED ===")
 # across the file). Line 573 is where that module resolves a CLIENT, not where it writes.
 # Requiring the write to appear there made the control fail for a true reason stated
 # wrongly.
+# `strategy_backtests` WAS the first entry here and was REMOVED by MKT-10, which moved
+# backtest_service.py's three writes from the caller's request-scoped client to the
+# service-role client precisely so that `authenticated` could lose INSERT/UPDATE/DELETE on
+# it (migration 074). The analyzer is therefore CORRECT to stop finding it, and leaving it
+# in EXPECTED made this control fail on every commit from #324 onward -- which turned
+# `main` red and, because `03 Deploy` refuses a commit whose test workflow did not pass,
+# silently stopped every production deployment.
+#
+# The removal is not a weakening of the control. The inverse is now asserted in
+# `tests/test_sec22_authenticated_write_inventory.py::TestMkt10StaysClosed`: if that write
+# ever moves back to a caller-supplied client, `strategy_backtests` reappears in this
+# inventory and that test fails. A table leaving this list because its privilege was
+# revoked is the success case; the control exists to catch a table leaving because the
+# ANALYZER stopped seeing it.
 EXPECTED = [
-    "strategy_backtests",
     "training_jobs",
     "training_governance_decisions",
 ]
