@@ -1337,6 +1337,34 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
   const strategyIdParam = searchParams.get("strategy_id");
 
   /*
+   * MKT-08: `?listing_id=` arrives here and there is nothing this page can do with it.
+   *
+   * The Strategies page offers a subscriber `run_backtest` when the server puts it in
+   * `allowed_actions` — which `library_entries.allowed_actions_for_subscribed` does for an
+   * entitling Subscription whose Listing permits it — and links it to
+   * `/app/backtest?listing_id=<id>`. Measured: this page read only `strategy_id`, and NO
+   * backend route accepts a listing for a backtest (every one is keyed on `strategy_id`:
+   * `routers/strategies.py:2889` and the seven in `routers/strategy_operations.py`).
+   *
+   * A subscriber therefore landed on a Backtester whose selector could not contain their
+   * listing — MKT-05 keeps the Listing's logic out of the subscriber's tenant, so they own no
+   * strategy row for it — with no explanation of why. A control that goes nowhere quietly is
+   * the thing the remediation brief forbids outright.
+   *
+   * So the parameter is RECOGNISED and answered honestly rather than ignored. The alternative
+   * — withholding `run_backtest` from the server's action list — would silently remove a
+   * capability the spec says to offer, and would hide the gap instead of naming it.
+   *
+   * What would close it properly is a route that takes a `listing_id`, resolves the
+   * entitlement, and runs the engine against the owner's version WITHOUT returning the
+   * definition: the same shape `POST /api/paper-trading/sessions` already has, where
+   * `listing_id` and `strategy_id` are mutually exclusive and the executable artifact is
+   * resolved server-side. That is a new execution path and is specified rather than guessed
+   * at here.
+   */
+  const listingIdParam = (searchParams.get("listing_id") || "").trim();
+
+  /*
    * Three entry paths, one selection. A direct prop (inline use), route state (a `navigate`
    * from Strategies or the Builder), or `?strategy_id=` (a deep link or a bookmark) all end
    * at the same thing: an id in `selectedId`. Requirement 4.7's "runs identically whichever
@@ -1892,6 +1920,51 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
           </CommandButton>
         )}
       />
+
+      {/*
+        MKT-08: the subscriber who followed "Run backtest" on a purchased Listing.
+
+        Named at the top of the page rather than inside the Strategy panel's empty state,
+        because this is not "you have no strategies" — the account may have plenty — it is
+        "the thing you asked to backtest cannot be backtested here". Conflating the two is
+        what made the dead end look like an ordinary empty page.
+
+        It says what IS available, because both of the subscriber's other execution actions
+        work today: the paper session resolves a `listing_id` server-side
+        (`routers/paper_trading.py`), and so does the live deployment
+        (`POST /api/library/{id}/deploy`).
+      */}
+      {listingIdParam ? (
+        <Alert
+          severity="info"
+          title="Backtesting a subscribed strategy is not available yet"
+          data-testid="backtester-listing-unavailable"
+        >
+          <p>
+            This Backtester runs a saved version of a strategy in your own workspace. A
+            strategy you subscribe to stays in its creator&apos;s workspace — that is what
+            keeps its logic private — so there is nothing here to select for it.
+          </p>
+          <p className="mt-2">
+            What you can do with it now: start a paper session, or deploy it live against your
+            own exchange connection. Both run the creator&apos;s version without exposing it.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <CommandButton
+              intent="secondary"
+              onClick={() => navigate(`/app/paper-trading?listing_id=${encodeURIComponent(listingIdParam)}`)}
+            >
+              Start paper trading
+            </CommandButton>
+            <CommandButton
+              intent="secondary"
+              onClick={() => navigate(`/app/marketplace?listing_id=${encodeURIComponent(listingIdParam)}`)}
+            >
+              View the listing
+            </CommandButton>
+          </div>
+        </Alert>
+      ) : null}
 
       <div className="grid min-w-0 grid-cols-3 gap-4">
 
