@@ -72,6 +72,37 @@
  * indistinguishable from a read that failed.
  *
  * ═══════════════════════════════════════════════════════════════════════════
+ * BILL-HIST-02 (2026-11-22): THE LEDGER NOW RENDERS WHAT IT IS SENT
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Three things changed on the billing-history half of this page. The sections below are the
+ * task-7.9 record of an earlier migration and are left as they were measured then; this is
+ * what is different now.
+ *
+ *   1. **Three fields were being discarded.** `GET /api/billing/invoices` has carried
+ *      `provider`, `providerPaymentId` and `plan` since BILL-HIST-01, and migration 070
+ *      declared the five columns behind them — the ones the Razorpay webhook writer had
+ *      always named and `billing_invoices` never had, so until it was applied every invoice
+ *      write failed silently inside a `try/except logger.warning` and the table was empty by
+ *      construction. `invoiceRows` projected six keys and dropped the rest, and
+ *      `INVOICE_COLUMNS` had four. So the ledger could state that ₹999 had been taken and
+ *      not what it bought, which gateway captured it, or any reference to quote about it.
+ *      Two columns were added — *Plan* and *Paid via* — and all three fields are projected.
+ *      Each is nullable on purpose and each renders its declared marker when null: a row
+ *      written before 070 genuinely does not know its provider, and `'razorpay'` is the one
+ *      substitution that would look right on every row and be checkable on none.
+ *   2. **The *Payment methods* panel is deleted.** Not hidden: no state renders it. It read
+ *      `GET /api/billing/payment-methods`, which answers `[]` on every production account —
+ *      VyomQuant stores no payment instrument, Razorpay Checkout collects it at purchase and
+ *      never hands it over — so its empty arm was its only reachable state and a standing
+ *      panel with that heading told every subscriber this product keeps their card on file
+ *      and cannot currently read it. The read went with it; the endpoint and both client
+ *      methods did not. The instrument is NOT relocated into the invoice rows: joining the
+ *      account's current card onto a historical charge is §6's fabrication one level down,
+ *      so it is declared `UNAVAILABLE` per row instead.
+ *   3. **The five-row cap is gone.** `rows.slice(0, 5)` cut the ledger with no pagination, no
+ *      count and nothing on screen admitting the cut. `ds/DataTable` pages it now.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
  * ONE `Promise.allSettled` OUT, FOUR PANEL STATES IN (Requirement 4.1)
  * ═══════════════════════════════════════════════════════════════════════════
  * What was here: `isLoadingBilling`, `isLoadingPlans` and a `billingError` string, over one
@@ -88,7 +119,7 @@
  *   plans        → the priced catalogue, and the pricing-context row above it
  *   entitlements → the current-plan panel: status, period, and the four allowance tiles
  *   invoices     → the billing-history table
- *   methods      → the stored payment method
+ *   methods      → the stored payment method — GONE, see BILL-HIST-02 below
  *
  * Same four paths, same absence of parameters, once each on mount. `api-paths.budget.js` is
  * untouched and no request, route or query parameter changed — including the one that is easy
@@ -381,7 +412,10 @@ import {
   CheckCircle,
   ChevronDown,
   Cpu,
-  CreditCard,
+  // `CreditCard` left with BILL-HIST-02: its only use was the glyph in the *Payment methods*
+  // panel's instrument card, and that panel is gone. No icon replaces it in the invoice
+  // table — a card glyph beside a gateway name would imply a card was involved, which is
+  // exactly what this page does not know.
   Crown,
   Database,
   // `ExternalLink` left with BILLING-PORTAL-02: its only two uses were the icons on
@@ -639,17 +673,78 @@ const writeFailureMessage = (err, fallback) => {
 };
 
 /**
- * The four invoice columns, unchanged in order and in heading.
+ * How many invoices one page of the ledger holds.
+ *
+ * BILL-HIST-02 REPLACED A HARD `.slice(0, 5)` WITH THIS. The projection used to cut the list
+ * to five rows with no pagination, no count and nothing on screen saying it had been cut, so
+ * an account with eight charges could read its sixth-oldest nowhere in the product — on the
+ * only surface that records what it has been billed. Five is also below one year of monthly
+ * invoices, which is the span someone reconciling a year reaches for first.
+ *
+ * PAGINATED rather than "raise the cap", deliberately. `ds/DataTable` already owns paging and
+ * announces `Showing 1–12 of 37` in a live region, so paging costs one `useState` and makes
+ * the total visible; raising the cap to some larger number would leave the same silent
+ * truncation one order of magnitude further out, and an unbounded list would render every row
+ * a long-lived account has. 12 is one year of monthly billing on the first page.
+ *
+ * The server is the real bound and it is not this page's to choose: `get_invoices` applies
+ * `.limit(200)`, so 200 rows is the most this ledger can hold whatever happens here. That is
+ * ~16 pages, and it is the one truncation a reader cannot see from the footer — recorded here
+ * rather than worked around, because widening it is a backend change.
+ */
+const INVOICE_PAGE_SIZE = 12;
+
+/**
+ * `'razorpay'` → `'Razorpay'`. The server's own value, capitalised for display.
+ *
+ * Same shape as `planLabel` and for the same reason: this presents the recorded provider
+ * rather than mapping it to a nicer name, so a provider this page has never heard of still
+ * renders as whatever the row says instead of falling through to a default. There is no
+ * fallback arm — an unrecorded provider is an absence, not `'Razorpay'`.
+ */
+const providerLabel = (provider) =>
+  typeof provider === 'string' && provider.trim() !== ''
+    ? `${provider.trim().charAt(0).toUpperCase()}${provider.trim().slice(1)}`
+    : null;
+
+/**
+ * An identifier, shortened for a cell, with its full value kept for the `title`.
+ *
+ * design.md §2.5's fourth yield mechanism: truncating an IDENTIFIER is permitted as long as
+ * the whole value stays reachable. The invoice reference cell has always done this inline;
+ * BILL-HIST-02 added a second identifier column (the gateway's payment id) and the two must
+ * shorten the same way, so the expression is named once.
+ */
+const SHORT_ID_CHARS = 8;
+const shortId = (value) => `${String(value).slice(0, SHORT_ID_CHARS)}…`;
+
+/**
+ * The invoice columns.
  *
  * `render` is where the marker lives: `ds/DataTable` renders a bare `—` for a blank cell, and
  * Requirement 19.3's point is that the reason is the load-bearing half, so every cell renders
  * through the one marker with its declared sentence. Every cell CAN be absent here — a money
  * table with no denominator for its own amounts is the case §6 is written about.
+ *
+ * BILL-HIST-02 TOOK THIS FROM FOUR COLUMNS TO SIX. `GET /api/billing/invoices` has been
+ * sending `provider`, `providerPaymentId` and `plan` since BILL-HIST-01, and migration 070
+ * declared the columns behind them in production, so the data was on the wire and this page
+ * dropped it: the ledger showed that ₹999 was taken and not what it bought or which charge at
+ * the gateway it was. The two new columns are `plan` (what the payment bought) and `payment`
+ * (the gateway that captured it, plus that gateway's own payment reference).
+ *
+ * `priority: 3` on the pair, which `ds/DataTable` drops below `--breakpoint-laptop`. The four
+ * original columns answer "was I charged, when, how much, did it settle" and stay at every
+ * width; the two new ones answer "what for, and which charge is it" — needed to reconcile,
+ * not to read the ledger — and `pages/TradeHistory.jsx` set the same precedent for fees,
+ * slippage and strategy. A dropped column is still reachable: the primitive moves it into the
+ * row's expandable detail rather than deleting it.
  */
 const INVOICE_COLUMNS = Object.freeze([
   {
     key: 'reference',
     header: FIELD.invoiceReference.label,
+    priority: 1,
     // The truncation survives and the false affordance does not: design.md §2.5's fourth
     // yield mechanism permits truncating an IDENTIFIER with its full value on a `title`, and
     // the old `cursor: pointer` pointed at no handler and no keyboard path.
@@ -659,7 +754,7 @@ const INVOICE_COLUMNS = Object.freeze([
           className="font-mono text-brand"
           title={row?.fullReference ?? undefined}
         >
-          {`${String(value.value).slice(0, 8)}…`}
+          {shortId(value.value)}
         </span>
       ) : (
         <Marker field={FIELD.invoiceReference} reason={value.reason} />
@@ -668,6 +763,7 @@ const INVOICE_COLUMNS = Object.freeze([
   {
     key: 'date',
     header: FIELD.invoiceDate.label,
+    priority: 1,
     render: ({ value }) =>
       value.available ? (
         <span className="text-content-secondary">{value.value}</span>
@@ -676,9 +772,27 @@ const INVOICE_COLUMNS = Object.freeze([
       ),
   },
   {
+    // WHAT THE CHARGE BOUGHT. `billing_invoices.plan` — this row's own description of
+    // itself, and the column the refund path reads to decide whether a full refund revokes
+    // the plan. It is NOT the account's current plan, and `entitlements.plan` is deliberately
+    // not read here: an invoice for a tier the account has since left still describes what
+    // that charge bought, and joining today's subscription onto last year's money would
+    // relabel history to match the present.
+    key: 'plan',
+    header: FIELD.invoicePlan.label,
+    priority: 3,
+    render: ({ value }) =>
+      value.available ? (
+        <span className="capitalize text-content-primary">{planLabel(value.value)}</span>
+      ) : (
+        <Marker field={FIELD.invoicePlan} reason={value.reason} />
+      ),
+  },
+  {
     key: 'amount',
     header: FIELD.invoiceAmount.label,
     align: 'numeric',
+    priority: 1,
     // Denominated by the ROW's own currency, never by a `$` chosen because the row was not
     // INR. An amount with no denomination does not render as a number.
     render: ({ value, row }) =>
@@ -691,8 +805,91 @@ const INVOICE_COLUMNS = Object.freeze([
       ),
   },
   {
+    /*
+      HOW THE CHARGE WAS PAID, AS FAR AS THIS PLATFORM RECORDS IT.
+
+      Two readings in one cell because they are read together and are useless apart: the
+      gateway that captured the money, and that gateway's own payment id. The id is the value
+      a trader quotes to support or matches against a statement line, and it is unique per
+      provider (`uq_billing_invoices_provider_payment`), so it identifies one charge exactly.
+
+      THREE THINGS THIS CELL WILL NOT DO:
+
+        * It does not default `provider` to `'Razorpay'`. Razorpay being the only gateway is
+          precisely why that default is dangerous — it is the one value that would look right
+          on every row and be checkable on none. A row that predates migration 070 says it
+          does not know, through the declared marker, with the reason saying why.
+        * It does not name the INSTRUMENT. No card network, masked number or UPI handle is
+          recorded against an invoice: Razorpay Checkout collects it at purchase and never
+          hands it over. `GET /api/billing/payment-methods` does report a brand and a last
+          four, and joining TODAY'S default instrument onto a HISTORICAL charge is the exact
+          fabrication §6 is about — it would attribute a payment to a card that may not have
+          existed when it was taken. `FIELD.invoiceInstrument` is declared UNAVAILABLE and its
+          marker renders here, beside the provider, so the cell states the limit of what is
+          known rather than leaving a reader to assume the gateway line covers the card.
+        * It does not render `0`, a blank or a placeholder for any of the three.
+    */
+    key: 'payment',
+    header: FIELD.invoiceProvider.label,
+    priority: 3,
+    /*
+      THE CELL'S VALUE IS A COMPOSITE, AND THAT IS WHAT MAKES THE MEMO CORRECT.
+      `ds/DataTable` memoises a row on its PROJECTED cell values, so a second reading pulled
+      off `row` behind this column's back would not re-render when only that reading changed.
+      Both are projected under this one key instead — see `invoiceRows` — so a row whose
+      payment id changes is a row whose `payment` value changed. (The `reference` column's
+      `row.fullReference` is safe for the opposite reason: it is derived from the same `id`
+      the column itself projects, so it cannot change on its own.)
+    */
+    render: ({ value }) => (
+      <span className="flex flex-col gap-0.5">
+        <span className="flex flex-wrap items-baseline gap-1.5">
+          {value.provider.available ? (
+            <span className="text-content-primary">{providerLabel(value.provider.value)}</span>
+          ) : (
+            <Marker field={FIELD.invoiceProvider} reason={value.provider.reason} />
+          )}
+          {/* The instrument's absence, stated beside the gateway rather than left to be
+              inferred from it. `--text-micro` for the label (§2.4 Q4); the marker carries the
+              sentence that explains why nothing will ever fill it.
+              `aria-hidden` on the visible label because `ds/NotAvailableMarker`'s accessible
+              name is already `"{label}: not available"` — without it a screen reader reads
+              "Instrument Instrument: not available". */}
+          <span
+            aria-hidden="true"
+            className="text-micro uppercase tracking-wide text-content-muted"
+          >
+            {FIELD.invoiceInstrument.label}
+          </span>
+          <Marker field={FIELD.invoiceInstrument} />
+        </span>
+        {/* The gateway's payment id: an IDENTIFIER, so Requirement 3.1 keeps the monospace,
+            and truncated with the whole value on `title` exactly as the invoice reference is. */}
+        {value.reference.available ? (
+          <span
+            className="font-mono text-micro text-content-secondary"
+            title={value.fullReference ?? undefined}
+          >
+            {shortId(value.reference.value)}
+          </span>
+        ) : (
+          <span className="flex flex-wrap items-baseline gap-1 text-micro text-content-muted">
+            {/* `aria-hidden` for the same reason as the instrument label above: the marker's
+                own accessible name already names the field. */}
+            <span aria-hidden="true">{FIELD.invoicePaymentReference.label}</span>
+            <Marker
+              field={FIELD.invoicePaymentReference}
+              reason={value.reference.reason}
+            />
+          </span>
+        )}
+      </span>
+    ),
+  },
+  {
     key: 'status',
     header: FIELD.invoiceStatus.label,
+    priority: 1,
     // The server's word, verbatim, with the hue coming from `statusToken` — Requirement 4.4
     // finding 1 covers what that group is for `paid`.
     render: ({ value }) =>
@@ -748,29 +945,42 @@ export default function Billing() {
   */
   const plansCurrencyRef = useRef(null);
 
-  // ── The four reads (Requirement 4.1) ──────────────────────────────────────
+  // ── The three reads (Requirement 4.1) ─────────────────────────────────────
   //
   // `deps: []` on each, so each fires once on mount exactly as the `Promise.allSettled` did.
-  // Same four paths, no parameter added or changed.
+  // No parameter added or changed on any of them. It was FOUR until BILL-HIST-02 removed the
+  // stored-methods read along with the only panel that rendered it.
   const readPlans = useCallback(
     () => api.billing.getPlans(plansCurrencyRef.current ?? undefined),
     [],
   );
   const readEntitlements = useCallback(() => api.billing.getEntitlements(), []);
   const readInvoices = useCallback(() => api.billing.getInvoices(), []);
-  const readMethods = useCallback(() => api.billing.getPaymentMethods(), []);
+  /*
+    NO `readMethods`. REMOVED BY BILL-HIST-02, with the *Payment methods* panel that was its
+    only reader.
 
+    `GET /api/billing/payment-methods` answers `[]` on every Razorpay deployment — VyomQuant
+    stores no payment instrument, as `api/modules/billing.js` records against
+    `deletePaymentMethod` — so the panel's only reachable state was its own empty arm and the
+    read's only effect was one request per mount plus one per billing socket frame. Keeping
+    the read with no panel to fill would be a request whose response reaches nothing.
+
+    THE ROUTE AND THE CLIENT METHOD BOTH STAY. `api.billing.getPaymentMethods` and
+    `deletePaymentMethod` are untouched: the endpoint is honest, other builds call it, and a
+    deployment that one day stores an instrument needs it. This removes a reader, not a
+    capability. It does change this surface's API-call set, which is why
+    `tests/regression/baseline/surface_billing.json` is re-recorded in the same commit.
+  */
   const plans = usePanelState(readPlans, { deps: [] });
   const entitlements = usePanelState(readEntitlements, { deps: [] });
   const invoices = usePanelState(readInvoices, { deps: [] });
-  const methods = usePanelState(readMethods, { deps: [] });
 
   // Stable by `usePanelState`'s second inversion, so the socket effect below can depend on
   // them without being torn down and rebuilt on every render.
   const refetchPlans = plans.refetch;
   const refetchEntitlements = entitlements.refetch;
   const refetchInvoices = invoices.refetch;
-  const refetchMethods = methods.refetch;
 
   // The envelope both shapes the old code accepted: `res.data ?? res`. Kept, because the shape
   // a deployment answers with is not this commit's question.
@@ -794,15 +1004,16 @@ export default function Billing() {
   }, [plansBody]);
 
   /**
-   * Re-read all four. The same four requests the mount issues, and nothing else.
+   * Re-read all three. The same three requests the mount issues, and nothing else.
    *
    * `loadBilling` + `loadPlans` before the migration, in one function because the two callers
-   * — the socket handler and the Refresh control — both called both.
+   * — the socket handler and the Refresh control — both called both. It re-read FOUR until
+   * BILL-HIST-02 removed the stored-methods read, so a billing frame no longer issues a
+   * request whose response nothing renders.
    */
   const refreshSubscription = useCallback(() => {
     refetchEntitlements();
     refetchInvoices();
-    refetchMethods();
     refetchPlans();
     /*
       And the SHARED entitlement snapshot every gate in the app reads
@@ -813,7 +1024,7 @@ export default function Billing() {
       the app has to be told.
     */
     refreshEntitlements();
-  }, [refetchEntitlements, refetchInvoices, refetchMethods, refetchPlans]);
+  }, [refetchEntitlements, refetchInvoices, refetchPlans]);
 
   /*
     Real-time subscription updates, over the one session socket.
@@ -1372,11 +1583,29 @@ export default function Billing() {
     });
   }, [plansBody]);
 
-  /** The five most recent invoice rows, each field resolved once against its declaration. */
+  /**
+   * Every invoice the server sent, each field resolved once against its declaration.
+   *
+   * BILL-HIST-02 REMOVED A `.slice(0, 5)` AND THREE DROPPED FIELDS.
+   *
+   * The slice cut the ledger to five rows with no pagination and nothing on screen admitting
+   * it, so an account with more than five charges could not reach its sixth from anywhere in
+   * the product. The whole list is projected now and `ds/DataTable` pages it at
+   * `INVOICE_PAGE_SIZE`, which also puts the real total in the footer's live region.
+   *
+   * The dropped fields were `provider`, `providerPaymentId` and `plan`. All three have been
+   * on the response since BILL-HIST-01 and all three are populated in production by the
+   * signature-verified Razorpay webhook since migration 070 declared their columns; this
+   * projection named six keys and discarded them, so the page could show that money had been
+   * taken and not what it bought or which gateway charge it was. Each is `rowField`ed through
+   * its own declaration, so a null arrives as an absence carrying its reason rather than as a
+   * default — the nullability is deliberate (a row written before 070 genuinely does not know
+   * its provider) and `'razorpay'` is the one substitution that would be invisible.
+   */
   const invoiceRows = useMemo(() => {
     const body = invoices.data?.data ?? invoices.data;
     const rows = Array.isArray(body) ? body : [];
-    return rows.slice(0, 5).map((invoice, index) => {
+    return rows.map((invoice, index) => {
       const denomination =
         typeof invoice?.currency === 'string' ? invoice.currency.trim().toUpperCase() : null;
       /*
@@ -1392,6 +1621,7 @@ export default function Billing() {
           : denomination === 'USD'
             ? invoice?.amtUSD
             : undefined;
+      const paymentReference = rowField(invoice, FIELD.invoicePaymentReference);
       return {
         // Only a React key and a `getRowId`; never rendered.
         id: invoice?.id ?? `invoice-${index}`,
@@ -1400,37 +1630,55 @@ export default function Billing() {
         fullReference:
           invoice?.id === null || invoice?.id === undefined ? null : String(invoice.id),
         date: fromNullable(formatDate(invoice?.date), FIELD.invoiceDate.reason),
+        plan: rowField(invoice, FIELD.invoicePlan),
         amount: fromNullable(amount, FIELD.invoiceAmount.reason),
         denomination,
+        /*
+          The gateway and its payment id under ONE key, because the cell that renders them
+          renders them together and `ds/DataTable` memoises a row on its projected cell
+          values. Two keys with one column reading both would leave the second invisible to
+          that compare; one key makes either reading changing a changed cell.
+        */
+        payment: {
+          provider: rowField(invoice, FIELD.invoiceProvider),
+          reference: paymentReference,
+          fullReference: paymentReference.available ? String(paymentReference.value) : null,
+        },
         status: rowField(invoice, FIELD.invoiceStatus),
       };
     });
   }, [invoices.data]);
 
-  /** The default stored method, by the page's own existing rule. */
-  const defaultMethod = useMemo(() => {
-    const body = methods.data?.data ?? methods.data;
-    const rows = Array.isArray(body) ? body : [];
-    return rows.find((method) => method?.is_default) || rows[0] || null;
-  }, [methods.data]);
+  /*
+    The page of the ledger on screen. **1-based**, as `ds/DataTable` requires.
 
-  const cardBrand = rowField(defaultMethod, FIELD.cardBrand);
-  const cardLast4 = rowField(defaultMethod, FIELD.cardLast4);
-  /**
-   * BOTH parts or neither. A month with no year is not an expiry date, and the previous
-   * version rendered `Expires undefined/undefined` for it.
-   */
-  const cardExpiry =
-    defaultMethod?.expiry_month === null
-    || defaultMethod?.expiry_month === undefined
-    || defaultMethod?.expiry_year === null
-    || defaultMethod?.expiry_year === undefined
-      ? unavailable(FIELD.cardExpiry.reason)
-      : available(`${defaultMethod.expiry_month}/${defaultMethod.expiry_year}`);
+    Reset to 1 whenever the invoice payload changes, because a refetch can shorten the list:
+    the primitive clamps a stale page number for its own render, but leaving this state at 4
+    after a read that returned one page would make the next, longer read open on page 4 of a
+    ledger the trader had not navigated. The effect depends on `invoices.data`, which is the
+    same value `invoiceRows` is memoised on.
+  */
+  const [invoicePage, setInvoicePage] = useState(1);
+  useEffect(() => {
+    setInvoicePage(1);
+  }, [invoices.data]);
+
+  /*
+    NO `defaultMethod`, `cardBrand`, `cardLast4` or `cardExpiry`. REMOVED BY BILL-HIST-02 with
+    the panel that was their only reader; see the removal note where that panel stood.
+
+    They are not relocated into the invoice table, and that is the point rather than an
+    omission. `defaultMethod` was "the default stored method, or the first one" — a statement
+    about the account's instrument NOW. An invoice is a statement about a charge THEN, and
+    joining the two would print a card beside a payment that card may not have made. The
+    instrument is declared `UNAVAILABLE` per row instead (`FIELD.invoiceInstrument`), which is
+    the true answer: `billing_invoices` records no instrument, and Razorpay Checkout never
+    hands one over.
+  */
 
   // ── The panel states ──────────────────────────────────────────────────────
 
-  const anyLoading = [plans, entitlements, invoices, methods].some(
+  const anyLoading = [plans, entitlements, invoices].some(
     (panel) => panel.state === PANEL_STATES.LOADING || panel.state === PANEL_STATES.REFRESHING,
   );
 
@@ -1452,7 +1700,11 @@ export default function Billing() {
           (--text-page and --text-body) rather than this page's. */}
       <PageHeader
         title="Subscription & Billing"
-        subtitle="Manage your plan, localized pricing, and payment methods"
+        // BILL-HIST-02 corrected the third noun. It read "…, and payment methods", which
+        // described a panel this page carried and no longer does — and which this product has
+        // never actually offered, since no instrument is stored for anyone to manage. The
+        // billing history is what the page really does hold.
+        subtitle="Manage your plan, localized pricing, and billing history"
         actions={
           <CommandButton
             intent="secondary"
@@ -2123,101 +2375,72 @@ export default function Billing() {
         </div>
       </Panel>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {/* ══ THE STORED PAYMENT METHOD ═════════════════════════════════════ */}
-        <Panel
-          title="Payment methods"
-          state={methods.state}
-          loading={{ kind: 'skeleton-cards', rows: 1, label: 'Reading your payment methods' }}
-          // The empty body is the WHOLE honest answer for this panel, so it states the fact
-          // rather than pointing at somewhere else to go. It used to end "…or in the payment
-          // provider's own portal", and that half was false: Razorpay collects the instrument
-          // inside Razorpay Checkout and publishes no portal of its own for a subscriber to
-          // manage it in. Nothing is stored here, and there is nowhere else to look.
-          empty={{
-            headline: 'No payment methods on file',
-            body: 'Nothing is stored against this account, and nothing ever is: the card or '
-              + 'UPI instrument is collected by Razorpay Checkout at the moment of purchase '
-              + 'and is never held by VyomQuant. To pay with a different instrument, choose it '
-              + 'at your next checkout.',
-            action: { label: 'Read again', onClick: refetchMethods },
-          }}
-          error={{ error: methods.error, onRetry: refetchMethods }}
-          unavailable={{ reason: 'Your stored payment methods cannot be read right now.' }}
-          unauthorised={{ error: methods.error }}
-          // NO `actions`. A *Manage via provider portal* `ds/CommandButton` stood here and
-          // called `POST /api/billing/portal`, which opens with `_validate_keys("stripe")` and
-          // therefore raised a 500 on every press of it: this deployment has no live Stripe
-          // secret, and Razorpay — the provider it does bill through — has no hosted portal to
-          // send anyone to, so there was never a URL for the handler to return. The old comment
-          // here argued the control belonged in `actions` "so the portal stays reachable in the
-          // empty and error states — which is where a trader most needs it". That is exactly
-          // the case it failed in, and a reachable button that always 500s is worse in that
-          // state than no button: it reads as "this can be fixed from here" when it cannot.
-          // Removing it removes no capability, because there was none behind it. The panel's
-          // `empty` body above carries the one true instruction instead.
-        >
-          <div className="flex items-center gap-3 rounded-lg border border-line-default bg-surface-inset p-4">
-            {/* The Visa-blue gradient is gone rather than retokened: it painted one company's
-                brand colours behind every stored card, whatever the brand actually was. The
-                brand is stated in words beside it, which is the channel that cannot be wrong. */}
-            <div className="flex shrink-0 items-center justify-center rounded-lg bg-surface-raised p-2.5 text-content-secondary">
-              <CreditCard size={20} aria-hidden="true" />
-            </div>
-            <div className="min-w-0 flex-1">
-              {/* fontSize: 13 → --text-body (value — Q7). A card's last four digits are an
-                  IDENTIFIER, so Requirement 3.1 keeps the monospace on them. */}
-              <p className="flex flex-wrap items-baseline gap-1.5 text-body text-content-primary">
-                {cardBrand.available ? (
-                  <span className="font-semibold capitalize">{cardBrand.value}</span>
-                ) : (
-                  <Marker field={FIELD.cardBrand} reason={cardBrand.reason} />
-                )}
-                <span aria-hidden="true">••••</span>
-                {cardLast4.available ? (
-                  <span className="font-mono tabular-nums">{cardLast4.value}</span>
-                ) : (
-                  <Marker field={FIELD.cardLast4} reason={cardLast4.reason} />
-                )}
-              </p>
-              {/* fontSize: 11 → --text-micro for the label (Q4) and --text-body for the value
-                  (Q7). It LOSES the monospace: a date is a value but not an identifier, which
-                  is `pages/SecurityLogs.jsx`'s precedent from task 7.4. */}
-              <p className="mt-0.5 flex flex-wrap items-baseline gap-1 text-micro uppercase tracking-wide text-content-muted">
-                {FIELD.cardExpiry.label}
-                {cardExpiry.available ? (
-                  <span className="text-body normal-case tracking-normal text-content-secondary">
-                    {cardExpiry.value}
-                  </span>
-                ) : (
-                  <Marker field={FIELD.cardExpiry} reason={cardExpiry.reason} />
-                )}
-              </p>
-            </div>
-            {defaultMethod?.is_default === true ? (
-              <StatusBadge state="ok" label="Default" />
-            ) : null}
-          </div>
-        </Panel>
+      {/* ══ THE STORED PAYMENT METHOD: GONE ═══════════════════════════════════
+          BILL-HIST-02 DELETED THE *Payment methods* PANEL. It is removed, not hidden: no
+          state, no flag and no collapsed disclosure renders it.
 
-        {/* ══ THE INVOICE HISTORY ═══════════════════════════════════════════
-            fontSize: 11 and 9 → `ds/DataTable`'s `--text-small` body and `--text-micro`
-            `<th>`s. §2.4 orders Q4 ahead of Q6 exactly so a `<th>` is read as a label rather
-            than as a cell. The table's blanket monospace goes with it — the primitive renders
-            the mono treatment per column format — and the reference cell keeps an explicit
-            one, because it is an identifier.
-            fontSize: 12 → `ds/Panel`'s `empty` arm. *No invoices found.* used to render for a
-            500 as well as for an account with no invoices, because the `Promise.allSettled`
-            branch had no `else`: those are `error` and `empty` now. */}
+          WHAT STOOD HERE. A panel driven by `GET /api/billing/payment-methods`, rendering a
+          card brand, `•••• {last4}` and an expiry inside a bordered card, with a *Default*
+          badge. BILLING-PORTAL-01 had already removed its *Manage via provider portal*
+          button, leaving a panel that could be read but not acted on.
+
+          WHY IT HAD TO GO RATHER THAN BE CORRECTED. It could never show anything.
+          `VyomQuant stores no payment instrument` — Razorpay Checkout collects the card or UPI
+          handle at the moment of purchase and never hands it over, which is why
+          `POST /api/billing/payment-methods` answers `501 PAYMENT_METHOD_STORAGE_UNSUPPORTED`
+          and `DELETE` answers `404` for any id. So the read answered `[]` on every production
+          account, the panel's empty arm was its only reachable state, and a standing panel
+          headed *Payment methods* told a trader that this product keeps their card on file
+          and could not currently read it. That is a false claim about where their payment
+          details live, made permanently, in the place they would go to check.
+
+          WHERE THE INFORMATION WENT. Into the billing-history rows, which is where it is
+          actually recorded: each invoice now states the gateway that captured the charge and
+          that gateway's own payment reference. What is NOT carried across is any instrument
+          detail — see `FIELD.invoiceInstrument` and the `payment` column's comment for why
+          joining the account's current card onto a past charge is the fabrication §6 names.
+
+          The one true sentence this panel carried — that the instrument is collected inside
+          Razorpay Checkout and changed by paying again with a different one — is not lost. It
+          is in the `past_due` alert above, where it is read by the person who needs it. */}
+
+      {/* ══ THE INVOICE HISTORY ═══════════════════════════════════════════════
+          FULL WIDTH SINCE BILL-HIST-02. It shared an `xl:grid-cols-2` row with the payment-
+          methods panel; with that panel gone it is the row, and it has six columns to place
+          rather than four, so the grid wrapper went with its second child.
+          fontSize: 11 and 9 → `ds/DataTable`'s `--text-small` body and `--text-micro`
+          `<th>`s. §2.4 orders Q4 ahead of Q6 exactly so a `<th>` is read as a label rather
+          than as a cell. The table's blanket monospace goes with it — the primitive renders
+          the mono treatment per column format — and the two identifier cells keep an explicit
+          one, because that is what they are.
+          fontSize: 12 → `ds/Panel`'s `empty` arm. *No invoices found.* used to render for a
+          500 as well as for an account with no invoices, because the `Promise.allSettled`
+          branch had no `else`: those are `error` and `empty` now. */}
+      <div className="mt-4">
         <Panel
           title="Billing history"
           state={invoices.state}
-          loading={{ kind: 'skeleton-table', rows: 5, columns: 4, label: 'Reading your invoices' }}
+          /*
+            THE EMPTY ARM CARRIES AS MUCH WEIGHT AS THE POPULATED ONE. `billing_invoices` held
+            zero rows in production when this was written — migration 070 declared the columns
+            the webhook writer had always named, so until it landed every invoice write failed
+            silently and the ledger has nothing older than that migration. This body says that
+            nothing has been billed, which is a statement about the ACCOUNT, and `ds/Panel`'s
+            separate `error` arm is what says the read failed. Collapsing the two is the defect
+            Property 9 exists for and it was on this panel once.
+          */
           empty={{
             headline: 'No invoices yet',
             body: 'Nothing has been billed to this account. An invoice appears here after the '
-              + 'first charge settles.',
+              + 'first charge settles, with the plan it paid for and the payment reference '
+              + 'that identifies it at the gateway.',
             action: { label: 'Read again', onClick: refetchInvoices },
+          }}
+          loading={{
+            kind: 'skeleton-table',
+            rows: 6,
+            columns: INVOICE_COLUMNS.length,
+            label: 'Reading your invoices',
           }}
           error={{ error: invoices.error, onRetry: refetchInvoices }}
           unavailable={{ reason: 'Your invoice history cannot be read right now.' }}
@@ -2227,9 +2450,30 @@ export default function Billing() {
             caption="Invoices billed to this account, newest first"
             columns={INVOICE_COLUMNS}
             rows={invoiceRows}
-            pageSize={0}
+            page={invoicePage}
+            pageSize={INVOICE_PAGE_SIZE}
+            onPageChange={setInvoicePage}
             density="compact"
           />
+
+          {/*
+            THE RECEIPT, STATED ONCE. `GET /api/billing/invoices` carries nine keys and not one
+            of them is a URL, so there is no receipt or invoice document to link and none is
+            composed: a Razorpay dashboard link built from the payment id would point at a
+            merchant-side console a customer cannot sign in to, which is the same invented
+            destination BILLING-PORTAL-02 removed two buttons for.
+
+            It is one sentence under the table rather than a *Receipt* column, because it is a
+            fact about the ledger and not about any row — a column would render the same marker
+            on every line forever and claim, by sitting there, that some row might carry one.
+            `FIELD.invoiceReceipt` holds the copy, so this reason is declared where every other
+            absence on this page is declared and cannot drift from it.
+
+            fontSize: --text-micro (label — Q4), inside the panel, so it is not standing prose.
+          */}
+          <p className="mt-2.5 text-micro text-content-muted">
+            {FIELD.invoiceReceipt.reason}
+          </p>
         </Panel>
       </div>
     </div>
