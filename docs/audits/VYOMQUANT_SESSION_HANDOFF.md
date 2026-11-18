@@ -150,6 +150,96 @@ MKT-07's code are merged but **not live**.
 
 ---
 
+## 2c. The hardening file never needed a maintenance window
+
+**This supersedes §2a's "the full hardening file cannot be applied to a live
+database".** That conclusion was drawn from a real symptom and the wrong cause,
+and it left the privilege hardening unapplied for weeks.
+
+The symptom was real: a dry run against production, the whole file in a
+transaction and rolled back, hit `statement timeout` and then `lock timeout`.
+What I wrote was *"it issues `ALTER TABLE … ENABLE ROW LEVEL SECURITY` across
+every table in `public`"*. It issues it on **ten named tables**, and that
+distinction is not pedantry — it is what makes the problem small.
+
+**Measured, PostgreSQL 16.2, reading `pg_locks` for the issuing backend from
+inside the transaction:**
+
+| statement | lock on the target table |
+|---|---|
+| `REVOKE INSERT,UPDATE,DELETE … FROM authenticated` | **none** |
+| `GRANT SELECT … TO authenticated` | **none** |
+| `REVOKE … ON ALL TABLES IN SCHEMA public FROM anon` | **none** |
+| `ALTER TABLE … ENABLE ROW LEVEL SECURITY` | **AccessExclusiveLock** |
+
+And the last one takes it **even when RLS is already enabled** — `ALTER TABLE`
+does not check whether the change is a no-op before locking. Every one of the
+file's targets already has RLS on in any database provisioned even once
+(13/13 measured). The file was taking ten heavy locks to change nothing.
+
+Guarding each site with a `pg_class.relrowsecurity` test (PR #327) took the file
+from **14 heavy locks to 4**. The four that remain are all `DROP POLICY` /
+`CREATE POLICY` on quiet tables (`payment_methods`, `creator_analytics`,
+`marketplace_analytics`, `library_ratings`) and are deliberately left unguarded:
+skipping a policy replacement because a policy of that name exists would
+silently keep a wrong predicate.
+
+**So: apply it with `SET lock_timeout = '5s'` and retry on failure.** A failure
+is now a clean no-op, never a half-applied schema.
+
+Two corrections fell out of this, both of claims this repo shipped:
+
+1. **Migration 074's comment** said REVOKE *"still waits behind open
+   transactions that hold the table"*. It does not. Asserted, not measured;
+   corrected in #327.
+2. **"across every table in `public`"** — ten, not ninety-nine.
+
+### The lesson, because it has now happened twice in this area
+
+Both wrong calls came from reasoning about lock behaviour instead of reading
+`pg_locks`. A lock claim is cheap to measure — one transaction, one query, a
+rollback — and `.kiro-tmp/lock_measure.py` in the second clone does it in about
+a minute. Measure it.
+
+---
+
+## 2d. TWO AGENT SESSIONS SHARED ONE WORKING TREE, AND IT DESTROYED WORK
+
+**Operational, not a code defect, and worth reading before you start.**
+
+On 2026-11-18 around 20:30 a second Kiro session was working in
+`Downloads/vyomquant-saas-main/vyomquant-saas` at the same time as this one. The
+reflog is unambiguous — interleaved checkouts neither session made, and then:
+
+```
+20:26:20  checkout: -b fix/hardening-live-applicable      <- session A
+20:30:36  reset: moving to origin/main                    <- session B
+20:33:01  checkout: ... to fix/deploy05-apply-tool-...    <- session B
+```
+
+That `reset` **silently discarded session A's uncommitted edits** to
+`999_privilege_hardening.sql` and `074_…sql`. They had to be redone from scratch.
+
+It also explains two things that looked like tooling bugs at the time and are
+not: a `git add` that staged nothing, and a `git stash pop` that reported *"No
+stash entries found"* while the files came back. Both were the other session
+moving HEAD underneath.
+
+**If you see any of those three symptoms, check `git reflog` before debugging
+anything else.**
+
+**Mitigation that worked:** a second, independent clone
+(`git clone … Downloads/vq-work`), with `origin` pointed at the same remote.
+Branches and PRs still land normally; neither tree can reset the other. The work
+in #327 was redone there without incident.
+
+**Do not** `checkout`, `reset` or `stash` in a shared tree when another session
+has uncommitted changes — session B's 98-line edit to
+`scripts/apply_migration_to_production.py` was sitting uncommitted the whole
+time, and any of those commands from session A would have destroyed it.
+
+---
+
 ## 3. URGENT — not a task, an exposure
 
 The production database password was pasted into a chat transcript and is
@@ -167,6 +257,10 @@ secret at start. One such outage already happened; see §6.
 
 ## 4. Task state
 
+> **Superseded in part by §4a**, which is the current remaining list. The entries
+> below are kept because several carry measurements that are still the best record
+> of what was found.
+
 **Done and verified (14):** T01, T03, T04, T05, T06, T07, T08, T11, T12, T13,
 T14a. (T07 and T11 closed in session two — see §8.)
 
@@ -182,6 +276,8 @@ The "mandatory-alert floor" has no schema anchor.
 Attachments **do not exist at all** — needs a storage backend decision (S3 vs
 Supabase Storage) before code. Then replies and notification wiring.
 `migrations/add_support_tables.sql` is the starting point.
+**The decision is now made:** Supabase Storage, on four measurements, in
+`docs/audits/T09_ATTACHMENT_STORAGE_DECISION.md`.
 
 ### T17 light mode
 ~**35 live hex-alpha concatenations** (`${token.brand.base}15`) in
@@ -193,6 +289,72 @@ usages, `getContext(` = 0. **Must land atomically** — `prebuild` runs
 
 ### T02 dashboard grid
 Needs fresh screenshots from current `main` to confirm the symptom still exists.
+
+---
+
+## 4a. What is actually left (current as of 2026-11-18, end of session four)
+
+Four items, and they are **not** equivalent — two are ready to build, one is a
+judgement call I would argue against, one needs production access.
+
+### 1. Apply migration 074 to production — READY, needs credentials
+`backend_app/migrations/074_mkt10_revoke_backtest_dml.sql` is merged (#324) and
+takes `authenticated`'s INSERT/UPDATE/DELETE off `strategy_backtests`. **Until it
+is applied, a seller can still write the backtest evidence the Eligibility_Gate
+reads about them.** The code half is live; this is the half that closes it.
+
+It is privilege-only, idempotent, verifies its own outcome inside the transaction
+(so a wrong result rolls back), runs under `lock_timeout = 5s`, takes no table
+lock at all (§2c), and has a rollback at
+`rollback/074_mkt10_rollback.sql`. Applied and cycled forward/back on a local
+cluster that reproduced the hole.
+
+**Blocker: no production DB credential in the working environment.** The helper
+that used to hold it is gone, `aws` is not on PATH, and the password still needs
+rotating (§3) — so rotate first, then apply, then this item and §3 close
+together. `scripts/apply_migration_to_production.py` was being worked on
+concurrently (§2d); check its state before writing a new tool.
+
+### 2. Subscriber-backtest route — READY to build
+#318 replaced a dead link with an honest "unavailable" notice, which is the right
+interim state but not the capability. A subscriber who paid for a listing cannot
+backtest it (Requirement 12.3).
+
+Needs its own PR because it is a **new execution path**, and specifically its own
+Protected_Logic review: the whole point is running a strategy whose logic the
+caller must not see. `tests/property/test_protected_logic_containment.py` is the
+existing guard and the place to extend.
+
+### 3. T14b — merge the entitlement list — READY to build
+Unchanged from `TASK_14_STRATEGIES_PAGE_SCOPE_FINDING.md` §4, which has the
+ordered steps. The one that is easy to get wrong is step 3: `subscribed_total`
+must stay **withheld** rather than render as `0` when the subscribed read failed,
+or an account whose subscription read errored is told it has no subscriptions.
+
+Do **not** satisfy Task 14 by deleting the *Owned and subscribed* section. It is
+the only surface rendering a subscribed Listing and the only place renew, cancel
+and listing-deploy exist.
+
+### 4. T10 preference filtering — I recommend NOT building this yet
+The mandatory-alert floor is done and anchored (#314, migration 073). Filtering
+is the remaining half, and the measurement says it would be ornamental:
+**7 of the 8 preference keys have no producer.** AST over the dispatch path: 17
+dispatch sites, only `kill_switch_activated` matches a key. A filter over events
+nobody emits reads like a working feature and is not one.
+
+**The prerequisite is wiring the producers** (trade-execution and risk events into
+`dispatch_user_notification`), and that is the work worth doing. Also still open
+and measured: `public.notifications` held **0 rows in production**, so NOTIF-01's
+fix is either undeployed or has had no qualifying event — check that first now
+that the backend is current.
+
+### Standing recommendation, now five-for-five and still unbuilt
+A `paths`-triggered CI job that fails when `backend_app/routers/**` or
+`backend_app/migrations/**` changes without a matching
+`tests/regression/baseline/surface_*.json` or `staging/provisioning_snapshot.json`
+in the same push. It has turned `main` red five times, and once (#309) it
+**silently blocked every production deploy for a day** — see §2a. #325 now detects
+the staleness that causes; this would prevent the cause.
 
 ### T16 performance
 **Partially blocked** — no Sentry, no API or DB timing available to baseline
