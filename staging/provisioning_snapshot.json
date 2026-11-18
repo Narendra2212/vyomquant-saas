@@ -26246,6 +26246,21 @@
       "step1"
     ],
     [
+      "migrations/073_notif02_mandatory_alert_floor.sql",
+      "998fe0d65ed9c81cd8bae2650a77fe55f54d6ec99bd24a394b912f9bed25247a",
+      "step1"
+    ],
+    [
+      "migrations/074_mkt10_revoke_backtest_dml.sql",
+      "a2745bea104c0a0fa5b0b6c301d404876b656afb90a1776be4534e8bda410e09",
+      "step1"
+    ],
+    [
+      "migrations/075_risk06_risk_settings_circuit_breaker_armed.sql",
+      "da19b4a09789dc9f0cf580c5ab3dd3f829488541c8f90896c2756347223352c0",
+      "step1"
+    ],
+    [
       "migrations/add_billing_currency_and_dag_hash.sql",
       "4b2ac2899820d0a43407671ab4b4648af994d98210a66347c6c05a022740719f",
       "step1"
@@ -26324,11 +26339,6 @@
       "root_migrations/010_create_deployment_permissions.sql",
       "2a7335c0294acc19a2aaed3c90d49359afd317ac4f89dd5dc9ae951f444854c8",
       "step0b"
-    ],
-    [
-      "migrations/073_notif02_mandatory_alert_floor.sql",
-      "998fe0d65ed9c81cd8bae2650a77fe55f54d6ec99bd24a394b912f9bed25247a",
-      "step1"
     ]
   ],
   "row_level_security": [
