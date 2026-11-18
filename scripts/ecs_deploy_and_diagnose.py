@@ -115,6 +115,50 @@ ROLLOUT_POLL_INTERVAL_SECONDS = int(os.getenv("ROLLOUT_POLL_INTERVAL_SECONDS", "
 # in-flight deployment (the exact failure mode seen on 2026-09-29).
 PRE_DEPLOY_IDLE_WAIT_SECONDS = int(os.getenv("PRE_DEPLOY_IDLE_WAIT_SECONDS", "600"))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THE DECLARED TASK SIZING, AND WHY IT IS 4096 AND NOT 2048
+# ─────────────────────────────────────────────────────────────────────────────
+# `validate_task_definition` refuses a revision whose sizing is not these values. The gate
+# matters because `register_new_task_definition` bases every new revision on the RUNNING one:
+# a sizing change made outside this pipeline would otherwise propagate into every future
+# deploy silently. That is exactly what happened on 2026-11-18 and it blocked all deploys.
+#
+# MEMORY WAS RAISED 2048 -> 4096 ON EVIDENCE, NOT TO MAKE THE GATE PASS.
+#
+# Revision 351 was registered out of band with 4096, and from then until this change every
+# deploy was refused by this function with "Memory is not 2048, got 4096". The two possible
+# reconciliations are opposite in meaning -- raise the expectation, or put the revision back
+# to 2048 -- so which one is right was measured before either was done.
+#
+# Measured from CloudWatch `AWS/ECS MemoryUtilization` for this service, 36 hours to
+# 2026-11-18T17:00 IST, 431 datapoints at 5-minute resolution:
+#
+#     steady state ON 4096        ~50.6 - 51.5 %   =>  ~2.07 - 2.11 GB resident
+#     PEAK while still ON 2048     91.7 %  (04:33)  =>  ~1.88 GB resident
+#
+# The first line is the decisive one: the container's steady-state working set is **above
+# 2048 MB**. At a 2048 limit it does not fit, which is consistent with the task that came up
+# at 08:47, registered at 08:49, and was failed by the target group's health check at 08:50
+# before being replaced. A process under memory pressure answers a health check late or not
+# at all.
+#
+# Revision 351 differs from 350 in memory and in NOTHING ELSE -- same image
+# (`b44628cdcb9d56f97127dd63636125c896fb8b71`), the same 36 `environment` names, the same 13
+# `secrets` names, the same health check. So it was a deliberate sizing decision rather than a
+# side effect of some other change, and the service has held steady state since.
+#
+# 1024 CPU with 4096 memory is a valid Fargate combination (1 vCPU admits 2-8 GB in 1 GB
+# steps), so no CPU change is implied.
+#
+# WHAT THIS DOES NOT SETTLE, AND SHOULD BE WATCHED. A working set of ~2.1 GB for one API
+# container is large, and raising a limit to accommodate growth nobody has explained is how an
+# environment arrives at 8 GB. The same image used ~1.88 GB at peak on the old limit, so this
+# is not new code -- it is the same code measured against a ceiling it was already pressed
+# against. The size is accepted here because the pipeline must reproduce what runs; the
+# question of why it needs 2 GB is recorded in the session report and is not answered here.
+EXPECTED_TASK_CPU = os.getenv("EXPECTED_TASK_CPU", "1024")
+EXPECTED_TASK_MEMORY = os.getenv("EXPECTED_TASK_MEMORY", "4096")
+
 # Rollout outcome states returned by wait_for_rollout().
 ROLLOUT_COMPLETED = "COMPLETED"    # our deployment reached steady state
 ROLLOUT_FAILED = "FAILED"          # ECS deployment circuit breaker tripped
@@ -251,11 +295,19 @@ def validate_critical_config(task_def: Dict) -> Tuple[bool, str]:
     if not port_mappings or port_mappings[0].get("containerPort") != 8000:
         return False, "CRITICAL: Container port is not 8000"
 
-    # Validate CPU and memory
-    if task_def.get("cpu") != "1024":
-        return False, f"CRITICAL: CPU is not 1024, got {task_def.get('cpu')}"
-    if task_def.get("memory") != "2048":
-        return False, f"CRITICAL: Memory is not 2048, got {task_def.get('memory')}"
+    # Validate CPU and memory against the declared sizing (see EXPECTED_TASK_* above).
+    if task_def.get("cpu") != EXPECTED_TASK_CPU:
+        return False, (
+            f"CRITICAL: CPU is not {EXPECTED_TASK_CPU}, got {task_def.get('cpu')}"
+        )
+    if task_def.get("memory") != EXPECTED_TASK_MEMORY:
+        return False, (
+            f"CRITICAL: Memory is not {EXPECTED_TASK_MEMORY}, got "
+            f"{task_def.get('memory')}. This gate exists because the deploy bases every "
+            f"new revision on the RUNNING one, so an out-of-band sizing change would "
+            f"otherwise propagate silently. If the running size is deliberately different, "
+            f"change EXPECTED_TASK_MEMORY and say why -- do not widen the comparison."
+        )
 
     return True, "All critical validations passed"
 
