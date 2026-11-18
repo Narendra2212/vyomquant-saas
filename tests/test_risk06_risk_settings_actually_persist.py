@@ -238,7 +238,15 @@ class TestSaveRefusesRatherThanLying:
 
 
 class TestStrategyLimitsPersist:
-    @patch("backend_app.routers.risk._sb")
+    """These patch `get_service_supabase_async`, NOT `_sb`.
+
+    `public.strategy_limits` grants `authenticated` SELECT only, so the write has to go
+    through the service-role client or fail with 42501 in production -- which is how CI's
+    `sec22_authenticated_write_inventory` analyzer caught the first version of this fix.
+    Patching `_sb` here would test a client the handler no longer uses.
+    """
+
+    @patch("backend_app.routers.risk.get_service_supabase_async")
     def test_batch_update_upserts_on_the_tables_unique_key(self, mock_sb, configured_store):
         factory, sb = _sb_that_succeeds()
         mock_sb.side_effect = factory
@@ -260,7 +268,7 @@ class TestStrategyLimitsPersist:
             f"got {kwargs.get('on_conflict')!r}"
         )
 
-    @patch("backend_app.routers.risk._sb")
+    @patch("backend_app.routers.risk.get_service_supabase_async")
     def test_single_update_refuses_when_the_write_fails(self, mock_sb, configured_store):
         mock_sb.side_effect = _sb_that_raises(Exception("connection refused"))
         app.dependency_overrides[get_current_user] = _user_with_token
@@ -273,6 +281,27 @@ class TestStrategyLimitsPersist:
 
         assert response.status_code == 503
         assert response.json()["detail"]["error"] == "STRATEGY_LIMITS_PERSIST_FAILED"
+
+    @patch("backend_app.routers.risk.get_service_supabase_async")
+    def test_no_service_role_client_refuses_rather_than_falling_back_to_the_caller(
+        self, mock_sb, configured_store
+    ):
+        """A missing SUPABASE_SERVICE_ROLE_KEY must not silently degrade to the caller's
+        client -- that client cannot write this table, so the save would fail anyway, and
+        falling back would re-grow the browser-role write surface."""
+        mock_sb.side_effect = AsyncMock(return_value=None)
+        app.dependency_overrides[get_current_user] = _user_with_token
+        try:
+            response = client.put(
+                "/api/risk/strategy-limits/s1", json={"max_position_size": 250}
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == (
+            "STRATEGY_LIMITS_PERSISTENCE_UNAVAILABLE"
+        )
 
     def test_row_builder_omits_keys_the_caller_did_not_supply(self):
         """A partial update must not overwrite unmentioned columns with model defaults."""
