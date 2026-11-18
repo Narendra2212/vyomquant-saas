@@ -650,6 +650,81 @@ the drift register, all 58 regression baselines, and the e2e journey.
 
 ---
 
+## 8b. Four defects a self-review found that the tests did not
+
+The suites were green before any of these. That is the finding worth recording,
+because a green suite written by the same person who wrote the code tests the
+cases that person thought of.
+
+### The CHECK constraint only caught one of six shapes
+
+`(events -> 'kill_switch_activated') IS DISTINCT FROM 'false'::jsonb` reads
+correctly and binds for almost nothing. `->` yields jsonb, so only the JSON
+*boolean* `false` matches. Measured against that predicate:
+
+| shape | verdict |
+|---|---|
+| JSON boolean `false` | refused |
+| JSON boolean `true` | accepted — correct |
+| JSON string `"false"` | **accepted** |
+| JSON string `"no"` | **accepted** |
+| JSON number `0` | **accepted — dangerous** |
+| JSON `null` | **accepted — dangerous** |
+| key absent | accepted — correct |
+
+`0` and `null` are dangerous not because of what the database makes of them but
+because of what a reader would: `bool(0)` and `bool(None)` are both `False`, so
+the preference filter this floor exists to constrain would read either as
+"switched off" — the exact suppression the constraint forbids, arriving through a
+shape it waved through.
+
+Reachable, because `authenticated` retains INSERT and UPDATE on the table (the
+panel's upsert needs both), so a hand-rolled PostgREST request can send any of
+them even though the request model cannot.
+
+Now `IS NULL OR = 'true'::jsonb`. Re-measured: all five non-`true` shapes
+refused, absent and `true` accepted. The postgres case is parametrised over the
+five, because one lucky shape is what made the weaker predicate look enforced.
+
+### The end-windows sorted by a nullable column
+
+The two reads ordered by `filled_at` — the column the span is *dated* by, and
+nullable. PostgreSQL places nulls at one end, so a strategy with more than 200
+fills whose `filled_at` was never stamped would have its descending window filled
+entirely with those rows and its genuinely latest fill excluded.
+
+A false *fail* rather than a false pass, so not dangerous — but user-visible in
+the worst way on a gate whose refusal the owner cannot argue with. Now ordered by
+`created_at`, which is `NOT NULL`.
+
+### The evidence generator still drew sets of three
+
+`tests/strategies/marketplace_generators.MIN_CONDITIONS` stayed at 3 and nothing
+failed, because `test_evidence_distinctness` computes the expected verdict rather
+than assuming admission. The cost was coverage, not correctness: every drawn set
+of 3 or 4 becomes a guaranteed `EV_COUNT` failure, so the generator would spend
+most of its draws re-proving one criterion and the admitted path would quietly
+empty out.
+
+### Two stale prose references
+
+`test_validation_sweep.py` quoted `min_items=3, max_items=10` as the field's
+declaration and `test_marketplace_pipeline.py` described the flow as admitting
+"on three completed runs". Comments, not assertions — which is why neither
+failed, and why a reader would have been misled rather than warned.
+
+### And one claim checked and found sound
+
+The report's assertion that "nothing in the repository writes `execution_records`,
+`orders` or `positions` through PostgREST" was re-verified independently, with a
+wider net than the original AST pass: `.table("…")`, `.from_(…)` and `rest/v1/…`
+across `backend_app`, `api_ws`, `scripts`, `dev_tools`, `infra`, `monitoring`,
+`observability` and `algo22-terminal/src`. The only PostgREST reference to any of
+the three in the entire tree is this change's own `SELECT` in
+`eligibility_gate.py`. The Alembic hits are `op.create_table`, which is DDL.
+
+---
+
 ## 9. Security posture of these changes
 
 | Requirement | Status |
