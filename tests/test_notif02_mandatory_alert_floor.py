@@ -192,6 +192,40 @@ def test_the_migration_constrains_exactly_the_declared_mandatory_keys() -> None:
     )
 
 
+def test_the_predicate_is_absent_or_true_rather_than_not_false() -> None:
+    """The spelling is the control, and the obvious spelling does not bind.
+
+    `(events -> 'key') IS DISTINCT FROM 'false'::jsonb` was the first version of this
+    constraint. `->` yields jsonb, so it catches ONLY the JSON boolean `false`. Measured on a
+    local cluster against that predicate:
+
+        JSON boolean false       refused
+        JSON string "false"      ACCEPTED
+        JSON number 0            ACCEPTED
+        JSON null                ACCEPTED
+
+    `0` and `null` are the dangerous two, because `bool(0)` and `bool(None)` are both False —
+    so a preference filter would read them as "switched off", which is the suppression the
+    constraint exists to forbid, arriving through a shape it waved through.
+
+    Asserted on the text rather than the behaviour so the reason survives in the SQLite lane;
+    the postgres cases below assert the behaviour.
+    """
+    sql = MIGRATION.read_text(encoding="utf-8")
+    body = sql.split("ADD CONSTRAINT chk_notification_settings_mandatory_alerts", 1)[1]
+    predicate = body.split(");", 1)[0]
+
+    assert "IS DISTINCT FROM" not in predicate, (
+        "the predicate is back to IS DISTINCT FROM, which only catches the JSON boolean "
+        "false and accepts 0 and null — see this test's docstring for the measurement"
+    )
+    for key in MANDATORY_NOTIFICATION_EVENTS:
+        assert f"(events -> '{key}') IS NULL" in predicate, f"{key} lost its absent clause"
+        assert f"(events -> '{key}') = 'true'::jsonb" in predicate, (
+            f"{key} lost its explicit true clause"
+        )
+
+
 def test_the_migration_corrects_the_dead_column_defaults() -> None:
     """The default must name the stored vocabulary, or the constraint reads an absent key.
 
@@ -344,15 +378,26 @@ def _profile(cur) -> str:
     return user_id
 
 
+#: Every shape a client could put at a mandatory key that is not "absent" and not the JSON
+#: boolean `true`. All must be refused.
+#:
+#: The list is the point. A predicate of `IS DISTINCT FROM 'false'::jsonb` refuses the first
+#: and accepts the other four — and `0` and `null` are the two a preference filter would read
+#: as "switched off", because `bool(0)` and `bool(None)` are both False. Parametrising over
+#: the shapes is what makes "the constraint binds" a measurement rather than one lucky case.
+_REFUSED_SHAPES = ("false", '"false"', '"no"', "0", "null")
+
+
 @pg_only
 @pytest.mark.parametrize("key", MANDATORY_NOTIFICATION_EVENTS)
-def test_the_database_refuses_a_mandatory_alert_stored_as_false(pg, key: str) -> None:
+@pytest.mark.parametrize("value", _REFUSED_SHAPES)
+def test_the_database_refuses_every_not_true_shape_at_a_mandatory_key(
+    pg, key: str, value: str
+) -> None:
     """Against a REAL profile, so the CHECK is what refuses rather than the foreign key."""
     import psycopg2
 
     cur = pg.cursor()
-    if cur.execute("SELECT to_regclass('public.notification_settings')") is None:
-        pass
     cur.execute("SELECT to_regclass('public.notification_settings')")
     if cur.fetchone()[0] is None:
         pytest.skip("public.notification_settings is not in this database")
@@ -362,8 +407,34 @@ def test_the_database_refuses_a_mandatory_alert_stored_as_false(pg, key: str) ->
     with pytest.raises(psycopg2.errors.CheckViolation):
         cur.execute(
             "INSERT INTO notification_settings (user_id, events) VALUES (%s, %s::jsonb)",
-            (user_id, '{"%s": false}' % key),
+            (user_id, '{"%s": %s}' % (key, value)),
         )
+    pg.rollback()
+
+
+@pg_only
+@pytest.mark.parametrize("key", MANDATORY_NOTIFICATION_EVENTS)
+def test_the_database_accepts_a_mandatory_key_absent_or_true(pg, key: str) -> None:
+    """The other half: a floor that refused every write would make the panel undrawable.
+
+    Absent is accepted because a partial payload that does not mention a mandatory switch does
+    not disagree with it.
+    """
+    cur = pg.cursor()
+    cur.execute("SELECT to_regclass('public.notification_settings')")
+    if cur.fetchone()[0] is None:
+        pytest.skip("public.notification_settings is not in this database")
+
+    for payload in ('{"%s": true}' % key, '{"trade_executed": true}'):
+        user_id = _profile(cur)
+        cur.execute("SAVEPOINT ok")
+        cur.execute(
+            "INSERT INTO notification_settings (user_id, events) VALUES (%s, %s::jsonb)",
+            (user_id, payload),
+        )
+        cur.execute("SELECT 1 FROM notification_settings WHERE user_id = %s", (user_id,))
+        assert cur.fetchone() is not None, f"{payload} was not stored"
+        cur.execute("ROLLBACK TO SAVEPOINT ok")
     pg.rollback()
 
 

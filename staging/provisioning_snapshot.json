@@ -26351,7 +26351,7 @@
     ],
     [
       "migrations/073_notif02_mandatory_alert_floor.sql",
-      "09d8270aceef726cb4dea94cfcdfd6d2620a187b9480e23dc949220c8146be04",
+      "998fe0d65ed9c81cd8bae2650a77fe55f54d6ec99bd24a394b912f9bed25247a",
       "step1"
     ]
   ],
@@ -27987,7 +27987,7 @@
       "notification_settings",
       "chk_notification_settings_mandatory_alerts",
       "c",
-      "CHECK ((((events -> 'kill_switch_activated'::text) IS DISTINCT FROM 'false'::jsonb) AND ((events -> 'stop_loss_triggered'::text) IS DISTINCT FROM 'false'::jsonb) AND ((events -> 'new_login_detected'::text) IS DISTINCT FROM 'false'::jsonb)))"
+      "CHECK (((((events -> 'kill_switch_activated'::text) IS NULL) OR ((events -> 'kill_switch_activated'::text) = 'true'::jsonb)) AND (((events -> 'stop_loss_triggered'::text) IS NULL) OR ((events -> 'stop_loss_triggered'::text) = 'true'::jsonb)) AND (((events -> 'new_login_detected'::text) IS NULL) OR ((events -> 'new_login_detected'::text) = 'true'::jsonb))))"
     ],
     [
       "notifications",

@@ -88,10 +88,46 @@
 -- alert they had switched off. The constraint forbids a FUTURE write, which is
 -- the only thing it needs to do.
 --
--- The predicate is `IS NOT FALSE`, not `= true`. An absent key and a JSON
--- `null` both read as "not set", and a not-set mandatory key is the default,
--- which is on. `= true` would have rejected a partial payload that omitted the
--- key entirely -- refusing a write for not mentioning something it agrees with.
+-- ────────────────────────────────────────────────────────────────────────────
+-- 3a. THE PREDICATE IS "ABSENT OR TRUE", NOT "NOT FALSE"
+-- ────────────────────────────────────────────────────────────────────────────
+-- The obvious spelling is `(events -> 'key') IS DISTINCT FROM 'false'::jsonb`,
+-- and it was the first version of this file. It does not bind. `->` yields
+-- jsonb, so only the JSON *boolean* `false` matches; every other shape a client
+-- can put at that key passes. Measured against this constraint on a local
+-- cluster (`.kiro-tmp/probe_check_predicate.py`):
+--
+--     JSON boolean false       refused
+--     JSON boolean true        ACCEPTED   <- correct
+--     JSON string "false"      ACCEPTED   <- wrong
+--     JSON string "no"         ACCEPTED   <- wrong
+--     JSON number 0            ACCEPTED   <- wrong, and the dangerous one
+--     JSON null                ACCEPTED   <- wrong, and the dangerous one
+--     key absent               ACCEPTED   <- correct
+--
+-- The two marked dangerous are dangerous because of what a READER would make of
+-- them. Python's `bool(0)` and `bool(None)` are both False, so a preference
+-- filter would treat `0` and `null` as "switched off" -- which is exactly the
+-- suppression this constraint exists to forbid, arriving through a shape the
+-- constraint waved through. `bool("false")` is True, so the string spellings are
+-- merely junk rather than a bypass, but a constraint should not need that
+-- distinction explained.
+--
+-- `authenticated` retains INSERT and UPDATE on this table (the panel's write is
+-- an upsert through the caller's own client and needs both verbs), so those
+-- shapes are reachable by a hand-rolled PostgREST request even though the
+-- request model cannot produce them.
+--
+-- So the predicate is `IS NULL OR = 'true'::jsonb`: the key is absent, or it is
+-- the JSON boolean true. Nothing else.
+--
+-- Absent is still accepted, deliberately. A partial payload that does not
+-- mention a mandatory switch does not disagree with it, and refusing a write for
+-- not mentioning something it agrees with would break any client that sends less
+-- than the whole object. That is the one clause carried over from the weaker
+-- version, and `IS NULL` is the right test for it -- an absent key makes `->`
+-- return SQL NULL, where a JSON `null` returns `'null'::jsonb` and is now
+-- refused, because an unreadable value at a mandatory key is not consent.
 --
 -- ────────────────────────────────────────────────────────────────────────────
 -- 4. WHAT THIS DOES NOT CLAIM
@@ -142,9 +178,12 @@ ALTER TABLE public.notification_settings
 
 ALTER TABLE public.notification_settings
     ADD CONSTRAINT chk_notification_settings_mandatory_alerts CHECK (
-        (events -> 'kill_switch_activated') IS DISTINCT FROM 'false'::jsonb
-        AND (events -> 'stop_loss_triggered') IS DISTINCT FROM 'false'::jsonb
-        AND (events -> 'new_login_detected') IS DISTINCT FROM 'false'::jsonb
+        ((events -> 'kill_switch_activated') IS NULL
+            OR (events -> 'kill_switch_activated') = 'true'::jsonb)
+        AND ((events -> 'stop_loss_triggered') IS NULL
+            OR (events -> 'stop_loss_triggered') = 'true'::jsonb)
+        AND ((events -> 'new_login_detected') IS NULL
+            OR (events -> 'new_login_detected') = 'true'::jsonb)
     );
 
 -- ── The dead defaults, corrected to the vocabulary that is actually stored ──
@@ -195,10 +234,15 @@ BEGIN
     -- refuse, against an id that cannot collide, and require the refusal. A
     -- constraint whose predicate were subtly wrong (`->>` against a jsonb
     -- literal, say) would pass the existence check and permit the write.
+    -- The probe sends JSON `null`, not `false`. `false` was refused by the WEAKER
+    -- predicate too, so it could not tell the two apart; `null` is one of the two
+    -- shapes that predicate accepted and a reader would treat as switched off, so
+    -- this is the write that distinguishes a binding constraint from a decorative
+    -- one. See section 3a.
     probe_id := gen_random_uuid();
     BEGIN
         INSERT INTO public.notification_settings (user_id, events)
-        VALUES (probe_id, '{"kill_switch_activated": false}'::jsonb);
+        VALUES (probe_id, '{"kill_switch_activated": null}'::jsonb);
     EXCEPTION
         WHEN check_violation THEN
             refused := true;
@@ -224,14 +268,17 @@ BEGIN
         -- refuses -- correctly, since a reader scanning for destructive SQL cannot be asked
         -- to also reason about which branch is reachable.
         RAISE EXCEPTION
-            '073 postflight FAILED: a row storing kill_switch_activated=false '
-            'was ACCEPTED. The constraint exists but does not bind.';
+            '073 postflight FAILED: a row storing kill_switch_activated=null '
+            'was ACCEPTED. The constraint exists but does not bind -- check that '
+            'the predicate is "IS NULL OR = true" and not "IS DISTINCT FROM '
+            'false", which only catches the JSON boolean.';
     END IF;
 
     RAISE NOTICE
         '073: kill_switch_activated, stop_loss_triggered and new_login_detected '
-        'cannot be stored as false. The preference defaults now name the keys '
-        'the application actually reads.';
+        'may only be absent or JSON true -- false, "false", 0 and null are all '
+        'refused. The preference defaults now name the keys the application '
+        'actually reads.';
 END $$;
 
 COMMIT;
