@@ -589,7 +589,20 @@ async def create_ticket(
         )
         if supabase and ws_mgr:
             try:
-                await create_notification(admin_notification, supabase, ws_mgr)
+                # NO CLIENT IS PASSED, DELIBERATELY. `create_notification` resolves the
+                # SERVICE-ROLE client when a caller supplies none
+                # (`notification_dispatcher._resolve_persistence_client`), and this row
+                # is addressed to `support_staff` -- NOT to the caller. Handing it the
+                # ticket submitter's own request-scoped client asked that customer to
+                # insert a row belonging to somebody else, which the owner policy on
+                # `notifications` refuses. The failure was swallowed by the `except`
+                # below and logged at debug, so this notification has never persisted;
+                # it is part of why production held zero notification rows.
+                #
+                # `supabase` is still the gate: it tells us a database is configured at
+                # all (the test suite overrides it to None). It is just no longer the
+                # client the write goes through.
+                await create_notification(admin_notification, ws_manager=ws_mgr)
             except Exception as notif_err:
                 logger.debug(f"[SUPPORT] In-app notification creation non-blocking fallback: {notif_err}")
     except Exception as e:
@@ -1071,7 +1084,13 @@ async def staff_reply_ticket(
             message=f"VyomQuant Support replied: {body.message[:120]}...",
             metadata={"ticket_id": ticket_id, "status": new_status},
         )
-        await create_notification(user_notif, supabase, ws_mgr)
+        # Same reason as the admin notification on ticket creation: no client is passed,
+        # so the service-role one is resolved. This row is addressed to
+        # `target_user_id` -- the TICKET'S OWNER -- while the caller here is support
+        # staff, so writing it through the staff member's request-scoped client asked
+        # one user to insert a notification belonging to another. The owner policy
+        # refuses that, and the `except` below swallowed it.
+        await create_notification(user_notif, ws_manager=ws_mgr)
     except Exception as notif_err:
         logger.debug(f"[SUPPORT] Staff reply notification dispatch non-blocking: {notif_err}")
 
