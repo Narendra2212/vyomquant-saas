@@ -182,6 +182,33 @@ redefining what a `None` from the module-shared `_sb` means for **every** handle
 Fixing (1) and (2) together with a single explicit `_sb` contract is the right shape for that work,
 and it is a change to refusal behaviour across a risk router rather than a one-line correction.
 
+##### UPDATE — RISK-06/RISK-07 built that contract, and used it on the WRITE paths only
+
+The discriminator this section asked for now exists: `routers/risk.py::_persistence_configured()`
+tests `SUPABASE_URL` / `SUPABASE_ANON_KEY`, mirroring `core/dependencies.get_supabase`, so
+"deliberately unconfigured" and "construction refused" are no longer the same answer.
+
+It is applied to the two **write** endpoints, where the stakes are highest:
+
+- `PUT /api/risk/settings` — 503 `RISK_SETTINGS_PERSIST_FAILED` / `RISK_SETTINGS_PERSISTENCE_UNAVAILABLE`
+- `PUT /api/risk/strategy-limits` and `.../{strategy_id}` — 503 `STRATEGY_LIMITS_PERSIST_FAILED` /
+  `STRATEGY_LIMITS_PERSISTENCE_UNAVAILABLE`
+
+The reason the write paths went first is that they were worse than this section assumed. The save
+had **never persisted anything in production**: the upsert named `circuit_breaker_armed`, which no
+migration declared, so PostgREST rejected the whole atomic statement with 42703 every time — taking
+`max_daily_loss`, `max_positions`, `max_leverage` and `kill_switches` down with it — while the
+handler returned `{"status": "ok", "message": "Risk settings saved successfully"}`. Migration
+**075** declares the column and was applied to production; `PUT /strategy-limits` additionally never
+wrote to a table at all, only to a process-local dict that `GET /strategy-limits` then merged over
+the table it does read.
+
+**Both read gaps above remain open and are unchanged in substance.** They are now a smaller change
+than when this section was written, because the discriminator no longer has to be invented — it has
+to be called. Tests: `tests/test_risk06_risk_settings_actually_persist.py`, including
+`test_unconfigured_deployment_is_not_treated_as_a_broken_one`, which pins the distinction after a
+first attempt keyed the refusal on token presence alone and broke three lifecycle tests.
+
 ## Category C items settled by the pricing-ladder change
 
 Two of the three category C entries above are resolved, and one is narrowed:
