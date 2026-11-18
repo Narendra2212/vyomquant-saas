@@ -189,6 +189,31 @@ BEGIN
             ON public.notifications FROM authenticated;
         GRANT SELECT, UPDATE, DELETE ON public.notifications TO authenticated;
     END IF;
+    -- NOTIF-02: `notification_settings` holds one row per customer and decides which
+    -- alerts they are willing to receive. `anon` held SELECT/INSERT/UPDATE/DELETE on it.
+    --
+    -- RLS is enabled with an owner policy, so no anon row is reachable -- defence in
+    -- depth, stated at that size, same as `billing_invoices` and `notifications` above.
+    -- The privilege is still wrong: this table now carries the mandatory-alert floor
+    -- (migration 073's `chk_notification_settings_mandatory_alerts`), and a constraint is
+    -- only as good as the set of roles that can reach the table at all.
+    --
+    -- `authenticated` KEEPS SELECT, INSERT and UPDATE. The panel's own write is
+    -- `supabase.table("notification_settings").upsert(...)` through the caller's
+    -- request-scoped client (`routers/user.py:151`, the only PostgREST writer in the
+    -- tree), and an upsert needs both verbs. DELETE goes: no endpoint deletes a
+    -- preference row, and a deleted row reads as "no preference stored", which the panel
+    -- renders as the contract defaults -- so a delete is a silent reset, not an erasure
+    -- the customer would see.
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'notification_settings') THEN
+        ALTER TABLE public.notification_settings ENABLE ROW LEVEL SECURITY;
+        REVOKE ALL ON public.notification_settings FROM anon;
+        REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER
+            ON public.notification_settings FROM authenticated;
+        GRANT SELECT, INSERT, UPDATE ON public.notification_settings TO authenticated;
+    END IF;
+
     -- Stored-instrument metadata: brand, last4, expiry, and the provider's
     -- payment_method_id. 006 PART 11 declared no policy for this table at all, so it
     -- needs both. Served exclusively by the API over SQLAlchemy, so neither browser role

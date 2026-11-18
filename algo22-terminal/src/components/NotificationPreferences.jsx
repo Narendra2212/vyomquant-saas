@@ -58,6 +58,30 @@ import { token } from '../design/tokens';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
 
 /**
+ * NOTIF-02 — `pydantic_models.MANDATORY_NOTIFICATION_EVENTS`, the alerts no preference may
+ * switch off.
+ *
+ * Before this, the panel printed "Mandatory risk alerts (global kill switch triggers) cannot
+ * be disabled" and rendered, directly above that sentence, the switch that disabled them.
+ * Nothing enforced the claim: grep for readers of `notification_settings` in `backend_app`
+ * finds two, both in `routers/user.py` — the GET and the PUT of this panel.
+ *
+ * Now three layers say the same thing: this set locks the controls,
+ * `NotificationEvents.mandatory_alerts_stay_on` refuses the payload, and migration 073's
+ * `chk_notification_settings_mandatory_alerts` refuses the row whatever writes it. The set is
+ * mirrored rather than fetched because it is a product rule rather than account state — and a
+ * fetch would leave the controls' locked-ness waiting on a round trip that can fail.
+ */
+const MANDATORY_EVENTS = new Set([
+  'kill_switch_activated',
+  'stop_loss_triggered',
+  'new_login_detected',
+]);
+
+/** One sentence, used for all three, because the reason is the same for all three. */
+const LOCK_REASON = 'Always on — the platform delivers this alert regardless of preference.';
+
+/**
  * `NotificationSettingsRequest`'s own field defaults.
  *
  * Not invented here: these are the positions the server would apply for a value it has not
@@ -100,20 +124,33 @@ const writeFailureMessage = (err, fallback) => {
  * from a feature commit is how a design system acquires a control nobody reviewed. Every
  * colour comes from `token`.
  */
-function NotificationSwitch({ label, description, icon: Icon, checked, onChange }) {
+function NotificationSwitch({ label, description, icon: Icon, checked, onChange, locked, lockReason }) {
+  // NOTIF-02: a locked switch is `aria-disabled` and ignores both activation paths, rather
+  // than being removed or merely styled differently. The three mandatory alerts are real
+  // settings with a real position — the customer is entitled to SEE that they are on — and a
+  // control that moves and then springs back is worse than one that does not move.
+  //
+  // `aria-disabled` rather than `disabled`: this is a `div` with `role="switch"`, so it keeps
+  // its tab stop and a screen reader reads both the state and the reason.
+  const interactive = !locked;
+  const activate = () => {
+    if (interactive) onChange(!checked);
+  };
   return (
     <div
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      aria-disabled={locked ? true : undefined}
+      title={locked ? lockReason : undefined}
       tabIndex={0}
-      onClick={() => onChange(!checked)}
+      onClick={activate}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
           // Space scrolls the page by default, which would move the row out from under the
           // setting just toggled.
           event.preventDefault();
-          onChange(!checked);
+          activate();
         }
       }}
       style={{
@@ -124,7 +161,7 @@ function NotificationSwitch({ label, description, icon: Icon, checked, onChange 
         background: token.surface.raised,
         border: `1px solid ${checked ? token.brand.wash : token.line.default}`,
         borderRadius: token.radius.lg,
-        cursor: 'pointer',
+        cursor: interactive ? 'pointer' : 'not-allowed',
         transition: `all ${token.transition.fast}`,
       }}
     >
@@ -145,8 +182,19 @@ function NotificationSwitch({ label, description, icon: Icon, checked, onChange 
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="text-title font-semibold text-content-primary">{label}</div>
-        <div className="text-body leading-snug text-content-muted">{description}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-title font-semibold text-content-primary">{label}</span>
+          {locked ? (
+            <Lock
+              size={11}
+              aria-hidden="true"
+              style={{ color: token.content.muted, flexShrink: 0 }}
+            />
+          ) : null}
+        </div>
+        <div className="text-body leading-snug text-content-muted">
+          {locked ? lockReason : description}
+        </div>
       </div>
 
       <div
@@ -367,6 +415,8 @@ export function NotificationPreferences({ className }) {
               description="Stop loss execution and drawdown limit notifications"
               icon={AlertCircle}
               checked={eventOn('stop_loss_triggered')}
+              locked={MANDATORY_EVENTS.has('stop_loss_triggered')}
+              lockReason={LOCK_REASON}
               onChange={(checked) =>
                 handleNotificationSettingChange('events', 'stop_loss_triggered', checked)
               }
@@ -376,6 +426,8 @@ export function NotificationPreferences({ className }) {
               description="Venue liquidation proximity and emergency halt activations"
               icon={Shield}
               checked={eventOn('kill_switch_activated', 'margin')}
+              locked={MANDATORY_EVENTS.has('kill_switch_activated')}
+              lockReason={LOCK_REASON}
               onChange={(checked) =>
                 handleNotificationSettingChange('events', 'kill_switch_activated', checked)
               }
@@ -409,6 +461,8 @@ export function NotificationPreferences({ className }) {
               description="New login detections and authentication state alterations"
               icon={Lock}
               checked={eventOn('new_login_detected', 'login')}
+              locked={MANDATORY_EVENTS.has('new_login_detected')}
+              lockReason={LOCK_REASON}
               onChange={(checked) =>
                 handleNotificationSettingChange('events', 'new_login_detected', checked)
               }
@@ -418,10 +472,18 @@ export function NotificationPreferences({ className }) {
       </div>
 
       {/* A statement about what the platform will do whatever the switches say, which makes it
-          the one sentence in the panel that must not be the smallest text in it. */}
+          the one sentence in the panel that must not be the smallest text in it.
+
+          NOTIF-02 made it true and widened it to name all three, because the sentence used to
+          say "global kill switch triggers" while the stop-loss and sign-in alerts are on the
+          same floor. A sentence that under-claims is as misleading as one that over-claims:
+          a customer reading it would reasonably conclude the other two were theirs to mute. */}
       <p className="mt-3 flex items-start gap-1.5 text-body text-content-muted">
         <Lock size={12} aria-hidden="true" className="mt-0.5 shrink-0" />
-        <span>Mandatory risk alerts (global kill switch triggers) cannot be disabled.</span>
+        <span>
+          Emergency halt, stop-loss and new sign-in alerts cannot be disabled. The three
+          switches above are shown locked for that reason.
+        </span>
       </p>
     </Panel>
   );

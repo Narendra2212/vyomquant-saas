@@ -4851,7 +4851,7 @@
       "jsonb",
       "",
       "YES",
-      "'{\"push\": true, \"email\": true, \"in_app\": true, \"telegram\": false}'::jsonb",
+      "'{\"email\": true, \"mobile\": false, \"telegram\": false}'::jsonb",
       "NO",
       "",
       "NEVER"
@@ -4884,7 +4884,7 @@
       "jsonb",
       "",
       "YES",
-      "'{\"system\": true, \"stop_loss\": true, \"risk_alerts\": true, \"trade_fills\": true}'::jsonb",
+      "'{\"trade_executed\": true, \"api_key_expiring\": true, \"bot_state_change\": false, \"backtest_complete\": false, \"daily_pnl_summary\": true, \"new_login_detected\": true, \"stop_loss_triggered\": true, \"kill_switch_activated\": true}'::jsonb",
       "NO",
       "",
       "NEVER"
@@ -22434,31 +22434,6 @@
     ],
     [
       "notification_settings",
-      "anon",
-      "DELETE"
-    ],
-    [
-      "notification_settings",
-      "anon",
-      "INSERT"
-    ],
-    [
-      "notification_settings",
-      "anon",
-      "SELECT"
-    ],
-    [
-      "notification_settings",
-      "anon",
-      "UPDATE"
-    ],
-    [
-      "notification_settings",
-      "authenticated",
-      "DELETE"
-    ],
-    [
-      "notification_settings",
       "authenticated",
       "INSERT"
     ],
@@ -25866,7 +25841,7 @@
     ],
     [
       "hardening/999_privilege_hardening.sql",
-      "dc8300e46d59f798e9af3ffeb221a5e8147f7a4cb92cbb1884111764d453e22e",
+      "bdaeb80b876d8d27e2f9345b693ed3db69c46d4710ee363e12cb718cacb46be7",
       "step4"
     ],
     [
@@ -26373,6 +26348,11 @@
       "root_migrations/010_create_deployment_permissions.sql",
       "2a7335c0294acc19a2aaed3c90d49359afd317ac4f89dd5dc9ae951f444854c8",
       "step0b"
+    ],
+    [
+      "migrations/073_notif02_mandatory_alert_floor.sql",
+      "02f5ec76789326065489841335e51f16fed85b7d0e786cf4c2cfd414314a9369",
+      "step1"
     ]
   ],
   "row_level_security": [
@@ -28002,6 +27982,12 @@
       "uq_mv_version_node",
       "u",
       "UNIQUE (version_id, node_id, model_version)"
+    ],
+    [
+      "notification_settings",
+      "chk_notification_settings_mandatory_alerts",
+      "c",
+      "CHECK ((((events -> 'kill_switch_activated'::text) IS DISTINCT FROM 'false'::jsonb) AND ((events -> 'stop_loss_triggered'::text) IS DISTINCT FROM 'false'::jsonb) AND ((events -> 'new_login_detected'::text) IS DISTINCT FROM 'false'::jsonb)))"
     ],
     [
       "notifications",
