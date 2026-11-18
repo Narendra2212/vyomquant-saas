@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
@@ -56,12 +57,54 @@ async def expire_lapsed_one_time_plans(sb: Any, now: Optional[datetime] = None) 
                 except Exception:  # noqa: BLE001
                     pass
         except Exception as exc:  # noqa: BLE001
-            logger.error("[BILLING] BILL-01: could not expire plan for %s: %s", uid, type(exc).__name__)
+            # BILL-09: this one matters more than the loop's, because it fires
+            # per user. A plan that failed to expire is a customer still holding
+            # paid entitlements they have stopped paying for, and the old log
+            # line could not say why.
+            logger.error(
+                "[BILLING] BILL-01: could not expire plan for %s: %s: %s",
+                uid, type(exc).__name__, _describe(exc), exc_info=True,
+            )
     return expired
 
 
+def _describe(exc: BaseException) -> str:
+    """An exception rendered with enough detail to diagnose, and no credential.
+
+    BILL-09. Both handlers below logged `type(exc).__name__` and nothing else.
+    That is why 304 production failures between 2026-11-15 and 2026-11-17
+    produced exactly one string -- "APIError" -- and no way to tell what had
+    gone wrong. `APIError` is PostgREST's wrapper: the cause is in its
+    `message`/`code`/`hint`/`details`, all of which were being thrown away.
+
+    Those four fields are safe to log. They are the server's own account of a
+    rejected statement -- "column x does not exist", "permission denied for
+    table y" -- and carry no DSN. `str(exc)` is NOT used as the primary source
+    because a psycopg2 OperationalError's text can contain the full connection
+    string, host and user included; it is used only as a fallback and is
+    truncated. Same reasoning as `core/readiness.py::_safe_detail`.
+    """
+    parts = []
+    for attr in ("message", "code", "hint", "details"):
+        value = getattr(exc, attr, None)
+        if value:
+            parts.append(f"{attr}={value}")
+    if parts:
+        return " ".join(parts)[:400]
+    # Nothing structured. Fall back to the text, but keep it short and drop
+    # anything that looks like a URI, which is where a credential would sit.
+    text = re.sub(r"\b\w+://\S+", "<uri-redacted>", str(exc))
+    return text[:300] or "(no detail)"
+
+
 async def run_plan_expiry_loop(get_client, interval: int = SWEEP_INTERVAL_SECONDS) -> None:
-    """Forever: sweep, sleep. Never dies on a failed sweep; cancelled on shutdown."""
+    """Forever: sweep, sleep. Never dies on a failed sweep; cancelled on shutdown.
+
+    The swallow is deliberate and stays: a failed sweep must not kill the loop,
+    because the next hour's sweep is what recovers from a transient database
+    problem. What changed under BILL-09 is that the failure is now reported in
+    enough detail to act on.
+    """
     while True:
         try:
             client = get_client()
@@ -70,5 +113,8 @@ async def run_plan_expiry_loop(get_client, interval: int = SWEEP_INTERVAL_SECOND
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.error("[BILLING] plan-expiry sweep failed: %s", type(exc).__name__)
+            logger.error(
+                "[BILLING] plan-expiry sweep failed: %s: %s",
+                type(exc).__name__, _describe(exc), exc_info=True,
+            )
         await asyncio.sleep(interval)
