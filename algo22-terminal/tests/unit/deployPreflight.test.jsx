@@ -533,6 +533,16 @@ describe('strategiesApi.deployPreflight', () => {
 vi.mock('../../src/api', () => ({
   endpoints: { strategies: mockStrategies, exchange: mockExchange },
   publicGet: (...args) => mockPublicGet(...args),
+  // MKT-07: this file renders `pages/Strategies`, which now reads
+  // `useFeature(FEATURES.MARKETPLACE_PUBLISH)`, and `useEntitlements.load()` calls
+  // `isAuthenticated()` unguarded. A `vi.mock` factory replaces the module, so an omitted
+  // export throws on access — as an unhandled rejection out of a `useEffect`, with every
+  // assertion still passing and vitest exiting non-zero.
+  //
+  // `() => false` matters more here than elsewhere: an authenticated reader would make the
+  // entitlements hook issue its own GET, and this file counts `publicGet` calls to assert
+  // the preflight poll's repeat behaviour. Returning false keeps the request count exact.
+  isAuthenticated: () => false,
 }));
 
 // eslint-disable-next-line import/first

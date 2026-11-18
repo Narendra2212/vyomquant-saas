@@ -71,6 +71,12 @@ vi.mock('../../src/api', () => ({
   default: mockApi,
   api: mockApi,
   endpoints: mockApi,
+  // MKT-07: `pages/Strategies` now reads `useFeature(FEATURES.MARKETPLACE_PUBLISH)`, and
+  // `useEntitlements.load()` calls `isAuthenticated()` unguarded. A `vi.mock` factory
+  // replaces the module, so an omitted export throws on access — as an unhandled rejection
+  // out of a `useEffect`, with every assertion still passing and vitest exiting non-zero.
+  // `() => false` because this file never signs in; the hook then returns without fetching.
+  isAuthenticated: () => false,
 }));
 
 vi.mock('../../src/pages/StrategyBuilder', () => ({
