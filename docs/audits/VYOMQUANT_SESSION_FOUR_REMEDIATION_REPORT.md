@@ -542,6 +542,24 @@ switch is live and promises alerts that cannot be delivered; the panel's own
 docblock records the gap and
 `VYOMQUANT_EMAIL_NOTIFICATION_DELIVERY_AUDIT.md` has the four measurements.
 
+### The highest-severity open item, re-ranked after §8g
+
+**`strategy_backtests` is customer-writable in production.** `authenticated`
+holds INSERT, UPDATE and DELETE on it, so a seller can write their own backtest
+evidence — the five-backtest half of the Eligibility_Gate's requirement. Nothing
+has exploited it (production holds 0 marketplace subscriptions and the gate has
+admitted nothing), but the requirement is forgeable until it is closed.
+
+The fix is bounded and its prerequisite is resolved: move the three writes in
+`backend/backtest_service.py` (the insert at `:451`, the result update at `:582`,
+the delete at `:807`) from the caller's request-scoped client to the service-role
+client, keeping their existing `.eq("user_id", …)` predicates — which then become
+the only ownership scope — and then revoke. Production configures
+`SUPABASE_SERVICE_ROLE_KEY` on all 7 ECS services, so the configuration question
+that blocked this is answered.
+
+`test_the_other_half_of_the_evidence_is_still_writable` fails when it lands.
+
 ### The two sharpest remaining unknowns in T15
 
 Named separately from the rest because both are the kind that look like nothing
@@ -984,7 +1002,131 @@ return the seeded Subscription for any caller, so a resolver that forgot its
 
 ---
 
+## 8g. **CORRECTION — the forgery was never reachable in production, and I weighted the two halves the wrong way round**
+
+Found while preparing to apply the privilege change to production, by reading
+production's actual grants instead of the grants a database built from repository
+source ends up with.
+
+### What I claimed
+
+§2.2 and the MKT-07 commit message say a logged-in customer could INSERT, UPDATE
+and DELETE rows in `execution_records`, and that *"a seller could have
+manufactured the 24 hours in one request."* The measurement behind it is sound and
+was correctly labelled — it was taken *"on a cluster provisioned from repository
+source."* The **severity I attached to it was not.**
+
+### What production actually holds
+
+Read-only against production, PostgreSQL 17.6:
+
+| table | `anon` | `authenticated` | customer-writable |
+|---|---|---|---|
+| `execution_records` | SELECT | **SELECT** | **no** |
+| `orders` | SELECT | **SELECT** | **no** |
+| `positions` | SELECT | **SELECT** | **no** |
+| `strategy_backtests` | SELECT | DELETE, INSERT, SELECT, UPDATE | **YES** |
+
+A database built from `scripts/provision_database.py` gave `authenticated` all
+four DML privileges on the three ledgers. **Production is narrower than its own
+provisioning source.** So the forgery I demonstrated was never reachable in
+production.
+
+### So what was the defect, stated at its real size
+
+**A divergence between the provisioning source and production**, which is a real
+defect with a real consequence — any new environment built from the repo has the
+hole, and production would acquire it the moment it were re-provisioned — but it
+is **latent, not live.** Closing it was still right. Calling it a live exposure
+was not.
+
+### And the half I under-weighted is the live one
+
+`strategy_backtests` is customer-writable **in production, right now**:
+`authenticated` holds INSERT, UPDATE and DELETE. That is the five-backtest half
+of the Eligibility_Gate's evidence, and I filed it as the *deferred* item —
+"not closed by this section", pinned open by a test — while giving top billing to
+the half that turned out to be latent.
+
+The two were measured the same way and reported with opposite emphasis. The
+reason is not subtle: I measured the one I could fix cheaply and reported its
+severity from the cluster I had, rather than from the database it mattered on.
+
+**What is actually exposed today:** a seller can write their own backtest
+evidence in production. Nothing has exploited it — production holds 0 marketplace
+subscriptions and the gate has admitted nothing — but the gate's five-backtest
+requirement is forgeable until the writer moves to the service-role client. That
+is now the highest-severity open item in T15, where before it was a footnote.
+
+### Why the whole hardening file was not applied
+
+A true dry run against production — the file applied inside a transaction and
+rolled back — failed twice:
+
+```
+canceling statement due to statement timeout    -> raised to 600s, retried
+canceling statement due to lock timeout         -> the real obstacle
+```
+
+The file walks every table in `public` and issues
+`ALTER TABLE … ENABLE ROW LEVEL SECURITY`, which needs an ACCESS EXCLUSIVE lock.
+The API is live and serving, so those locks contend. **Applying the full hardening
+to a live database needs a maintenance window.** That is recorded rather than
+forced, and it is a standing operational constraint nobody had written down.
+
+What was applied instead is in §8h.
+
+---
+
+## 8h. What is now live in production
+
+| | before | after |
+|---|---|---|
+| backend image | `b44628cd` (#308, 2026-11-17 19:38) | **`d0931c63`** = `main` head |
+| ECS task revision | 351 (out of band) | **352**, registered by the pipeline, 1024/4096 |
+| service | 1/1 healthy | 1/1 healthy, steady state |
+| frontend bundle | `74a4ba9c` | `74a4ba9c` — **current**, see below |
+| `chk_notification_settings_mandatory_alerts` | absent | **present, and proven to bind** |
+| `notification_settings.events` default | 4 keys nothing reads | **the 8 the application reads** |
+| `anon` on the 3 ledgers + preferences | SELECT | **none** |
+
+**The backend was 13 commits stale** and is now current. Missing before this
+included #309 (support tickets had been silently discarded), #312, #313, #314,
+#315, #317 and #318.
+
+**The frontend is current in substance.** `06-frontend-deploy.yml` is
+`paths`-filtered on `algo22-terminal/**`, and `git diff --name-only 74a4ba9c
+d0931c63` lists **no** file under that path. The deployed bundle is what `main`
+would build; `release.json` naming an older SHA is correct, because it names the
+commit the bundle was built from.
+
+**The migration was proven to bind before the transaction committed** — an
+`INSERT … kill_switch_activated: null` inside a savepoint, required to raise
+`CheckViolation` rather than a foreign-key error, then rolled back.
+
+### The deploy chain had two sequential causes, and §8e named only the second
+
+1. **#309 landed the support fix without re-recording
+   `tests/regression/baseline/surface_support.json`,** so `01 PR Check` was red on
+   `main` from then on. `03 Deploy`'s pre-deployment gate refuses a commit whose
+   test workflow did not pass — measured in the run log: `REFUSING: 01 PR Check
+   concluded 'failure' for 00d7e3fc`. **Every deploy from #309 onward was refused
+   for that reason**, which is why the backend was stale from 2026-11-17 19:38,
+   hours before the memory drift existed.
+2. Then the out-of-band task revision blocked the stage after it (§8e).
+
+I fixed the first one in #315 as *"main is red"*, without realising it was also
+the thing stopping production from shipping. The paired-artifact gap is therefore
+not only a CI annoyance — **it silently stopped deployment for a day**, and that
+raises the standing recommendation from cheap-and-tidy to load-bearing.
+
+---
+
 ## 8e. **URGENT — every production deploy is blocked, and has been since today**
+
+> **RESOLVED.** Fixed in #322 and deployed; see §8h for what is now live, and
+> §8g for why the full hardening file was not applied. Kept below as the record
+> of the diagnosis.
 
 Found while confirming that this session's commits reached production. They have
 not, and neither has anything else merged today.
