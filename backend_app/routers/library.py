@@ -59,6 +59,7 @@ from backend_app.core.rate_limit import limiter
 from backend_app.core.rate_limit_keys import caller_or_address, source_address
 from backend_app.core.runtime_env import local_fallbacks_are_acceptable
 from backend_app.backend.marketplace import eligibility_gate as _eligibility_gate
+from backend_app.backend.marketplace import evidence_validator as _evidence_validator
 from backend_app.backend.marketplace import submission_service as _submission_service
 from backend_app.backend.marketplace import pricing_evaluator as _pricing_evaluator
 from backend_app.backend.marketplace import aliases as _aliases
@@ -5371,16 +5372,26 @@ def _raise_from_service_error(exc: "_submission_service.SubmissionServiceError")
 
 
 class SubmissionCreateRequest(BaseModel):
-    """The owner's publication request: a strategy and its 3..10 Backtest_Evidence refs.
+    """The owner's publication request: a strategy and its 5..10 Backtest_Evidence refs.
 
     The Eligibility_Gate ignores every eligibility/validation/score/status value in the
     body (Requirement 2.1); the only fields that matter are which strategy and which
-    backtest runs. ``backtest_ids`` is bounded 3..10 here to match Requirement 3.1's
-    Backtest_Condition count — the gate re-checks it server-side regardless.
+    backtest runs. ``backtest_ids`` is bounded here to match the
+    ``evidence_validator``'s Backtest_Condition count — the gate re-checks it server-side
+    regardless, so this bound is a 422 that saves five reads, never the control.
+
+    MKT-07 moved the lower bound from 3 to 5 and the bound is read from
+    ``evidence_validator`` rather than written again: a literal here that disagreed with the
+    gate would reject a legal request before the gate could admit it, or accept an illegal
+    one and then refuse it with a criterion failure instead of a field error.
     """
 
     strategy_id: UUID
-    backtest_ids: List[UUID] = Field(..., min_items=3, max_items=10)
+    backtest_ids: List[UUID] = Field(
+        ...,
+        min_items=_evidence_validator.MIN_CONDITIONS,
+        max_items=_evidence_validator.MAX_CONDITIONS,
+    )
 
 
 class AdminActionRequest(BaseModel):

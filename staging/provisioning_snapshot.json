@@ -21094,43 +21094,8 @@
     ],
     [
       "execution_records",
-      "anon",
-      "DELETE"
-    ],
-    [
-      "execution_records",
-      "anon",
-      "INSERT"
-    ],
-    [
-      "execution_records",
-      "anon",
-      "SELECT"
-    ],
-    [
-      "execution_records",
-      "anon",
-      "UPDATE"
-    ],
-    [
-      "execution_records",
-      "authenticated",
-      "DELETE"
-    ],
-    [
-      "execution_records",
-      "authenticated",
-      "INSERT"
-    ],
-    [
-      "execution_records",
       "authenticated",
       "SELECT"
-    ],
-    [
-      "execution_records",
-      "authenticated",
-      "UPDATE"
     ],
     [
       "execution_records",
@@ -22704,43 +22669,8 @@
     ],
     [
       "orders",
-      "anon",
-      "DELETE"
-    ],
-    [
-      "orders",
-      "anon",
-      "INSERT"
-    ],
-    [
-      "orders",
-      "anon",
-      "SELECT"
-    ],
-    [
-      "orders",
-      "anon",
-      "UPDATE"
-    ],
-    [
-      "orders",
-      "authenticated",
-      "DELETE"
-    ],
-    [
-      "orders",
-      "authenticated",
-      "INSERT"
-    ],
-    [
-      "orders",
       "authenticated",
       "SELECT"
-    ],
-    [
-      "orders",
-      "authenticated",
-      "UPDATE"
     ],
     [
       "orders",
@@ -23544,43 +23474,8 @@
     ],
     [
       "positions",
-      "anon",
-      "DELETE"
-    ],
-    [
-      "positions",
-      "anon",
-      "INSERT"
-    ],
-    [
-      "positions",
-      "anon",
-      "SELECT"
-    ],
-    [
-      "positions",
-      "anon",
-      "UPDATE"
-    ],
-    [
-      "positions",
-      "authenticated",
-      "DELETE"
-    ],
-    [
-      "positions",
-      "authenticated",
-      "INSERT"
-    ],
-    [
-      "positions",
       "authenticated",
       "SELECT"
-    ],
-    [
-      "positions",
-      "authenticated",
-      "UPDATE"
     ],
     [
       "positions",

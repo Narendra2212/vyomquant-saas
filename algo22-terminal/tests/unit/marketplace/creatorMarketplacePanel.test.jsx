@@ -2,9 +2,16 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import {
+  EVIDENCE_THRESHOLDS,
+  MIN_LIVE_HISTORY_HOURS,
+} from '../../../src/components/marketplace/marketplaceFlow';
 
 const STRAT = { id: 's-1', name: 'EMA cross', description: 'demo' };
-const runs = [1, 2, 3, 4].map((i) => ({
+// Six runs since MKT-07 raised the evidence floor to five: the refusal case below selects
+// `minConditions` of them, and a pool of exactly five would make "selects enough" and "selects
+// all there are" the same act, so a shortfall in the picker would no longer be distinguishable.
+const runs = [1, 2, 3, 4, 5, 6].map((i) => ({
   id: `r-${i}`,
   status: 'completed',
   start_date: `202${i}-01-01T00:00:00+00:00`,
@@ -69,13 +76,29 @@ describe('CreatorMarketplacePanel', () => {
 
     render(<CreatorMarketplacePanel strategy={STRAT} />);
     const boxes = await screen.findAllByRole('checkbox');
-    boxes.slice(0, 3).forEach((box) => fireEvent.click(box));
+    const selected = runs
+      .slice(0, EVIDENCE_THRESHOLDS.minConditions)
+      .map((run) => run.id);
+    boxes.slice(0, EVIDENCE_THRESHOLDS.minConditions).forEach((box) => fireEvent.click(box));
     fireEvent.click(screen.getByRole('button', { name: 'Submit for review' }));
 
     const list = await screen.findByTestId('eligibility-failures');
     expect(list.textContent).toMatch(/genuinely different conditions/);
     expect(list.textContent).toMatch(/enough trades/);
-    expect(mocks.create).toHaveBeenCalledWith({ strategy_id: 's-1', backtest_ids: ['r-1', 'r-2', 'r-3'] });
+    expect(mocks.create).toHaveBeenCalledWith({ strategy_id: 's-1', backtest_ids: selected });
+  });
+
+  it('states the live-history requirement before the owner submits', async () => {
+    // Task 15 D requirement 2 is the one criterion an owner cannot satisfy in the moment, so
+    // the panel says so up front rather than only in the refusal.
+    mocks.get.mockResolvedValue({ items: [{ id: 'l-1', source_strategy_id: 's-1', name: 'EMA cross', moderation_status: 'pending' }] });
+    mocks.list.mockResolvedValue({ submissions: [] });
+
+    render(<CreatorMarketplacePanel strategy={STRAT} />);
+
+    const note = await screen.findByText(/traded live for at least/i);
+    expect(note.textContent).toMatch(new RegExp(`${MIN_LIVE_HISTORY_HOURS} hours`));
+    expect(note.textContent).toMatch(/paper trading/i);
   });
 
   it('shows the submission state and computes the price range in exact minor units', async () => {

@@ -179,6 +179,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from backend_app.backend import ws_channels as channels
+from backend_app.backend.marketplace import evidence_validator as _evidence_validator
 from backend_app.backend.marketplace.listing_projection import DENIED_LISTING_COLUMNS
 from backend_app.backend.paper import paper_channel as pc
 from backend_app.backend.paper import paper_repository as repo
@@ -1456,14 +1457,19 @@ REQUIREMENT_21_4_GAPS: Dict[Tuple[str, str], _Gap] = {
         ),
     ),
     ("POST /api/library/submissions", STRATEGY): _Gap(
+        # MKT-07 added MP_LIVE_HISTORY to both sides. The gap itself is unchanged: the two
+        # answers still differ on MP_SUBMISSION_OPEN versus MP_VERSION_EXISTS/VALID, which is
+        # the oracle this entry records. A criterion that fails for BOTH a foreign and an
+        # absent identifier distinguishes nothing and so neither widens nor narrows the leak.
         foreign=(
             "422 MARKETPLACE_ELIGIBILITY_FAILED failures=EV_COUNT,EV_ONE_VERSION,"
-            "MP_EXECUTION_OK,MP_METRICS_COMPLETE,MP_OWNERSHIP,MP_SUBMISSION_OPEN,MP_TENANT"
+            "MP_EXECUTION_OK,MP_LIVE_HISTORY,MP_METRICS_COMPLETE,MP_OWNERSHIP,"
+            "MP_SUBMISSION_OPEN,MP_TENANT"
         ),
         absent=(
             "422 MARKETPLACE_ELIGIBILITY_FAILED failures=EV_COUNT,EV_ONE_VERSION,"
-            "MP_EXECUTION_OK,MP_METRICS_COMPLETE,MP_OWNERSHIP,MP_TENANT,MP_VERSION_EXISTS,"
-            "MP_VERSION_VALID"
+            "MP_EXECUTION_OK,MP_LIVE_HISTORY,MP_METRICS_COMPLETE,MP_OWNERSHIP,MP_TENANT,"
+            "MP_VERSION_EXISTS,MP_VERSION_VALID"
         ),
         note=(
             "same status and same code, but the eligibility verdict's failure LIST differs: a "
@@ -1751,7 +1757,15 @@ MATRIX_DECLARATIONS: Tuple[_RowDeclaration, ...] = (
     _D(
         "POST /api/library/submissions",
         body_references={STRATEGY: "strategy_id"},
-        body={"backtest_ids": [ABSENT_IDS["strategy_id"]] * 3},
+        # The count is MIN_CONDITIONS, read rather than written: `SubmissionCreateRequest`
+        # bounds this field, and a body below the bound is refused by Pydantic before the
+        # route runs. That turns this cell's probe into "both answers are a field error",
+        # which looks like isolation and measures nothing (MKT-07 moved the bound to 5 and
+        # this is how it surfaced).
+        body={
+            "backtest_ids": [ABSENT_IDS["strategy_id"]]
+            * _evidence_validator.MIN_CONDITIONS
+        },
         owner_control=True,
     ),
     # MKT-03: the owner's own Submissions, scoped by owner_id in the query. Another tenant's

@@ -9,14 +9,28 @@
 
 import { apiErrorMessage } from '../../design/apiErrors';
 
-/** `evidence_validator.THRESHOLDS`, mirrored for the picker's pre-check. */
+/**
+ * `evidence_validator.THRESHOLDS`, mirrored for the picker's pre-check.
+ *
+ * MKT-07 moved `minConditions` from 3 to 5. A stale value here does not weaken the gate — the
+ * server re-checks every one of these — but it does mislead: the picker would let the owner
+ * submit four runs and the request would come back refused on a count the UI said was fine.
+ */
 export const EVIDENCE_THRESHOLDS = Object.freeze({
-  minConditions: 3,
+  minConditions: 5,
   maxConditions: 10,
   minWindowDays: 90,
   minTrades: 20,
   minBars: 50,
 });
+
+/**
+ * `eligibility_gate.MIN_LIVE_HISTORY_HOURS` (MKT-07). Hours of verified live trading a strategy
+ * must have before it can be listed. Held here so the listing surface can say what is required
+ * before the request is made; the criterion itself is decided server-side from
+ * `execution_records`, which the browser cannot write.
+ */
+export const MIN_LIVE_HISTORY_HOURS = 24;
 
 /**
  * The owner-facing sentence for every criterion code `POST /api/library/submissions` can return
@@ -36,6 +50,8 @@ export const ELIGIBILITY_FAILURE_TEXT = Object.freeze({
     'Every backtest you reference must have recorded its full set of performance results. Re-run any test that is missing them.',
   MP_SUBMISSION_OPEN:
     'This strategy already has a submission in progress or a published listing. Complete or withdraw it before submitting again.',
+  MP_LIVE_HISTORY:
+    'This strategy must have traded live for at least a full day before it can be published. Deploy it to live trading and let it run; paper trading does not count towards this.',
   EV_COUNT:
     'A submission must reference several different completed backtest runs of this strategy, and each reference must name a different run.',
   EV_OWNERSHIP: 'Every referenced backtest run must be one of your own completed runs of this strategy.',

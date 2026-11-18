@@ -317,6 +317,24 @@ _ELIGIBILITY_HANDLER = {
         "library_strategies": frozenset(
             {"id", "moderation_status", "is_active", "source_strategy_id"}
         ),
+        # MKT-07 read 5: the live-execution ledger behind ``MP_LIVE_HISTORY``. Every name
+        # here is declared on ``public.execution_records`` -- checked against
+        # ``staging/provisioning_snapshot.json``, which is also where the absence of an
+        # ``is_simulated`` column is read from, and why ``exchange_id IS NOT NULL`` is the
+        # live discriminator rather than a flag.
+        "execution_records": frozenset(
+            {
+                "execution_id",
+                "strategy_id",
+                "tenant_id",
+                "status",
+                "exchange_id",
+                "filled_size",
+                "filled_at",
+                "submitted_at",
+                "created_at",
+            }
+        ),
     },
     "preexisting": frozenset(
         {
@@ -324,6 +342,9 @@ _ELIGIBILITY_HANDLER = {
             "strategy_versions",
             "strategy_backtests",
             "library_strategies",
+            # Declared by ``d97ffff9c3bb_execution_schema_rebuild``, which is the revision
+            # production is pinned at -- so the gate's fifth read needs no migration.
+            "execution_records",
         }
     ),
 }

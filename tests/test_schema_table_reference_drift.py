@@ -2413,6 +2413,35 @@ PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES = {
             "review_text", "updated_at", "user_id",
         }
     ),
+    #: ``execution_records`` ENTERED THIS ROSTER AT MKT-07, for the same reason
+    #: ``library_strategies`` is on it: declared only by Alembic (revision
+    #: ``d97ffff9c3bb``, which is the revision production is pinned at), and the
+    #: numbered migration set only ever ALTERs it (015, 020, 026, 030), so there
+    #: is no parsed CREATE TABLE for a read to be checked against.
+    #:
+    #: It had no cover until now because nothing read it column by column — the
+    #: live-history read in ``routers/orders.py`` is raw SQL, which this section
+    #: does not parse. The Eligibility_Gate's fifth read (``MP_LIVE_HISTORY``) is
+    #: a PostgREST projection, so from MKT-07 onward nine of these names are read
+    #: by name and need an oracle.
+    #:
+    #: MEASURED, not transcribed from the repository: read-only against
+    #: production, PostgreSQL 17.6,
+    #: ``SELECT column_name FROM information_schema.columns WHERE
+    #: table_schema='public' AND table_name='execution_records'``. 23 columns,
+    #: agreeing exactly with ``staging/provisioning_snapshot.json``. Note what is
+    #: NOT here: no ``is_simulated`` and no ``environment`` column, which is why
+    #: the gate's live discriminator is ``exchange_id IS NOT NULL`` rather than a
+    #: flag.
+    "execution_records": frozenset(  # 23 columns; declared only by Alembic
+        {
+            "avg_price", "created_at", "exchange_id", "exchange_status",
+            "execution_id", "filled_at", "filled_size", "last_exchange_sync",
+            "order_id", "price", "remaining_size", "result", "side", "size",
+            "status", "strategy_id", "submitted_at", "symbol", "task_id",
+            "tenant_id", "updated_at", "user_id", "venue_order_id",
+        }
+    ),
 }
 
 #: A REGISTER OF OPEN DEFECTS, not an allowlist. Every entry was proven to
@@ -4284,13 +4313,8 @@ class TestEveryReferencedColumnIsDeclared:
             "removes a capability rather than a duplicate."
         )
 
-        # 3. The premise, against the retired production measurement rather
-        #    than against a live oracle. The table has no entry in
-        #    PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES any more BECAUSE nothing
-        #    reads it - that roster may only carry tables code actually reads,
-        #    and `test_the_recorded_production_column_sets_are_still_what_they
-        #    _claim` enforces it. So the 22 real columns are retired to a
-        #    constant, and the twelve must not be among them.
+        # 3. The premise, against the retired production measurement. The
+        #    twelve names must not be among the columns the table really has.
         measured = RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS
         present = {c for c in absent_columns if c in measured}
         assert not present, (
@@ -4303,11 +4327,42 @@ class TestEveryReferencedColumnIsDeclared:
             "They are what made the 42703 a measurement rather than 'the "
             "whole table was absent'."
         )
-        assert _allowed_columns(table) is None, (
-            f"{table} has a live column oracle again, which means something "
-            "reads it. Put its 22 columns back into "
-            "PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES alongside that read - "
-            "this constant is the retired copy, not the oracle."
+
+        # 4. A read of this table HAS come back - MKT-07's Eligibility_Gate
+        #    criterion MP_LIVE_HISTORY - so the roster entry came back with it,
+        #    which is what the retired constant's own note asks for. This
+        #    assertion was previously `_allowed_columns(table) is None`; the
+        #    inverse is now the stronger statement, because it checks the live
+        #    oracle against an INDEPENDENT measurement rather than merely
+        #    noting that no oracle exists.
+        oracle = _allowed_columns(table)
+        assert oracle is not None, (
+            f"{table} has no column oracle, but the Eligibility_Gate's fifth "
+            "read projects nine of its columns by name. Restore its entry in "
+            "PRODUCTION_COLUMNS_FOR_UNCREATED_TABLES."
+        )
+        assert measured <= oracle, (
+            f"the live oracle for {table} is missing "
+            f"{sorted(measured - oracle)}, which task 13.17 measured against "
+            "production. A column does not leave a table silently - find the "
+            "migration that dropped it, or re-measure."
+        )
+        # The one permitted difference, and it is named rather than tolerated
+        # as slack: `venue_order_id` was added by
+        # `backend_app/migrations/030_execution_venue_order_id.sql`, after the
+        # 13.17/13.19 measurements. Any OTHER addition means the two
+        # measurements disagree for an unexplained reason.
+        assert oracle - measured == {"venue_order_id"}, (
+            f"the live oracle for {table} carries "
+            f"{sorted(oracle - measured - {'venue_order_id'})} beyond the "
+            "retired measurement with no migration named for them. Name the "
+            "migration here or remove the column from the roster."
+        )
+        offending = {c for c in absent_columns if c in oracle}
+        assert not offending, (
+            f"{sorted(offending)} are in the live oracle for {table}. "
+            "Production answers 42703 for every one of them, so the roster "
+            "entry was not measured - re-measure it."
         )
         for column in absent_columns:
             assert (
