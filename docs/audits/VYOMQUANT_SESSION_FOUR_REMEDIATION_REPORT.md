@@ -486,10 +486,11 @@ A and C were found already built and were extended rather than replaced:
 `eligibility_gate`, `submission_service`, `entitlement_resolver`,
 `subscriber_operation_guard`, `subscription_reinstatement`, `expiry_sweep`,
 `listing_projection`, `CreatorMarketplacePanel`, and property suites for
-protected-logic containment and tenant isolation. E, F and G were **not
-re-audited this session** beyond what the suites above assert; the previous
-report's note that T15 "should not be started without the budget to finish it"
-applies to the remainder.
+protected-logic containment and tenant isolation.
+
+**E, F and G were then audited — see §8d.** F holds. E has one real defect, now
+answered honestly (PR #318). G was checked only to the depth of naming its
+mechanisms and is the genuine remainder.
 
 **Named and not done: move the three `strategy_backtests` writes to the
 service-role client, then revoke `authenticated`'s DML there.** No blocker — the
@@ -540,6 +541,21 @@ session, and nothing new was measured, so nothing new is claimed.
 switch is live and promises alerts that cannot be delivered; the panel's own
 docblock records the gap and
 `VYOMQUANT_EMAIL_NOTIFICATION_DELIVERY_AUDIT.md` has the four measurements.
+
+### The two sharpest remaining unknowns in T15
+
+Named separately from the rest because both are the kind that look like nothing
+until they are expensive:
+
+1. **Subscriber-run backtesting does not exist** (§8d E). The refusal is now
+   honest, but the capability the brief asks for is not built. The shape is
+   specified; it is a new execution path and needs its own PR.
+2. **The 30-day entitlement expiry was not verified against the clock.**
+   `subscription_period.py`, `expiry_sweep` and
+   `test_entitlement_expiry_boundary` exist and pass, but no measurement was
+   taken. An entitlement that fails to expire is a revenue defect that is
+   invisible until it is large, and it is the one T15 item where the test
+   passing and the behaviour being right are not the same claim.
 
 ### Named this session and not done
 
@@ -790,6 +806,87 @@ Everything in §8a and §8b was found by measurement. **This one was found by CI
 after a merge** — which is the honest ordering and is recorded as such. The
 value of the guard was not that it existed; it is that it names the failure mode
 precisely enough that the fix took one reading of its docstring.
+
+---
+
+## 8d. Task 15 E, F and G — the audit this report had deferred
+
+§8 originally recorded these as "not re-audited this session". They have been.
+
+### F — protect strategy logic. **HOLDS**
+
+The brief calls this "a critical marketplace requirement", so it was audited by
+following the subscriber's four reachable paths rather than by reading the test
+names.
+
+| Surface | Finding |
+|---|---|
+| `project_listing` | builds its output by **explicit assignment**, not by filtering. A column added to `library_strategies` by a future migration is not exposed by default — which is the difference between an allow-list and `select("*")` followed by `pop()`. |
+| P-47 property | no non-owner response — projected, enriched, error body, structured error envelope, or Paper_Channel event — carries any Protected_Logic substring at any nesting depth. **And** the projection is asserted *invariant* when the source row carries the logic, which catches a derivative that shares no three-character run with the source. The test first asserts the source row *would* trip the check, so a projection that dropped the columns for the wrong reason still fails. |
+| subscriber **deploy** (`POST /{library_id}/deploy`) | never touches the blueprint. It is built by `deployment_runtime.start_recorded_deployment` **from the row, through the runtime's own service client** — not through the subscriber's request path. `_owner_version_label` selects `id, version` only; `strategy_versions`' two protected columns (`blueprint`, `execution_graph`) are not in the projection, and the pair is bound by `COLUMN_CONTRACT`'s `marketplace_deployment` entry. |
+| subscriber **paper session** | `paper_sessions` has **no graph column at all**. Measured against the production column list: `listing_id`, `source_strategy_id`, `version_id`, and a `config` jsonb whose keys are execution parameters (fee rate, slippage, participation rate, precisions, permitted order types and sides). `listing_id` and `strategy_id` are mutually exclusive in the request and the artifact is resolved server-side. |
+
+One design decision is worth repeating because it is the load-bearing one: the
+deploy path accepts that **an unstartable marketplace strategy leaves a row
+marked `failed` with a reason**, rather than refusing before the insert as the
+owner's own `deploy_version` does. The runtime derives every input from the row,
+so the row must exist first. The router's own comment states the trade: *"for a
+subscriber deploying someone else's strategy that is the better of the two: a
+recorded refusal they can read beats a 422 about an artifact they are not allowed
+to see."* The quota is released either way.
+
+### E — subscriber functionality. **Three of five work; one is a real defect**
+
+| Capability the brief requires | State |
+|---|---|
+| View all qualifying backtest results | works — evidence summaries reach the projection, outcomes only (`CONDITION_OUTCOME_METRICS`) |
+| Review the verified live performance history | **not re-verified this session** |
+| Backtest the subscribed strategy | **not implemented** — see below |
+| Start paper trading | works |
+| Deploy live for the entitlement period | works |
+
+**The defect.** `library_entries.allowed_actions_for_subscribed` offers
+`run_backtest` to an entitling subscriber whose Listing permits it;
+`pages/Strategies` links it to `/app/backtest?listing_id=<id>`; and
+`pages/Backtester` read only `strategy_id`. No backend route accepts a listing
+for a backtest — every one is keyed on `strategy_id` (`routers/strategies.py:2889`
+plus seven in `routers/strategy_operations.py`; `routers/library.py` has no
+backtest verb at all).
+
+So a paying subscriber landed on a Backtester whose selector **could not** contain
+their listing, with nothing explaining why. The selector being empty of it is
+correct — MKT-05 keeps the Listing's logic out of the subscriber's tenant — which
+is exactly why the page had to say so. The one state indistinguishable from a
+broken page is a correct page that explains nothing.
+
+PR **#318** makes the refusal honest: the parameter is recognised, the reason is
+named, and the two actions that do work are offered. It deliberately does **not**
+withhold `run_backtest` server-side (that would silently remove a capability
+Requirement 12.3 says to offer) and does **not** implement the feature. What
+would close it is a route taking a `listing_id`, resolving the entitlement and
+running the engine against the owner's version without returning the definition —
+the shape the paper-session route already has.
+
+### G — marketplace security. **Mechanisms named, not independently re-audited**
+
+Every item the brief lists has a named mechanism, and this is the honest depth of
+the check: the mechanisms were located and read, not exercised against an
+adversary.
+
+| Brief's concern | Mechanism |
+|---|---|
+| Unauthorized strategy access | `subscriber_operation_guard.refuse_if_entitled_subscriber`, `tests/test_subscriber_restricted_operations.py` |
+| Source-code leakage | §F above |
+| Subscription bypass / expiry failure | `entitlement_resolver`, `expiry_sweep`, `workers/marketplace_expiry_worker.py`, `migration 056` |
+| Duplicate charges / webhook replay | `uq_settlement_reference_reversal`, `settlement_service.settle` as the only writer of `status='active'` |
+| Privilege escalation, incorrect ownership | `tests/property/test_tenant_isolation_matrix.py` (155 cells) |
+| Revenue / transaction records | `migration 059` creator payout atomicity, `migration 050` settlement transition |
+
+**The 30-day entitlement period was not independently verified against the
+clock** — `subscription_period.py` and `test_entitlement_expiry_boundary` exist
+and pass, but no measurement was taken this session. That is the sharpest
+remaining unknown in T15, because an entitlement that fails to expire is a
+revenue defect that looks like nothing until it is large.
 
 ---
 
