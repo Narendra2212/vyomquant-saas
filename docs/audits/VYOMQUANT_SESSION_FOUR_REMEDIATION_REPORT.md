@@ -890,6 +890,89 @@ revenue defect that looks like nothing until it is large.
 
 ---
 
+## 8e. **URGENT — every production deploy is blocked, and has been since today**
+
+Found while confirming that this session's commits reached production. They have
+not, and neither has anything else merged today.
+
+### The measurement
+
+`03 Deploy` fails on `main` at the registration step:
+
+```
+[ecs_deploy] Basing new revision on the running revision: vyomquant-api:351
+Task definition registration failed: Deployment safety validation failed:
+    CRITICAL: Memory is not 2048, got 4096
+```
+
+Read from AWS (task-definition metadata only, no write):
+
+| revision | cpu | memory | registered |
+|---|---|---|---|
+| **351 — RUNNING** | 1024 | **4096** | 2026-11-18 |
+| 350 | 1024 | 2048 | 2026-11-18 |
+| 349 … 344 | 1024 | 2048 | 2026-11-16/17 |
+
+### Why that stops every deploy
+
+`scripts/ecs_deploy_and_diagnose.py` bases each new revision on the **running**
+revision and then validates it:
+
+```python
+if task_def.get("memory") != "2048":
+    return False, f"CRITICAL: Memory is not 2048, got {task_def.get('memory')}"
+```
+
+Revision 351 was registered with 4096 **outside the pipeline**, so every
+subsequent deploy inherits 4096 and is refused by the pipeline's own safety
+check. The gate is working exactly as designed: it is refusing to reproduce a
+change nobody reviewed.
+
+### The probable trigger, from the service events
+
+```
+08:50:17  (task aa03cd2f…) (port 8000) is unhealthy in (target-group …)
+08:50:17  has stopped 1 running tasks: (task aa03cd2f…)
+08:53:28  has reached a steady state.
+14:54:05  has reached a steady state.
+```
+
+A task went unhealthy and was replaced, and the memory was doubled shortly after.
+The service is currently **healthy, 1/1, steady state** on 351 — so this is not
+an outage. It is a pipeline that can no longer ship.
+
+### This needs an owner decision, and deliberately was not "fixed"
+
+Two reconciliations, opposite in meaning:
+
+1. **4096 is correct** — the task was genuinely memory-starved at 2048. Then the
+   validator's expectation must be raised to 4096 at
+   `scripts/ecs_deploy_and_diagnose.py:257`, so the pipeline reproduces what is
+   running.
+2. **4096 was a reaction to the unhealthy task** — then the cause of the
+   unhealthy check is the thing to fix, and the revision should go back to 2048.
+
+**Editing the validator to accept 4096 would make the gate agree with an
+unreviewed change, which is the one thing the gate exists to prevent.** So it is
+reported rather than changed.
+
+### One structural finding underneath it
+
+The task definition is **not managed as code**. The only `"memory": "2048"` in
+the repository is a rollback snapshot
+(`infra/rollback/taskdef-vyomquant-api-145-pre-domain.json`), not a live
+declaration — the deploy script mutates the running revision in place. That is
+why a console edit can silently become the base of every future deploy, and why
+the only thing standing between it and production is a hardcoded literal in a
+Python script.
+
+### Consequence for this session's work
+
+**Migration 073, the privilege revoke and MKT-07's code are merged but not
+live.** The deployment order in §10 still applies and has not been executed.
+
+---
+
 ## 9. Security posture of these changes
 
 | Requirement | Status |

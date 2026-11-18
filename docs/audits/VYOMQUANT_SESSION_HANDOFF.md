@@ -58,6 +58,43 @@ with no uncommitted work), `wt-rzp` (345 MB), `ci_logs` (100 MB).
 
 ---
 
+## 2a. URGENT — every production deploy is blocked (found 2026-11-18)
+
+`03 Deploy` fails on `main` at task-definition registration:
+
+```
+Basing new revision on the running revision: vyomquant-api:351
+Deployment safety validation failed: CRITICAL: Memory is not 2048, got 4096
+```
+
+**Measured.** Revision **351 (running) has memory 4096**; revisions 344–350 all
+have 2048. 351 was registered today, outside the pipeline. The deploy script
+bases each new revision on the *running* one, so every deploy now inherits 4096
+and is refused by `scripts/ecs_deploy_and_diagnose.py:257`.
+
+The service is **healthy, 1/1, steady state** — this is not an outage. It is a
+pipeline that cannot ship. The service events show a task went unhealthy on the
+target group at 08:50 and was replaced, which is the probable reason someone
+doubled the memory.
+
+**Owner decision, and do not shortcut it.** Either 4096 is right (raise the
+validator's expectation at `:257`, so the pipeline reproduces what runs) or it
+was a reaction to the unhealthy check (fix that cause, return to 2048). **Editing
+the validator to accept 4096 makes the gate agree with an unreviewed change,
+which is the one thing the gate exists to prevent.**
+
+Underneath it: the task definition is **not managed as code**. The only
+`"memory": "2048"` in the repo is a rollback snapshot
+(`infra/rollback/taskdef-vyomquant-api-145-pre-domain.json`); the deploy script
+mutates the running revision in place. A console edit therefore becomes the base
+of every future deploy, with one hardcoded literal in a Python script as the only
+check.
+
+**Consequence:** migration 073, the `execution_records` privilege revoke and
+MKT-07's code are merged but **not live**.
+
+---
+
 ## 3. URGENT — not a task, an exposure
 
 The production database password was pasted into a chat transcript and is
