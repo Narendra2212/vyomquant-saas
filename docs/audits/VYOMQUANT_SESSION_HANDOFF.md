@@ -337,16 +337,34 @@ and listing-deploy exist.
 
 ### 4. T10 preference filtering — I recommend NOT building this yet
 The mandatory-alert floor is done and anchored (#314, migration 073). Filtering
-is the remaining half, and the measurement says it would be ornamental:
-**7 of the 8 preference keys have no producer.** AST over the dispatch path: 17
-dispatch sites, only `kill_switch_activated` matches a key. A filter over events
-nobody emits reads like a working feature and is not one.
+is the remaining half, and it should **not** be built yet.
 
-**The prerequisite is wiring the producers** (trade-execution and risk events into
-`dispatch_user_notification`), and that is the work worth doing. Also still open
-and measured: `public.notifications` held **0 rows in production**, so NOTIF-01's
-fix is either undeployed or has had no qualifying event — check that first now
-that the backend is current.
+**Full measurement and recommendation:
+`docs/audits/T10_NOTIFICATION_VOCABULARY_FINDING.md`.** It supersedes the "7 of 8
+keys have no producer" framing used here before, which was true but pointed at
+the wrong fix. The sharper version:
+
+* the panel offers **8** preference keys; the tree dispatches **15** literal
+  event types; **exactly one** (`kill_switch_activated`) appears in both;
+* so **14 dispatched event types are not preference keys at all** — the half
+  nobody had written down. The panel shows 7 switches that govern nothing, and
+  the dispatcher emits 14 events no preference can govern.
+
+A filter keyed on those 8 fields would consult a preference for one event type
+and pass fourteen through ungoverned, while looking — in review and in the UI —
+like preferences now work. The panel would stop being *visibly* inert and start
+being *invisibly* inert.
+
+**Reconcile the two vocabularies first**, with the `event_type -> preference_key`
+mapping declared in one reviewable place rather than in scattered string
+literals, which is how they drifted apart.
+
+Measured against production the same day: `public.notifications` is **still 0
+rows** against 6 support tickets, 28 deployments and **1838 fills**, with the
+backend current at `5cd0fd21`. Note **#334 (NOTIF-03) is merged but was not in
+`5cd0fd21`**, so the next deploy is the first honest test of whether anything
+persists at all. Re-run `.kiro-tmp/notif_census.py` after it lands before
+investigating further.
 
 ### Standing recommendation, now five-for-five and still unbuilt
 A `paths`-triggered CI job that fails when `backend_app/routers/**` or
