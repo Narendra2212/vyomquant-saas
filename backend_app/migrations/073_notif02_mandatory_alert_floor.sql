@@ -216,7 +216,13 @@ BEGIN
     END;
 
     IF NOT refused THEN
-        DELETE FROM public.notification_settings WHERE user_id = probe_id;
+        -- No cleanup statement here, deliberately. The probe row would need deleting if
+        -- this block could return normally, but it cannot: the RAISE aborts the enclosing
+        -- transaction and the INSERT goes with it. A `DELETE FROM` would also put a
+        -- destructive statement into the migration set, which Requirement 24.7 forbids and
+        -- `test_marketplace_paper_schema_contract.py::test_no_destructive_statements`
+        -- refuses -- correctly, since a reader scanning for destructive SQL cannot be asked
+        -- to also reason about which branch is reachable.
         RAISE EXCEPTION
             '073 postflight FAILED: a row storing kill_switch_activated=false '
             'was ACCEPTED. The constraint exists but does not bind.';
