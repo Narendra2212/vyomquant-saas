@@ -621,6 +621,24 @@ _LIVE_EXECUTION_PROJECTION = (
 #: live execution is rather than each deciding separately.
 _LIVE_EXECUTION_STATUS = "COMPLETED"
 
+#: The column the two end-windows are ORDERED by, which is deliberately not the column the
+#: span is DATED by.
+#:
+#: Dating prefers `filled_at` (:func:`_live_history_hours`), but `filled_at` is nullable, and
+#: ordering by a nullable column puts the nulls at one end: PostgreSQL defaults to NULLS LAST
+#: ascending and NULLS FIRST descending. A strategy with more than
+#: :data:`LIVE_HISTORY_END_WINDOW` fills whose `filled_at` was never stamped would therefore
+#: have its *descending* window filled entirely with those rows, and the genuinely latest fill
+#: would fall outside the slice — reporting a short span for a strategy that has traded live
+#: for a month. A false FAIL, not a false pass, but a user-visible one: "I have traded live for
+#: weeks and it says I have not."
+#:
+#: `created_at` is `NOT NULL` on this table (measured against production's column list), so
+#: ordering by it has no null end to misplace. A record is created and then filled, so the
+#: earliest-created and latest-created rows are the extremes of the history within the gap
+#: between creation and fill — which is seconds, against a 24-hour threshold.
+_LIVE_EXECUTION_ORDER_COLUMN = "created_at"
+
 
 def _read_live_executions(
     supabase: Any, strategy_id: Any, caller_id: Any
@@ -667,7 +685,9 @@ def _read_live_executions(
     fills. It is applied in :func:`_live_history_hours` against a parsed number instead.
 
     Ordering is explicit for the same reason the cap exists: PostgREST's unordered default
-    would make the returned slice, and therefore the verdict, arbitrary.
+    would make the returned slice, and therefore the verdict, arbitrary. It orders by
+    :data:`_LIVE_EXECUTION_ORDER_COLUMN` rather than by the column the span is dated from —
+    see that constant for why a nullable sort key would produce a false fail.
     """
     def _end(descending: bool) -> List[Mapping[str, Any]]:
         response = (
@@ -677,7 +697,7 @@ def _read_live_executions(
             .eq("tenant_id", caller_id)
             .eq("status", _LIVE_EXECUTION_STATUS)
             .not_.is_("exchange_id", "null")
-            .order("filled_at", desc=descending)
+            .order(_LIVE_EXECUTION_ORDER_COLUMN, desc=descending)
             .limit(LIVE_HISTORY_END_WINDOW)
             .execute()
         )

@@ -127,7 +127,17 @@ DATASETS: Tuple[str, ...] = (
 #: ``evidence_validator.THRESHOLDS`` (design § marketplace/evidence_validator.py).
 #: Duplicated here only so the generators can straddle each boundary; the
 #: production constants remain the single source of truth for the assertions.
-MIN_CONDITIONS = 3
+#:
+#: MKT-07 moved this from 3 to 5 with the production constant. Leaving it at 3
+#: would not have failed anything — ``test_evidence_distinctness`` COMPUTES the
+#: expected verdict rather than assuming admission, so a generated set of three
+#: would simply have been judged inadmissible and the assertion would still hold.
+#: It would instead have quietly emptied the admitted path of coverage: every
+#: drawn set of 3 or 4 becomes a guaranteed ``EV_COUNT`` failure, so the
+#: generator would spend most of its draws re-proving one criterion. A silent
+#: loss of coverage is the failure mode this file's own ratchet exists to stop,
+#: so the number moves with production.
+MIN_CONDITIONS = 5
 MAX_CONDITIONS = 10
 MIN_WINDOW_DAYS = 90
 MIN_TRADES = 20
@@ -588,7 +598,9 @@ def evidence_sets(  # noqa: C901 - the defect branches are the point of the gene
 
     low = max(min_size, MIN_CONDITIONS)
     high = min(max_size, MAX_CONDITIONS)
-    assert low <= high, "min_size/max_size do not intersect 3…10"
+    assert low <= high, (
+        f"min_size/max_size do not intersect {MIN_CONDITIONS}…{MAX_CONDITIONS}"
+    )
     size = draw(st.integers(min_value=low, max_value=high))
     if "too_few_conditions" in chosen:
         size = draw(st.integers(min_value=0, max_value=MIN_CONDITIONS - 1))

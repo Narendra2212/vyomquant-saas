@@ -590,6 +590,19 @@ def test_the_fifth_read_asks_for_its_own_filters_and_both_ends() -> None:
         f"reached; got {directions}"
     )
 
+    # The SORT KEY must be the NOT NULL column, not the column the span is dated from.
+    # Ordering by nullable `filled_at` puts the nulls at one end (NULLS LAST ascending,
+    # NULLS FIRST descending in PostgreSQL), so a strategy with more fills than the window
+    # whose `filled_at` was never stamped would have its descending slice filled entirely
+    # with those rows and its genuinely latest fill excluded -- a false FAIL, and a
+    # user-visible one.
+    sort_keys = {a[0] for record in calls for a, _k in record["order"]}
+    assert sort_keys == {gate._LIVE_EXECUTION_ORDER_COLUMN}, (
+        f"the end-windows sort by {sort_keys}; expected only "
+        f"{gate._LIVE_EXECUTION_ORDER_COLUMN!r}, which is the NOT NULL column"
+    )
+    assert gate._LIVE_EXECUTION_ORDER_COLUMN == "created_at"
+
 
 def test_the_fifth_read_names_only_declared_columns() -> None:
     """A projection naming an undeclared column answers 42703 and makes every evaluation a 503.

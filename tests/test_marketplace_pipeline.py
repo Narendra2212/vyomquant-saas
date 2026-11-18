@@ -1264,8 +1264,9 @@ class TestMarketplacePipeline:
         """A submission whose referenced runs are not valid evidence is refused (task 14.10).
 
         The old ``publish_strategy`` admitted on one ``strategies.backtest_result`` blob and
-        rejected only its absence. The new flow admits on three completed, owner-scoped
-        ``strategy_backtests`` runs; a strategy with a saved version but whose referenced runs
+        rejected only its absence. The new flow admits on ``MIN_CONDITIONS`` completed,
+        owner-scoped ``strategy_backtests`` runs plus 24 hours of verified live execution; a
+        strategy with a saved version but whose referenced runs
         do not exist as the owner's completed runs is refused by the Eligibility_Gate with a 422
         naming the failed criteria (Requirements 2.4, 2.5, 3.1) — and NO Submission is created.
         """
