@@ -19,13 +19,41 @@ import { get, post, del, publicGet } from '../../apiClient';
  */
 
 /**
+ * One row of `billing_invoices`, as `GET /api/billing/invoices` projects it.
+ *
+ * THE LAST THREE ARE NULLABLE AND MUST NOT BE DEFAULTED. Migration 070 declared the five
+ * columns the Razorpay webhook writer had always named (`provider`, `provider_payment_id`,
+ * `amount_usd`, `amount_inr`, `plan`) and deliberately left them nullable, so a row written
+ * before that migration genuinely does not know who captured it or what it bought. The
+ * handler passes those nulls through for the same reason its own comment gives — "a null is
+ * honest where a fabricated 'razorpay' would not be" — so a caller that substitutes
+ * `'razorpay'`, `0` or the account's current plan is making a claim about a trader's money
+ * that nothing in the database supports. Render the absence; see
+ * `design/pageFields.js`'s `invoiceProvider`, `invoicePaymentReference` and `invoicePlan`.
+ *
+ * `amtUSD` / `amtINR` are two columns and `currency` is the row's own denomination, so the
+ * amount is SELECTED by `currency` rather than read from one of them. A currency with no
+ * matching column is an absence, not a dollar figure.
+ *
+ * WHAT IS NOT HERE: no receipt or invoice URL, and nothing identifying the instrument that
+ * paid. Both absences are declared in `design/pageFields.js` (`invoiceReceipt`,
+ * `invoiceInstrument`) rather than worked around — the stored-method read is about the
+ * account's instrument today and says nothing about a past charge.
+ *
  * @typedef {Object} Invoice
- * @property {string} id
- * @property {string} date
- * @property {number} amtUSD
- * @property {number} amtINR
- * @property {string} status
- * @property {string} currency
+ * @property {string} id Invoice reference. Also the React key and the `title` tooltip.
+ * @property {string} date `created_at`. The server orders rows newest first.
+ * @property {number|null} amtUSD `amount_usd`. Null when unknown; never 0 as a stand-in.
+ * @property {number|null} amtINR `amount_inr`. Null when unknown; never 0 as a stand-in.
+ * @property {string} status Defaults to `"unknown"` server-side, which is a reading.
+ * @property {string} currency The row's denomination, selecting which amount applies.
+ * @property {string|null} provider Gateway that captured the charge (`"razorpay"`), or null
+ *   on a row that predates the provider columns.
+ * @property {string|null} providerPaymentId The gateway's own payment id. Unique per
+ *   provider, so it is the value that reconciles a charge against a statement or a support
+ *   ticket. Not secret and not key material. Null on a pre-migration row.
+ * @property {string|null} plan The `item_key` the payment bought — this charge's own
+ *   description, NOT the account's current plan. Null on a pre-migration row.
  */
 
 /**
