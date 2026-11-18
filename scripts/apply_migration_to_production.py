@@ -48,24 +48,23 @@ import pathlib
 import re
 import subprocess
 import sys
+from urllib.parse import unquote, urlparse
 
 SECRET_ID = "vyomquant/production/database_url"
 REGION = "ap-southeast-1"
+
+#: IPv4-reachable route to the same database. :5432 is the SESSION pooler (dedicated
+#: backend, DDL-capable); :6543 is the TRANSACTION pooler and cannot hold the
+#: multi-statement transaction that --trial rolls back. Do not change this to 6543.
+POOLER_HOST = "aws-1-ap-southeast-1.pooler.supabase.com"
+POOLER_DDL_PORT = 5432
 
 BROWSER_ROLES = ("anon", "authenticated")
 WRITE_PRIVS = ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
 
 
-def read_dsn() -> str:
-    out = subprocess.run(
-        ["aws", "secretsmanager", "get-secret-value", "--secret-id", SECRET_ID,
-         "--region", REGION, "--query", "SecretString", "--output", "text"],
-        capture_output=True, text=True,
-    )
-    if out.returncode != 0:
-        print(f"could not read {SECRET_ID}: {out.stderr.strip()[:200]}", file=sys.stderr)
-        sys.exit(2)
-    raw = out.stdout.strip()
+def _extract_dsn(raw: str) -> str:
+    raw = raw.strip()
     if raw.startswith("{"):
         blob = json.loads(raw)
         for key in ("DATABASE_URL", "database_url", "url", "dsn"):
@@ -73,6 +72,93 @@ def read_dsn() -> str:
                 return blob[key]
         return next(iter(blob.values()))
     return raw
+
+
+def read_dsn() -> str:
+    """The production DSN, from Secrets Manager, via boto3 or the AWS CLI.
+
+    boto3 is tried FIRST and the CLI is the fallback, which is the opposite of what this
+    function originally did. The CLI is not installed on every operator host -- it was
+    removed from this one after a broken extract on PATH hung every invocation -- and a
+    tool that refuses to read its own credential is a tool nobody can use in the incident
+    it exists for. boto3 is already a hard dependency of this repository's AWS code.
+
+    Never returns the DSN to a log, a shell, or an argv: the caller hands it straight to
+    psycopg2.connect.
+    """
+    try:
+        import boto3  # noqa: PLC0415 - optional at import time, required only here
+    except ImportError:
+        boto3 = None
+
+    if boto3 is not None:
+        try:
+            client = boto3.session.Session(region_name=REGION).client("secretsmanager")
+            return _extract_dsn(client.get_secret_value(SecretId=SECRET_ID)["SecretString"])
+        except Exception as exc:  # noqa: BLE001 - fall through to the CLI and report both
+            boto3_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+    else:
+        boto3_error = "boto3 is not installed"
+
+    try:
+        out = subprocess.run(
+            ["aws", "secretsmanager", "get-secret-value", "--secret-id", SECRET_ID,
+             "--region", REGION, "--query", "SecretString", "--output", "text"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        print(f"could not read {SECRET_ID}.\n"
+              f"   boto3: {boto3_error}\n"
+              f"   aws CLI: not on PATH", file=sys.stderr)
+        sys.exit(2)
+    if out.returncode != 0:
+        print(f"could not read {SECRET_ID}.\n"
+              f"   boto3: {boto3_error}\n"
+              f"   aws CLI: {out.stderr.strip()[:160]}", file=sys.stderr)
+        sys.exit(2)
+    return _extract_dsn(out.stdout)
+
+
+def connect(dsn: str, psycopg2):
+    """Connect to production, falling back to the session pooler if the direct host is
+    unroutable.
+
+    ``db.<project>.supabase.co`` is **IPv6-only**. From an operator host with no IPv6
+    route it is unreachable no matter how correct the credential is, and the failure looks
+    like a timeout rather than a network-family problem, which is how an afternoon gets
+    lost. The session pooler resolves on IPv4 and is DDL-capable on **:5432** -- unlike the
+    transaction pooler on :6543, which cannot run multi-statement transactions and would
+    therefore defeat --trial's rollback.
+
+    The direct endpoint is still tried first, so on a host with IPv6 nothing changes.
+    """
+    try:
+        return psycopg2.connect(dsn, connect_timeout=30), "direct"
+    except psycopg2.OperationalError as exc:
+        text = str(exc)
+        unroutable = any(s in text for s in (
+            "Network is unreachable", "could not translate host name",
+            "timeout expired", "Cannot assign requested address",
+            "No route to host", "connection timed out",
+        ))
+        if not unroutable:
+            raise
+
+        parsed = urlparse(dsn)
+        user = unquote(parsed.username or "")
+        host = parsed.hostname or ""
+        if "." not in user and host.startswith("db."):
+            # the pooler requires a tenant-qualified user: postgres.<project-ref>
+            user = f"{user}.{host.split('.')[1]}"
+        print(f"   direct host {host} is unroutable from here "
+              f"({text.strip().splitlines()[0][:80]});\n"
+              f"   retrying via the DDL-capable session pooler on :5432")
+        return psycopg2.connect(
+            host=POOLER_HOST, port=POOLER_DDL_PORT,
+            dbname=(parsed.path or "/postgres").lstrip("/") or "postgres",
+            user=user, password=unquote(parsed.password or ""),
+            sslmode="require", connect_timeout=30,
+        ), "session pooler"
 
 
 def migration_body(path: pathlib.Path) -> str:
@@ -127,12 +213,12 @@ def main() -> int:
         return 2
 
     body = migration_body(path)
-    conn = psycopg2.connect(read_dsn(), connect_timeout=90)
+    conn, route = connect(read_dsn(), psycopg2)
     conn.autocommit = False
     cur = conn.cursor()
 
     label = "TRIAL (will roll back)" if args.trial else "APPLY (commits only if verified)"
-    print(f"{label}: {path}  [{len(body.splitlines())} lines]\n")
+    print(f"{label}: {path}  [{len(body.splitlines())} lines]  via {route}\n")
 
     before = browser_write_surface(cur)
 
@@ -157,8 +243,20 @@ def main() -> int:
         for table, role, priv in gained:
             print(f"   {role} gained {priv} on public.{table}", file=sys.stderr)
         return 1
-    print(f"\n   browser-role write surface unchanged "
-          f"({len(before)} grant(s) before and after)")
+    # Report the DELTA, not just the absence of growth. The invariant this tool enforces
+    # is one-directional -- it refuses growth -- so a migration whose whole purpose is to
+    # REVOKE used to print "surface unchanged" and read like a no-op. 074 revoked three
+    # grants and said "55 before and after". A shrink is the success signal for that class
+    # of migration and has to be visible.
+    removed = sorted(before - after)
+    if removed:
+        print(f"\n   browser-role write surface SHRANK: {len(before)} -> {len(after)} "
+              f"grant(s), {len(removed)} revoked")
+        for table, role, priv in removed:
+            print(f"      {role} lost {priv} on public.{table}")
+    else:
+        print(f"\n   browser-role write surface unchanged "
+              f"({len(before)} grant(s) before and after)")
 
     print()
     if args.trial:
