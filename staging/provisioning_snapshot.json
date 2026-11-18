@@ -26351,7 +26351,7 @@
     ],
     [
       "migrations/073_notif02_mandatory_alert_floor.sql",
-      "02f5ec76789326065489841335e51f16fed85b7d0e786cf4c2cfd414314a9369",
+      "09d8270aceef726cb4dea94cfcdfd6d2620a187b9480e23dc949220c8146be04",
       "step1"
     ]
   ],
