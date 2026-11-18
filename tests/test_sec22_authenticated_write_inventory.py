@@ -105,6 +105,29 @@ class TestMkt10StaysClosed:
             f"Writer(s) seen: {found.get('strategy_backtests')}"
         )
 
+    def test_risk_settings_is_not_written_by_a_browser_role_client(self, inventory):
+        """RISK-09. `public.risk_settings` granted `authenticated` INSERT and UPDATE, so a
+        customer holding the anon key could PostgREST-write their own risk row and store a
+        limit this platform's endpoint would have clamped.
+
+        NOT an enforcement bypass -- `core/risk_manager.validate_trade_request` clamps to
+        the platform ceiling on the order path regardless (RISK-03) -- but it lets a trader
+        read back a limit the engine will not honour, which is precisely what RISK-03's
+        clamp exists to prevent, and its own note says a stored limit nothing honours is
+        worse than no limit at all.
+
+        Migration 076 revokes the DML after RISK-09 moved the single writer to the
+        service-role client. This is the test that stops the writer moving back.
+        """
+        found = inventory["authenticated_tables"]
+        assert "risk_settings" not in found, (
+            "risk_settings is written by a role-`authenticated` client again. With "
+            "migration 076 applied that write FAILS with 42501; without it, a customer "
+            "can set their own max_daily_loss / max_positions / max_leverage directly, "
+            "bypassing the platform-ceiling clamp in PUT /api/risk/settings. "
+            f"Writer(s) seen: {found.get('risk_settings')}"
+        )
+
     def test_the_risk_limit_tables_are_not_written_by_a_browser_role_client(
         self, inventory
     ):
