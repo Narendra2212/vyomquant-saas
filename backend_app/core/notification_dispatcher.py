@@ -394,6 +394,109 @@ async def dispatch_user_notification(
         return None
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  NOTIF-05: THE SYNC ENTRY POINT, IN THE SHAPE THE DELETION NOTE SPECIFIED
+#
+#  Production holds ZERO notification rows against 1838 execution_records,
+#  28 strategy_deployments and 6 support_tickets (measured 2026-11-18). The
+#  reason is not the preference filter NOTIF-04 added, and not NOTIF-01's
+#  persistence fix: it is that NOTHING DISPATCHES from the execution path at
+#  all. `backend/execution_engine.py` and the bot runner are SYNCHRONOUS, and
+#  the only sync entry point they could have called was deleted -- correctly --
+#  for being unsafe in two ways (see the note below).
+#
+#  So a sync producer has had nothing to call. This is that thing, built to the
+#  shape the deletion note itself prescribed: `run_coroutine_threadsafe`
+#  against the application's running loop, HOLDING the returned Future and
+#  REPORTING its exception. Not `create_task` fire-and-forget.
+#
+#  WHY A REGISTERED LOOP RATHER THAN `get_event_loop()`. The deleted version
+#  called `asyncio.get_event_loop()`, which is deprecated and RAISES in a
+#  thread with no loop -- precisely the "sync execution context" it offered
+#  itself for. The loop cannot be discovered from a worker thread; it has to be
+#  handed over from the async side, which is what `register_dispatch_loop` is
+#  for (called once from `main.py`'s lifespan).
+#
+#  WHAT IT GUARANTEES TO ITS CALLER: it never raises, and it never blocks.
+#  A notification is an observation ABOUT a trade, never a participant in it --
+#  an alert that cannot be queued must not be able to fail a fill, and an alert
+#  that is slow must not hold a lock in the execution path. Both properties are
+#  pinned by tests.
+# ══════════════════════════════════════════════════════════════════════════
+
+_dispatch_loop: Optional[Any] = None
+
+
+def register_dispatch_loop(loop: Any) -> None:
+    """Hand the application's running event loop to sync producers. Called once.
+
+    Idempotent and last-write-wins, so a test fixture or a re-entered lifespan can
+    replace it without a guard at every call site.
+    """
+    global _dispatch_loop
+    _dispatch_loop = loop
+
+
+def dispatch_loop() -> Optional[Any]:
+    """The registered loop, or None when the application has not started one."""
+    return _dispatch_loop
+
+
+def dispatch_user_notification_threadsafe(**kwargs: Any) -> Optional[Any]:
+    """Queue a notification from SYNCHRONOUS code. Never raises, never blocks.
+
+    Returns the `concurrent.futures.Future` for the queued coroutine so a caller that
+    genuinely wants the notification id can wait for it, and `None` when the work
+    could not be queued at all. Most callers should ignore the return value: the
+    point of this function is that a notification failure is invisible to the trade
+    that produced it.
+
+    ``None`` IS NOT "it failed" -- it is "there was no loop to queue onto", which
+    happens in DEV_MODE, in sync unit tests, and in a worker started before the API.
+    It is logged at debug, not error, for that reason.
+
+    THE EXCEPTION IS REPORTED, which is the whole difference from the deleted
+    version. `run_coroutine_threadsafe` stores the coroutine's exception on the
+    Future; if nobody reads it, the failure is silent and Python may not even warn.
+    A done-callback reads it and routes it through `_log_dispatch_failure`, so a
+    notification that could not be stored is as visible as one dispatched from async
+    code.
+    """
+    import asyncio  # noqa: PLC0415 - only needed on this path
+
+    loop = _dispatch_loop
+    user_id = str(kwargs.get("user_id", "unknown"))
+    event_type = str(kwargs.get("event_type", "unknown"))
+    severity = str(kwargs.get("severity", "info"))
+
+    if loop is None or getattr(loop, "is_closed", lambda: False)():
+        logger.debug(
+            "[NOTIF_DISPATCH] no running loop registered; %s for %s not queued",
+            event_type, user_id,
+        )
+        return None
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(
+            dispatch_user_notification(**kwargs), loop
+        )
+    except Exception as exc:  # noqa: BLE001 - a producing transaction must not fail here
+        _log_dispatch_failure(user_id, event_type, severity, exc)
+        return None
+
+    def _report(fut: Any) -> None:
+        try:
+            fut.result()
+        except Exception as exc:  # noqa: BLE001
+            _log_dispatch_failure(user_id, event_type, severity, exc)
+
+    try:
+        future.add_done_callback(_report)
+    except Exception:  # noqa: BLE001 - a Future that cannot take a callback still ran
+        pass
+    return future
+
+
 # dispatch_user_notification_sync WAS HERE, AND IS DELETED RATHER THAN FIXED.
 #
 # NOTIF-01. It had ZERO references in the entire repository -- measured by grep
