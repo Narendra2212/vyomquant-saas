@@ -486,6 +486,38 @@ without `tests/regression/baseline/surface_*.json` or
    translation means the recorded checksum is over LF-normalised text, so a
    raw-bytes digest fails the drift gate on any CRLF checkout.
 
+### I turned main red, and the mechanism is worth knowing before you do
+
+PR #314 was merged **while `Frontend Build & Unit Tests` was still failing on
+it**, at the commit before the fix. So `main` carried the defect for ~80 minutes
+until #315. §8 of session three recorded that the owner merges quickly; what it
+did not say is that a merge can land with a job still red. **Treat a red job as
+blocking your own next push, not as something you will fix before the merge.**
+
+The defect itself is the more useful lesson. `pages/Strategies` started reading
+`useFeature(FEATURES.MARKETPLACE_PUBLISH)`, and `useEntitlements.load()` calls
+`isAuthenticated()` unguarded. A `vi.mock` factory **replaces** the module, so an
+omitted export throws on access — from inside a `useEffect`. Four test files
+render that page and three had no `isAuthenticated` in their factory.
+
+**Why I missed it locally.** The run said `1 failed | 191 passed`, the one
+failure being an unrelated Node 24 load error. I read the pass count. The signal
+was the next line:
+
+```
+Vitest caught 5 unhandled errors during the test run.
+```
+
+`tests/test_api_mock_factories_declare_isauthenticated.py`'s docstring describes
+this exactly — *"surfaces as an UNHANDLED ERROR with every test still reporting
+as passed, and vitest exits non-zero anyway."* **Read the exit code and the
+unhandled-error count, never the pass count alone.**
+
+And the pinned list's own note had predicted the shape: *"None of these currently
+renders a component that reaches `useEntitlements` … That is a property of what
+they render today, not a guarantee."* If you make a page read entitlements, grep
+for every test that renders it before you push.
+
 ### Running the full backend suite on Windows: classify before you read
 
 `pytest tests/` gives **40 failed, 16749 passed** on this host, and **36 of the
