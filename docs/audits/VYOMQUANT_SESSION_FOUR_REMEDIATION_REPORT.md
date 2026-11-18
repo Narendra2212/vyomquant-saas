@@ -23,13 +23,22 @@ than re-done. `main` was found red from a third-party cause and unblocked.
 
 | | |
 |---|---|
-| Tasks closed this session | **T15 D** (the two mandatory listing gates), **T10's mandatory-alert floor** |
+| Tasks closed this session | **T15 D** (the two mandatory listing gates), **T15 B** (the listing affordance), **T10's mandatory-alert floor** |
 | Tasks found already complete | **T17** (light mode, 0 live hex-alpha sites measured) |
-| `main` incidents fixed | 1 — the support surface baseline, stale since PR #309 |
+| `main` incidents fixed | 2 — the support surface baseline stale since PR #309, and one I caused (§8c) |
 | Standing blockers resolved | 1 — production *does* configure `SUPABASE_SERVICE_ROLE_KEY` |
 | Production data changed | **none** |
 | DDL against production | **none** |
 | Live orders placed | **none** |
+
+**Landed.** PR **#314** (`079dfbd5`) and PR **#315** (`0364861f`) are merged.
+`main`'s `01 PR Check` is green on `0364861f` — all 16 checks, including
+`Provisioning, Privilege Hardening & Tenant Isolation`, `Database Tests
+(PostgreSQL)`, `Unit & Integration Tests` (17m37s) and `Frontend Build & Unit
+Tests`.
+
+The migration and the privilege revoke are **not yet applied to production** —
+see §10 for the order.
 
 Commits, in order on `mkt07/listing-eligibility-gates`:
 
@@ -713,7 +722,7 @@ declaration and `test_marketplace_pipeline.py` described the flow as admitting
 "on three completed runs". Comments, not assertions — which is why neither
 failed, and why a reader would have been misled rather than warned.
 
-### And one claim checked and found sound
+### And one claim checked and found sound (see also §8c)
 
 The report's assertion that "nothing in the repository writes `execution_records`,
 `orders` or `positions` through PostgREST" was re-verified independently, with a
@@ -722,6 +731,65 @@ across `backend_app`, `api_ws`, `scripts`, `dev_tools`, `infra`, `monitoring`,
 `observability` and `algo22-terminal/src`. The only PostgREST reference to any of
 the three in the entire tree is this change's own `SELECT` in
 `eligibility_gate.py`. The Alembic hits are `op.create_table`, which is DDL.
+
+---
+
+## 8c. I turned `main` red, and CI is what told me
+
+PR #314 was merged **while `Frontend Build & Unit Tests` was still failing on
+it**, at `220cbfb3` — the commit before the fix, which had already been written
+and pushed to the branch. `main` carried the defect for about eighty minutes
+until PR #315 (`0364861f`) landed and all 16 checks went green.
+
+### The defect
+
+`pages/Strategies` started reading `useFeature(FEATURES.MARKETPLACE_PUBLISH)`,
+and `hooks/useEntitlements.load()` calls `isAuthenticated()` unguarded. A
+`vi.mock` factory **replaces** the module, so an omitted export throws on access
+rather than falling through — from inside a `useEffect`. Four test files render
+that page; three had no `isAuthenticated` in their factory.
+
+### Why the local run looked fine
+
+```
+Test Files  1 failed | 191 passed (192)
+     Tests  3944 passed | 11 skipped (3955)
+```
+
+The one failed file was the unrelated Node 24 load error. I read the pass count.
+The signal was the line underneath it:
+
+```
+Vitest caught 5 unhandled errors during the test run.
+```
+
+Which is what the guard's own docstring says it looks like: *"this surfaces as an
+UNHANDLED ERROR with every test still reporting as passed, and vitest exits
+non-zero anyway."*
+
+### Two things that had already written this down
+
+The guard existed, and its pinned list carried this note:
+
+> *"None of these currently renders a component that reaches `useEntitlements`,
+> which is the only reason they are green. That is a property of what they render
+> today, not a guarantee, and it is exactly how the three known instances
+> arrived."*
+
+That is the whole incident, predicted before it happened. The property expired
+for every file rendering `pages/Strategies` the moment that page reached the
+hook, and I did not grep for them.
+
+The note now records which four retired and why, and says that the way to retire
+a remaining entry is to add the export rather than to wait for a page to reach
+the hook.
+
+### What this says about the session's own claims
+
+Everything in §8a and §8b was found by measurement. **This one was found by CI,
+after a merge** — which is the honest ordering and is recorded as such. The
+value of the guard was not that it existed; it is that it names the failure mode
+precisely enough that the fix took one reading of its docstring.
 
 ---
 
