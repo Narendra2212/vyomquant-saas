@@ -378,3 +378,143 @@ Grouping a **major** plugin bump with a **minor** bump of the package it peers o
 produces a set that installs for neither. Second occurrence (`216b7481` was the
 first), and this time it cost five workflows and five root causes. Either split
 the frontend group or add `ignore` rules for majors. Not done.
+
+---
+
+## 10. Session four (2026-11-18) — the gate was reading forgeable evidence
+
+Full report: `VYOMQUANT_SESSION_FOUR_REMEDIATION_REPORT.md`. Branch
+`mkt07/listing-eligibility-gates`, three commits: `2ae8c78c`, `48a43862`,
+`d85c4ea0`.
+
+### MKT-07 — T15 D closed, and the privilege under it was the real finding
+
+The brief requires 5 completed backtests and 24 h of verified live trading before
+a strategy can be listed. The tree enforced **3** and **no live criterion at
+all**. Both are now enforced: `evidence_validator.MIN_CONDITIONS` is 5, and the
+Eligibility_Gate has a fifth owner-scoped read of `execution_records` behind a new
+`MP_LIVE_HISTORY` criterion. `EVALUATOR_VERSION` → `1.1.0`, because an admission
+stored under 1.0.0 was decided under weaker rules.
+
+**The part worth remembering.** A gate is only as good as the evidence it reads,
+and `authenticated` held INSERT/UPDATE/DELETE on `execution_records`. Measured on
+a cluster provisioned from repo source, as that role with
+`request.jwt.claim.sub` set to the customer's own id: a fabricated `COMPLETED`
+fill backdated 48 hours **inserted successfully**, an existing row's
+`filled_size` **updated**, and a row **deleted**. The owner policy is `FOR ALL`
+with `auth.uid() = user_id OR auth.uid() = tenant_id`, so the customer satisfies
+it by construction — RLS was correct, the privilege was wrong. The browser holds
+the anon key, so PostgREST is reachable from any session.
+
+Revoked for `execution_records`, `orders` and `positions` in
+`999_privilege_hardening.sql` SECTION 1b, keeping `authenticated SELECT`. Safe
+because **zero** PostgREST writers exist for those three tables anywhere in the
+repo (AST over `backend_app` + grep elsewhere); every real write is SQLAlchemy as
+the table owner.
+
+**Still open, and pinned by a test that fails when fixed:**
+`strategy_backtests` is the other half of the evidence and is writable by the
+same customer — but there the app's own writer IS the caller's client
+(`backend/backtest_service.py:336`, used at `:451`, `:582`, `:807`). Revoking
+would stop every backtest persisting. The fix is to move those three writes to
+the service-role client.
+
+### A two-session blocker resolved: production DOES set SUPABASE_SERVICE_ROLE_KEY
+
+Verified by reading all 7 ECS task definitions in `vyomquant-cluster`, **names
+only**. So the durable webhook idempotency layer is active in production, and the
+`strategy_backtests` writer move is feasible. Both were previously recorded as
+"needs configuration confirmed first".
+
+### NOTIF-02 — the panel claimed an invariant and offered the switch that broke it
+
+`NotificationPreferences.jsx` printed "Mandatory risk alerts … cannot be
+disabled" directly below a switch that disabled them. Nothing enforced it.
+
+**The trap:** the column default declares `{system, stop_loss, risk_alerts,
+trade_fills}` and **no stored row has ever carried any of those keys**. All four
+production rows carry the eight `NotificationEvents` fields instead, because the
+only writer always sends the whole Pydantic object. A CHECK against `risk_alerts`
+would have constrained a key no row has and read like an enforced invariant.
+Measure the stored vocabulary before constraining a jsonb column.
+
+Migration **073** constrains `kill_switch_activated`, `stop_loss_triggered` and
+`new_login_detected` against `false`, corrects the dead defaults, and its
+postflight **attempts the write it exists to refuse**. The model refuses the
+payload (422) and the router answers 409 for a constraint violation; the panel
+locks the three switches.
+
+**Not built, and pinned by two tests rather than a note:** preference filtering.
+Nothing on the dispatch path reads `notification_settings`, and **7 of the 8
+preference keys have no producer** (AST: 17 dispatch sites, only
+`kill_switch_activated` matches a key). Also measured: `public.notifications`
+still holds **0 rows in production**, so NOTIF-01's fix is either undeployed or
+has had no qualifying event — check that first after the next release.
+
+### T17 was already done, and the "35 remaining" figure was a grep artefact
+
+Stripping comments first — as the colour-literal guard does — gives **0** live
+hex-alpha concatenations and 54 `alpha()` call sites. The 8 a naive grep finds
+are all inside notes documenting the retired form. `gen-tokens.mjs --check`
+passes. Nothing was changed.
+
+Local-only artefact: `tests/unit/guards/tokens.generated.test.js` fails to LOAD
+under Node 24 (`SyntaxError`) while its cases skip. CI runs Node 20 and the real
+gate passes.
+
+### main was red again — fourth paired-artifact failure
+
+PR #309 (SUP-02) made the support ticket and comment writes return 503 and did
+not re-record `tests/regression/baseline/surface_support.json`. CI runs all of
+`tests/` at `01-pr-check.yml:251`, so every PR since inherited it. Fixed in
+`48a43862`.
+
+Note the capture tool **drops `_baseline_note_raises`** when it regenerates a
+file, so restore any existing note by hand after re-recording.
+
+**The guard is now four-for-four and still unbuilt:** a `paths`-triggered CI job
+that fails when `backend_app/routers/**` or `backend_app/migrations/**` changes
+without `tests/regression/baseline/surface_*.json` or
+`staging/provisioning_snapshot.json` in the same push.
+
+### Two new traps
+
+1. **`not_` is a PROPERTY, not a method,** in supabase-py. Three test doubles had
+   it as a method, so `.not_.is_(...)` raised `AttributeError` and collapsed every
+   gate verdict to `unevaluable`. Seven green tests moved because of it.
+2. **`provision_database.py` digests `read_text`, not bytes.** Universal-newline
+   translation means the recorded checksum is over LF-normalised text, so a
+   raw-bytes digest fails the drift gate on any CRLF checkout.
+
+### Running the full backend suite on Windows: classify before you read
+
+`pytest tests/` gives **40 failed, 16749 passed** on this host, and **36 of the
+40 are the environment**:
+
+* **24 `UnicodeDecodeError: 'charmap'`** — tests calling `open(path)` with no
+  encoding, cp1252 locale, UTF-8 box drawing in the file. CI is Linux/UTF-8.
+* **8** postgres-gated files (`test_sup02`, `test_bt04`) reaching the local
+  cluster, which lacks migrations 069–072. **Re-provision it** and these go.
+* **1** `test_protected_logic_containment` — Hypothesis drew the token
+  `'subscribe'` and the containment check is a SUBSTRING match, so it collides
+  with `errors.py:367`'s "You cannot subscribe to your own listing."
+  `.hypothesis/` caches it so it replays. The real fix is whole-identifier
+  comparison; it was deliberately not made, because loosening a Protected_Logic
+  guard to get green is how leakage gets masked.
+* **1** starlette version assertion, **1** pre-existing pydantic
+  `AcceptanceRequest` error, **1** log line the classifier counted as an error.
+
+So budget ~85 minutes for the run and expect to classify, not to see green. The
+four that WERE real this session are listed in the session-four report §8a.
+
+**`test_api_mock_factories_declare_isauthenticated` used to descend into the
+nested clone** and report 18 phantom failures. Fixed this session; if another
+guard does the same, that is the shape of the cause.
+
+### Snapshot edits stayed surgical, both times
+
+MKT-07: `−105 lines, +0` = exactly 21 revoked privilege rows. NOTIF-02: `+1
+CHECK, +1 recorded migration, 2 defaults changed, −5 privileges`. Both verified
+by the drift gate reporting `0 modified, 0 added` in every category. Local
+PostgreSQL is 16.2 and CI is 17.12, so a whole re-capture would import version
+skew — the surgical edit avoids it entirely.
