@@ -792,6 +792,78 @@ async def _sb(user: dict):
     return await create_request_supabase_async(token)
 
 
+#: The partial unique index migration 068 created:
+#:     CREATE UNIQUE INDEX uq_strategies_owner_name_live
+#:         ON strategies (user_id, lower(name)) WHERE archived_at IS NULL
+#: Named here because the DATABASE is what enforces the rule and its constraint name is
+#: the only unambiguous signal that THIS is the violation, as opposed to some other
+#: unique index on the same table.
+_OWNER_NAME_INDEX = "uq_strategies_owner_name_live"
+
+#: How many "(Copy)", "(Copy 2)", ... labels a clone will try before refusing. Bounded
+#: because each attempt is a round trip, and a user with ten copies of one strategy is
+#: better served by an explicit refusal than by a slow success.
+_CLONE_NAME_ATTEMPTS = 10
+
+
+def _is_duplicate_strategy_name(exc: Exception) -> bool:
+    """Whether ``exc`` is the owner-name uniqueness violation, and nothing else.
+
+    Matched on the constraint name AND the SQLSTATE together. `strategies` carries a
+    primary key and may carry other unique indexes later; `23505` alone only says "some
+    uniqueness was violated", and answering "that name is taken" for an unrelated
+    violation would be a confident wrong answer. Requiring the SQLSTATE too means a
+    stray mention of the index name in some other error string cannot trigger this.
+    """
+    text = str(exc)
+    code = getattr(exc, "code", None) or getattr(exc, "pgcode", None)
+    looks_unique = "23505" in text or str(code) == "23505"
+    return bool(looks_unique and _OWNER_NAME_INDEX in text)
+
+
+def _raise_if_duplicate_strategy_name(exc: Exception, name=None) -> None:
+    """Translate the owner-name uniqueness violation into a 409. Returns otherwise.
+
+    STRAT-02. Migration 068 added the constraint that makes duplicate names impossible,
+    and nothing translated its violation -- so the one case the constraint exists to
+    catch surfaced as:
+
+        HTTP 500  {"error": "STRATEGY_CREATE_ERROR", "message": "<raw postgres text>"}
+
+    A 500 tells the author the platform is broken when in fact they typed a name they
+    already use, and the only remedy a 500 suggests is "try again", which cannot work.
+    T05 asks for "clear validation when an existing name is entered"; this is it.
+
+    WHY NOT CHECK FIRST AND INSERT SECOND. A read-then-write cannot be correct here:
+    two concurrent saves both read "no such name" and both proceed, and T05 also requires
+    that concurrent saves not silently overwrite one another. The constraint is the only
+    thing that holds under concurrency, so the right shape is to attempt the write and
+    classify the refusal -- which also means the 409 is produced by the same mechanism
+    that guarantees it, rather than by a check that can be raced.
+
+    MATCHED ON THE CONSTRAINT NAME, not on the SQLSTATE alone. `strategies` carries a
+    primary key and may carry other unique indexes later; `23505` only says "some
+    uniqueness was violated". Answering "that name is taken" for an unrelated violation
+    would be a confident wrong answer. The SQLSTATE is still required, so a stray mention
+    of the index name in an error string cannot trigger this on its own.
+    """
+    if not _is_duplicate_strategy_name(exc):
+        return
+
+    display = f" '{name}'" if name else ""
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "STRATEGY_NAME_ALREADY_EXISTS",
+            "message": (
+                f"You already have a strategy named{display}. Choose a different name, "
+                "or rename the existing one first."
+            ),
+            "field": "name",
+        },
+    )
+
+
 def _safe_uid(uid: str) -> str:
     """Validate UUID-shaped user_id before injecting into SQL."""
     if re.match(r"^[a-zA-Z0-9\-_]{1,128}$", str(uid)):
@@ -1363,6 +1435,9 @@ async def create_strategy(
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
+        # STRAT-02: a name the owner already uses is a VALIDATION failure, not a server
+        # fault. Checked before the generic branch below, which would otherwise answer 500.
+        _raise_if_duplicate_strategy_name(e, data.get("name"))
         logger.error(f"[STRATEGIES] Error creating strategy: {e}")
         raise HTTPException(
             status_code=500,
@@ -1604,6 +1679,11 @@ async def rename_strategy(
             .execute()
         )
     except Exception as e:
+        # STRAT-02: renaming onto a name the owner already uses is the same validation
+        # failure as creating one, and it reached the customer as "Unable to rename
+        # strategy. Please try again later." -- advice that cannot succeed, because
+        # retrying the same name hits the same constraint every time.
+        _raise_if_duplicate_strategy_name(e, name)
         logger.error(
             "[STRATEGIES] Failed to rename strategy %s, user %s: %s",
             strategy_id,
@@ -3534,21 +3614,59 @@ async def clone_strategy(strategy_id: str, user: dict = Depends(get_current_user
                 # plan.dag_hash is a field. This is the SB-02 line.
                 cloned_buy_logic.update(_dag_fields(compiled.plan))
 
-    try:
-        ins_query = sb.table("strategies").insert(cloned_payload).execute()
-        ins = await ins_query if inspect.isawaitable(ins_query) else ins_query
-        if not ins.data:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to insert cloned strategy record.")
-        return {
-            "status": "cloned",
-            "strategy": ins.data[0],
-            "warnings": response_warnings,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[STRATEGIES] Clone failed for strategy {strategy_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error cloning strategy. Please try again later.")
+    # ── STRAT-02: cloning twice must work, not 500 ──
+    #
+    # The name above is always "<original> (Copy)", so the SECOND clone of one strategy
+    # collided with the first on `uq_strategies_owner_name_live` and the generic handler
+    # below answered 500 "Database error cloning strategy. Please try again later." --
+    # advice that could never succeed, because every retry proposes the same name.
+    #
+    # T05 requires that duplicating a strategy create a new identity. It does; the
+    # obstacle was only the label. So the label is what moves: "(Copy)", then "(Copy 2)",
+    # "(Copy 3)". Attempted rather than looked up, because a read-then-insert races -- two
+    # concurrent clones would both read "(Copy) is free" and one would still fail. Letting
+    # the constraint arbitrate and advancing on its refusal is correct under concurrency.
+    base_name = cloned_payload.get("name") or "Strategy (Copy)"
+    last_duplicate_error: Optional[Exception] = None
+    for attempt in range(1, _CLONE_NAME_ATTEMPTS + 1):
+        cloned_payload["name"] = (
+            base_name if attempt == 1 else f"{base_name} {attempt}"
+        )
+        try:
+            ins_query = sb.table("strategies").insert(cloned_payload).execute()
+            ins = await ins_query if inspect.isawaitable(ins_query) else ins_query
+            if not ins.data:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to insert cloned strategy record.")
+            return {
+                "status": "cloned",
+                "strategy": ins.data[0],
+                "warnings": response_warnings,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            if _is_duplicate_strategy_name(e):
+                # Taken. Try the next label; do not log at ERROR, this is an expected
+                # outcome of cloning the same strategy more than once.
+                last_duplicate_error = e
+                logger.info(
+                    "[STRATEGIES] clone name %r is taken, advancing",
+                    cloned_payload["name"],
+                )
+                continue
+            logger.error(f"[STRATEGIES] Clone failed for strategy {strategy_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error cloning strategy. Please try again later.")
+
+    # Every label in the window was taken. Say so plainly rather than looping forever or
+    # reporting a server fault.
+    logger.warning(
+        "[STRATEGIES] clone of %s exhausted %d name attempts for user %s",
+        strategy_id, _CLONE_NAME_ATTEMPTS, user.get("id"),
+    )
+    _raise_if_duplicate_strategy_name(
+        last_duplicate_error or Exception(f"23505 {_OWNER_NAME_INDEX}"),
+        cloned_payload.get("name"),
+    )
 
 @router.post("/optimize")
 async def optimize_strategy(
