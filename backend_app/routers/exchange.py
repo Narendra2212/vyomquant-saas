@@ -39,6 +39,70 @@ router = APIRouter()
 logger = logging.getLogger("ExchangeRouter")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# EXCH-STATE-02 — ONE authoritative connection verdict, reused not reinvented
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Part 3 of the engineering brief: "There must be one authoritative, consistently
+# interpreted connection-health state." There were three readings of the same
+# `exchange_keys` row:
+#
+#   1. this endpoint        hardcoded CONNECTED / healthy / two permissions
+#   2. dashboard_aggregation_service   derived connected / unknown / invalid_credentials
+#   3. ExchangeManager.jsx  a JS re-implementation (`credentialVerdict`)
+#
+# (2) is the correct one and is already tested, so it is the one imported here. Adding a
+# fourth derivation -- even a correct one -- would leave the same class of defect for the
+# next reader. The JS copy at (3) is out of scope for this change and is recorded in the
+# audit as still duplicating the rule.
+#
+# WHAT IS STILL NOT DISTINGUISHED, stated rather than implied: market-data health vs
+# trading health. Both are reported through one `health` value because nothing in the tree
+# measures them separately -- there is no per-connection market-data probe to read. The
+# brief lists them as distinct states; this closes five of the seven (credentials
+# configured, auth valid, auth invalid, permissions, unknown) and leaves that pair.
+from backend_app.backend.dashboard_aggregation_service import (  # noqa: E402
+    VENUE_STATUS_CONNECTED, VENUE_STATUS_INVALID_CREDENTIALS, VENUE_STATUS_UNKNOWN,
+    credential_validity as _credential_validity,
+)
+
+#: `credential_validity` returns True / False / None. None is "nothing has checked", which
+#: is NOT a negative fact about the credential -- the whole point of that function's
+#: three-valued return. Mapped to this endpoint's long-standing uppercase vocabulary.
+_CONNECTION_STATUS_BY_VALIDITY = {
+    True: VENUE_STATUS_CONNECTED.upper(),              # "CONNECTED"
+    False: VENUE_STATUS_INVALID_CREDENTIALS.upper(),   # "INVALID_CREDENTIALS"
+    None: VENUE_STATUS_UNKNOWN.upper(),                # "UNKNOWN"
+}
+
+#: Health answers a different question from status, so it gets its own mapping rather than
+#: being inferred from the string above.
+_CONNECTION_HEALTH_BY_VALIDITY = {
+    True: "healthy",
+    False: "unhealthy",
+    None: "unknown",
+}
+
+
+def _measured_permissions(row) -> list:
+    """The venue permissions something actually established, in display form.
+
+    Never asserted. The replaced literal `["Spot Trading", "Read"]` claimed both for every
+    stored row, including rows no probe had touched, which is how the Exchanges page could
+    show trading permission for a credential that had never been validated.
+
+    "Read" follows from any successful validation -- a credential that validated was read.
+    "Spot Trading" requires `can_trade` to be positively True; `None` is not a yes, per
+    Requirement 2.6 which makes the unknown non-tradable.
+    """
+    if not isinstance(row, dict):
+        return []
+    validity = _credential_validity(row)
+    if validity is not True:
+        return []
+    return ["Spot Trading", "Read"] if row.get("can_trade") is True else ["Read"]
+
+
 #: The projection ``list_exchanges`` may use against ``exchange_keys``.
 #:
 #: ``public.exchange_keys`` in production carries EXACTLY ``user_id``, ``exchange_id``,
@@ -811,8 +875,36 @@ async def list_exchanges(
                 "name": exchange_id.upper(),
                 "credential_configured": True,
                 "masked_key": f"{exchange_id[:3].upper()}{'•' * 24}{exchange_id[-2:].upper() if len(exchange_id) > 2 else ''}",
-                "status": "CONNECTED",
-                "permissions": ["Spot Trading", "Read"],
+                # ── EXCH-STATE-02: derived, not asserted ──
+                #
+                # These three used to be the literals "CONNECTED",
+                # ["Spot Trading", "Read"] and "healthy", written for EVERY stored
+                # credential row. A row nobody had ever probed reported itself connected,
+                # healthy, and holding two permissions nothing had measured -- while the
+                # fields directly below (`validation_status`, `last_validated_at`,
+                # `can_trade`) carried the real answer, which was usually "nothing has
+                # checked". That is the Dashboard/Exchanges disagreement in Part 3: the
+                # Dashboard derives from those fields and said "unknown", this endpoint
+                # asserted "connected", and both were reading the same row.
+                #
+                # Derived through `credential_validity`/`venue_status` from
+                # `dashboard_aggregation_service` -- IMPORTED, not reimplemented. A third
+                # derivation is what produced the second one; the brief asks for one
+                # authoritative, consistently interpreted state, so the honest fix is to
+                # consult the existing vocabulary rather than add to it.
+                #
+                # The UPPERCASE spelling is kept because this response's `status` has
+                # always been uppercase and the frontend matches on it; the dashboard's
+                # lowercase constants are the same three verdicts, mapped at the boundary.
+                "status": _CONNECTION_STATUS_BY_VALIDITY[_credential_validity(row)],
+                # Measured permissions only. "Read" is implied by any successful
+                # validation; "Spot Trading" requires `can_trade` to be positively true.
+                # An unprobed row reports NEITHER, rather than both.
+                "permissions": _measured_permissions(row),
+                # So a caller can tell "no permissions" from "no measurement", which the
+                # bare list cannot express and which decides whether a trade button
+                # should read "not permitted" or "not yet checked".
+                "permissions_measured": _credential_validity(row) is not None,
                 "bot_count": bot_counts.get(exchange_id, 0),
                 "strategy_count": strat_counts.get(exchange_id, 0),
                 "account_type": "Spot",
@@ -828,7 +920,11 @@ async def list_exchanges(
                 "can_trade": row.get("can_trade"),
                 "sandbox": row.get("sandbox"),
                 "subscription_tier": subscription_tier,
-                "health": "healthy"
+                # EXCH-STATE-02: "healthy" is a claim about a venue answering, and this
+                # endpoint never asked one. It now reports health only where the stored
+                # credential supports a verdict, and "unknown" otherwise -- Part 3's
+                # requirement that partial connectivity is not presented as fully healthy.
+                "health": _CONNECTION_HEALTH_BY_VALIDITY[_credential_validity(row)],
             })
         return exchanges
     except HTTPException:

@@ -129,6 +129,41 @@ export const CODE_COPY = Object.freeze({
   TRANSACTIONS_FETCH_FAILED: { headline: 'Could not load your transactions', detail: 'The transaction history is temporarily unreadable.', retryable: true },
 
   // ---- Live trading and order safety (`/api/orders/*`) ------------------
+  //
+  // LIVE-COPY-01. The two live-trading gate refusals had NO entry here, so
+  // `core/live_execution_gate.py`'s 403 fell through to the generic 403 copy —
+  // "This action is not available on your account · contact support" — which names
+  // neither the restriction nor anything the operator can do about it. A deploy that
+  // was refused for a specific, knowable reason read as an unexplained permission
+  // problem. Part 3 of the brief: "improve the UI to explain the restriction and
+  // provide an appropriate next step for authorized users".
+  //
+  // Both are `retryable: false` deliberately. Retrying cannot change either verdict —
+  // the allowlist is operator-managed and the platform flag is a deployment setting —
+  // and a retry button on a safety refusal invites exactly the hammering that makes an
+  // incident worse. The next step is a person, not a button.
+  //
+  // Neither message claims the restriction is temporary or implies it will lift on its
+  // own, and neither reveals who is on the allowlist.
+  LIVE_TENANT_NOT_ALLOWLISTED: {
+    headline: 'Live trading is not enabled for this account',
+    detail: 'No order was sent. Live execution is enabled per account by an operator, and this account is not on that list yet. Paper trading and backtesting are unaffected — contact support to request live access.',
+    retryable: false,
+  },
+  LIVE_TRADING_NOT_ENABLED: {
+    headline: 'Live trading is switched off platform-wide',
+    detail: 'No order was sent. Live execution is currently disabled for everyone, not just this account. Paper trading and backtesting are unaffected.',
+    retryable: false,
+  },
+  // The third refusal `assert_platform_live_trading_enabled` can raise. Distinguished
+  // from the one above because the remedy differs for whoever reads the log: this one is
+  // the platform MODE, that one is the live-trading flag, and conflating them sends an
+  // operator to the wrong setting.
+  LIVE_TRADING_DISABLED_BY_PLATFORM_MODE: {
+    headline: 'The platform is not in live mode',
+    detail: 'No order was sent. The platform is running in a safe or paper mode, so live execution is refused for every account. Paper trading and backtesting are unaffected.',
+    retryable: false,
+  },
   EXECUTION_GUARD_BLOCKED: { headline: 'Blocked by a safety check', detail: 'Nothing was sent to the exchange. A risk or safety check refused it.', retryable: false },
   EXECUTION_GUARD_ERROR: { headline: 'Safety checks could not run', detail: 'Nothing was sent to the exchange, because we will not trade without checking first.', retryable: true },
   DIRECT_EXECUTION_BLOCKED: { headline: 'This order cannot be placed here', detail: 'Orders are placed by a deployed strategy, not by hand, on this account.', retryable: false },
