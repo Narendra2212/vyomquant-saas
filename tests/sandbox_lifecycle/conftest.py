@@ -88,6 +88,13 @@ _CLIENT_SEAM_MODULES = (
     "backend_app.backend.backtest_service",
 )
 
+#: Every module that holds its own reference to the SERVICE-ROLE client factory.
+#: `backtest_service` writes `strategy_backtests` through it so that `authenticated`
+#: needs no DML privilege on the table the Marketplace gate reads as evidence.
+_SERVICE_CLIENT_SEAM_MODULES = (
+    "backend_app.backend.backtest_service",
+)
+
 
 @pytest.fixture(scope="module")
 def registry():
@@ -187,6 +194,26 @@ def sandbox(monkeypatch, sandbox_paper_mode) -> SandboxWorld:
 
         module = importlib.import_module(module_path)
         monkeypatch.setattr(module, "create_request_supabase_async", _client, raising=False)
+
+    # ── 1b. the SERVICE-ROLE client, at the modules that write through it ──
+    # `backtest_service` performs its three `strategy_backtests` writes under the
+    # service-role client, so patching only the request-scoped factory above would
+    # leave the sandbox's INSERT/UPDATE/DELETE reaching for real credentials. Both
+    # seams return the SAME `SandboxDatabase`, which is what keeps this suite's
+    # premise -- one shared database, whichever client asked -- true. The ownership
+    # predicates the writes carry are asserted by
+    # `test_cross_tenant_ownership_matrix.py`, and those are unaffected by which
+    # client issues the statement.
+    async def _service_client() -> SandboxDatabase:
+        return db
+
+    for module_path in _SERVICE_CLIENT_SEAM_MODULES:
+        import importlib
+
+        module = importlib.import_module(module_path)
+        monkeypatch.setattr(
+            module, "get_service_supabase_async", _service_client, raising=False
+        )
 
     # ── 2. the store the REAL idempotency layer locks in ──────────────────
     monkeypatch.setattr(di, "redis_manager", redis)

@@ -325,9 +325,17 @@ class _Supabase:
 
 
 def _service(sb) -> BacktestService:
-    """The real service, wired to the fake client at its one seam."""
+    """The real service, wired to the fake client at both of its client seams.
+
+    `update_backtest_results` writes through `_get_write_supabase` (the service-role
+    client) and reads through `_get_supabase`; this file is about the UPDATE payload's
+    SHAPE, which is the same either way, so both seams return the one fake. The
+    service-role routing itself is asserted in
+    `test_mkt10_backtest_writes_are_service_role.py`.
+    """
     service = BacktestService()
-    service._get_supabase = lambda user: sb  # noqa: SLF001 - the seam under test
+    service._get_supabase = lambda user: sb  # noqa: SLF001 - the read seam
+    service._get_write_supabase = lambda: sb  # noqa: SLF001 - the write seam under test
     return service
 
 

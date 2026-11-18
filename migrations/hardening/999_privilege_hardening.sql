@@ -277,8 +277,12 @@ BEGIN
 END $$;
 
 -- ───────────────────────────────────────────────────────────────────────────
--- SECTION 1b: the execution ledgers are evidence, not a client surface
+-- SECTION 1b: the Eligibility_Gate's evidence is evidence, not a client surface
 -- ───────────────────────────────────────────────────────────────────────────
+-- Four tables, two justifications. The three execution ledgers have NO PostgREST writer
+-- at all (MKT-07, below); `strategy_backtests` has one that was moved to the
+-- service-role client so this revoke could happen (MKT-10, further below). Both halves
+-- of what the Marketplace gate counts as evidence are covered here.
 -- MKT-07. `execution_records` is the live-execution ledger. It is what Trade History's
 -- LIVE tab reads (`routers/orders.py::_live_history_rows`), what realised P&L is derived
 -- from, and -- from this change onward -- what the Marketplace Eligibility_Gate reads to
@@ -321,23 +325,49 @@ END $$;
 -- `billing_invoices` and `notifications` decisions above. A read is not a forgery, and
 -- leaving it means a future owner-scoped read needs no privilege change.
 --
--- NOT CLOSED BY THIS SECTION, and recorded rather than quietly skipped:
--- `strategy_backtests` is the OTHER half of the Eligibility_Gate's evidence, and it is
--- writable by the same customer for the same reason -- except that there the application
--- itself writes through the caller's own client (`backend/backtest_service.py:336`
--- resolves `create_request_supabase_async(user["access_token"])`, used by the insert at
--- :451, the result update at :582 and the delete at :807). Revoking `authenticated`
--- there would stop every backtest persisting. Closing it means moving those three writes
--- to the service-role client while keeping their existing `.eq("user_id", …)`
--- predicates, which then become the only ownership scope. Production does configure
--- `SUPABASE_SERVICE_ROLE_KEY` -- verified on all 7 ECS services in
--- `vyomquant-cluster`, names only -- so the prerequisite that blocked this is resolved;
--- the change itself is a separate PR because it touches the backtest result path.
+-- `strategy_backtests` IS NOW CLOSED TOO, and it is in the array below for a DIFFERENT
+-- REASON than the three ledgers -- worth stating, because "zero writers" is the whole
+-- safety argument above and it is NOT the argument here.
+--
+-- MKT-10. This table is the five-backtest half of the same Eligibility_Gate evidence,
+-- and it was the LIVE half: measured against production on 2026-11-18, `authenticated`
+-- held DELETE/INSERT/SELECT/UPDATE here while the three ledgers above had already been
+-- narrowed to SELECT in production. (The ledger forgery demonstrated above was real but
+-- reachable only in a database provisioned from this repository -- production was
+-- narrower than its own provisioning source. This one needed no such caveat.)
+--
+-- Unlike the ledgers, this table DOES have an application writer on the PostgREST path:
+-- `backend/backtest_service.py` inserts the row, updates it with results, and deletes
+-- it. That is exactly why the revoke was deferred when the ledgers were narrowed --
+-- revoking first would have stopped every backtest from persisting.
+--
+-- WHY THE REVOKE IS SAFE NOW: those three writes were moved to the service-role client
+-- (`_get_write_supabase` -> `get_service_supabase_async`). `service_role` keeps its
+-- grants, so the application's writes are unaffected by a revoke aimed at
+-- `authenticated`. The reads were deliberately NOT moved and still run as the caller,
+-- which is why SELECT is retained below rather than revoked with the rest.
+--
+-- WHAT NOW ENFORCES OWNERSHIP: the service-role client is not subject to
+-- `backtests_owner_access`, so for each write the predicate on the statement is the
+-- whole ownership scope -- `.eq("id", …).eq("user_id", …)` on the UPDATE and the DELETE,
+-- and a payload `user_id` taken from the verified JWT on the INSERT (which never had a
+-- WHERE clause; RLS checked it with `WITH CHECK`). Those predicates are pinned by
+-- `tests/test_mkt10_backtest_writes_are_service_role.py`, which fails if any is dropped
+-- or if a write drifts back onto the caller's client. Three mutants -- one per write --
+-- were each confirmed to fail that file before this landed.
+--
+-- NOTE ON `ENABLE ROW LEVEL SECURITY` BELOW: for `strategy_backtests` it is already on
+-- (001), so the statement is a no-op here. It still takes an ACCESS EXCLUSIVE lock,
+-- which is why the production-facing migration
+-- (`backend_app/migrations/074_mkt10_revoke_backtest_dml.sql`) issues the REVOKEs
+-- ALONE, under a short `lock_timeout`. This file provisions empty databases, where the
+-- lock is free.
 DO $$
 DECLARE
     t text;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['execution_records', 'orders', 'positions']
+    FOREACH t IN ARRAY ARRAY['execution_records', 'orders', 'positions',
+                             'strategy_backtests']
     LOOP
         IF EXISTS (SELECT 1 FROM information_schema.tables
                     WHERE table_schema = 'public' AND table_name = t) THEN

@@ -743,33 +743,92 @@ def test_a_customer_cannot_forge_its_own_live_execution_history(pg) -> None:
 
 
 @pg_only
-def test_the_other_half_of_the_evidence_is_still_writable(pg) -> None:
-    """A PINNED OPEN GAP, failing when it is closed so it cannot be forgotten.
+def test_a_seller_cannot_write_the_backtest_half_of_its_own_evidence(pg) -> None:
+    """MKT-10, and the inverse of the pinned gap this file used to carry.
 
-    ``strategy_backtests`` is the five-backtest half of the same gate and ``authenticated``
-    still holds INSERT/UPDATE/DELETE on it, because the application's own writer is the
-    caller's client (``backend/backtest_service.py:336``, used at :451, :582 and :807).
-    Revoking without moving those three writes to the service-role client would stop every
-    backtest persisting.
+    ``strategy_backtests`` is the five-backtest half of the same gate. Until the writer
+    moved, ``authenticated`` held INSERT/UPDATE/DELETE here and this test asserted the
+    OPPOSITE -- it was a deliberate failing-when-fixed pin, because revoking before moving
+    the application's own writer would have stopped every backtest from persisting.
 
-    Production does configure ``SUPABASE_SERVICE_ROLE_KEY`` -- verified on all 7 ECS services
-    in ``vyomquant-cluster``, names only -- so the prerequisite that blocked this is resolved
-    and the remaining work is the writer move, not a configuration decision.
+    What changed: ``backend/backtest_service.py`` performs its three writes through the
+    service-role client, so ``074_mkt10_revoke_backtest_dml.sql`` can take the privilege
+    away. This was the LIVE half of the pair -- measured against production, where the
+    three ledgers above had already been narrowed to SELECT but this table had not.
 
-    When that lands, this test fails and should be deleted along with this note.
+    SELECT is asserted to REMAIN: the reads were deliberately left on the caller's own
+    client, so revoking it would break Backtest History for every user.
     """
     cur = pg.cursor()
     cur.execute("SELECT to_regclass('public.strategy_backtests')")
     if cur.fetchone()[0] is None:
         pytest.skip("public.strategy_backtests is not in this database")
 
-    writes = _grants(cur, "strategy_backtests", "authenticated") & {
-        "INSERT",
-        "UPDATE",
-        "DELETE",
-    }
-    assert writes, (
-        "authenticated no longer holds write privileges on strategy_backtests -- if the "
-        "backtest writer has moved to the service-role client, this pinned gap is closed: "
-        "delete this test and the note in 999_privilege_hardening.sql SECTION 1b."
+    assert _grants(cur, "strategy_backtests", "anon") == set(), (
+        "anon still holds "
+        f"{sorted(_grants(cur, 'strategy_backtests', 'anon'))} on strategy_backtests; "
+        "that key ships to unauthenticated visitors in the browser"
     )
+
+    authenticated = _grants(cur, "strategy_backtests", "authenticated")
+    assert authenticated <= {"SELECT"}, (
+        f"authenticated holds {sorted(authenticated - {'SELECT'})} on strategy_backtests "
+        "beyond SELECT, so a seller can still author the backtest evidence the "
+        "Eligibility_Gate reads about them"
+    )
+    assert "SELECT" in authenticated, (
+        "authenticated lost SELECT on strategy_backtests -- the backtest READS still run "
+        "as the caller (get_backtest, list_backtests, get_backtest_history, "
+        "compare_backtests), so Backtest History is now broken for every user"
+    )
+
+
+@pg_only
+def test_a_customer_cannot_forge_a_backtest_row(pg) -> None:
+    """The privilege above, demonstrated as a refusal rather than read off the catalogue.
+
+    Mirrors ``test_a_customer_cannot_forge_its_own_live_execution_history``: adopt the
+    customer's identity, attempt the forgery the Eligibility_Gate would have counted, and
+    require the database to refuse it. A seller writing five passing backtests directly
+    against PostgREST is the exact move this closes.
+    """
+    import psycopg2
+
+    cur = pg.cursor()
+    cur.execute("SELECT to_regclass('public.strategy_backtests')")
+    if cur.fetchone()[0] is None:
+        pytest.skip("public.strategy_backtests is not in this database")
+
+    user_id = str(uuid.uuid4())
+    cur.execute(
+        "INSERT INTO auth.users (id, email) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
+        (user_id, f"mkt10-{user_id[:8]}@example.invalid"),
+    )
+    cur.execute(
+        "INSERT INTO profiles (id, email) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
+        (user_id, f"mkt10-{user_id[:8]}@example.invalid"),
+    )
+
+    cur.execute("SAVEPOINT forge_backtest")
+    cur.execute("SELECT set_config('request.jwt.claim.sub', %s, true)", (user_id,))
+    cur.execute("SELECT set_config('request.jwt.claim.role', 'authenticated', true)")
+    cur.execute("SET LOCAL ROLE authenticated")
+    cur.execute("SELECT auth.uid()")
+    assert str(cur.fetchone()[0]) == user_id, (
+        "the probe did not adopt the customer's identity, so a refusal below would prove "
+        "nothing about the privilege"
+    )
+
+    # `user_id = auth.uid()` holds, so `backtests_owner_access` is SATISFIED. Only the
+    # missing INSERT privilege can refuse this -- which is the point: RLS was never the
+    # thing that was wrong here.
+    with pytest.raises((psycopg2.errors.InsufficientPrivilege, psycopg2.ProgrammingError)):
+        cur.execute(
+            """
+            INSERT INTO strategy_backtests
+                (id, user_id, strategy_id, status, created_at)
+            VALUES (%s, %s, %s, 'completed', now())
+            """,
+            (str(uuid.uuid4()), user_id, str(uuid.uuid4())),
+        )
+    pg.rollback()
