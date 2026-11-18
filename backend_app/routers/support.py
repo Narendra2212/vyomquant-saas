@@ -901,7 +901,27 @@ async def update_ticket(
             title=f"Support Ticket {action_verb}",
             message=f"Ticket '{ticket.get('subject', ticket_id)}' status updated to {new_status}.",
             metadata={"ticket_id": ticket_id, "status": new_status, "idempotency_key": f"ticket_status:{ticket_id}:{new_status}"},
-            supabase=supabase,
+            # NOTIF-04: NO CLIENT. This was `supabase=supabase` -- the caller's own
+            # request-scoped client -- and it is the third site of the defect NOTIF-03
+            # fixed at the other two (:592 and :1074). It was missed there because that
+            # change was scoped by the two sites the dispatcher's docstring happened to
+            # name.
+            #
+            # Two independent reasons the row could never land through that client:
+            #
+            #   1. `public.notifications` carries an owner-scoped policy, and this row is
+            #      addressed to the TICKET OWNER while a status change is performed by
+            #      support staff -- so `auth.uid()` is not the `user_id` being inserted
+            #      and PostgREST refuses it.
+            #   2. `999_privilege_hardening.sql` has since REVOKED `authenticated INSERT`
+            #      on `public.notifications`. Measured in production 2026-11-18:
+            #      `authenticated -> DELETE,SELECT,UPDATE`. So even an owner-performed
+            #      status change now fails on the privilege, with 42501.
+            #
+            # Either way the `except Exception: logger.debug` below swallowed it, so a
+            # customer whose ticket was resolved was never told. Passing no client lets
+            # `_resolve_persistence_client` resolve the service-role client, which is not
+            # subject to the owner policy and holds the privilege.
             ws_manager=ws_mgr,
         )
     except Exception as notif_err:

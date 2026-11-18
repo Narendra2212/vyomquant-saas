@@ -56,6 +56,9 @@ from backend_app.backend.ml_models import create_ml_block
 from backend_app.core.models.execution_record import (FILL_STATE_ACCEPTED,
                                                       FILL_STATE_PARTIAL)
 from backend_app.core.risk_manager import RiskVerdict, TradeRequest
+# Imported as a MODULE so `schedule_user_notification` resolves at call time and a test
+# can replace it. See the same note in routers/risk.py.
+from backend_app.core import notification_dispatcher
 from backend_app.backend.strategy_builder import StrategyEngine
 
 logger = logging.getLogger("BotRunner")
@@ -1291,6 +1294,123 @@ class BotRunner:
 
         await self.shutdown()
 
+    #: Outcomes that are neither a fill nor a failure, and so announce nothing.
+    #:
+    #: `accepted` means the venue HOLDS the order and has filled nothing -- telling the
+    #: customer their trade executed would be false, and telling them it failed would be
+    #: false too. `skipped_*` means the idempotency layer refused a replay because an
+    #: identical execution already ran, so THIS call did nothing and the original already
+    #: produced its own notification. Announcing either would be the fabricated alert the
+    #: brief forbids.
+    _QUIET_ORDER_STATUSES = frozenset({
+        FILL_STATE_ACCEPTED, "accepted",
+        "skipped_completed", "skipped_executing",
+    })
+
+    #: Outcomes the venue confirmed as a fill, whole or partial.
+    _FILLED_ORDER_STATUSES = frozenset({"completed", FILL_STATE_PARTIAL, "partially_filled"})
+
+    def _notify_order_outcome(
+        self,
+        *,
+        status,
+        side: str,
+        requested_qty,
+        filled_qty,
+        price,
+        execution_id: str,
+        message: str = "",
+    ) -> None:
+        """Tell the customer what happened to their order. Never raises.
+
+        T10. Trade execution and order failure were the two event classes with NO producer
+        anywhere in the tree -- a customer's strategy could fill an order, or fail to, and
+        the platform told them nothing. The stated blocker was that this loop is
+        synchronous; `notification_dispatcher.schedule_user_notification` is the answer to
+        that, and it is the same mechanism `routers/risk.record_risk_violation` already
+        uses.
+
+        TOTALITY IS NOT OPTIONAL HERE. This is called from inside the execution block
+        whose `except` rolls exposure back. An exception escaping it would roll back a
+        REAL, SETTLED FILL -- the bot would then believe it holds nothing after buying,
+        which is exactly the RT-02 defect this loop already carries a comment about. So
+        every failure mode is caught and logged, and nothing propagates.
+
+        THE OUTCOME IS PART OF THE IDEMPOTENCY KEY, not just the execution id. An intent
+        reported failed and then, on a retry, filled is two different things to tell a
+        customer; keying on the execution id alone would de-duplicate the second away.
+        """
+        try:
+            status_text = str(status) if status is not None else None
+            if status_text in self._QUIET_ORDER_STATUSES:
+                return
+
+            is_paper = bool(getattr(self, "paper_trading", False))
+            mode = "paper" if is_paper else "live"
+            filled = status_text in self._FILLED_ORDER_STATUSES
+            symbol = getattr(self, "symbol", "")
+            strategy_id = (getattr(self, "blueprint", None) or {}).get("strategy_id")
+
+            if filled:
+                # "Paper" in the title because a simulated fill must never be passed off
+                # as a venue fill. The customer decides what to do next on this.
+                title = "Paper Order Filled" if is_paper else "Order Filled"
+                shape = {
+                    "event_type": "trade_executed",
+                    "category": "trade",
+                    "severity": "success",
+                    "title": title,
+                    "message": (
+                        f"{side.upper()} {filled_qty} {symbol} at {price}."
+                        + (" Simulated fill." if is_paper else "")
+                    ),
+                    "idempotency_key": f"order_filled:{execution_id}",
+                }
+            else:
+                title = "Paper Order Failed" if is_paper else "Order Failed"
+                detail = f" {message}" if message else ""
+                shape = {
+                    "event_type": "order_failed",
+                    "category": "trade",
+                    # `error`: the customer's strategy intended a trade and it did not
+                    # happen. `order_failed` is deliberately NOT in
+                    # PREFERENCE_KEY_BY_EVENT_TYPE, so no switch can suppress it.
+                    "severity": "error",
+                    "title": title,
+                    "message": (
+                        f"{side.upper()} {requested_qty} {symbol} did not execute"
+                        f" (status: {status_text}).{detail}"
+                    ),
+                    "idempotency_key": f"order_failed:{execution_id}",
+                }
+
+            notification_dispatcher.schedule_user_notification(
+                user_id=getattr(self, "user_id", ""),
+                event_type=shape["event_type"],
+                category=shape["category"],
+                severity=shape["severity"],
+                title=shape["title"],
+                message=shape["message"],
+                strategy_id=strategy_id,
+                exchange=getattr(self, "exchange_id", None),
+                metadata={
+                    "mode": mode,
+                    "symbol": symbol,
+                    "side": side,
+                    "status": status_text,
+                    "requested_qty": str(requested_qty),
+                    "filled_qty": str(filled_qty),
+                    "execution_id": execution_id,
+                    "idempotency_key": shape["idempotency_key"],
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - must never reach the tick's except
+            logger.error(
+                "[NOTIFY_ORDER] could not schedule order-outcome notification for "
+                "user=%s execution_id=%s: %s",
+                getattr(self, "user_id", "?"), execution_id, exc,
+            )
+
     async def _inner_loop(self):
         """
         Core tick processing loop.
@@ -1968,6 +2088,21 @@ class BotRunner:
                             f"⚠️ Order {side} {qty} {self.symbol} was NOT executed "
                             f"(status={_status!r}); exposure unchanged at {previous_exposure}"
                         )
+
+                    # T10: the customer hears about BOTH outcomes -- a fill and a
+                    # non-execution. Placed after the exposure is settled and reported, so
+                    # a notification cannot sit between the fill and the state recording
+                    # it. `_notify_order_outcome` is total; see its docstring on why an
+                    # exception here would roll a real fill back.
+                    self._notify_order_outcome(
+                        status=_status,
+                        side=side,
+                        requested_qty=qty,
+                        filled_qty=filled_qty,
+                        price=price,
+                        execution_id=execution_id,
+                        message=str(result.get("message") or "") if result else "",
+                    )
 
                     # Record successful trace in background
                     asyncio.create_task(record_audit_signal(

@@ -56,11 +56,13 @@ notification is a dropped safety alert and is logged at ERROR, while a dropped
 ``_log_dispatch_failure``.
 """
 
-import inspect
+import asyncio
 import logging
 import re
 from typing import Any, Dict, Optional
 
+from backend_app.core.background_tasks import fire_and_forget_task
+from backend_app.core.notification_preferences import event_is_permitted
 from backend_app.routers.notifications import NotificationCreate, create_notification
 
 logger = logging.getLogger(__name__)
@@ -376,14 +378,30 @@ async def dispatch_user_notification(
         )
         client = await _resolve_persistence_client(supabase)
 
-        # NOTIF-04. The preference is consulted HERE -- after the client is
-        # resolved, so the read uses the same authority the write will, and
-        # before anything is persisted or broadcast, so a suppressed event
-        # leaves no row and no socket frame. Returning None is the same answer
-        # the caller already handles for a dispatch that did not persist.
-        if not await _preference_allows(str(user_id), str(event_type), client):
+        # ── T10: the preference gate, and it runs BEFORE anything observable ──
+        #
+        # Until this, NOTHING on the dispatch path read `notification_settings`: the panel
+        # offered eight switches and not one of them suppressed anything. The switches
+        # were real, stored, and inert.
+        #
+        # ORDER IS THE WHOLE POINT. Filtering after `create_notification` would leave the
+        # row sitting in the very feed the customer muted AND would already have broadcast
+        # it over their socket, so the mute would be visibly fake. The gate therefore sits
+        # above both, and a suppressed event returns None having touched neither.
+        #
+        # THE MANDATORY FLOOR IS NOT NEGOTIABLE and is enforced inside
+        # `event_is_permitted` rather than here -- `kill_switch_activated`,
+        # `stop_loss_triggered` and `new_login_detected` do not even read the store. That
+        # matches migration 073, which pins those three keys to `true` in the column, so
+        # the schema and the dispatcher agree instead of one trusting the other.
+        #
+        # A FAILED PREFERENCE READ DELIVERS. `event_is_permitted` fails toward delivery
+        # and logs at ERROR: an unreadable preference row must never silently swallow a
+        # notification, because the failure mode would be indistinguishable from the
+        # customer having muted it.
+        if not await event_is_permitted(str(user_id), str(event_type), client):
             logger.debug(
-                "[NOTIF_DISPATCH] %s suppressed for %s by preference",
+                "[NOTIF_DISPATCH] %s suppressed for %s by a stored preference",
                 event_type, user_id,
             )
             return None
@@ -512,10 +530,101 @@ def dispatch_user_notification_threadsafe(**kwargs: Any) -> Optional[Any]:
 #     caller could not distinguish a delivered notification from a collected one.
 #
 # A broken sync entry point is worse than no sync entry point: it looks like the
-# thing a sync producer is supposed to call. If one is genuinely needed later --
-# the execution engine and bot runner are sync, and NOTHING currently dispatches
-# trade-execution or order-failure notifications from them, which is a real
-# remaining T10 gap recorded in docs/audits -- the correct shape is
-# `asyncio.run_coroutine_threadsafe(coro, loop)` against the application's running
-# loop, holding the returned Future and reporting its exception. Not `create_task`
-# fire-and-forget.
+# thing a sync producer is supposed to call.
+#
+# T10 NEEDED ONE, AND `schedule_user_notification` BELOW IS IT. The paragraph that
+# used to end here recommended `asyncio.run_coroutine_threadsafe(coro, loop)`, and
+# that recommendation was answering only half the problem:
+#
+#   * `run_coroutine_threadsafe` is the right call FROM ANOTHER THREAD, and it
+#     requires a loop object to target. The sync producers this was written for --
+#     `ExecutionEngine`, `BotRunner`, `record_risk_violation` -- run inside the
+#     application's own loop thread, where `get_running_loop()` succeeds and
+#     `run_coroutine_threadsafe` would deadlock if given that same loop.
+#   * its objection to `create_task` was that the task was UNTRACKED and therefore
+#     collectable before running. `core/background_tasks.fire_and_forget_task`
+#     holds a strong reference and logs the exception, which is exactly that
+#     objection answered -- and it is already how `routers/risk.record_risk_violation`
+#     and `backend/builder_alerts.raise_alerts` schedule work, so reusing it keeps
+#     one mechanism rather than introducing a second.
+#
+# What is still NOT solved, stated rather than implied: a producer on a thread with
+# no running loop gets `False` and an ERROR log, not delivery. That is deliberate --
+# the alternative is `asyncio.run()` on a per-bar execution path, which blocks the
+# trading loop to send a notification. A cross-thread producer needs the
+# application loop captured at startup and `run_coroutine_threadsafe` against it;
+# no such producer exists today, and `schedule_user_notification` reports honestly
+# instead of pretending.
+
+
+def schedule_user_notification(
+    *,
+    user_id: str,
+    event_type: str,
+    category: str,
+    title: str,
+    message: str,
+    severity: str = "info",
+    strategy_id: Optional[str] = None,
+    exchange: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    supabase: Optional[Any] = None,
+    ws_manager: Optional[Any] = None,
+) -> bool:
+    """Dispatch a notification from SYNCHRONOUS code. Never raises.
+
+    Returns ``True`` when the coroutine was handed to the platform's tracked
+    background-task helper, ``False`` when there was no running loop to schedule onto.
+    The boolean is the point: the replaced ``dispatch_user_notification_sync`` returned
+    ``None`` on both branches, so a caller could not tell a delivered notification from a
+    collected one.
+
+    TOTALITY IS THE CONTRACT. Every caller is a producer whose real work -- an order
+    refusal, a fill, an audit write, a sign-in -- has already happened or is about to.
+    A notification that cannot be scheduled must never propagate into that path, so
+    every failure mode here is caught and logged.
+
+    A ``warning``/``error``/``critical`` that is dropped logs at ERROR, because those are
+    the ones a customer was supposed to act on. An ``info`` that is dropped logs at DEBUG.
+    """
+    actionable = severity in ("warning", "error", "critical")
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop in this thread. Report, do not raise, and do not block.
+        message_text = (
+            "[NOTIF_DISPATCH] %s notification for %s was NOT scheduled: no running "
+            "event loop in this thread. The producing action is unaffected."
+        )
+        if actionable:
+            logger.error(message_text, event_type, user_id)
+        else:
+            logger.debug(message_text, event_type, user_id)
+        return False
+
+    try:
+        # Resolved as a module global at call time, so a test (and a future decorator)
+        # can replace `dispatch_user_notification` and have this honour it.
+        coro = dispatch_user_notification(
+            user_id=user_id,
+            event_type=event_type,
+            category=category,
+            title=title,
+            message=message,
+            severity=severity,
+            strategy_id=strategy_id,
+            exchange=exchange,
+            metadata=metadata,
+            supabase=supabase,
+            ws_manager=ws_manager,
+        )
+        fire_and_forget_task(coro, name=f"notify_{event_type}_{user_id}")
+        return True
+    except Exception as exc:  # noqa: BLE001 - a notification must not break its producer
+        logger.error(
+            "[NOTIF_DISPATCH] %s notification for %s was NOT scheduled: %s. The "
+            "producing action is unaffected.",
+            event_type, user_id, exc,
+        )
+        return False
