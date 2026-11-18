@@ -2691,7 +2691,52 @@ RETIRED_PRODUCTION_COLUMNS_EXECUTION_RECORDS = frozenset(
 #: ``billing_lifecycle.py``) are unrelated refactors already on this branch
 #: that each REMOVED one unresolvable site; they are why the net change across
 #: the eight real additions above is +6 rather than +8.
-MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 189
+#:
+#: Raised 189 -> 190 for RISK-06/07, measured by diffing the skip sets across
+#: ``7eb00b96^ -> 7ef19d9f`` rather than inferred. The RAW diff shows three
+#: additions and two removals, and the removals are what make it +1 rather than
+#: +3 -- so the raw number would have overstated the change threefold:
+#:
+#:     + backend_app/routers/risk.py:325 .upsert :: payload is not a literal dict
+#:     + backend_app/routers/risk.py:402 .update :: chain starts at the variable 'settings'
+#:     + backend_app/routers/risk.py:633 .upsert :: payload is not a literal dict
+#:     - backend_app/routers/risk.py:282 .update :: chain starts at the variable 'settings'
+#:     - backend_app/routers/risk.py:473 .upsert :: payload is not a literal dict
+#:
+#: TWO OF THE THREE "NEW" SITES ARE THE OLD TWO, RELOCATED. ``risk.py`` grew by
+#: 253 lines in that change, so ``:282 -> :402`` (the same ``settings.update({…})``)
+#: and ``:473 -> :633`` (the same ``risk_settings`` upsert) are the identical
+#: statements at new line numbers -- same file, same verb, same skip reason, and
+#: one appears in the removals for every one that appears in the additions.
+#:
+#: SO THERE IS EXACTLY ONE GENUINELY NEW SITE: ``risk.py:325``, RISK-07's
+#: ``strategy_limits`` upsert. It is irreducible, which is the only reason the pin
+#: moves instead of the code:
+#:
+#:     async def _persist_strategy_limits(user, uid, rows: list[dict]) -> bool:
+#:         ...
+#:         sb.table("strategy_limits").upsert(rows, on_conflict="user_id,strategy_id")
+#:
+#: ``rows`` is a PARAMETER holding a MULTI-ROW batch. The fix this counter's own
+#: message asks for first -- "a literal table name and a literal projection are
+#: all it takes" -- gets half of what it needs here: the table name IS a literal.
+#: The payload cannot be, because there is no single row to write out; one dict
+#: per strategy arrives from the caller. The alternative shape, a literal upsert
+#: per row inside a loop, would turn one round trip into N to satisfy a test,
+#: which is a worse program. Same shape as every other ``.insert``/``.upsert``
+#: already pinned above (SEC-24's two, library.py's two).
+#:
+#: ``:402`` is additionally not a database call at all -- ``settings`` is a plain
+#: local ``dict`` being merged, the same category as RISK-05's six
+#: ``body.update(...)``/``summary.update(...)`` sites recorded above. It is
+#: counted because the parser attributes any ``.update(`` it cannot trace to a
+#: ``.table()``, and that is the safe direction for it to fail in.
+#:
+#: Not raised to go green: the tree sat at exactly 189 against a pin of 189
+#: before this change (``f6777ebe``), so there was no slack to absorb it, and
+#: ``resolved`` held at 1134 across the diff -- the parser did not stop matching,
+#: it met one more thing it cannot match.
+MAX_UNRESOLVABLE_COLUMN_CALL_SITES = 190
 
 #: Call sites that DID resolve, as observed. The other half of the ratchet: a
 #: parser that stops matching would otherwise satisfy every assertion above.
