@@ -286,22 +286,80 @@ def test_nothing_on_the_dispatch_path_reads_a_preference() -> None:
         "backend_app/routers/notifications.py",
     ):
         source = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert "notification_settings" not in source, (
-            f"{relative} now reads notification_settings. Preference filtering has been "
-            "wired, which is good — delete this test and assert the filtering instead, "
-            "including that no mandatory event can be filtered."
+        # Comments stripped first. The gate's own explanation NAMES the table it
+        # deliberately does not read here, so a raw substring search matches the prose
+        # about the design rather than a query. Same reason the colour-literal guard
+        # strips comments before counting.
+        code = "\n".join(
+            line.split("#", 1)[0] for line in source.splitlines()
+        )
+        assert "notification_settings" not in code, (
+            f"{relative} now reads notification_settings DIRECTLY. The gate belongs in "
+            "core/notification_preferences.py, which these two modules consult -- see "
+            "test_the_dispatch_path_now_applies_preferences below. Reading the table "
+            "from two places is how the floor and the filter drift apart."
         )
 
 
-def test_seven_of_eight_preference_keys_have_no_producer() -> None:
-    """The panel offers eight switches; the platform emits an event for one of them.
+def test_the_dispatch_path_now_applies_preferences() -> None:
+    """The inverse of what this test originally pinned.
 
-    Derived by AST over every `dispatch_user_notification` call site in `backend_app`, which is
-    the only producer of a notification row. The point is not that the panel is wrong to show
-    them — a preference can reasonably precede its producer — but that "add preference
-    filtering" would today be building a mechanism with no input, and that should be a
-    measured statement rather than an impression.
+    It used to assert that NOTHING on the dispatch path read a preference, and said in its
+    own docstring that wiring a filter "has a test to delete". T10 wired it, so this is
+    that deletion -- replaced rather than removed, because the absence it recorded and the
+    presence that replaced it are both facts worth keeping checkable.
+
+    The behaviour is asserted properly in
+    `tests/test_t10_event_wiring_and_preferences.py` (46 tests: suppression, the mandatory
+    floor overriding a stored `false`, the floor not even reading the store, a failed read
+    delivering, and the gate running BEFORE both the insert and the WebSocket broadcast).
+    This keeps a single structural assertion here so that removing the gate fails the file
+    that was built to guard the floor.
     """
+    dispatcher_source = (
+        REPO_ROOT / "backend_app" / "core" / "notification_dispatcher.py"
+    ).read_text(encoding="utf-8")
+
+    assert "event_is_permitted" in dispatcher_source, (
+        "the dispatcher no longer consults core/notification_preferences. Preference "
+        "filtering has been removed, so every switch in the Notifications panel is inert "
+        "again."
+    )
+
+    # Order is the property that makes a mute real rather than cosmetic: filtering after
+    # the insert would leave the row in the feed the customer muted and would already
+    # have broadcast it.
+    gate_at = dispatcher_source.find("event_is_permitted(")
+    create_at = dispatcher_source.find("await create_notification(")
+    assert gate_at != -1 and create_at != -1
+    assert gate_at < create_at, (
+        "the preference gate runs AFTER create_notification, so a suppressed "
+        "notification is still stored and still broadcast"
+    )
+
+
+def test_the_register_of_producerless_preference_keys_only_shrinks() -> None:
+    """This used to assert that SEVEN of the eight switches governed nothing.
+
+    That was true when measured: only `kill_switch_activated` had a producer, so
+    "add preference filtering" would have been building a mechanism with no input. T10
+    added producers, so the measurement has moved and the assertion moves with it -- in
+    one direction only.
+
+    THE REGISTER MAY ONLY SHRINK. `core/notification_preferences.PREFERENCE_KEYS_WITHOUT_PRODUCER`
+    is the declared list of switches that still govern nothing. If this test finds a key
+    NOT in that register and with no producer, either a producer was deleted or a switch
+    was added without one -- both are the panel offering a control that does nothing,
+    which is the defect NOTIF-02 was opened for.
+
+    Derived by AST over every `dispatch_user_notification` and
+    `schedule_user_notification` call site in `backend_app`, plus the event types the
+    mapping routes, because a producer now reaches the switch THROUGH
+    `PREFERENCE_KEY_BY_EVENT_TYPE` rather than by naming the key directly.
+    """
+    from backend_app.core.notification_preferences import (
+        PREFERENCE_KEY_BY_EVENT_TYPE, PREFERENCE_KEYS_WITHOUT_PRODUCER)
+
     emitted: set = set()
     for path in (REPO_ROOT / "backend_app").rglob("*.py"):
         try:
@@ -316,20 +374,61 @@ def test_seven_of_eight_preference_keys_have_no_producer() -> None:
                 if isinstance(node.func, ast.Attribute)
                 else getattr(node.func, "id", None)
             )
-            if name != "dispatch_user_notification":
+            if name not in ("dispatch_user_notification", "schedule_user_notification"):
                 continue
             for keyword in node.keywords:
                 if keyword.arg == "event_type" and isinstance(keyword.value, ast.Constant):
                     emitted.add(str(keyword.value.value))
 
+        # A producer may build its notification as a dict and pass `event_type=shape[...]`,
+        # which is a Subscript and not a Constant -- `routers/risk._risk_breach_notification`
+        # and `master_executor._notify_order_outcome` both do, because they classify the
+        # event before dispatching it. Scanning call keywords alone reports those event
+        # types as having no producer, which is how `stop_loss_triggered` first appeared
+        # here as an undeclared gap when its producer had just been written. So also take
+        # string constants bound to an "event_type" key in any dict literal.
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant) and key.value == "event_type"
+                    and isinstance(value, ast.Constant) and isinstance(value.value, str)
+                ):
+                    emitted.add(value.value)
+
     assert emitted, "no dispatch call site was found at all, which cannot be right"
 
+    # A producer satisfies a switch either by naming the key as its event_type or by
+    # emitting an event_type the mapping routes to that key.
+    governed: set = {
+        PREFERENCE_KEY_BY_EVENT_TYPE[event_type]
+        for event_type in emitted
+        if event_type in PREFERENCE_KEY_BY_EVENT_TYPE
+    }
     declared = set(NotificationEvents.model_fields)
-    with_producer = declared & emitted
-    assert with_producer == {"kill_switch_activated"}, (
-        f"the set of preference keys with a real producer has changed to "
-        f"{sorted(with_producer)}. If a producer was wired, that is progress — update this "
-        "assertion and say which event now exists."
+    with_producer = declared & (governed | emitted)
+    producerless = declared - with_producer
+
+    assert "kill_switch_activated" in with_producer, (
+        "the kill-switch producer has gone. That is the one switch that had a producer "
+        "before T10 and it is on the mandatory floor."
+    )
+
+    undeclared_gaps = producerless - PREFERENCE_KEYS_WITHOUT_PRODUCER
+    assert not undeclared_gaps, (
+        f"these preference switches govern nothing and are not declared in "
+        f"PREFERENCE_KEYS_WITHOUT_PRODUCER: {sorted(undeclared_gaps)}. Either a producer "
+        "was deleted, or a switch was added without one. The panel must not offer a "
+        "control that does nothing -- add the producer, or add the key to that register "
+        "with a reason."
+    )
+
+    stale = PREFERENCE_KEYS_WITHOUT_PRODUCER & with_producer
+    assert not stale, (
+        f"PREFERENCE_KEYS_WITHOUT_PRODUCER still lists {sorted(stale)}, which now HAS a "
+        "producer. The register may only shrink -- remove the key from it, so it keeps "
+        "naming a real gap rather than a historical one."
     )
 
 

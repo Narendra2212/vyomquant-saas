@@ -29,6 +29,11 @@ from backend_app.core.dependencies import (
     get_service_supabase_async, get_vault, get_ws_manager
 )
 from backend_app.core.background_tasks import fire_and_forget_task
+# Imported as a MODULE, deliberately: `schedule_user_notification` must be resolved as an
+# attribute at call time so a test (and any future decorator) can replace it. A
+# `from ... import schedule_user_notification` would bind the original function object and
+# make the producer untestable without reaching into this module's globals.
+from backend_app.core import notification_dispatcher
 from backend_app.core.cache.redis_manager import redis_manager
 
 router = APIRouter()
@@ -205,6 +210,114 @@ def record_risk_violation(user_id: str, rule: str, reason: str, details: Optiona
             "[RISK_VIOLATION] could not schedule durable write: user=%s "
             "rule=%s err=%s", uid, rule, exc
         )
+
+    # ── RISK-08 / T10: tell the CUSTOMER, not only the audit trail ──
+    #
+    # Until this, a refusal produced a durable row and a log line and nothing the account
+    # holder could see. An account whose daily-loss limit had been hit refused every order
+    # for the rest of the day and looked, from the product, like an account that was not
+    # trading. The audit write above is for us; this is for them.
+    #
+    # Scheduled through the same no-loop guard as the audit write (both sit after the
+    # `get_running_loop` check above), so a CLI or sync test still refuses, still mirrors
+    # and still logs -- it just does not notify. Wrapped because a notification must never
+    # propagate into a per-bar evaluation path.
+    try:
+        shape = _risk_breach_notification(rule, reason)
+        if shape is not None:
+            notification_dispatcher.schedule_user_notification(
+                user_id=uid,
+                event_type=shape["event_type"],
+                category=shape["category"],
+                severity=shape["severity"],
+                title=shape["title"],
+                message=shape["message"],
+                metadata={**shape["metadata"], "details": detail},
+            )
+    except Exception as exc:  # noqa: BLE001 - never propagate
+        logger.error(
+            "[RISK_VIOLATION] could not schedule customer notification: user=%s "
+            "rule=%s err=%s", uid, rule, exc
+        )
+
+
+#: The refusals that fire because MONEY WAS LOST, as opposed to because a cap was hit.
+#:
+#: These three are the platform's stop-loss. Each locks new position opens until its
+#: condition clears, which is what a stop-loss does; there is no ORDER-level stop on the
+#: production path (`deployment_runtime.EXECUTABLE_ORDER_TYPES` is `("market",)`, and
+#: nothing evaluates `stop_loss_pct` outside the backtester). So these are the only real
+#: stop-loss events this system can produce, and announcing them as such is not
+#: fabricating a backtest concept into production.
+STOP_LOSS_RULE_CODES: frozenset = frozenset({
+    "MAX_DAILY_LOSS_EXCEEDED",
+    "MAX_DRAWDOWN_EXCEEDED",
+    "CONSECUTIVE_LOSS_LIMIT_EXCEEDED",
+})
+
+#: Rules whose refusal is ALREADY announced by the endpoint that produced it. Announcing
+#: them here as well would send a customer two notifications for one act.
+_SELF_ANNOUNCED_RULE_CODES: frozenset = frozenset({
+    # `activate_kill_switch` dispatches its own `critical` kill_switch_activated and then
+    # calls record_risk_violation for the audit trail. The audit write is the point of
+    # that call, not a second alert.
+    "KILL_SWITCH_MANUAL_ACTIVATION",
+})
+
+
+def _risk_breach_notification(rule: str, reason: str) -> Optional[Dict[str, Any]]:
+    """The notification a risk refusal should produce, or ``None`` for silence.
+
+    RISK-08 / T10. `record_risk_violation` wrote a durable audit row and a log line and
+    told the CUSTOMER nothing -- so an account that refused every order for an hour
+    because its daily-loss limit had been hit looked, from the product, like an account
+    that simply was not trading.
+
+    Returns a dict rather than dispatching, so the classification is testable without a
+    loop, a store or a monkeypatch -- and so the hour-bucketed key below is asserted on
+    its own terms.
+
+    THE KEY CARRIES AN HOUR BUCKET. A breached limit refuses EVERY attempt while it
+    holds, and the paper path evaluates these rules per bar; one notification per refusal
+    is a storm, not coverage. The bucket makes every refusal of one rule inside one hour
+    produce the SAME `idempotency_key`, which `uq_notifications_user_idempotency`
+    collapses to one row. Collapsing is the database's job; this is the input that lets
+    it do it.
+    """
+    rule_code = str(rule)
+    if rule_code in _SELF_ANNOUNCED_RULE_CODES:
+        return None
+
+    is_stop_loss = rule_code in STOP_LOSS_RULE_CODES
+    bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+
+    if is_stop_loss:
+        return {
+            "event_type": "stop_loss_triggered",
+            "category": "risk",
+            # `critical`: the account has stopped taking positions and the customer did
+            # not ask for that. It is also on the mandatory floor, so no preference hides
+            # it -- see core/notification_preferences.MANDATORY_EVENT_TYPES.
+            "severity": "critical",
+            "title": "Trading Halted — Loss Limit Reached",
+            "message": f"{reason} New positions are blocked until this clears.",
+            "metadata": {
+                "rule": rule_code,
+                "idempotency_key": f"risk_breach:{rule_code}:{bucket}",
+            },
+        }
+
+    return {
+        "event_type": "risk_limit_breached",
+        "category": "risk",
+        "severity": "warning",
+        "title": "Order Refused — Risk Limit",
+        "message": reason,
+        "metadata": {
+            "rule": rule_code,
+            "idempotency_key": f"risk_breach:{rule_code}:{bucket}",
+        },
+    }
 
 
 def _safe_uid(uid: str) -> str:

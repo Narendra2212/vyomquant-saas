@@ -15,6 +15,9 @@ from pydantic import BaseModel, EmailStr
 from backend_app.core.dependencies import (get_current_user, get_service_supabase,
                                            get_supabase)
 from backend_app.core.rate_limit import limiter
+# Module import so schedule_user_notification/dispatch_user_notification resolve at
+# call time and a test can replace them. Same note as routers/risk.py.
+from backend_app.core import notification_dispatcher
 from backend_app.core.supabase_connection import SupabaseConnection
 from backend_app.core.websocket_auth import (WS_TICKET_REDIS_PREFIX,
                                              WS_TICKET_TTL_SECONDS,
@@ -262,6 +265,61 @@ async def register(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _login_dedupe_token(access_token: str) -> str:
+    """A stable, non-reversible handle for ONE session, for use as an idempotency key.
+
+    T10. `new_login_detected` is on the mandatory alert floor (migration 073 pins it to
+    `true`), and until now nothing dispatched it -- the event existed only inside that
+    CHECK constraint.
+
+    KEYED ON THE SESSION, NOT ON THE USER AND A TIMESTAMP. Two sign-ins inside the same
+    second would collide on a per-second key, and the second one -- the interesting one,
+    if the first was the attacker's -- would be de-duplicated away by
+    `uq_notifications_user_idempotency`. One access token is one session, so hashing it
+    gives exactly one key per sign-in.
+
+    THE TOKEN ITSELF NEVER TRAVELS. It is a bearer credential; a notification row is read
+    back by the browser and sits in a database the support tooling can see. SHA-256 is
+    sufficient here because the input is high-entropy and the output is a correlation
+    handle, not an authenticator -- nothing is ever verified against it.
+    """
+    import hashlib
+
+    return hashlib.sha256(str(access_token).encode("utf-8")).hexdigest()[:32]
+
+
+async def _notify_new_login(user_id: str, email: str, access_token: str) -> None:
+    """Tell the account holder that a session was opened. Never raises.
+
+    A customer must never be unable to sign in because the alert could not be sent, so
+    every failure here is caught and logged at ERROR -- ERROR rather than DEBUG because a
+    security alert that silently did not send is the kind of gap that is only discovered
+    after it mattered.
+    """
+    try:
+        await notification_dispatcher.dispatch_user_notification(
+            user_id=str(user_id),
+            event_type="new_login_detected",
+            category="security",
+            severity="warning",
+            title="New Sign-In to Your Account",
+            message=(
+                f"A new session was opened for {email}. If this was not you, change your "
+                "password and review your active sessions."
+            ),
+            metadata={
+                # The hash, never the token.
+                "idempotency_key": f"new_login:{_login_dedupe_token(access_token)}",
+                "email": email,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - a sign-in must not fail over an alert
+        logger.error(
+            "[AUTH] new_login_detected notification was not delivered for user=%s: %s",
+            user_id, exc,
+        )
+
+
 @router.post("/login")
 @limiter.limit("5/minute")
 async def login(
@@ -277,9 +335,22 @@ async def login(
             }
         )
         if res.session:
+            # T10: awaited rather than scheduled. This is an async handler, the dispatch
+            # is one insert, and a security alert that races the response is a security
+            # alert that can be lost on a worker recycle. `_notify_new_login` is total,
+            # so it cannot turn a successful sign-in into a 401.
+            await _notify_new_login(
+                user_id=getattr(res.user, "id", "") or "",
+                email=credentials.email,
+                access_token=res.session.access_token,
+            )
             return {"access_token": res.session.access_token, "token_type": "bearer", "user": res.user}
         else:
             raise HTTPException(status_code=401, detail="Invalid credentials")
+    except HTTPException:
+        # Do not convert a deliberate 401 into another 401 with a different body, and do
+        # not let the generic handler below swallow a non-auth failure.
+        raise
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
