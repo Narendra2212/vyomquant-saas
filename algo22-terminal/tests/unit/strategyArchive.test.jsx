@@ -250,6 +250,18 @@ const { mockStrategies, mockExchange } = vi.hoisted(() => ({
 
 vi.mock('../../src/api', () => ({
   endpoints: { strategies: mockStrategies, exchange: mockExchange },
+  // MKT-07: this file renders `pages/Strategies`, which now reads
+  // `useFeature(FEATURES.MARKETPLACE_PUBLISH)` to decide whether the "List on marketplace"
+  // row action is enabled. `hooks/useEntitlements.load()` calls `isAuthenticated()`
+  // unguarded, and a `vi.mock` factory REPLACES the module — so an omitted export throws on
+  // access rather than falling through. It surfaces as an unhandled rejection out of a
+  // `useEffect`, with every assertion still reporting as passed and vitest exiting non-zero,
+  // which is exactly how it reached CI green locally and red there.
+  //
+  // `() => false`: this file never signs in, and an unauthenticated reader makes the
+  // entitlements hook return without fetching — so no request is added to the ones these
+  // tests count. The row action then renders disabled, which nothing here asserts on.
+  isAuthenticated: () => false,
 }));
 
 // The builder is a heavy tree the archive path never reaches.

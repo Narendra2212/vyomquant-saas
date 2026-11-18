@@ -78,7 +78,6 @@ KNOWN_INCOMPLETE_API_MOCKS = frozenset(
         "tests/unit/backtestSaveFlow.test.jsx",
         "tests/unit/backtestStrategySelection.test.jsx",
         "tests/unit/deploy/deployConfirmation.test.jsx",
-        "tests/unit/deployPreflight.test.jsx",
         "tests/unit/exchange_manager_phase6.test.jsx",
         "tests/unit/pages/riskSettingsKillSwitch.test.jsx",
         "tests/unit/shell/accountMenu.test.jsx",
@@ -87,18 +86,30 @@ KNOWN_INCOMPLETE_API_MOCKS = frozenset(
         "tests/unit/signalTraceConnection.test.jsx",
         "tests/unit/signalTraceDedup.test.jsx",
         "tests/unit/signalTraceRealtime.test.jsx",
-        "tests/unit/strategies-table.test.jsx",
-        "tests/unit/strategyArchive.test.jsx",
         "tests/unit/builder/enginePaths.test.jsx",
         "src/pages/__tests__/PaperTrading.test.jsx",
-        # `src/pages/__tests__/Strategies.test.jsx` LEFT THIS LIST at MKT-07. The note above
-        # says the entries are green only because none of them renders a component reaching
-        # `useEntitlements` -- "a property of what they render today, not a guarantee". That
-        # property expired for this one the moment the Strategies page started reading
-        # `useFeature(FEATURES.MARKETPLACE_PUBLISH)` to decide whether the "List on
-        # marketplace" row action is enabled: the suite began throwing an unhandled rejection
-        # out of a `useEffect` while every assertion still reported as passed, and vitest
-        # exited non-zero. The factory now declares `isAuthenticated: () => false`.
+        # FOUR ENTRIES LEFT THIS LIST AT MKT-07, and the reason is the one the note above
+        # predicted: "None of these currently renders a component that reaches
+        # `useEntitlements` ... That is a property of what they render today, not a
+        # guarantee."
+        #
+        # The property expired for every file that renders `pages/Strategies`, the moment
+        # that page started reading `useFeature(FEATURES.MARKETPLACE_PUBLISH)` to decide
+        # whether the "List on marketplace" row action is enabled:
+        #
+        #     src/pages/__tests__/Strategies.test.jsx
+        #     tests/unit/strategyArchive.test.jsx
+        #     tests/unit/strategies-table.test.jsx
+        #     tests/unit/deployPreflight.test.jsx
+        #
+        # All four began throwing an unhandled rejection out of a `useEffect`, with every
+        # assertion still reporting as passed and vitest exiting non-zero. Three of them
+        # looked green in a local run and turned `Frontend Build & Unit Tests` red in CI,
+        # which is precisely the failure mode this guard's docstring describes. All four now
+        # declare `isAuthenticated: () => false`.
+        #
+        # The remaining entries are still here on the same expiring promise. The way to
+        # retire one is to add the export, not to wait for a page to reach the hook.
     }
 )
 
