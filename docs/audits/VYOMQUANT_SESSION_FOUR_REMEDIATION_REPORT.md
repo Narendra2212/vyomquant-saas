@@ -550,12 +550,11 @@ until they are expensive:
 1. **Subscriber-run backtesting does not exist** (§8d E). The refusal is now
    honest, but the capability the brief asks for is not built. The shape is
    specified; it is a new execution path and needs its own PR.
-2. **The 30-day entitlement expiry was not verified against the clock.**
-   `subscription_period.py`, `expiry_sweep` and
-   `test_entitlement_expiry_boundary` exist and pass, but no measurement was
-   taken. An entitlement that fails to expire is a revenue defect that is
-   invisible until it is large, and it is the one T15 item where the test
-   passing and the behaviour being right are not the same claim.
+2. ~~**The 30-day entitlement expiry was not verified against the clock.**~~
+   **RESOLVED — measured, §8f.** The behaviour is correct and is now pinned by
+   `tests/test_mkt09_entitlement_expires_against_the_clock.py` (PR #320). The
+   data half is *unverifiable*, and that is the finding: production holds **zero**
+   marketplace subscriptions.
 
 ### Named this session and not done
 
@@ -843,7 +842,7 @@ to see."* The quota is released either way.
 | Review the verified live performance history | **not re-verified this session** |
 | Backtest the subscribed strategy | **not implemented** — see below |
 | Start paper trading | works |
-| Deploy live for the entitlement period | works |
+| Deploy live for the entitlement period | works, and the period expires correctly — **§8f** |
 
 **The defect.** `library_entries.allowed_actions_for_subscribed` offers
 `run_backtest` to an entitling subscriber whose Listing permits it;
@@ -869,6 +868,9 @@ the shape the paper-session route already has.
 
 ### G — marketplace security. **Mechanisms named, not independently re-audited**
 
+*(The 30-day entitlement, listed below as unverified, has since been measured —
+see §8f.)*
+
 Every item the brief lists has a named mechanism, and this is the honest depth of
 the check: the mechanisms were located and read, not exercised against an
 adversary.
@@ -882,11 +884,103 @@ adversary.
 | Privilege escalation, incorrect ownership | `tests/property/test_tenant_isolation_matrix.py` (155 cells) |
 | Revenue / transaction records | `migration 059` creator payout atomicity, `migration 050` settlement transition |
 
-**The 30-day entitlement period was not independently verified against the
-clock** — `subscription_period.py` and `test_entitlement_expiry_boundary` exist
-and pass, but no measurement was taken this session. That is the sharpest
-remaining unknown in T15, because an entitlement that fails to expire is a
-revenue defect that looks like nothing until it is large.
+**The 30-day entitlement period has since been measured — see §8f.** The
+behaviour is correct across the boundary and is sweep-independent; the data half
+is unverifiable because production holds zero subscriptions. What remains
+unmeasured in G is whether the expiry *worker* is actually processing, which by
+design affects only the freshness of the stored label, not the entitlement
+decision.
+
+---
+
+## 8f. The 30-day entitlement, measured. **RESOLVED**
+
+§8d called this the sharpest remaining unknown in T15, on the grounds that it is
+the one item where *"the test passing and the behaviour being right are not the
+same claim"*. It has been measured. Two halves, and one of them is unverifiable
+in a way that is itself the answer.
+
+### The data half — unverifiable, because there is no data
+
+Read-only against production: **`public.library_subscriptions` holds 0 rows.** No
+marketplace subscription has ever been created, so no expiry has ever been
+exercised against real data. There is no revenue defect because there is no
+revenue — and the moment the first subscription exists, the new test file is what
+says the expiry works.
+
+Both failure directions were checked for and neither can exist yet:
+
+| | count |
+|---|---|
+| past `period_expiry`, still labelled `active` (a stale label) | 0 |
+| `active` row with a NULL `period_expiry` (locks out a payer) | 0 |
+
+The second is the worse of the two, and the one a "does it expire?" question
+tends not to ask.
+
+### The behaviour half — verified, against a handed-in clock
+
+`resolve` takes `now` as an argument precisely so the decision is testable
+without waiting a month. Driving the **real** resolver across the boundary:
+
+```
+now = expiry  -29 days      SUBSCRIBED       entitling=True
+now = expiry  -1 second     SUBSCRIBED       entitling=True
+now = expiry   0            EXPIRED          entitling=False
+now = expiry  +1 second     EXPIRED          entitling=False
+now = expiry  +30 days      EXPIRED          entitling=False
+```
+
+The boundary is **at** the instant, which is what makes the resolver's
+`now >= period_expiry` agree with the sweep's `period_expiry <= now`. Had the two
+disagreed there would be a window in which one believes the Subscription is live
+and the other does not.
+
+### The load-bearing case
+
+`test_expiry_does_not_depend_on_the_sweep_having_run`. The stored `status` still
+reads `'active'` — exactly what a dead or mis-scheduled `marketplace_expiry`
+worker leaves behind — and the resolver refuses anyway, because
+`entitlement_resolver.py:514` consults `period_expiry` before it trusts the
+label.
+
+That claim is made in **three docstrings**. If it were ever false, all three would
+still read as if it were true, and a stopped worker would silently become
+unlimited free access. It is now exercised rather than cited.
+
+### A calendar month is not thirty days, and that matters
+
+Task 15 E asks for 30 days *"unless the existing billing architecture defines a
+compatible calendar-month mechanism"*. It does, so the calendar month stands —
+but the two are not interchangeable and the tests pin which one a subscriber
+gets:
+
+| activation | expiry | granted |
+|---|---|---|
+| 1 June | 1 July | 30 days |
+| **31 January** | **28 February** | **28 days** |
+| 31 January (leap year) | 29 February | 29 days |
+
+A future change to `add_one_calendar_month` would otherwise be able to shorten
+what someone paid for without any test objecting.
+
+### Proved capable of failing
+
+Four distinct reasons from one double with different inputs — `SUBSCRIBED`,
+`EXPIRED`, `OWNED`, `NOT_SUBSCRIBED` — and the verdict flips on a **one-second**
+change of `now`. A stub could not produce that spread. The double applies its
+filters rather than ignoring them, for the same reason: a permissive one would
+return the seeded Subscription for any caller, so a resolver that forgot its
+`user_id` scope would still pass.
+
+### Still not claimed
+
+- Not that a real subscription has ever expired correctly. Production has none.
+- **Not that the sweep runs in production.** `vyomquant-worker-marketplace_expiry`
+  is a registered ECS service; whether it is processing was not measured. By
+  design it need not be for entitlement to be correct — only for the stored label
+  to be fresh — which is exactly why the label is the thing to distrust on any
+  surface that renders it.
 
 ---
 
