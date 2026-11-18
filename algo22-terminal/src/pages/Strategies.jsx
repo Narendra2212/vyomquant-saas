@@ -173,6 +173,39 @@ const normalizeStrategies = (rows = []) =>
  * strategy carrying eight tags, three metric tiles, a progress bar and seven buttons, for
  * ten fields. `DataTable` rows satisfy 4.5 by construction.
  *
+ * CORRECTION — 4.5 DOES NOT FORBID CARDS, AND THIS NOTE HAS BEEN READ AS SAYING IT DOES.
+ * ------------------------------------------------------------------------------------
+ * Verbatim, from `.kiro/specs/vyomquant-ui-redesign/requirements.md` §4.5:
+ *
+ *     "THE Strategies_Page SHALL NOT render strategies as oversized cards EXCEEDING THE
+ *      INFORMATION DENSITY NEEDED to display the fields listed in 4.1."
+ *
+ * The prohibition is on OVERSIZED, density-wasting cards. The grid described above was
+ * exactly that — 220px and seven buttons for ten fields — so the sentence above is true
+ * about THAT grid, and the generalisation that followed it ("`DataTable` rows satisfy 4.5
+ * by construction") is also true but does not imply the converse. A compact, dense card
+ * satisfies 4.5 as well; "by construction" is a property of rows, not a requirement of
+ * them.
+ *
+ * This matters because the engineering brief's Task 14 asks for exactly that: rectangular
+ * cards carrying name, market, exchange, timeframe, ownership, subscription status,
+ * marketplace listing status, execution state, version, last activity and actions. That is
+ * ELEVEN fields, three of them status badges (Owned / Subscribed / Listed) that read
+ * poorly as table columns and well as badges. A reader of this note concluded Task 14 was
+ * blocked by 4.5 and stopped; it is not blocked, it is CONSTRAINED:
+ *
+ *   - the card must carry the 4.1 fields, not fewer (4.5 is about density, and dropping
+ *     fields to shrink the card fails 4.1 instead);
+ *   - no decorative metric tiles, progress bars or icon rows that add height without
+ *     adding a field;
+ *   - the three fields with nothing behind them stay marked, per the section below —
+ *     a card must not imply it is showing `performance` or `riskState` when the list
+ *     projection carries neither.
+ *
+ * Whoever builds it: keep `FilterBar`, `STATUS_FILTER_OPTIONS`, the no-match empty state
+ * and every entry in `ROW_ACTION`/`ACTION_CATALOG`. Those are 4.2/4.4 and are independent
+ * of the layout.
+ *
  * THREE OF THE TEN HAVE NOTHING BEHIND THEM, AND SAY SO
  * ----------------------------------------------------
  * `pageFields` declares `performance` and `riskState` ❌ on this read, and `market`'s and
