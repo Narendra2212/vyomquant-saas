@@ -3114,8 +3114,9 @@ const BILLING_FIELDS = [
     path: 'subscription_status',
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
-    reason: 'Your subscription status could not be read. Manage billing opens the payment '
-      + 'provider\'s portal, which is the authority on whether this plan is currently paid.',
+    reason: 'Your subscription status could not be read, so neither active nor past due is '
+      + 'claimed for this account. Refresh reads it again; the entitlements endpoint is the '
+      + 'only authority on whether this plan is currently paid.',
     note: 'DEFAULTED TO "active" THREE TIMES: `useState("active")`, '
       + '`data.subscription_status || "active"`, and `…?.toUpperCase()?.replace("_", " ") '
       + '|| "ACTIVE"` at the chip. A failed read therefore rendered a green ACTIVE pill, and '
@@ -3151,8 +3152,7 @@ const BILLING_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
     reason: 'Whether a cancellation is already scheduled could not be read, so neither '
-      + 'Cancel nor Resume is offered on a guess. Manage billing opens the provider\'s '
-      + 'portal, which reports the current schedule.',
+      + 'Cancel nor Resume is offered on a guess. Refresh reads the current schedule again.',
     note: '`bool(profiles.cancel_at_period_end)`, so `false` is a reading and means the '
       + 'plan renews. It selects between the Cancel and Resume controls, which is why an '
       + 'absence has to be a state rather than a default: `|| false` offered Cancel to an '
@@ -3445,8 +3445,9 @@ const BILLING_FIELDS = [
     path: '[].id',
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
-    reason: 'This invoice carries no reference, so there is nothing to quote for it. The '
-      + 'payment provider\'s portal lists the same invoices with their own references.',
+    reason: 'This invoice carries no reference of its own, so there is nothing to quote for '
+      + 'it. The payment reference in the same row identifies the charge at the gateway '
+      + 'whenever the row carries one.',
     note: 'Rendered as `String(inv.id).slice(0, 8) + "..."` under `cursor: pointer` with no '
       + '`onClick` and no keyboard path — a truncated identifier dressed as a link. The '
       + 'truncation stays (design.md §2.5 mechanism 4 permits it for an IDENTIFIER) with '
@@ -3485,8 +3486,8 @@ const BILLING_FIELDS = [
       + 'column and is therefore an absence, not a dollar figure.**',
     reason: 'This invoice\'s amount is recorded in a currency this page has no column for, '
       + 'or was not reported at all, so no figure is shown rather than one in the wrong '
-      + 'denomination. Manage billing opens the provider\'s portal, which holds the '
-      + 'original invoice.',
+      + 'denomination. The charge on your card or bank statement is the authority on what '
+      + 'was actually taken.',
     note: '`inv.currency === "INR" ? ₹${amtINR || 0} : $${amtUSD || 0}`. Two faults in one '
       + 'expression: the else arm put a **dollar sign in front of every non-INR invoice '
       + 'whatever it was denominated in**, and both arms substituted `0`, so an unreadable '
@@ -3506,13 +3507,152 @@ const BILLING_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
     reason: 'This invoice reports no status, so neither paid nor unpaid is claimed for it. '
-      + 'The provider\'s portal is the authority on whether it settled.',
+      + 'Your card or bank statement is the authority on whether the charge settled.',
     note: 'The server defaults the column to `"unknown"`, which `design/semantic.js` '
       + 'already resolves to the neutral group — so an unknown status is a reading and is '
       + 'rendered as one rather than being coloured as a failure.',
   }),
 
+  /*
+   * ── GET /api/billing/invoices — the provider metadata (BILL-HIST-02) ──────
+   *
+   * THE FRONTEND WAS THROWING AWAY THREE FIELDS THE RESPONSE ALREADY CARRIED. BILL-HIST-01
+   * added `provider`, `providerPaymentId` and `plan` to `get_invoices`'s projection
+   * (`routers/billing.py`), and migration 070 declared the five columns the Razorpay webhook
+   * writer had always named but the schema never had — so until that migration landed the
+   * invoice write failed silently and this table held nothing at all. The columns exist in
+   * production now and the webhook populates them; `Billing.jsx`'s `invoiceRows` projected
+   * id / reference / date / amount / denomination / status and dropped the rest on the floor,
+   * so a trader could see that ₹999 was taken and not what it bought or which charge at the
+   * gateway it corresponds to.
+   *
+   * ALL THREE ARE NULLABLE BY DESIGN, AND THAT IS NOT A DEFECT. Migration 070 declines a
+   * `DEFAULT 0` on the amounts and a back-dated `'razorpay'` on the provider for the reason
+   * this whole file exists: a row that predates provider metadata genuinely does not know who
+   * captured it, and a fabricated provider on an invoice is a claim about where a trader's
+   * money went. Each of the three therefore has a reachable marker and a reason, and the
+   * reason says the row predates the metadata rather than implying the read failed.
+   */
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoicePlan',
+    label: 'Plan',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].plan',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice does not record what the payment bought. Rows written before the '
+      + 'provider metadata migration carry no plan, and naming one here would be a guess '
+      + 'about which subscription a charge paid for.',
+    note: '`billing_invoices.plan`, the `item_key` the payment bought — the same column the '
+      + 'refund path reads to decide whether a full refund should revoke the plan '
+      + '(`_revoke_plan_for_refunded_razorpay_payment`). It is the row\'s own description of '
+      + 'the charge, so it is NOT the account\'s current plan: an invoice for a tier the '
+      + 'account has since left still describes what that charge bought, and reading the '
+      + 'current plan into it would backdate today\'s subscription onto last year\'s money.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceProvider',
+    label: 'Paid via',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].provider',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice does not record which payment provider captured the charge. Rows '
+      + 'written before the provider metadata migration carry none, and "Razorpay" is not '
+      + 'filled in on their behalf — it would be a claim about where this money went.',
+    note: '`billing_invoices.provider`. Razorpay is the only gateway the platform bills '
+      + 'through today, which is exactly why a null must NOT be defaulted to it: the one '
+      + 'value it could be defaulted to is the one that looks most plausible and is least '
+      + 'checkable. The column\'s own COMMENT in migration 070 states the same rule — "NULL '
+      + 'on rows that predate provider metadata -- honest, rather than back-dated".',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoicePaymentReference',
+    label: 'Payment reference',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    path: '[].providerPaymentId',
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'This invoice carries no provider payment reference, so there is nothing to '
+      + 'quote to support or to match against a statement line. Rows written before the '
+      + 'provider metadata migration carry none.',
+    note: '`billing_invoices.provider_payment_id` — the gateway\'s own payment id, and the '
+      + 'single most useful value on the row for a trader who has to reconcile a charge or '
+      + 'quote it to support. It is unique per provider through '
+      + '`uq_billing_invoices_provider_payment`, which is what makes a redelivered webhook '
+      + 'collide instead of filing a second invoice for one charge. Not secret and not key '
+      + 'material: it identifies a payment, it cannot authorise one.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceInstrument',
+    label: 'Instrument',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'Which card or UPI handle paid this invoice is not recorded. Razorpay Checkout '
+      + 'collects the instrument at the moment of purchase and VyomQuant never receives it, '
+      + 'so no card network, masked number or handle exists to show for a past charge.',
+    note: 'DECLARED UNAVAILABLE RATHER THAN LEFT OUT, because the obvious way to fill this '
+      + 'column is the wrong one: `GET /api/billing/payment-methods` reports a brand and a '
+      + 'last four, and joining TODAY\'S default instrument onto a HISTORICAL invoice would '
+      + 'attribute a charge to a card that may not have existed when it was taken. '
+      + '`billing_invoices` has no instrument column at all — migration 070 added provider, '
+      + 'provider_payment_id, amount_usd, amount_inr and plan, and none of the five is an '
+      + 'instrument. Showing the gateway that captured the charge is the furthest this page '
+      + 'can honestly go.',
+  }),
+  entry({
+    page: PAGES.BILLING,
+    field: 'invoiceReceipt',
+    label: 'Receipt',
+    requirement: '4.2',
+    read: BILLING_INVOICES_READ,
+    endpoint: BILLING_INVOICES_ENDPOINT,
+    verdict: VERDICT.UNAVAILABLE,
+    absence: ABSENCE.UNREPORTED,
+    documentedIn: BILLING_API_MODULE,
+    reason: 'No receipt document is published for this charge. `GET /api/billing/invoices` '
+      + 'reports no receipt or invoice URL, and Razorpay serves no self-service download for '
+      + 'it, so the payment reference beside the amount is what identifies the charge.',
+    note: 'DECLARED SO THE ABSENCE IS STATED ONCE RATHER THAN RENDERED AS A COLUMN OF '
+      + 'DASHES. The response carries nine keys — id, date, amtUSD, amtINR, status, '
+      + 'currency, provider, providerPaymentId, plan — and not one of them is a URL. '
+      + 'Composing a Razorpay dashboard link from `providerPaymentId` would be inventing a '
+      + 'destination: that console is merchant-side and a customer cannot sign in to it, '
+      + 'which is the same mistake BILLING-PORTAL-02 removed two buttons for. The billing '
+      + 'history panel renders this one reason below the table instead of a per-row marker, '
+      + 'because it is a fact about the ledger rather than about any single row.',
+  }),
+
   // ── GET /api/billing/payment-methods ──────────────────────────────────────
+  //
+  // BILL-HIST-02 REMOVED THE ONLY PAGE THAT RENDERED THESE THREE, and they are kept here
+  // rather than deleted. `pages/Billing.jsx` carried a standing *Payment methods* panel
+  // showing a brand, a masked last four and an expiry; the read behind it
+  // (`GET /api/billing/payment-methods`) answers `[]` on every Razorpay deployment, because
+  // VyomQuant stores no payment instrument at all — Razorpay Checkout collects the card or
+  // UPI handle at the moment of purchase and never hands it over. So the panel's only
+  // reachable state was its own empty arm, and the page now shows the provider metadata the
+  // invoice ledger really does carry instead.
+  //
+  // They stay declared because the ENDPOINT stays, the `PaymentMethodModel` table stays, and
+  // `deletePaymentMethod` stays: a deployment that one day stores an instrument would render
+  // these three, and a declaration deleted here would have to be rediscovered from the
+  // backend. Their `reason` copy no longer points at a provider portal — there is none, and
+  // BILLING-PORTAL-02 removed the controls that claimed otherwise.
   entry({
     page: PAGES.BILLING,
     field: 'cardBrand',
@@ -3523,8 +3663,8 @@ const BILLING_FIELDS = [
     path: '[].brand',
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
-    reason: 'The card network on this payment method was not reported. Manage via the '
-      + 'provider portal shows the stored method in full.',
+    reason: 'The card network on this payment method was not reported, so none is named. '
+      + 'The instrument is held by Razorpay and is chosen again at the next checkout.',
   }),
   entry({
     page: PAGES.BILLING,
@@ -3537,7 +3677,7 @@ const BILLING_FIELDS = [
     absence: ABSENCE.UNREPORTED,
     documentedIn: BILLING_API_MODULE,
     reason: 'The last four digits of this card were not reported, so the method cannot be '
-      + 'identified here. It is unchanged either way, and the provider portal shows it.',
+      + 'identified here. The stored method is unchanged either way.',
     note: 'The last four digits are the only part of a card number this application ever '
       + 'holds or renders; nothing on this page has access to the rest.',
   }),
