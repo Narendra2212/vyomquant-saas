@@ -9874,6 +9874,17 @@
     ],
     [
       "risk_settings",
+      "circuit_breaker_armed",
+      "boolean",
+      "",
+      "NO",
+      "true",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "risk_settings",
       "created_at",
       "timestamp with time zone",
       "",
