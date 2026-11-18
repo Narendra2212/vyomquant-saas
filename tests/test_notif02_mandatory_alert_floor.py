@@ -273,13 +273,18 @@ def test_the_panel_locks_exactly_the_mandatory_switches() -> None:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-def test_nothing_on_the_dispatch_path_reads_a_preference() -> None:
-    """PINNED MEASUREMENT, not an endorsement.
+def test_the_dispatch_path_now_filters_and_the_floor_still_holds() -> None:
+    """REPLACES a pin on the ABSENCE of filtering. NOTIF-04 wired it.
 
-    No preference suppresses any notification today. `core/notification_dispatcher.py` and
-    `routers/notifications.py` — the whole dispatch path — contain no reference to
-    `notification_settings`. Recorded so that the claim "preferences are not yet applied" in
-    the audit trail is checkable, and so that wiring a filter has a test to delete.
+    This test used to assert that `notification_settings` appeared nowhere on the
+    dispatch path, and said so explicitly: *"wiring a filter has a test to delete"*.
+    It is not deleted but inverted, because the thing worth pinning was never the
+    absence — it was that **no mandatory event can be filtered**, which is now a
+    property of running code rather than of missing code.
+
+    The floor is asserted here as a source-level property and exercised behaviourally
+    in `tests/test_notif04_preference_filtering.py`. Both exist on purpose: a
+    behavioural test can be satisfied by a stub, and this one cannot.
     """
     for relative in (
         "backend_app/core/notification_dispatcher.py",

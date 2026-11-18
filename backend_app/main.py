@@ -294,6 +294,29 @@ async def lifespan(app: FastAPI):
         release="2.4.0",
         trading_mode=get_vyomquant_mode("safe"),
     )
+    # NOTIF-05: hand this loop to synchronous producers.
+    #
+    # `backend/execution_engine.py` and the bot runner are SYNCHRONOUS and cannot
+    # discover a running loop from their own thread -- `asyncio.get_event_loop()`
+    # raises there, which is why the previous sync entry point was deleted. The loop
+    # has to be handed over from the async side exactly once, and this is the only
+    # place that is guaranteed to run inside it.
+    #
+    # Registered BEFORE the long startup work below, so a producer firing during
+    # recovery is queued rather than silently dropped.
+    try:
+        import asyncio as _asyncio
+
+        from backend_app.core.notification_dispatcher import register_dispatch_loop
+
+        register_dispatch_loop(_asyncio.get_running_loop())
+    except Exception as _loop_exc:  # noqa: BLE001 - never block boot on telemetry
+        logger.warning(
+            "[NOTIF-05] could not register the dispatch loop; synchronous producers "
+            "will not be able to queue notifications: %s",
+            _loop_exc,
+        )
+
     # Print configuration status at startup
     print_config_status()
     missing_settings = settings.validate_required()
