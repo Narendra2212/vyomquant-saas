@@ -977,12 +977,112 @@ def _blank_dollar_quoted_bodies(sql: str) -> str:
     return out
 
 
+#: A `GRANT`/`REVOKE` privilege list: everything between the keyword and its `ON`, stopped
+#: at a statement boundary so a `GRANT role TO user` (which has no `ON`) cannot run on and
+#: swallow a later statement's `ON`.
+_PRIVILEGE_LIST = re.compile(r"\b(?:grant|revoke)\b[^;]*?\bon\b", re.IGNORECASE)
+
+
+def _blank_privilege_lists(sql: str) -> str:
+    """``sql`` with each ``GRANT``/``REVOKE`` privilege list replaced by the keyword alone.
+
+    TRUNCATE AND DELETE ARE PRIVILEGE NAMES AS WELL AS STATEMENTS, and the scan could not
+    tell the two apart. ``074_mkt10_revoke_backtest_dml.sql`` revokes the forgery surface
+    on ``strategy_backtests`` with
+
+        REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+            ON public.strategy_backtests FROM authenticated;
+
+    and the bare-word ``TRUNCATE`` pattern matched the privilege being TAKEN AWAY. That is
+    not merely harmless, it is the exact inverse: the statement exists so that nobody can
+    truncate the table, and RLS cannot filter TRUNCATE, so revoking it is the only defence
+    there is. The scan read a hardening statement as a destructive one.
+
+    It is the same class of false positive the ``(?!\\s+on\\s)`` lookahead already handles
+    for ``BEFORE TRUNCATE ON <table>`` -- a trigger EVENT name on a trigger that refuses
+    truncation. That carve-out could not cover this one, because in a privilege list
+    ``TRUNCATE`` is followed by a comma, not by ``ON``.
+
+    WHY BLANKING THE LIST IS SAFE: a privilege list is a sequence of keywords. It cannot
+    contain a nested statement, so nothing destructive can hide in the blanked span. The
+    table names after ``ON`` are deliberately kept, so ``REVOKE ... ON TRUNCATE_LOG`` would
+    still be visible to anything that looked.
+
+    THIS NARROWS THE SCAN, SO IT IS PAIRED WITH A WIDENING, the same way
+    :func:`_blank_dollar_quoted_bodies` is: the three tests below require that a real
+    ``TRUNCATE`` statement elsewhere in the same file is still caught, including one that
+    sits immediately after a REVOKE.
+    """
+    return _PRIVILEGE_LIST.sub(
+        lambda m: f"{m.group(0).split()[0]} on", sql
+    )
+
+
 def test_truncate_statement_forms_are_still_flagged() -> None:
     pattern = _DESTRUCTIVE["TRUNCATE"]
     for statement in ("TRUNCATE TABLE public.t", "truncate public.t", "TRUNCATE ONLY public.t",
                       "TRUNCATE\n  public.t RESTART IDENTITY"):
         assert pattern.search(statement), statement
     assert not pattern.search("BEFORE TRUNCATE ON public.order_audit_log")
+
+
+def test_revoking_the_truncate_privilege_is_not_a_destructive_statement() -> None:
+    """The 074 case. Taking the TRUNCATE privilege away is the opposite of truncating."""
+    sql = (
+        "REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER\n"
+        "    ON public.strategy_backtests FROM authenticated;\n"
+    )
+    clean = _blank_privilege_lists(_strip_sql_comments_and_strings(sql))
+    assert not _DESTRUCTIVE["TRUNCATE"].search(clean), (
+        "revoking the TRUNCATE privilege was read as a TRUNCATE statement"
+    )
+    assert not _DESTRUCTIVE["DELETE FROM"].search(clean)
+
+
+def test_granting_the_truncate_privilege_is_not_flagged_either() -> None:
+    """Stated separately because the fix must not be REVOKE-only.
+
+    A GRANT is not a statement that truncates any more than a REVOKE is, and a future
+    migration restoring a privilege set should not have to work around this scan.
+    """
+    sql = "GRANT SELECT, TRUNCATE ON public.t TO service_role;\n"
+    clean = _blank_privilege_lists(_strip_sql_comments_and_strings(sql))
+    assert not _DESTRUCTIVE["TRUNCATE"].search(clean)
+
+
+def test_a_real_truncate_after_a_revoke_is_still_flagged() -> None:
+    """The widening that pays for the narrowing above.
+
+    If `_blank_privilege_lists` over-reached -- by running past the statement boundary to a
+    later `ON`, which is what an unbounded match would do -- it would blank real statements
+    between the two. This is the case that catches that.
+    """
+    sql = (
+        "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.a FROM authenticated;\n"
+        "TRUNCATE TABLE public.b;\n"
+    )
+    clean = _blank_privilege_lists(_strip_sql_comments_and_strings(sql))
+    assert _DESTRUCTIVE["TRUNCATE"].search(clean), (
+        "a real TRUNCATE statement following a REVOKE was blanked away with the "
+        "privilege list"
+    )
+
+
+def test_a_grant_without_on_does_not_swallow_a_later_statement() -> None:
+    """`GRANT <role> TO <user>` has no `ON`, so an unbounded match would run forward.
+
+    Without the `[^;]*?` bound it would consume up to the NEXT statement's `ON` and hide
+    whatever lay between -- here, a DROP TABLE.
+    """
+    sql = (
+        "GRANT readonly TO analyst;\n"
+        "DROP TABLE public.victim;\n"
+        "REVOKE ALL ON public.t FROM anon;\n"
+    )
+    clean = _blank_privilege_lists(_strip_sql_comments_and_strings(sql))
+    assert _DESTRUCTIVE["DROP TABLE"].search(clean), (
+        "a DROP TABLE between a role GRANT and a later REVOKE was blanked away"
+    )
 
 
 #: Where a function definition starts. Matched on its own, with the dollar-quoted body
@@ -1098,12 +1198,18 @@ def test_no_destructive_statements() -> None:
     Function BODIES are stripped too, for the reason :func:`_strip_function_bodies` gives:
     the rule is about what applying the migration does, and a function body is defined
     rather than executed. ``DO`` blocks are NOT stripped, because they do execute.
+
+    ``GRANT``/``REVOKE`` PRIVILEGE LISTS are blanked as well -- see
+    :func:`_blank_privilege_lists`. ``TRUNCATE`` and ``DELETE`` are privilege names as
+    well as statements, and revoking them is the inverse of performing them.
     """
     offenders: List[str] = []
     for path in _all_migration_files():
-        clean = _strip_function_bodies(
-            _strip_sql_comments_and_strings(
-                path.read_text(encoding="utf-8", errors="replace")
+        clean = _blank_privilege_lists(
+            _strip_function_bodies(
+                _strip_sql_comments_and_strings(
+                    path.read_text(encoding="utf-8", errors="replace")
+                )
             )
         )
         for label, pattern in _DESTRUCTIVE.items():
