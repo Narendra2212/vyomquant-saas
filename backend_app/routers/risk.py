@@ -25,7 +25,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, validator
 
 from backend_app.core.dependencies import (
-    create_request_supabase_async, get_alert, get_current_user, get_vault, get_ws_manager
+    create_request_supabase_async, get_alert, get_current_user,
+    get_service_supabase_async, get_vault, get_ws_manager
 )
 from backend_app.core.background_tasks import fire_and_forget_task
 from backend_app.core.cache.redis_manager import redis_manager
@@ -272,22 +273,46 @@ def _strategy_limit_row(uid: str, strategy_id: str, data: dict) -> dict:
 async def _persist_strategy_limits(user: dict, uid: str, rows: list[dict]) -> bool:
     """Upsert per-strategy limits, refusing rather than reporting a save that failed.
 
-    Returns True when the rows are durable, False only on the tokenless path (service and
-    test contexts, where the in-memory store is the deliberate behaviour). Raises 503 when
-    a store should have been reachable and was not -- same contract as the risk-settings
-    save above, and the same reason: a limit a trader is told was saved must be stored.
+    WHY THIS WRITE USES THE SERVICE-ROLE CLIENT
+    -------------------------------------------
+    `public.strategy_limits` grants `authenticated` **SELECT only** -- measured against
+    production 2026-11-18. The first version of this function wrote through the caller's
+    own request-scoped client, which would have failed with 42501 on every save in
+    production; the 503 below would have fired every time and the save still would not
+    have worked. `scripts/sec22_authenticated_write_inventory.py` caught it in CI by
+    noticing the inventory of browser-role writes had grown.
+
+    Keeping it on the service-role client is also the right answer on the merits, and the
+    same one MKT-10 reached for `strategy_backtests`: this table holds risk caps that
+    `paper_trading_service` ENFORCES, so making the application depend on a browser-role
+    write grant here would mean the grant could never be revoked, and a customer able to
+    PostgREST-write their own caps could loosen what is enforced against them.
+
+    The service-role client is not subject to RLS, so ownership is enforced here instead:
+    `user_id` comes from `_strategy_limit_row`, which takes it from the verified JWT, and
+    the upsert conflicts on `uq_strategy_limits (user_id, strategy_id)` so a row can only
+    ever be created or updated for the authenticated caller. Reads are deliberately NOT
+    moved -- `GET /strategy-limits` keeps the request-scoped client and its RLS layer.
+
+    Returns True when the rows are durable, False only when no store is configured
+    (DEV_MODE and the test suite). Raises 503 when a store should have been reachable and
+    was not: a limit a trader is told was saved must be stored.
     """
     if not rows:
         return False
     if not user.get("access_token") or not _persistence_configured():
         return False
 
-    sb = await _sb(user)
-    if sb is None:
+    try:
+        res = get_service_supabase_async()
+        sb = await res if inspect.isawaitable(res) else res
+    except Exception as exc:
         logger.error(
-            "[RISK-07] could not build a database client for %s; refusing to report a "
-            "strategy-limit save", uid,
+            "[RISK-07] no service-role client for %s; refusing to report a "
+            "strategy-limit save: %s", uid, exc,
         )
+        sb = None
+    if sb is None:
         raise HTTPException(
             status_code=503,
             detail={
