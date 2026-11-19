@@ -295,6 +295,14 @@ def test_the_dispatch_path_now_filters_and_the_floor_still_holds() -> None:
         # deliberately does not read here, so a raw substring search matches the prose
         # about the design rather than a query. Same reason the colour-literal guard
         # strips comments before counting.
+        #
+        # DOCSTRINGS ARE NOT STRIPPED, and that is a sharp edge worth knowing: any
+        # mention of the table in a docstring fails this test, including one inside a
+        # longer identifier that merely contains it. Migration 073's
+        # mandatory-alerts CHECK is therefore referred to by description rather than
+        # by name in notification_dispatcher. Strip docstrings here (via ast, keeping
+        # other string literals so a real query is still caught) if that becomes
+        # more annoying than it is useful.
         code = "\n".join(
             line.split("#", 1)[0] for line in source.splitlines()
         )

@@ -24285,43 +24285,8 @@
     ],
     [
       "risk_settings",
-      "anon",
-      "DELETE"
-    ],
-    [
-      "risk_settings",
-      "anon",
-      "INSERT"
-    ],
-    [
-      "risk_settings",
-      "anon",
-      "SELECT"
-    ],
-    [
-      "risk_settings",
-      "anon",
-      "UPDATE"
-    ],
-    [
-      "risk_settings",
-      "authenticated",
-      "DELETE"
-    ],
-    [
-      "risk_settings",
-      "authenticated",
-      "INSERT"
-    ],
-    [
-      "risk_settings",
       "authenticated",
       "SELECT"
-    ],
-    [
-      "risk_settings",
-      "authenticated",
-      "UPDATE"
     ],
     [
       "risk_settings",
@@ -26258,6 +26223,11 @@
     [
       "migrations/075_risk06_risk_settings_circuit_breaker_armed.sql",
       "da19b4a09789dc9f0cf580c5ab3dd3f829488541c8f90896c2756347223352c0",
+      "step1"
+    ],
+    [
+      "migrations/076_risk09_revoke_risk_settings_dml.sql",
+      "1005854945c8ea3a2b6a19aa979e418bb3dc925929ae0a8df2cbc0f9f830d6f0",
       "step1"
     ],
     [

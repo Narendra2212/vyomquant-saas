@@ -136,10 +136,14 @@ describe('Phase 3 Adversarial Audit Test Battery (20 Invariants)', () => {
       </MemoryRouter>
     );
 
-    // Task 17.1: the row is a table row and the fallback reason is stated once above the
-    // table, so the name appears in both places — hence the scoped lookup for the row.
-    expect(await screen.findByRole('table')).toBeDefined();
-    expect(within(screen.getByRole('table')).getByText('Crashing Bot')).toBeDefined();
+    // T14 (#345) rebuilt this listing as a card grid, so the row is a card in a `<ul>`
+    // rather than a table row. The assertion is unchanged in substance: the fallback
+    // reason is stated once above the grid and the name appears in both places, so the
+    // lookup stays scoped to the listing instead of matching either one.
+    expect(await screen.findByTestId('strategy-card-grid')).toBeDefined();
+    expect(
+      within(screen.getByTestId('strategy-card-grid')).getByText('Crashing Bot'),
+    ).toBeDefined();
     expect(screen.getByText('Strategy execution halted due to error.')).toBeDefined();
   });
 

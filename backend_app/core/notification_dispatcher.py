@@ -239,9 +239,12 @@ def _safety_critical_event_types() -> frozenset:
     TWO LISTS, UNIONED, because they were written for different jobs and neither is
     complete on its own:
 
-    * `MANDATORY_NOTIFICATION_EVENTS` (3) is the set migration 073's
-      `chk_notification_settings_mandatory_alerts` enforces at the COLUMN, so it can
-      only contain events that have a `NotificationEvents` switch to constrain.
+    * `MANDATORY_NOTIFICATION_EVENTS` (3) is the set migration 073's mandatory-alerts
+      CHECK enforces at the COLUMN, so it can only contain events that have a
+      `NotificationEvents` switch to constrain. (The constraint's identifier is not
+      spelled out here: it contains the settings table's name as a substring, and
+      test_notif02's guard strips `#` comments but not docstrings, so naming it in
+      prose reads as this module querying the table. See that test.)
     * the four safety-critical types above have no switch and no producer yet. T10
       requires them; `tests/test_notif01_durable_dedupe_postgres.py` has pinned a
       six-item floor since before any filtering existed.
@@ -269,70 +272,12 @@ def _safety_critical_event_types() -> frozenset:
 SAFETY_CRITICAL_EVENT_TYPES: frozenset = _safety_critical_event_types()
 
 
-async def _preference_allows(
-    user_id: str, event_type: str, client: Optional[Any]
-) -> bool:
-    """Whether this user's stored preferences permit ``event_type``.
+# The preference gate lives in `core/notification_preferences.event_is_permitted`,
+# which `dispatch_user_notification` calls below. A second copy used to live here;
+# it was superseded, kept reading the settings table directly, and drifted -- see
+# test_notif02_mandatory_alert_floor for the guard that forbids a second reader.
 
-    FAILS OPEN, on purpose and in three distinct ways:
 
-    * a MANDATORY event is never consulted at all -- `kill_switch_activated`,
-      `stop_loss_triggered` and `new_login_detected` reach the user whatever the
-      row says. Migration 073's CHECK already refuses to store `false` for
-      them; this is the same floor enforced a second time at the dispatch
-      boundary, because a constraint added later than the rows it governs cannot
-      vouch for rows written before it.
-    * an event mapped to ``None`` is not governed, so no read happens.
-    * a preference read that FAILS resolves to "allowed". Losing a notification
-      because a settings row could not be read is a worse outcome than sending
-      one the customer had switched off, and a silent drop is invisible from
-      both ends.
-
-    An absent row is also "allowed": `NotificationEvents`' defaults are on, so a
-    user who has never opened the panel gets the default behaviour rather than
-    silence.
-    """
-    if event_type in SAFETY_CRITICAL_EVENT_TYPES:
-        return True
-
-    key = EVENT_PREFERENCE_MAP.get(event_type, None)
-    if key is None:
-        # Either not preference-governed, or an event type nobody declared. The
-        # drift test pins the second case, so reaching here means the first.
-        return True
-    if key in SAFETY_CRITICAL_EVENT_TYPES:
-        # The event is governed by a switch that is itself a mandatory one.
-        return True
-    if client is None:
-        return True
-
-    try:
-        q = (
-            client.table("notification_settings")
-            .select("events")
-            .eq("user_id", str(user_id))
-            .limit(1)
-            .execute()
-        )
-        res = await q if inspect.isawaitable(q) else q
-        rows = getattr(res, "data", None) or []
-        if not rows:
-            return True
-        events = rows[0].get("events")
-        if not isinstance(events, dict) or key not in events:
-            return True
-        value = events[key]
-        # Only an explicit, unambiguous false suppresses. `0`, `"no"`, `None`
-        # and friends are NOT read as false here: NOTIF-02 measured that
-        # `bool(0)` and `bool(None)` silently become False, which would turn a
-        # malformed row into a muted alert.
-        return not (value is False or value == "false")
-    except Exception as exc:  # noqa: BLE001 - fail open, but say so
-        logger.debug(
-            "[NOTIF_DISPATCH] preference read failed for %s/%s, allowing: %s",
-            user_id, event_type, exc,
-        )
-        return True
 
 
 async def dispatch_user_notification(

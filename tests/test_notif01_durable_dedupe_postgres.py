@@ -539,7 +539,10 @@ class TestTheMandatoryAlertFloor:
         from backend_app.core import notification_dispatcher as nd
 
         src = _inspect.getsource(nd.dispatch_user_notification)
-        gate = src.find("_preference_allows")
+        # `event_is_permitted`, not `_preference_allows`: NOTIF-04 moved the gate into
+        # core/notification_preferences and this search kept naming the copy it left
+        # behind, so it would have passed on the dead function's presence.
+        gate = src.find("event_is_permitted")
         write = src.find("create_notification(")
         assert gate != -1, "dispatch_user_notification no longer consults preferences"
         assert write != -1, "dispatch_user_notification no longer persists"
