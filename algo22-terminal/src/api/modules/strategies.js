@@ -615,6 +615,42 @@ export const strategiesApi = {
   },
 
   /**
+   * Delete one saved backtest. `DELETE /api/backtests/{backtest_id}`.
+   *
+   * WHAT THE SERVER DOES, because two of its properties shape how a caller must treat
+   * the answer. `routers/strategy_operations.delete_backtest` →
+   * `BacktestService.delete_backtest`:
+   *
+   *   * the statement is `.delete().eq("id", id).eq("user_id", user.id)`, so the
+   *     ownership predicate IS the authorization — another tenant's row is not matched
+   *     rather than refused (Requirement 20.1);
+   *   * it runs through the SERVICE-ROLE client, which is what makes it work at all:
+   *     migration 074 (MKT-10) took `DELETE` off `authenticated` for
+   *     `strategy_backtests`, so a direct PostgREST delete from the browser would now
+   *     match nothing.
+   *
+   * THE RESPONSE IS ALWAYS `{success: true}` AND MUST NOT BE READ AS "a row was
+   * removed". Requirement 20.2 requires "this backtest is not yours" and "there is no
+   * such backtest" to be indistinguishable, so the handler deliberately does not
+   * forward whether the predicate matched. A caller that treats the body as
+   * confirmation would report success for a row that never existed.
+   *
+   * So the only honest way to know the list changed is to RE-READ it — `listBacktests`
+   * above — which is also what keeps the history showing what the database holds rather
+   * than what the page assumed.
+   *
+   * PATH NOTE: `/api/backtests/{id}`, with no `strategy-operations` alias, matching
+   * `listBacktests`. The route is declared as `/backtests/{backtest_id}` on a router
+   * mounted at `prefix="/api"`; the prefixed spelling resolves to nothing, which is the
+   * mistake that silently 404'd the history read before task 17.2.
+   *
+   * @param {string} backtestId
+   * @returns {Promise<{success: boolean}>}
+   */
+  deleteBacktest: (backtestId) =>
+    del(`/api/backtests/${encodeURIComponent(backtestId)}`),
+
+  /**
    * Validate DAG-based strategy
    * @param {Object} payload - DAG configuration
    * @returns {Promise<any>}

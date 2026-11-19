@@ -1,8 +1,55 @@
 {
+  "_baseline_note_backtester_delete_saved_run": "AUTHORISED RE-RECORD. Requirement 22.1 lists the backtest delete action and Requirement 10.1 makes Saved Backtest History the account's own record of its runs; the Backtester page now offers that action, so `pages/Backtester.jsx` calls `DELETE /api/backtests/{backtest_id}` through `api.strategies.deleteBacktest`. That is the whole of this delta: api_call_count 6 -> 7 and ONE added api_calls entry. The handler itself is UNCHANGED and pre-existing (routers/strategy_operations.delete_backtest, service-role, ownership-scoped on id AND user_id, constant {'success': true} per Requirement 20.2) -- it was reachable and simply uncalled by this surface before. No existing entry was removed, renamed, retyped or re-meaninged. Evidence: algo22-terminal/tests/unit/backtestDeleteSavedRun.test.jsx (9 tests, mutation-checked).",
   "_baseline_note_plan_ladder": "RE-RECORDED by the VyomQuant plan-ladder change. The backtest handler gained ONE additive FastAPI dependency parameter, `_quota=Depends(check_backtest_quota)`, and lost none. Backtests are now a monthly allowance (Free 10, Trader 100, Pro Quant 500, Business 1500) and were previously ungated and unmetered. The dependency reserves one run before the job is enqueued; it changes no request field, no response field and no execution behaviour for a caller within their allowance. A caller over it receives 403 with a structured `BACKTEST_LIMIT_REACHED` refusal.",
   "_baseline_note_rl02_strategy_detail_rate_limit_restored": "RL-02 AUTHORISES the added `@limiter.limit(\"200/minute\")` decorator and `request: Request` parameter on GET /api/strategies/{strategy_id} (backend_app/routers/strategies.py::get_strategy_route). API-01 correctly deleted a shadowed duplicate of this route that strategies.py's own live handler always won over by registration order -- but the deleted duplicate carried this exact rate limit, which never travelled to the live handler, leaving it callable at an unbounded rate. This is a restoration of a protection that briefly existed, not a new behavioural surface: the route's response shape, status codes and auth requirement are unchanged. Evidence: commit c931a43, tests/test_task_8_2_deploy_preflight.py (42 passed, was 41 passed + 1 failed).",
-  "api_call_count": 6,
+  "api_call_count": 7,
   "api_calls": [
+    {
+      "handler_count": 1,
+      "handlers": [
+        {
+          "decorators": [
+            "router.delete('/backtests/{backtest_id}')",
+            "limiter.limit('50/minute')"
+          ],
+          "handler": "delete_backtest",
+          "module": "backend_app.routers.strategy_operations",
+          "parameters": {
+            "backtest_id": {
+              "annotation": "str"
+            },
+            "request": {
+              "annotation": "Request"
+            },
+            "user": {
+              "annotation": "dict",
+              "depends_on": "get_current_user"
+            }
+          },
+          "raises": [
+            {
+              "detail_type": {
+                "error": "str",
+                "message": "str"
+              },
+              "error_code": "BACKTEST_DELETE_FAILED",
+              "status_code": 500
+            }
+          ],
+          "returns": [
+            {
+              "success": "bool"
+            }
+          ],
+          "route_path": "/api/backtests/{backtest_id}"
+        }
+      ],
+      "method": "DELETE",
+      "path": "/api/backtests/{expr}",
+      "path_template": "/api/backtests/{expr}",
+      "resolved": true,
+      "via": "api.strategies.deleteBacktest"
+    },
     {
       "handler_count": 1,
       "handlers": [
