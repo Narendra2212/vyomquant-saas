@@ -72,8 +72,21 @@ const { mockStrategies, mockExchange } = vi.hoisted(() => ({
   mockExchange: { getSupported: vi.fn() },
 }));
 
+/*
+ * `isAuthenticated` is declared even though nothing below reads entitlements, because a
+ * `vi.mock` factory replaces the WHOLE module: an omitted export throws on access rather than
+ * falling through to the real one, and `useEntitlements.load()` calls it unguarded inside an
+ * async function. That lands as an unhandled error with every test still reporting as passed
+ * and vitest exiting non-zero anyway — the failure mode
+ * `tests/test_api_mock_factories_declare_isauthenticated.py` exists to stop, which is why a
+ * new file must declare it rather than join that guard's shrinking list.
+ *
+ * `() => false` is the honest value here: this suite never signs in, and `src/apiClient` is
+ * refused above, so there is no token for it to report.
+ */
 vi.mock('../../src/api', () => ({
   endpoints: { strategies: mockStrategies, exchange: mockExchange },
+  isAuthenticated: () => false,
 }));
 
 import Backtester from '../../src/pages/Backtester';
