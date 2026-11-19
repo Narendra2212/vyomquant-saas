@@ -82,6 +82,23 @@ const MANDATORY_EVENTS = new Set([
 const LOCK_REASON = 'Always on — the platform delivers this alert regardless of preference.';
 
 /**
+ * EMAIL-01. The *Email Notifications* lock, and it is the OPPOSITE kind of lock to
+ * `LOCK_REASON` above: that one is "on and cannot be turned off", this one is "cannot be
+ * turned on, because nothing would carry it".
+ *
+ * Measured rather than assumed. The customer notification path has no email hop at all —
+ * neither `core/notification_dispatcher.py` nor `routers/notifications.py` references any
+ * of the three modules that hold `aiosmtplib`, and those three are the operator/platform
+ * alerting path. Separately, no SMTP host or credential is configured on any production
+ * task definition, so even that path cannot send today.
+ *
+ * Phrased as a capability statement, not an apology, and it names what DOES work so the
+ * reader does not conclude their alerts are off altogether.
+ */
+const EMAIL_LOCK_REASON = 'Email delivery is not configured on this platform yet. '
+  + 'In-app and real-time alerts are delivered as normal.';
+
+/**
  * `NotificationSettingsRequest`'s own field defaults.
  *
  * Not invented here: these are the positions the server would apply for a value it has not
@@ -440,11 +457,35 @@ export function NotificationPreferences({ className }) {
             Automation &amp; security
           </p>
           <div className="flex flex-col gap-1.5">
+            {/* EMAIL-01: locked, because nothing can deliver what this promised.
+                It read "Receive verified critical alerts to your primary email address",
+                and the switch was operable, so turning it on was an instruction the
+                platform accepted and then did not carry out. Measured, twice over:
+
+                  - the per-user dispatch path has NO email hop. `grep` for
+                    `alert_engine`/`alert_system`/`alerting_system` across
+                    `core/notification_dispatcher.py` and `routers/notifications.py`
+                    returns nothing. The three modules that DO hold `aiosmtplib` are the
+                    operator/platform alerting path, not the customer one.
+                  - production configures no transport. None of `ALERT_SMTP_HOST`,
+                    `EMAIL_SMTP_HOST` or their credentials is set on any of the seven ECS
+                    task definitions, so even the operator senders cannot send.
+
+                `email_notifications` is still WRITTEN and still READ BACK, so no stored
+                preference is lost and nothing is migrated away; the switch simply stops
+                offering a promise. It unlocks by configuring a transport and giving the
+                dispatcher an email hop — at which point delete `EMAIL_LOCK_REASON` and
+                this comment, not just the `locked` prop.
+
+                Locked rather than hidden: a trader who previously switched it on should
+                see what the platform thinks the setting is and why it is not in force. */}
             <NotificationSwitch
               label="Email Notifications"
-              description="Receive verified critical alerts to your primary email address"
+              description="Email delivery is not available yet — in-app and WebSocket alerts are unaffected"
               icon={Mail}
               checked={emailChannelOn}
+              locked
+              lockReason={EMAIL_LOCK_REASON}
               onChange={(checked) => handleNotificationSettingChange('channels', 'email', checked)}
             />
             <NotificationSwitch

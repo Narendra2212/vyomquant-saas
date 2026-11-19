@@ -99,11 +99,40 @@ describe('PROFILE-REORG-01: notification preferences, in their new home', () => 
     for (const label of [
       'Trade Executions',
       'Daily PnL Summaries',
-      'Email Notifications',
       'Strategy Lifecycle State Changes',
     ]) {
       expect(switchFor(label).getAttribute('aria-disabled')).toBeNull();
     }
+  });
+
+  it('locks Email Notifications for the opposite reason, and says which', async () => {
+    /*
+      EMAIL-01. Two kinds of lock now exist on this panel and they must not be conflated:
+
+        MANDATORY  — on, and cannot be turned OFF. The platform delivers it regardless.
+        EMAIL      — cannot be turned ON, because nothing would carry it.
+
+      Measured both ways: the customer notification path has NO email hop (neither
+      `core/notification_dispatcher.py` nor `routers/notifications.py` references any of
+      the three modules holding `aiosmtplib`, and those three are the operator alerting
+      path), and no SMTP host or credential is set on any production task definition.
+
+      The switch was operable before this, so turning it on was an instruction the platform
+      accepted and then did not carry out — the brief's "never make a control appear
+      functional when its backend operation is broken".
+    */
+    render(<NotificationPreferences />);
+    await screen.findByText('Email Notifications');
+
+    expect(switchFor('Email Notifications').getAttribute('aria-disabled')).toBe('true');
+
+    // The reason must name the gap AND what still works, or a reader concludes their
+    // alerts are off altogether. And it must not reuse the mandatory wording, which
+    // would read as "always on" — the opposite of the truth here.
+    const panel = document.body.textContent ?? '';
+    expect(panel).toMatch(/not configured/i);
+    expect(panel).toMatch(/in-app/i);
+    expect(panel).not.toMatch(/Receive verified critical alerts/i);
   });
 
   it('a locked switch issues no write when clicked or keyed', async () => {
@@ -134,17 +163,22 @@ describe('PROFILE-REORG-01: notification preferences, in their new home', () => 
     render(<NotificationPreferences />);
     await screen.findByText('Email Notifications');
 
-    fireEvent.click(switchFor('Email Notifications'));
+    // EMAIL-01: was `Email Notifications`, which is now LOCKED (no transport exists), so
+    // clicking it issues no write — which is what `a locked switch issues no write when
+    // clicked or keyed` asserts. Driven from an unlocked EVENT switch instead, because
+    // what this test is really about is the exact payload shape, not which control sent
+    // it. `trade_executed` starts true, so one click sends it false.
+    fireEvent.click(switchFor('Trade Executions'));
 
     await waitFor(() => {
       expect(updateNotifSpy).toHaveBeenCalledWith({
         channels: {
-          email: false,
+          email: true,
           telegram: false,
           mobile: false,
         },
         events: {
-          trade_executed: true,
+          trade_executed: false,
           stop_loss_triggered: true,
           daily_pnl_summary: true,
           bot_state_change: false,
@@ -192,7 +226,9 @@ describe('PROFILE-REORG-01: notification preferences, in their new home', () => 
     render(<NotificationPreferences />);
     await screen.findByText('Email Notifications');
 
-    fireEvent.click(switchFor('Email Notifications'));
+    // EMAIL-01: driven from an unlocked switch. `Email Notifications` is locked now, so
+    // clicking it issues no write at all and there would be nothing to revert.
+    fireEvent.click(switchFor('Trade Executions'));
 
     await waitFor(() => expect(updateNotifSpy).toHaveBeenCalled());
 
