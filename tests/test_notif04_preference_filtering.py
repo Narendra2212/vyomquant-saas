@@ -38,6 +38,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from backend_app.core import notification_dispatcher as nd
+from backend_app.core.notification_preferences import event_is_permitted
 from backend_app.core.models.pydantic_models import MANDATORY_NOTIFICATION_EVENTS
 
 REPO = Path(__file__).resolve().parents[1]
@@ -89,7 +90,16 @@ class _Client:
 
 
 def _allows(event_type: str, client) -> bool:
-    return asyncio.run(nd._preference_allows(USER, event_type, client))  # noqa: SLF001
+    """The real gate, not a copy of it.
+
+    This used to call `notification_dispatcher._preference_allows`, which NOTIF-04
+    superseded with `notification_preferences.event_is_permitted` and left behind. The
+    dead copy never imported `inspect`, so every read raised `NameError` into its own
+    fail-open handler and the four suppression cases below could not have passed
+    against it. Pointing at the function `dispatch_user_notification` actually calls is
+    what makes them mean something.
+    """
+    return asyncio.run(event_is_permitted(USER, event_type, client))
 
 
 # ───────── 1. the mandatory floor, enforced at dispatch ─────────
@@ -184,18 +194,30 @@ def test_no_client_delivers() -> None:
     assert _allows("trade_executed", None) is True
 
 
-@pytest.mark.parametrize("bad", [0, None, "no", "", [], {}, "False"])
+@pytest.mark.parametrize("bad", [0, None, "no", "", [], {}, "False", "false"])
 def test_an_ambiguous_value_is_not_read_as_false(bad) -> None:
     """NOTIF-02 measured this: `bool(0)` and `bool(None)` are False in Python, so a
-    malformed row would silently mute an alert. Only an explicit false suppresses."""
+    malformed row would silently mute an alert. Only an explicit false suppresses.
+
+    `"false"` MOVED HERE from the suppressing case, and that is a correction to this
+    file rather than a change in behaviour. The string never suppressed in production:
+    `dispatch_user_notification` consults `event_is_permitted`, whose
+    `_is_explicitly_off` is `value is False` and documents `"false"` as one of the
+    shapes it deliberately will not read as consent.
+    `test_t10_event_wiring_and_preferences.test_only_an_unambiguous_false_suppresses`
+    has pinned that, green, with `"false"` in this same list. The old expectation
+    belonged to the superseded copy of the gate, which matched `value == "false"` --
+    so these two files asserted opposite things about the same string, and the one
+    describing running code is this one.
+    """
     assert _allows("trade_executed", _Client({"trade_executed": bad})) is True, (
         f"{bad!r} was read as 'switched off'"
     )
 
 
-@pytest.mark.parametrize("falsey", [False, "false"])
-def test_the_two_spellings_that_do_suppress(falsey) -> None:
-    assert _allows("trade_executed", _Client({"trade_executed": falsey})) is False
+def test_the_only_spelling_that_suppresses() -> None:
+    """The JSON boolean `false`, and nothing else. See the case above for why."""
+    assert _allows("trade_executed", _Client({"trade_executed": False})) is False
 
 
 # ───────── 4. the vocabularies cannot drift apart again ─────────
