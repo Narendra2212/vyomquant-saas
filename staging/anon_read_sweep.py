@@ -125,6 +125,20 @@ CHECK_OVERRIDES = {
     "copilot_messages": {"role": "user"},
     "waitlist": {"experience_level": "beginner"},
     "training_governance_decisions": {"decision": "ADMITTED"},
+    # 077/MKT-11. `supported_pairs` and `supported_exchanges` are NOT NULL `text[]`
+    # guarded by `disclosure_tags_are_valid`, which requires between one and N non-blank
+    # elements -- so a synthesised empty array fails
+    # `chk_listing_disclosures_exchanges`, and the sweep then reports the table as
+    # UNPROVEN rather than claiming an isolation result it never measured. That refusal
+    # is the guard working correctly; this entry is the value it was asking for.
+    #
+    # Nothing else on that table needs one: every other column is nullable, and
+    # `chk_listing_disclosures_currency` is satisfied by leaving both capital bounds NULL
+    # beside a NULL `capital_currency` -- it couples their presence, not their values.
+    "marketplace_listing_disclosures": {
+        "supported_pairs": ["BTC/USDT"],
+        "supported_exchanges": ["binance"],
+    },
     # CHECK (executed_bar_count >= 50), CHECK (total_trades >= 20) and
     # CHECK ((end_date - start_date) + 1 >= 90)
     "marketplace_backtest_evidence": {
