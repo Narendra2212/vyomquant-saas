@@ -22,7 +22,6 @@ import { Button } from "../components/ui/Button";
 import { Alert } from "../components/ds/Alert";
 import { CommandButton } from "../components/ds/CommandButton";
 import { ConfirmDialog } from "../components/ds/ConfirmDialog";
-import { DataTable } from "../components/ds/DataTable";
 import { EmptyState } from "../components/ds/EmptyState";
 import { Field } from "../components/ds/Field";
 import { FilterBar } from "../components/ds/FilterBar";
@@ -41,6 +40,16 @@ import {
   HEALTH_UNDETERMINED,
   computeStrategyHealth,
 } from "../lib/strategyHealth";
+// Task 14: the card the listing renders each strategy as. The component is deliberately
+// dumb — this page resolves which facts exist and hands them over, so
+// `design/pageFields.js` stays the single source of truth rather than the card growing a
+// second opinion about what is reportable.
+import {
+  LISTED_LABEL,
+  StrategyCard,
+  StrategyCardGrid,
+  ownershipLabel,
+} from "../components/strategies/StrategyCard";
 import {
   describeArchiveFailure,
   describeBlockingDeployment,
@@ -125,6 +134,22 @@ const normalizeStrategies = (rows = []) =>
     name: _text(row.name) ?? _text(row.strategy_name),
     pair: _text(row.symbol) ?? _text(row.pair),
     market: _marketLabel(row),
+    // ── Task 14: market, exchange and timeframe as THREE facts ──
+    //
+    // `market` above is a COMPOSITE — "BTCUSDT · binance · 1h" — built for a single table
+    // column where three columns would not fit. A card has room for three labelled facts,
+    // and Task 14 names them separately, so each is normalised on its own here.
+    //
+    // This is not duplication for its own sake: a composite cannot express a PARTIAL
+    // absence. A row with a symbol and no venue renders "BTCUSDT" and the reader cannot
+    // tell whether the venue is missing or simply not part of the format. Three facts each
+    // carry their own marker and their own reason.
+    //
+    // `market` itself is retained unchanged, because the table columns, the search
+    // predicate (`visibleStrategies`) and the archive confirmation's review grid all read
+    // it.
+    cardMarket: _text(row.symbol) ?? _text(row.pair),
+    exchange: _text(row.deployed_exchange),
     // The server's spelling, verbatim, for `ds/StrategyStatus` — which reports "Status not
     // reported" for a row carrying none rather than claiming `stopped`, the way
     // `_normalizeStatus` has to for the filter's closed vocabulary.
@@ -246,8 +271,41 @@ const isReported = (field) => fieldEntry(field)?.verdict === VERDICT.AVAILABLE;
 /** Requirement 11.4 — a page of strategies, not a page of trades. */
 const PAGE_SIZE = 25;
 
+/**
+ * Task 14: the orders the card grid offers — and, by omission, the ones it refuses to.
+ *
+ * `performance`, `riskState` and `marketplaceListing` are ABSENT on purpose. All three
+ * render a marker on EVERY card, because the list projection carries none of them, so
+ * ordering by one would reorder nothing a reader can see. That is the rule the table
+ * already applied when it set `sortable: false` on its performance column — "a dead sort
+ * header over a column of markers is a control that does nothing". Here it is expressed by
+ * omitting the option rather than disabling it: a disabled option invites the reader to
+ * wonder what it would have done.
+ *
+ * `read` returns the value to order by, or `null` for "this row has nothing to order by",
+ * which sinks in both directions rather than claiming a position.
+ */
+const SORTABLE_CARD_FIELDS = Object.freeze([
+  { id: "updatedAt", field: "updatedAt", descending: true, read: (row) => row.updated_at ?? null },
+  { id: "name", field: "name", descending: false, read: (row) => row.name ?? null },
+  { id: "market", field: "market", descending: false, read: (row) => row.cardMarket ?? null },
+  { id: "status", field: "status", descending: false, read: (row) => row.statusRaw ?? null },
+  {
+    id: "lastSignalAt",
+    field: "lastSignalAt",
+    descending: true,
+    read: (row) => row.last_signal_at ?? null,
+  },
+  {
+    id: "lastExecutionAt",
+    field: "lastExecutionAt",
+    descending: true,
+    read: (row) => row.last_execution_at ?? null,
+  },
+]);
+
 /** Newest first: the strategy a trader touched last is the one they are looking for. */
-const DEFAULT_SORT = Object.freeze({ key: "updated_at", direction: "desc" });
+const DEFAULT_CARD_SORT = "updatedAt";
 
 /** What the filter row's live region counts. */
 const COUNT_NOUN = "strategies";
@@ -452,6 +510,18 @@ const instantCell = (field) => function InstantCell({ value }) {
     ? <NotAvailableMarker label={labelFor(field)} reason={reasonFor(field)} />
     : text;
 };
+
+/* ── Task 14: the card's prebuilt cells ──────────────────────────────────────
+ *
+ * Built ONCE, at module scope. `instantCell(...)` and `unreportedCell(...)` each return a
+ * NEW component identity per call, so building them inside the per-row `facts` loop would
+ * hand React a different component type for the same cell on every render and remount four
+ * elements per card. Cheap to avoid, and invisible until a few hundred strategies. */
+const UnreportedListingCell = unreportedCell("marketplaceListing");
+const UnreportedPerformanceCell = unreportedCell("performance");
+const SignalInstantCell = instantCell("lastSignalAt");
+const ExecutionInstantCell = instantCell("lastExecutionAt");
+const UpdatedInstantCell = instantCell("updatedAt");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Server-derived ownership: GET /api/library/my-strategies (task 32.7)
@@ -807,7 +877,6 @@ export default function Strategies() {
   const [editingStrategy, setEditingStrategy] = useState(null);
   const [filterStatus, setFilterStatus] = useState(STATUS_FILTER_ALL);
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState(DEFAULT_SORT);
   const [page, setPage] = useState(1);
   const [focusedStrategyId, setFocusedStrategyId] = useState(() => searchParams.get("strategy_id") || null);
   const [deployModalStrategy, setDeployModalStrategy] = useState(null);
@@ -838,6 +907,9 @@ export default function Strategies() {
   // `null` means "not read yet or the read failed" and is never rendered as a list: an error
   // clears it, so the section shows the error state rather than the previous entries
   // (Requirement 12.8 — an error is an error state, never a stale list or a zero).
+  // Task 14: which order the card grid renders in. Replaces ds/DataTable's per-column
+  // sort headers, which a card grid has nowhere to hang.
+  const [cardSort, setCardSort] = useState(DEFAULT_CARD_SORT);
   const [ownershipEntries, setOwnershipEntries] = useState(null);
   const [ownershipMeta, setOwnershipMeta] = useState(null);
   const [ownershipLoading, setOwnershipLoading] = useState(true);
@@ -1157,6 +1229,37 @@ export default function Strategies() {
       );
     });
   }, [strategies, filterStatus, query]);
+
+  /**
+   * Task 14: the page of rows the card grid renders.
+   *
+   * `ds/DataTable` did this slicing itself from `page`/`pageSize`. The card grid renders
+   * exactly what it is given, so the slice moves here. Clamped against a stale `page`,
+   * which every filter handler already guards by returning to page 1 — belt and braces,
+   * because an out-of-range slice renders an empty grid over rows that exist, and that is
+   * indistinguishable from "no strategies" to the reader.
+   */
+  const sortedStrategies = useMemo(() => {
+    const option = SORTABLE_CARD_FIELDS.find((candidate) => candidate.id === cardSort);
+    if (!option) return visibleStrategies;
+    // Copied before sorting: `visibleStrategies` is a memo other readers share, and
+    // `Array.prototype.sort` mutates in place.
+    return [...visibleStrategies].sort((left, right) => {
+      const a = option.read(left);
+      const b = option.read(right);
+      // A row with nothing to order by sinks, in both directions. Otherwise an absent
+      // value would claim a position — "oldest" for a row with no timestamp at all.
+      if (a === null || a === undefined || a === "") return 1;
+      if (b === null || b === undefined || b === "") return -1;
+      if (a === b) return 0;
+      return option.descending ? (a < b ? 1 : -1) : (a > b ? 1 : -1);
+    });
+  }, [visibleStrategies, cardSort]);
+
+  const pagedStrategies = useMemo(() => {
+    const start = Math.max(0, (page - 1) * PAGE_SIZE);
+    return sortedStrategies.slice(start, start + PAGE_SIZE);
+  }, [sortedStrategies, page]);
 
   /** Requirement 4.1's failure reporting, hoisted out of the row (see the Alert below). */
   const failedStrategies = useMemo(
@@ -1999,6 +2102,137 @@ export default function Strategies() {
     { key: "actions", header: "Actions", priority: 1, render: ActionsCell },
   ];
 
+  /* ═══════════════════════════════════════════════════════════════════════════
+   * Task 14 — the same facts, as cards
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Requirement 4.5 forbids cards that EXCEED the density needed for 4.1's fields, not
+   * cards. See the correction in this file's header. The card therefore carries the same
+   * facts as the columns above, from the same renderers, with no decorative addition —
+   * every element on it is a labelled fact or an action.
+   *
+   * THE RENDERERS ARE REUSED, NOT REIMPLEMENTED. `facts[].node` takes the very component
+   * the column used, so a change to how a status or an instant renders lands in both
+   * places at once and the two cannot drift. `label` and `reason` come from `labelFor` /
+   * `reasonFor`, which read `design/pageFields.js` — so the declaration stays the single
+   * source of truth for what exists and why something does not.
+   */
+
+  /** Ownership entries keyed by the strategy they describe, or `null` when unread. */
+  const ownershipByStrategy = useMemo(() => {
+    if (!Array.isArray(ownershipEntries)) return null;
+    const byId = new Map();
+    for (const entry of ownershipEntries) {
+      // Only OWNED entries carry a `strategy_id`. A SUBSCRIBED entry describes another
+      // author's listing and has a `listing_id` instead, which is why the ownership panel
+      // below is not folded into this grid.
+      const key = entry?.strategy_id;
+      if (key !== null && key !== undefined) byId.set(String(key), entry);
+    }
+    return byId;
+  }, [ownershipEntries]);
+
+  /**
+   * The `<dl>` rows for one card: Task 14's twelve fields, in its order.
+   *
+   * A fact is either a `node` (an already-built element, for the facts that need a
+   * component) or a `value` plus the field's declared `reason`, which the card turns into
+   * the marker when the value is absent. One rendering per fact.
+   */
+  const cardFacts = useCallback((row) => {
+    const owned = ownershipByStrategy === null
+      ? undefined
+      : ownershipByStrategy.get(String(row.id));
+
+    return [
+      { field: "market", label: labelFor("market"), value: row.cardMarket, reason: reasonFor("market") },
+      { field: "exchange", label: labelFor("exchange"), value: row.exchange, reason: reasonFor("exchange") },
+      { field: "timeframe", label: labelFor("timeframe"), value: row.tf, reason: reasonFor("timeframe") },
+      { field: "version", label: labelFor("version"), value: row.current_version, reason: reasonFor("version") },
+      {
+        field: "deploymentState",
+        label: labelFor("deploymentState"),
+        node: <DeploymentCell value={row.deploymentState} row={row} />,
+      },
+      {
+        field: "performance",
+        label: labelFor("performance"),
+        // Declared unavailable on this read: the list projection carries no `pnl`,
+        // `win_rate` or `max_dd`, and those figures exist per BACKTEST. A zero here would
+        // read as a strategy that has never made money, which is a different claim from
+        // "not reported on this read".
+        node: <UnreportedPerformanceCell />,
+      },
+      {
+        field: "ownership",
+        label: labelFor("ownership"),
+        // UNKNOWN rather than absent when the ownership read failed or named no entry:
+        // defaulting to "Owned" would claim an ownership nobody stated. `undefined` here
+        // means the read did not complete, and `Reported` turns it into the marker.
+        value: owned === undefined ? undefined : ownershipLabel(owned?.ownership),
+        reason: reasonFor("ownership"),
+      },
+      {
+        field: "subscription",
+        label: labelFor("subscription"),
+        // `subscription: null` on an OWNED entry is a REPORTED absence — the server states
+        // there is no subscription, which is not the same as not knowing. Either way the
+        // marker carries the declared reason rather than inventing a state.
+        value: owned?.subscription?.state ?? undefined,
+        reason: reasonFor("subscription"),
+      },
+      {
+        field: "marketplaceListing",
+        label: labelFor("marketplaceListing"),
+        // Declared UNAVAILABLE: neither read carries whether YOUR OWN strategy is listed.
+        // Rendering "Not listed" would state a negative about the one author it would
+        // mislead — the one who has listed. See the field's note in `pageFields.js`.
+        node: <UnreportedListingCell />,
+      },
+      { field: "riskState", label: labelFor("riskState"), node: <RiskCell value={row.health} /> },
+      {
+        field: "lastSignalAt",
+        label: labelFor("lastSignalAt"),
+        node: <SignalInstantCell value={row.last_signal_at} />,
+      },
+      {
+        field: "lastExecutionAt",
+        label: labelFor("lastExecutionAt"),
+        node: <ExecutionInstantCell value={row.last_execution_at} />,
+      },
+      {
+        field: "updatedAt",
+        label: labelFor("updatedAt"),
+        node: <UpdatedInstantCell value={row.updated_at} />,
+      },
+    ];
+  }, [ownershipByStrategy]);
+
+  /** The header chips: lifecycle status, the archived flag, and the listing label. */
+  const cardBadges = useCallback((row) => {
+    const owned = ownershipByStrategy === null
+      ? undefined
+      : ownershipByStrategy.get(String(row.id));
+    return (
+      <>
+        {/* `status` is a badge rather than a `<dl>` pair — it is the card's headline
+            state, and it carries `data-card-field` so it is still addressable as the
+            same fact the table's `status` column was. `StrategyStatus` reports
+            "Status not reported" for a row carrying none, rather than claiming
+            `stopped`, and renders the archived flag BESIDE the status because an
+            archived row is history, not an actionable state (Requirement 3.3). */}
+        <span data-card-field="status" className="inline-flex min-w-0 flex-wrap items-center gap-1">
+          <StatusCell row={row} />
+        </span>
+        {/* `Listed` appears only where the read actually carries a listing. An owned
+            strategy's listing state is on neither read, so the absence is reported by the
+            `marketplaceListing` fact's marker rather than by a missing chip — a missing
+            chip says nothing, and Requirement 19.3 wants the reason visible. */}
+        {owned?.listing ? <StatusBadge state="info" label={LISTED_LABEL} size="sm" /> : null}
+      </>
+    );
+  }, [ownershipByStrategy]);
+
   /* ── Handlers. Every one that changes the row set returns to page 1, or a
    *    stale page number renders an empty table over rows that exist. ────── */
 
@@ -2568,6 +2802,34 @@ export default function Strategies() {
             </ul>
           ) : null}
 
+          {/* Task 14: the sort affordance the card grid replaces column headers with.
+              Rendered above the grid and labelled, so it is reachable by keyboard and by
+              a screen reader (Requirement 18.2/18.4). Returns to page 1 on change, like
+              every other control that changes the row order or the row set — a stale page
+              number renders an empty grid over rows that exist. */}
+          {emptyVariant !== "no-match" && pagedStrategies.length > 0 ? (
+            <div className="flex items-center gap-2 text-micro">
+              <label htmlFor="strategy-card-sort" className="text-content-secondary">
+                Sort by
+              </label>
+              <select
+                id="strategy-card-sort"
+                value={cardSort}
+                onChange={(event) => {
+                  setCardSort(event.target.value);
+                  setPage(1);
+                }}
+                className="min-w-0 rounded border border-border-subtle bg-surface-raised px-2 py-1 text-content-primary"
+              >
+                {SORTABLE_CARD_FIELDS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {labelFor(option.field)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
           {emptyVariant === "no-match" ? (
             <EmptyState
               {...NO_STRATEGIES_STATE}
@@ -2578,20 +2840,36 @@ export default function Strategies() {
               clearFiltersAction={{ label: "Clear filters", onClick: clearFilters }}
             />
           ) : (
-            <DataTable
-              columns={columns}
-              rows={visibleStrategies}
-              getRowId={(row) => row.id}
-              rowHref={(row) => `/app/strategies/${row.id}`}
-              totalCount={resultCount}
-              page={page}
-              pageSize={PAGE_SIZE}
-              onPageChange={setPage}
-              sort={sort}
-              onSortChange={setSort}
-              stickyHeader
-              caption="Your strategies, with status, deployment and activity per row"
-            />
+            /* ── Task 14: cards, not rows ──
+             *
+             * Requirement 4.5 forbids cards that EXCEED the density needed for 4.1's
+             * fields, not cards — see the correction in this file's header. Every fact
+             * on the card comes from the same renderer the column used, so the two
+             * cannot drift, and `labelFor`/`reasonFor` keep `design/pageFields.js` the
+             * single source of what exists and why something does not.
+             *
+             * SORTING MOVES FROM COLUMN HEADERS TO ONE LABELLED CONTROL. `ds/DataTable`
+             * owned the sort headers and a card grid has nowhere to hang them, so the
+             * affordance becomes the `Sort by` select above the grid. The honesty rule
+             * that governed the headers governs its option list too: `performance`,
+             * `riskState` and `marketplaceListing` render a marker on EVERY card, so
+             * ordering by them would reorder nothing visible — a control that does
+             * nothing. They are excluded by `SORTABLE_CARD_FIELDS`, not greyed out.
+             *
+             * Pagination is kept and applied here rather than inside the table. */
+            <StrategyCardGrid label="Your strategies, as cards">
+              {pagedStrategies.map((row) => (
+                <StrategyCard
+                  key={row.id}
+                  row={row}
+                  focused={String(row.id) === String(focusedStrategyId)}
+                  nameLabel={labelFor("name")}
+                  facts={cardFacts(row)}
+                  badges={cardBadges(row)}
+                  actions={<ActionsCell row={row} />}
+                />
+              ))}
+            </StrategyCardGrid>
           )}
         </div>
       </Panel>

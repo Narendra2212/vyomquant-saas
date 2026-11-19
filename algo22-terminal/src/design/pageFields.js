@@ -602,6 +602,80 @@ const STRATEGIES_FIELDS = [
   // the strategy list -- and that distinction carries the meaning of an absence here: it
   // means "the ownership read did not report it", which is not the same fact as "the
   // strategy list did not carry it".
+  // ── Task 14: the venue and the bar, split out of the composite `market` ───
+  //
+  // `market` above is declared "Market / exchange" and the table rendered it as one
+  // composite cell — "BTCUSDT · binance · 1h" — because three columns would not fit. A card
+  // has room for three labelled facts, and Task 14 names them separately.
+  //
+  // The split is not cosmetic: a composite CANNOT express a partial absence. A row with a
+  // symbol and no venue renders "BTCUSDT", and the reader cannot tell whether the venue is
+  // missing or simply not part of the format. Three facts each carry their own marker and
+  // their own reason.
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'exchange',
+    label: 'Exchange',
+    requirement: '4.1',
+    read: STRATEGIES_READ,
+    endpoint: STRATEGIES_ENDPOINT,
+    path: 'strategies[].deployed_exchange',
+    documentedIn: STRATEGIES_MODULE,
+    note: 'The venue the strategy is deployed against, NOT the venue its author built it '
+      + 'for — the list projection carries only the former. Absent on a strategy that has '
+      + 'never been deployed, which is a real state and not a read failure, so the marker '
+      + 'says so rather than naming a default exchange.',
+  }),
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'timeframe',
+    label: 'Timeframe',
+    requirement: '4.1',
+    read: STRATEGIES_READ,
+    endpoint: STRATEGIES_ENDPOINT,
+    path: 'strategies[].timeframe',
+    documentedIn: STRATEGIES_MODULE,
+    note: 'The bar interval the strategy evaluates on. Read as `timeframe` and then `tf`, '
+      + 'because both spellings appear on the wire; neither is defaulted, since guessing '
+      + '"1h" would state a cadence the strategy may not run at.',
+  }),
+  entry({
+    page: PAGES.STRATEGIES,
+    field: 'subscription',
+    label: 'Subscription',
+    requirement: '4.1',
+    read: OWNERSHIP_READ,
+    endpoint: OWNERSHIP_ENDPOINT,
+    documentedIn: OWNERSHIP_MODULE,
+    // NO `path`, by the declaration's own rule: a path names where a REPORTED figure is
+    // read from, and an unavailable field has nowhere to point. The shape the server would
+    // use if it ever carried one is `items[].subscription.state`, recorded here in prose
+    // rather than as a path so the "a path exists exactly when a figure is at one" check
+    // stays meaningful.
+    //
+    // UNAVAILABLE on THIS surface, which is the owner's own strategy list. Not because the
+    // field does not exist -- a SUBSCRIBED entry carries `subscription.state` and the
+    // marketplace surfaces read it -- but because every entry reachable from a strategy
+    // row is an OWNED one, and the server sends `subscription: null` for those. So the
+    // value is absent for every row this page can render, which is what UNAVAILABLE means
+    // here, and `NEVER` is the absence kind: no backend change resolves it, because owning
+    // a strategy is precisely not subscribing to it.
+    verdict: VERDICT.UNAVAILABLE,
+    // `unmeasurable`, not `never` -- `never` means "this value is never absent", which is
+    // the opposite of the case here and makes the reason below dead copy. Not `unreported`
+    // either: the backend DOES carry `subscription.state`, and the marketplace surfaces
+    // read it. It is unmeasurable on THIS surface specifically, because every entry
+    // reachable from an owned strategy row is an OWNED one and owning a strategy is
+    // precisely not subscribing to it.
+    absence: ABSENCE.UNMEASURABLE,
+    reason: 'Not applicable: the ownership read reports no subscription for this strategy, '
+      + 'which is the expected answer for one you own rather than subscribe to.',
+    note: 'A REPORTED absence, not an unreadable one. The server sends `subscription: null` '
+      + 'for an OWNED entry — it is stating that there is no subscription, which is a '
+      + 'different fact from not knowing — so the reason says "not applicable" rather than '
+      + 'claiming the value could not be read. Nothing is defaulted to a state: inventing '
+      + '"active" would claim an entitlement nobody granted.',
+  }),
   entry({
     page: PAGES.STRATEGIES,
     field: 'ownership',

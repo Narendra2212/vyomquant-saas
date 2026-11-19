@@ -325,7 +325,7 @@ afterEach(() => {
 // 1. The columns (Requirements 4.1, 4.5)
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe.skip('every field Requirement 4.1 names is on the card, under its declared label', () => {
+describe('every field Requirement 4.1 names is on the card, under its declared label', () => {
   it('renders each one under the label `pageFields` declares for it', async () => {
     const { grid } = await mountWith([strategyRow()]);
     const [card] = bodyRows(grid);
@@ -433,7 +433,7 @@ describe.skip('every field Requirement 4.1 names is on the card, under its decla
 // 2. Risk: `undetermined` is not-available (Requirement 4.1, and 1.8/1.9)
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe.skip('the risk fact goes through computeStrategyHealth', () => {
+describe('the risk fact goes through computeStrategyHealth', () => {
   it('renders `undetermined` as not-available, never as a healthy verdict', async () => {
     // The row as the list endpoint really serves it: neither permitted source is on it, so
     // `computeStrategyHealth` returns `undetermined` for it — which is EVERY row today.
@@ -484,7 +484,7 @@ describe.skip('the risk fact goes through computeStrategyHealth', () => {
 // 3. Performance: a marker, never a zero (Requirement 14.5)
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe.skip('the performance fact', () => {
+describe('the performance fact', () => {
   it('is declared unavailable on this read, so there is nothing to render', () => {
     // Read from the declaration, not asserted about the page: if a listing widening ever
     // makes this ✅, the expectation below stops describing the intended behaviour and this
@@ -528,7 +528,7 @@ describe.skip('the performance fact', () => {
 // 4. BC-3 and BC-4 (Requirement 4.1, 19.2)
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe.skip('last signal (BC-3) and last execution (BC-4)', () => {
+describe('last signal (BC-3) and last execution (BC-4)', () => {
   it('renders both as figures now that task 12 landed', async () => {
     const row = strategyRow();
     const { grid } = await mountWith([row]);
@@ -566,7 +566,7 @@ describe.skip('last signal (BC-3) and last execution (BC-4)', () => {
 // 5. The filter row (Requirements 11.2, 11.5, 19.3)
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe.skip('the filter row', () => {
+describe('the filter row', () => {
   const countRegion = () => document.querySelector('[data-filter-count="true"]');
 
   it('reports `n of m` over the rows that were read', async () => {
@@ -637,7 +637,7 @@ describe.skip('the filter row', () => {
 // 6. Empty, no-match and error (Requirements 4.4, 11.5, 14.5)
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe.skip('the listing region\'s states', () => {
+describe('the listing region\'s states', () => {
   it('renders Requirement 4.4\'s empty state for zero strategies, with the builder action', async () => {
     mockApi.strategies.list.mockResolvedValue(listBody([]));
     renderPage();
@@ -710,7 +710,7 @@ describe.skip('the listing region\'s states', () => {
 //    (Requirements 4.2, 4.3) — task 17.1 moved these into the row, 17.2 partitioned them
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe.skip('the card\'s actions survive the rebuild', () => {
+describe('the card\'s actions survive the rebuild', () => {
   it('renders the non-destructive controls inline', async () => {
     const { grid } = await mountWith([strategyRow({ status: 'stopped' })]);
     const actions = within(actionsOf(bodyRows(grid)[0]));
