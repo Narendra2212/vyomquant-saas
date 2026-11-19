@@ -1195,6 +1195,17 @@
     ],
     [
       "execution_records",
+      "is_sandbox",
+      "boolean",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "execution_records",
       "last_exchange_sync",
       "timestamp with time zone",
       "",
@@ -26522,6 +26533,11 @@
     [
       "migrations/078_sec_definer_caller_guard.sql",
       "870dc465e2e01c790481b2549660b98dbacffc1856b53378dcfcef68b6223928",
+      "step1"
+    ],
+    [
+      "migrations/079_exec_env01_execution_records_is_sandbox.sql",
+      "a312a91df0d916199a3ebe160d1de72a2e8e21d52e62b77d2696d32edfbab4d7",
       "step1"
     ],
     [

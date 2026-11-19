@@ -565,6 +565,7 @@ def _live_history_rows(owner_id: str, strategy_id: str, *, hours: float) -> list
             "user_id": owner_id,
             "status": "COMPLETED",
             "exchange_id": "binance",
+            "is_sandbox": False,  # EXEC-ENV-01: a real-money fill
             "filled_size": "0.0100",
             "filled_at": stamp.isoformat(),
             "submitted_at": stamp.isoformat(),

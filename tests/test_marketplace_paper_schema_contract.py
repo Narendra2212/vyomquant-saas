@@ -983,6 +983,22 @@ def _blank_dollar_quoted_bodies(sql: str) -> str:
 _PRIVILEGE_LIST = re.compile(r"\b(?:grant|revoke)\b[^;]*?\bon\b", re.IGNORECASE)
 
 
+_FUNCTION_RENAME = re.compile(
+    r"\balter\s+(?:function|procedure)\b[^;]*?\brename\s+to\b", re.IGNORECASE | re.DOTALL
+)
+
+
+def _blank_function_renames(sql: str) -> str:
+    """``sql`` with each ``ALTER FUNCTION ... RENAME TO`` reduced to ``ALTER FUNCTION``.
+
+    A FUNCTION rename moves no stored data: 078 (SEC-DEF-01) renames a SECURITY DEFINER body
+    to ``<name>__impl`` and puts a caller-checking wrapper in its place. Table, column, index,
+    schema and type renames -- which break readers of stored data -- are still flagged; see
+    :func:`test_only_a_function_rename_is_exempt`.
+    """
+    return _FUNCTION_RENAME.sub("ALTER FUNCTION", sql)
+
+
 def _blank_privilege_lists(sql: str) -> str:
     """``sql`` with each ``GRANT``/``REVOKE`` privilege list replaced by the keyword alone.
 
@@ -1016,6 +1032,17 @@ def _blank_privilege_lists(sql: str) -> str:
     return _PRIVILEGE_LIST.sub(
         lambda m: f"{m.group(0).split()[0]} on", sql
     )
+
+
+def test_only_a_function_rename_is_exempt() -> None:
+    rename = _DESTRUCTIVE["RENAME"]
+    assert not rename.search(_blank_function_renames(
+        "ALTER FUNCTION public.f(uuid, numeric)\n    RENAME TO f__impl;"))
+    for statement in ("ALTER TABLE public.t RENAME TO u;",
+                      "ALTER TABLE public.t RENAME COLUMN a TO b;",
+                      "ALTER INDEX i RENAME TO j;",
+                      "ALTER SCHEMA s RENAME TO z;"):
+        assert rename.search(_blank_function_renames(statement)), statement
 
 
 def test_truncate_statement_forms_are_still_flagged() -> None:
@@ -1205,13 +1232,13 @@ def test_no_destructive_statements() -> None:
     """
     offenders: List[str] = []
     for path in _all_migration_files():
-        clean = _blank_privilege_lists(
+        clean = _blank_function_renames(_blank_privilege_lists(
             _strip_function_bodies(
                 _strip_sql_comments_and_strings(
                     path.read_text(encoding="utf-8", errors="replace")
                 )
             )
-        )
+        ))
         for label, pattern in _DESTRUCTIVE.items():
             if pattern.search(clean):
                 match = pattern.search(clean)

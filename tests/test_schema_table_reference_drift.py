@@ -4395,11 +4395,14 @@ class TestEveryReferencedColumnIsDeclared:
         # The one permitted difference, and it is named rather than tolerated
         # as slack: `venue_order_id` was added by
         # `backend_app/migrations/030_execution_venue_order_id.sql`, after the
-        # 13.17/13.19 measurements. Any OTHER addition means the two
-        # measurements disagree for an unexplained reason.
-        assert oracle - measured == {"venue_order_id"}, (
+        # 13.17/13.19 measurements. `is_sandbox` was added by
+        # `backend_app/migrations/079_exec_env01_execution_records_is_sandbox.sql`
+        # (EXEC-ENV-01): testnet fills must never count as live history. Any OTHER
+        # addition means the two measurements disagree for an unexplained reason.
+        named = {"venue_order_id", "is_sandbox"}
+        assert oracle - measured <= named and "venue_order_id" in oracle, (
             f"the live oracle for {table} carries "
-            f"{sorted(oracle - measured - {'venue_order_id'})} beyond the "
+            f"{sorted(oracle - measured - named)} beyond the "
             "retired measurement with no migration named for them. Name the "
             "migration here or remove the column from the roster."
         )
