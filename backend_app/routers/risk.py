@@ -743,7 +743,47 @@ async def update_risk_settings(
                 },
             )
         try:
-            q = sb.table("risk_settings").upsert(updated_record, on_conflict="user_id").execute()
+            # ── RISK-09: the WRITE goes through the service-role client ──
+            #
+            # `public.risk_settings` granted `authenticated` INSERT and UPDATE, so a
+            # customer holding the anon key could PostgREST-write their own risk row
+            # directly and set `max_daily_loss`, `max_positions` or `max_leverage` to
+            # anything. Measured in production 2026-11-18:
+            #
+            #     risk_settings   authenticated   INSERT,SELECT,UPDATE
+            #
+            # NOT an enforcement bypass, and that distinction is worth keeping straight:
+            # `core/risk_manager.validate_trade_request` clamps every limit to the
+            # platform ceiling on the order path independently of this row
+            # (RISK-03), so a forged value buys no extra exposure. What it does buy is a
+            # LIE: the trader reads back a limit the engine will not honour, which is the
+            # exact defect RISK-03's clamp exists to prevent on the honest path. It also
+            # defeats the ceiling-clamp audit trail, since the stored value no longer
+            # records what this endpoint decided.
+            #
+            # Same remedy, same order, as MKT-10 for `strategy_backtests` and RISK-07 for
+            # `strategy_limits`: move the writer, THEN take the privilege away. Migration
+            # 076 performs the revoke and is safe precisely because this is the only
+            # writer -- every other reference to the table in `backend_app` is a SELECT
+            # (`routers/risk.py:511`, `core/risk_manager.py:180`,
+            # `dashboard_aggregation_service.py:1062`), and those keep `authenticated`
+            # SELECT and their RLS layer.
+            #
+            # The service-role client is not subject to RLS, so ownership is enforced in
+            # the row instead: `updated_record["user_id"]` is `uid`, taken from the
+            # verified JWT at the top of this handler, and the upsert conflicts on
+            # `risk_settings_user_id_key` so it can only ever create or update the
+            # authenticated caller's single row.
+            res = get_service_supabase_async()
+            service_sb = await res if inspect.isawaitable(res) else res
+            if service_sb is None:
+                raise RuntimeError(
+                    "no service-role client; refusing to fall back to the caller's "
+                    "client, which no longer holds INSERT/UPDATE on risk_settings"
+                )
+            q = service_sb.table("risk_settings").upsert(
+                updated_record, on_conflict="user_id"
+            ).execute()
             await q if inspect.isawaitable(q) else q
             persisted = True
         except Exception as e:

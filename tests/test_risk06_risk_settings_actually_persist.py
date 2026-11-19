@@ -113,7 +113,7 @@ def configured_store(monkeypatch):
 
 
 class TestSaveRefusesRatherThanLying:
-    @patch("backend_app.routers.risk._sb")
+    @patch("backend_app.routers.risk.get_service_supabase_async")
     def test_upsert_failure_returns_503_not_a_success_message(self, mock_sb, configured_store):
         """The exact production failure: 42703 on an undeclared column."""
         mock_sb.side_effect = _sb_that_raises(
@@ -135,7 +135,7 @@ class TestSaveRefusesRatherThanLying:
         body = response.text.lower()
         assert "saved successfully" not in body
 
-    @patch("backend_app.routers.risk._sb")
+    @patch("backend_app.routers.risk.get_service_supabase_async")
     def test_process_store_keeps_the_old_value_when_the_write_failed(self, mock_sb, configured_store):
         """The divergence that made the defect invisible: this worker must not serve a
         value the database does not hold.
@@ -180,7 +180,32 @@ class TestSaveRefusesRatherThanLying:
             "RISK_SETTINGS_PERSISTENCE_UNAVAILABLE"
         )
 
-    @patch("backend_app.routers.risk._sb")
+    @patch("backend_app.routers.risk.get_service_supabase_async")
+    def test_no_service_client_refuses_rather_than_using_the_callers(
+        self, mock_service, configured_store
+    ):
+        """RISK-09. The write moved to the service-role client because migration 076
+        revokes `authenticated`'s INSERT/UPDATE on `risk_settings`.
+
+        A missing `SUPABASE_SERVICE_ROLE_KEY` must therefore REFUSE, not quietly fall back
+        to the caller's client. Two reasons, and either alone is sufficient: with 076
+        applied that write fails with 42501 anyway, and a silent fallback would re-widen
+        the browser-role write surface the revoke exists to close -- which
+        `scripts/sec22_authenticated_write_inventory.py` would then flag on the next run.
+        """
+        mock_service.side_effect = AsyncMock(return_value=None)
+        app.dependency_overrides[get_current_user] = _user_with_token
+        try:
+            response = client.put("/api/risk/settings", json=PAYLOAD)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == "RISK_SETTINGS_PERSIST_FAILED"
+        body = response.text.lower()
+        assert "saved successfully" not in body
+
+    @patch("backend_app.routers.risk.get_service_supabase_async")
     def test_successful_save_reports_persisted_true(self, mock_sb, configured_store):
         factory, sb = _sb_that_succeeds()
         mock_sb.side_effect = factory
