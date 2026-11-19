@@ -22,7 +22,15 @@ export default defineConfig({
   /* Opt out of parallel tests on CI. */
   workers: process.env.CI ? 1 : undefined,
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
-  reporter: 'html',
+  /*
+   * Local behaviour is unchanged. On CI the `html` reporter alone puts the failure in a
+   * zipped artifact and the log says only "To open last HTML report run…", so a red job
+   * cannot be diagnosed from the log it prints. `list` restores that; `html` is kept
+   * beside it, with `open: 'never'` because there is no browser to open it in.
+   */
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }]]
+    : 'html',
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
@@ -34,18 +42,41 @@ export default defineConfig({
 
   /* Configure projects for major browsers */
   projects: [
+    /*
+     * T03's layout sweep, and the only project CI runs today (`.github/workflows/11-layout.yml`).
+     *
+     * SEPARATE, AND CHROMIUM-ONLY, ON PURPOSE. The specs it owns assert box geometry
+     * against a container — `boundingBox()` arithmetic and the document's scrollHeight —
+     * which is layout engine behaviour that CSS-grid-correct browsers agree on. Running it
+     * three times would triple the browser download for three identical answers, and the
+     * cost of a cold `playwright install` is the main thing that makes a browser job
+     * expensive. Each spec sets its own viewport, so the sizes come from the spec rather
+     * than from a project per size.
+     *
+     * The three browser projects below `grepInvert` the same tag, so the sweep has exactly
+     * one owner and `npx playwright test` does not quietly run it once per engine.
+     */
+    {
+      name: 'layout',
+      grep: /@layout/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+
     {
       name: 'chromium',
+      grepInvert: /@layout/,
       use: { ...devices['Desktop Chrome'] },
     },
 
     {
       name: 'firefox',
+      grepInvert: /@layout/,
       use: { ...devices['Desktop Firefox'] },
     },
 
     {
       name: 'webkit',
+      grepInvert: /@layout/,
       use: { ...devices['Desktop Safari'] },
     },
 
