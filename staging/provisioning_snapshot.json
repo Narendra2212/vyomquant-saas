@@ -3647,6 +3647,182 @@
       "NEVER"
     ],
     [
+      "marketplace_listing_disclosures",
+      "capital_currency",
+      "character",
+      "3",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "created_at",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "now()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "declared_max_drawdown_pct",
+      "numeric",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "investor_disclosures",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "leverage_disclosure",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "listing_id",
+      "uuid",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "max_leverage",
+      "numeric",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "max_recommended_capital",
+      "numeric",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "min_recommended_capital",
+      "numeric",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "published_at",
+      "timestamp with time zone",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "risk_classification",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "strategy_limitations",
+      "text",
+      "",
+      "YES",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "supported_exchanges",
+      "ARRAY",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "supported_pairs",
+      "ARRAY",
+      "",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "updated_at",
+      "timestamp with time zone",
+      "",
+      "NO",
+      "now()",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "version",
+      "character varying",
+      "64",
+      "NO",
+      "",
+      "NO",
+      "",
+      "NEVER"
+    ],
+    [
       "marketplace_listings",
       "allow_clone",
       "boolean",
@@ -14843,6 +15019,11 @@
       "FOREIGN KEY (settlement_id) REFERENCES marketplace_settlements(id) ON DELETE RESTRICT"
     ],
     [
+      "marketplace_listing_disclosures",
+      "marketplace_listing_disclosures_listing_id_fkey",
+      "FOREIGN KEY (listing_id) REFERENCES library_strategies(id) ON DELETE CASCADE"
+    ],
+    [
       "marketplace_listings",
       "marketplace_listings_strategy_id_fkey",
       "FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE"
@@ -15415,6 +15596,11 @@
       false
     ],
     [
+      "disclosure_tags_are_valid",
+      "tags text[], max_count integer, max_len integer",
+      false
+    ],
+    [
       "encrypt",
       "bytea, bytea, text",
       false
@@ -15693,6 +15879,11 @@
       "record_referral_obligation",
       "p_provider text, p_provider_payment_id text, p_referred_id uuid, p_payment_amount numeric, p_currency text, p_subscription_tier text, p_reason_code text, p_detail jsonb",
       true
+    ],
+    [
+      "refuse_published_disclosure_change",
+      "",
+      false
     ],
     [
       "reject_immutable_version_update",
@@ -16440,6 +16631,16 @@
       "marketplace_creator_payouts",
       "marketplace_creator_payouts_pkey",
       "CREATE UNIQUE INDEX marketplace_creator_payouts_pkey ON public.marketplace_creator_payouts USING btree (id)"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "idx_listing_disclosures_published",
+      "CREATE INDEX idx_listing_disclosures_published ON public.marketplace_listing_disclosures USING btree (listing_id, published_at DESC NULLS LAST)"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "pk_listing_disclosures",
+      "CREATE UNIQUE INDEX pk_listing_disclosures ON public.marketplace_listing_disclosures USING btree (listing_id, version)"
     ],
     [
       "marketplace_listings",
@@ -18611,6 +18812,24 @@
       "true"
     ],
     [
+      "marketplace_listing_disclosures",
+      "listing_disclosures_owner_read",
+      "PERMISSIVE",
+      "authenticated",
+      "SELECT",
+      "(EXISTS ( SELECT 1\n   FROM library_strategies ls\n  WHERE ((ls.id = marketplace_listing_disclosures.listing_id) AND (ls.author_id = auth.uid()))))",
+      ""
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "listing_disclosures_service_role",
+      "PERMISSIVE",
+      "service_role",
+      "ALL",
+      "true",
+      "true"
+    ],
+    [
       "marketplace_listings",
       "All users can view published listings",
       "PERMISSIVE",
@@ -20150,6 +20369,11 @@
       "marketplace_creator_payouts",
       "marketplace_creator_payouts_pkey",
       "id"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "pk_listing_disclosures",
+      "listing_id,version"
     ],
     [
       "marketplace_listings",
@@ -21935,6 +22159,46 @@
     ],
     [
       "marketplace_creator_payouts",
+      "service_role",
+      "UPDATE"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "authenticated",
+      "SELECT"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "service_role",
+      "DELETE"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "service_role",
+      "INSERT"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "service_role",
+      "REFERENCES"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "service_role",
+      "SELECT"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "service_role",
+      "TRIGGER"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "service_role",
+      "TRUNCATE"
+    ],
+    [
+      "marketplace_listing_disclosures",
       "service_role",
       "UPDATE"
     ],
@@ -26231,6 +26495,11 @@
       "step1"
     ],
     [
+      "migrations/077_mkt11_listing_disclosures.sql",
+      "b14fceda62281963a8839b6bd8c4b3467a80b73115745b1125d6cec320c20da3",
+      "step1"
+    ],
+    [
       "migrations/add_billing_currency_and_dag_hash.sql",
       "4b2ac2899820d0a43407671ab4b4648af994d98210a66347c6c05a022740719f",
       "step1"
@@ -26444,6 +26713,11 @@
     ],
     [
       "marketplace_creator_payouts",
+      true,
+      false
+    ],
+    [
+      "marketplace_listing_disclosures",
       true,
       false
     ],
@@ -26941,6 +27215,10 @@
       "postgres"
     ],
     [
+      "marketplace_listing_disclosures",
+      "postgres"
+    ],
+    [
       "marketplace_listings",
       "postgres"
     ],
@@ -27331,6 +27609,11 @@
       "marketplace_backtest_evidence",
       "trg_marketplace_backtest_evidence_updated_at",
       "marketplace_touch_updated_at"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "trg_listing_disclosures_immutable",
+      "refuse_published_disclosure_change"
     ],
     [
       "marketplace_listings",
@@ -27878,6 +28161,54 @@
       "chk_creator_payout_status",
       "c",
       "CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text, 'rejected'::text])))"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "chk_listing_disclosures_capital",
+      "c",
+      "CHECK ((((min_recommended_capital IS NULL) OR (min_recommended_capital >= (0)::numeric)) AND ((max_recommended_capital IS NULL) OR (max_recommended_capital >= (0)::numeric)) AND ((min_recommended_capital IS NULL) OR (max_recommended_capital IS NULL) OR (max_recommended_capital >= min_recommended_capital))))"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "chk_listing_disclosures_currency",
+      "c",
+      "CHECK (((((min_recommended_capital IS NULL) AND (max_recommended_capital IS NULL)) = (capital_currency IS NULL)) AND ((capital_currency IS NULL) OR (capital_currency ~ '^[A-Z]{3}$'::text))))"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "chk_listing_disclosures_drawdown",
+      "c",
+      "CHECK (((declared_max_drawdown_pct IS NULL) OR ((declared_max_drawdown_pct >= (0)::numeric) AND (declared_max_drawdown_pct <= (100)::numeric))))"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "chk_listing_disclosures_exchanges",
+      "c",
+      "CHECK (disclosure_tags_are_valid(supported_exchanges, 32, 32))"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "chk_listing_disclosures_leverage",
+      "c",
+      "CHECK (((max_leverage IS NULL) OR ((max_leverage >= (1)::numeric) AND (max_leverage <= (125)::numeric))))"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "chk_listing_disclosures_pairs",
+      "c",
+      "CHECK (disclosure_tags_are_valid(supported_pairs, 64, 32))"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "chk_listing_disclosures_prose",
+      "c",
+      "CHECK ((((leverage_disclosure IS NULL) OR (length(leverage_disclosure) <= 2000)) AND ((strategy_limitations IS NULL) OR (length(strategy_limitations) <= 4000)) AND ((investor_disclosures IS NULL) OR (length(investor_disclosures) <= 8000))))"
+    ],
+    [
+      "marketplace_listing_disclosures",
+      "chk_listing_disclosures_risk_class",
+      "c",
+      "CHECK (((risk_classification IS NULL) OR (risk_classification = ANY (ARRAY['conservative'::text, 'moderate'::text, 'aggressive'::text, 'speculative'::text]))))"
     ],
     [
       "marketplace_price_evaluations",
