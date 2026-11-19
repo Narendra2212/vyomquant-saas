@@ -215,31 +215,11 @@ async def register(
                 from backend_app.core.supabase_connection import SupabaseConnection
                 admin_client = SupabaseConnection().get_client()
                 if admin_client:
-                    ref_code = user_data.referral_code.upper().strip()
-                    referral_code_res = admin_client.table("referral_codes").select("user_id", "id").eq("code", ref_code).execute()
-                    if referral_code_res.data and len(referral_code_res.data) > 0:
-                        referrer_data = referral_code_res.data[0]
-                        referrer_id = referrer_data["user_id"]
-                        referral_code_id = referrer_data["id"]
-                        if referrer_id == user_id:
-                            logger.warning(f"Self-referral attempt blocked for user {user_id}")
-                        else:
-                            existing_referral = admin_client.table("referral_relationships").select("id").eq("referred_id", user_id).execute()
-                            if not existing_referral.data or len(existing_referral.data) == 0:
-                                admin_client.table("referral_relationships").insert({
-                                    "referrer_id": referrer_id,
-                                    "referred_id": user_id,
-                                    "referral_code_id": referral_code_id,
-                                    "status": "pending"
-                                }).execute()
-                                admin_client.table("profiles").update({
-                                    "referred_by_user_id": referrer_id
-                                }).eq("id", user_id).execute()
-                                logger.info(f"Referral relationship created: {referrer_id} referred {user_id} using code {ref_code}")
-                            else:
-                                logger.warning(f"User {user_id} already has a referrer, ignoring duplicate referral")
-                    else:
-                        logger.warning(f"Invalid referral code: {ref_code}")
+                    # REF-ATTR-01: the one attribution rule, shared with /api/referral/claim.
+                    from backend_app.backend.referral_attribution import attribute_referral
+
+                    outcome = attribute_referral(admin_client, user_id, user_data.referral_code)
+                    logger.info(f"Referral claim at registration for {user_id}: {outcome['status']}")
                 else:
                     logger.warning(f"Referral code {user_data.referral_code} ignored: admin client not available")
             except Exception as ref_err:

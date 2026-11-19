@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import * as Sentry from "@sentry/react";
+import { flushPendingReferral } from "./lib/pendingReferral";
 import { AppStateProvider } from './AppState';
 import wsClient from './websocketClient';
 import { Lock } from "lucide-react";
@@ -450,6 +451,10 @@ export function safeReturnPath(from) {
 export function AuthGuard() {
   const { pending, token: effectiveToken } = useGuardedAuthToken();
   const location = useLocation();
+  // REF-ATTR-01: a referral code remembered at signup is claimed once a session exists.
+  useEffect(() => {
+    if (!pending && effectiveToken) flushPendingReferral();
+  }, [pending, effectiveToken]);
   if (pending) return <AuthExchangePendingScreen />;
   if (!effectiveToken) {
     return (
