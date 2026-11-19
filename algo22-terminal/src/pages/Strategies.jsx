@@ -2144,6 +2144,15 @@ export default function Strategies() {
       ? undefined
       : ownershipByStrategy.get(String(row.id));
 
+    // The COMPUTED risk verdict, which the row mapper near the top of this file already
+    // resolved with `computeStrategyHealth` from the most-recent deployment and backtest
+    // records. `row` here is that MAPPED row, so this is not the API row's `health` --
+    // the list endpoint reports no such field, and inventing one as `"healthy"` is the
+    // precise defect `strategyHealth.test.js` pins by forbidding `row.health` anywhere in
+    // this file. Named apart from `row` so the provenance is legible at the use site
+    // rather than depending on which `row` is in scope.
+    const { health: computedRiskVerdict } = row;
+
     return [
       { field: "market", label: labelFor("market"), value: row.cardMarket, reason: reasonFor("market") },
       { field: "exchange", label: labelFor("exchange"), value: row.exchange, reason: reasonFor("exchange") },
@@ -2189,7 +2198,11 @@ export default function Strategies() {
         // mislead — the one who has listed. See the field's note in `pageFields.js`.
         node: <UnreportedListingCell />,
       },
-      { field: "riskState", label: labelFor("riskState"), node: <RiskCell value={row.health} /> },
+      {
+        field: "riskState",
+        label: labelFor("riskState"),
+        node: <RiskCell value={computedRiskVerdict} />,
+      },
       {
         field: "lastSignalAt",
         label: labelFor("lastSignalAt"),
