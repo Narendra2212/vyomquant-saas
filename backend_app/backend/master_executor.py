@@ -753,9 +753,19 @@ class BotRunner:
         try:
             snapshot = await asyncio.to_thread(paper_ledger.snapshot, self.symbol)
             self.execution_engine._reconcile_from_paper_ledger(snapshot)
+            # PAPER-EXP-01: the exposure every risk check reads. The paper branch of
+            # `_recover_live_state` returned without setting it, so it stayed at 0 after
+            # every restart: the $5,000 free-plan cap was judged against 0, the bot bought
+            # another full cap, and the QA account reached 1,122 SOL (~$80,000) across
+            # deploys. Seeded from the ledger's open long, the same figure the reduce-only
+            # guard reads.
+            held = await asyncio.to_thread(
+                paper_ledger.open_long_size, paper_ledger.ledger_symbol(self.symbol)
+            )
+            self.recovered_exposure_coins = max(Decimal("0"), Decimal(str(held)))
             logger.info(
                 f"[PAPER] Bot {self.user_id}/{self.symbol} starts from the paper account: "
-                f"cash {snapshot.cash}"
+                f"cash {snapshot.cash}, open long {self.recovered_exposure_coins}"
             )
         except Exception as exc:  # noqa: BLE001 - reported, and the bot still runs
             logger.warning(
