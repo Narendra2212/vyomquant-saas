@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 import gzip
 import inspect
 import logging
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
+import asyncio
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set
 from uuid import uuid4
 
 from fastapi import Request, APIRouter, Depends, HTTPException, Query, Response, status
@@ -1229,106 +1230,30 @@ def _public_failure(exc: BaseException) -> Exception:
     )
 
 
-@router.post("/strategy-operations/strategies/{strategy_id}/backtests/execute")
-@router.post("/strategies/{strategy_id}/backtests/execute")
-@limiter.limit("10/minute")
-async def execute_backtest(request: Request, 
+async def _execute_version_backtest(
+    *,
     strategy_id: str,
-    body: BacktestExecuteRequest,
-    user: dict = Depends(get_current_user),
-    _quota=Depends(check_backtest_quota),
-):
-    """Backtest one immutable version through the canonical runtime, and persist the result.
+    body: "BacktestExecuteRequest",
+    user: dict,
+    on_record_created: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Everything the synchronous and asynchronous backtest routes share.
 
-    Metered against the same monthly backtest allowance as ``create_backtest``. Both paths are
-    gated because either one alone would leave the other as an unmetered way to run a backtest.
+    EXTRACTED RATHER THAN COPIED, and that is the whole point of it existing. Step 1 below
+    is an authorization boundary: another tenant's strategy must be a 404 identical to a
+    missing one (Requirement 20.2). Two routes maintaining their own copy of that check is
+    how one of them eventually stops making it. There is one ordering, one archive gate,
+    one version load and one refusal mapping, and both routes get all four.
 
-    Trading-lifecycle-integration task 6.1. Requirements 5.1-5.7, 22.3, and Requirement
-    3.3's archived refusal (deferred to here by task 5.1).
+    ``on_record_created`` is forwarded to the runtime, which calls it with the
+    ``strategy_backtests`` id the moment that row exists -- before the simulation it
+    describes runs. The synchronous route passes nothing. The asynchronous route passes a
+    callback and answers its client with that id, which is what lets it return in
+    milliseconds without inventing a second job record: the row is created with
+    ``status='running'`` and moved to ``completed``/``failed`` by the same
+    ``BacktestService``, so it already IS the job record.
 
-    WHAT THIS ENDPOINT USED TO DO, AND WHY IT CHANGED
-    -------------------------------------------------
-    It required the caller to post an ``execution_graph``, rebuilt a ``StrategyPackage``
-    from it, and ran that. Three things were wrong with it, and all three are what
-    Requirement 5 is about:
-
-    * The graph came from the client, so the backtest executed an artifact assembled in
-      the browser rather than the version's own persisted ``compiled_plan`` — the one
-      thing Requirements 5.2/5.7 and 22.3 exist to prevent, because a backtest and a live
-      run could then disagree about the same version.
-    * The venue was ``ccxt.binance()``, hardcoded in the router.
-    * Every configuration field the request model declared was discarded: the shared
-      singleton runtime ran on the class defaults (Requirement 6.2's silently-ignored
-      parameter, in its purest form).
-
-    Now: the version row is loaded, :meth:`BacktestRuntime.run_version_backtest` resolves
-    its plan through :meth:`~BacktestRuntime.load_version_plan` — reusing the persisted
-    plan when its hash matches the graph and recompiling **for this run only** when it does
-    not (Requirements 5.2, 5.3) — takes market identity from the version's own DATA nodes
-    (SB-06), and runs the same ``DAG_Engine`` → ``BacktestEngine`` (VectorBT) → ``RiskEngine``
-    pipeline the live path uses (Requirements 5.1, 5.5).
-
-    ORDER, AND WHY
-    --------------
-    1. Ownership, through ``StrategyService.get_strategy``'s ``.eq("user_id", …)`` on top of
-       the request-scoped client's RLS. Another tenant's strategy is a **404**, identical to
-       a missing one (Requirement 20.2).
-    2. Requirement 3.3's archived refusal, read off the row step 1 already loaded, so it
-       costs no extra query. Raised as an ``ArchiveRejected`` — a ``DeployRejected``
-       subclass — so this route's existing refusal mapping answers it without a second
-       mapping that could drift from the deploy route's.
-    3. The version row. Nothing has been written at this point, so a refusal at 1, 2 or 3
-       leaves no ``strategy_backtests`` row behind.
-    4. The run. ``run_version_backtest`` creates the ``strategy_backtests`` row, executes,
-       and writes the metrics back through ``BacktestService`` — so persistence happens
-       server-side in one call and the caller needs no second request to save it
-       (Requirement 10.1; the client-side two-step glue task 17.2 removes).
-
-    SYNCHRONOUS, AND RETURNED IN ONE RESPONSE
-    -----------------------------------------
-    No job id, no polling: the response carries ``backtest_id``, ``status`` and the full
-    ``results`` — what ``BacktestRuntime.run_backtest``'s own contract already describes —
-    plus the version that was run and the configuration the request submitted.
-
-    WHAT ``configuration`` IS, AND WHAT IT IS NOT
-    ---------------------------------------------
-    It is the configuration that was **submitted**: the request body's seven fields, echoed
-    back verbatim. It used to be described here as "the configuration that was actually
-    applied, so a client can show what produced the numbers rather than what it hoped it
-    sent", and that was true of three of the seven. ``initial_capital``, ``commission`` and
-    ``slippage`` reach ``vbt.Portfolio.from_signals`` as ``init_cash``, ``fees`` and
-    ``slippage``. The other four reach no simulation at all, each for its own reason, and
-    those reasons are now reported rather than described in prose — see
-    ``backtest_runtime.CONFIGURATION_FIELDS_NOT_APPLIED``, which the response carries as
-    ``configuration_not_applied``.
-
-    The echo is deliberately NOT pruned. A record of what the caller asked for is worth
-    having, and removing fields would turn a misleading label into missing information.
-    What changed is that the response no longer implies submitted means applied.
-
-    ``applied_risk`` is the other half of that correction: the per-trade position size and
-    the two stops the simulation actually used, reported from the same dict the simulator
-    was handed, each annotated with whether it came from the strategy's own
-    ``strategies.risk`` block or from a documented default. Those three were hardcoded in
-    the runtime, which meant a backtest and a live deployment of one strategy applied
-    different risk — the live path reads them off that same ``risk`` block.
-
-    Responses
-        **200** ``{backtest_id, status, results, applied_risk,
-        configuration_not_applied, strategy_id, version_id, version, configuration,
-        ignored_fields}``.
-        **404** ``STRATEGY_NOT_FOUND``, or ``BACKTEST_VERSION_UNAVAILABLE`` for a version
-        that is not this strategy's.
-        **409** ``STRATEGY_ARCHIVED`` (Requirement 3.3).
-        **422** ``BACKTEST_VERSION_UNAVAILABLE`` when the version carries no runnable graph
-        or plan (Requirement 5.4), or ``BACKTEST_NOT_RUNNABLE`` when the version declares no
-        market or the requested window holds too little data to simulate.
-        **503** ``BACKTEST_FEED_UNCONFIGURED``.
-        **429** from the existing limiter.
-
-    The legacy job-queue path (``POST /api/strategies/backtest`` in ``routers/strategies.py``)
-    is untouched by this handler and stays reachable, per ``design.md``'s "RETAINED, NOT
-    EXTENDED".
+    Returns the same payload the synchronous route has always returned.
     """
     from backend_app.backend.deployment_binding import DeployRejected
     from backend_app.backend.strategy_archive import (
@@ -1437,6 +1362,10 @@ async def execute_backtest(request: Request,
             # `applied_risk`.
             # Regression: tests/test_backtest_risk_configuration_provenance.py
             strategy_risk=(owned.get("strategy") or {}).get("risk"),
+            # Forwarded so an asynchronous caller learns the row id before the
+            # simulation starts. `None` for the synchronous route, which changes
+            # nothing about the run.
+            on_record_created=on_record_created,
         )
     except HTTPException:
         raise
@@ -1508,6 +1437,250 @@ async def execute_backtest(request: Request,
         }
     )
     return payload
+
+
+@router.post("/strategy-operations/strategies/{strategy_id}/backtests/execute")
+@router.post("/strategies/{strategy_id}/backtests/execute")
+@limiter.limit("10/minute")
+async def execute_backtest(request: Request, 
+    strategy_id: str,
+    body: BacktestExecuteRequest,
+    user: dict = Depends(get_current_user),
+    _quota=Depends(check_backtest_quota),
+):
+    """Backtest one immutable version through the canonical runtime, and persist the result.
+
+    Metered against the same monthly backtest allowance as ``create_backtest``. Both paths are
+    gated because either one alone would leave the other as an unmetered way to run a backtest.
+
+    Trading-lifecycle-integration task 6.1. Requirements 5.1-5.7, 22.3, and Requirement
+    3.3's archived refusal (deferred to here by task 5.1).
+
+    WHAT THIS ENDPOINT USED TO DO, AND WHY IT CHANGED
+    -------------------------------------------------
+    It required the caller to post an ``execution_graph``, rebuilt a ``StrategyPackage``
+    from it, and ran that. Three things were wrong with it, and all three are what
+    Requirement 5 is about:
+
+    * The graph came from the client, so the backtest executed an artifact assembled in
+      the browser rather than the version's own persisted ``compiled_plan`` — the one
+      thing Requirements 5.2/5.7 and 22.3 exist to prevent, because a backtest and a live
+      run could then disagree about the same version.
+    * The venue was ``ccxt.binance()``, hardcoded in the router.
+    * Every configuration field the request model declared was discarded: the shared
+      singleton runtime ran on the class defaults (Requirement 6.2's silently-ignored
+      parameter, in its purest form).
+
+    Now: the version row is loaded, :meth:`BacktestRuntime.run_version_backtest` resolves
+    its plan through :meth:`~BacktestRuntime.load_version_plan` — reusing the persisted
+    plan when its hash matches the graph and recompiling **for this run only** when it does
+    not (Requirements 5.2, 5.3) — takes market identity from the version's own DATA nodes
+    (SB-06), and runs the same ``DAG_Engine`` → ``BacktestEngine`` (VectorBT) → ``RiskEngine``
+    pipeline the live path uses (Requirements 5.1, 5.5).
+
+    ORDER, AND WHY
+    --------------
+    1. Ownership, through ``StrategyService.get_strategy``'s ``.eq("user_id", …)`` on top of
+       the request-scoped client's RLS. Another tenant's strategy is a **404**, identical to
+       a missing one (Requirement 20.2).
+    2. Requirement 3.3's archived refusal, read off the row step 1 already loaded, so it
+       costs no extra query. Raised as an ``ArchiveRejected`` — a ``DeployRejected``
+       subclass — so this route's existing refusal mapping answers it without a second
+       mapping that could drift from the deploy route's.
+    3. The version row. Nothing has been written at this point, so a refusal at 1, 2 or 3
+       leaves no ``strategy_backtests`` row behind.
+    4. The run. ``run_version_backtest`` creates the ``strategy_backtests`` row, executes,
+       and writes the metrics back through ``BacktestService`` — so persistence happens
+       server-side in one call and the caller needs no second request to save it
+       (Requirement 10.1; the client-side two-step glue task 17.2 removes).
+
+    SYNCHRONOUS, AND RETURNED IN ONE RESPONSE
+    -----------------------------------------
+    No job id, no polling: the response carries ``backtest_id``, ``status`` and the full
+    ``results`` — what ``BacktestRuntime.run_backtest``'s own contract already describes —
+    plus the version that was run and the configuration the request submitted.
+
+    WHAT ``configuration`` IS, AND WHAT IT IS NOT
+    ---------------------------------------------
+    It is the configuration that was **submitted**: the request body's seven fields, echoed
+    back verbatim. It used to be described here as "the configuration that was actually
+    applied, so a client can show what produced the numbers rather than what it hoped it
+    sent", and that was true of three of the seven. ``initial_capital``, ``commission`` and
+    ``slippage`` reach ``vbt.Portfolio.from_signals`` as ``init_cash``, ``fees`` and
+    ``slippage``. The other four reach no simulation at all, each for its own reason, and
+    those reasons are now reported rather than described in prose — see
+    ``backtest_runtime.CONFIGURATION_FIELDS_NOT_APPLIED``, which the response carries as
+    ``configuration_not_applied``.
+
+    The echo is deliberately NOT pruned. A record of what the caller asked for is worth
+    having, and removing fields would turn a misleading label into missing information.
+    What changed is that the response no longer implies submitted means applied.
+
+    ``applied_risk`` is the other half of that correction: the per-trade position size and
+    the two stops the simulation actually used, reported from the same dict the simulator
+    was handed, each annotated with whether it came from the strategy's own
+    ``strategies.risk`` block or from a documented default. Those three were hardcoded in
+    the runtime, which meant a backtest and a live deployment of one strategy applied
+    different risk — the live path reads them off that same ``risk`` block.
+
+    Responses
+        **200** ``{backtest_id, status, results, applied_risk,
+        configuration_not_applied, strategy_id, version_id, version, configuration,
+        ignored_fields}``.
+        **404** ``STRATEGY_NOT_FOUND``, or ``BACKTEST_VERSION_UNAVAILABLE`` for a version
+        that is not this strategy's.
+        **409** ``STRATEGY_ARCHIVED`` (Requirement 3.3).
+        **422** ``BACKTEST_VERSION_UNAVAILABLE`` when the version carries no runnable graph
+        or plan (Requirement 5.4), or ``BACKTEST_NOT_RUNNABLE`` when the version declares no
+        market or the requested window holds too little data to simulate.
+        **503** ``BACKTEST_FEED_UNCONFIGURED``.
+        **429** from the existing limiter.
+
+    The legacy job-queue path (``POST /api/strategies/backtest`` in ``routers/strategies.py``)
+    is untouched by this handler and stays reachable, per ``design.md``'s "RETAINED, NOT
+    EXTENDED".
+    """
+    # One line, because every decision this route makes is shared with
+    # `.../backtests/start` and lives in the function below. Synchronous: no
+    # `on_record_created`, so the result is awaited in full and returned whole.
+    return await _execute_version_backtest(strategy_id=strategy_id, body=body, user=user)
+
+
+#: Strong references to the backtests running behind ``.../backtests/start``.
+#:
+#: ``asyncio`` keeps only a WEAK reference to a running task, so a task nobody else holds
+#: can be garbage-collected mid-run. The backtest would simply stop, leaving its row at
+#: ``running`` for ever and no error anywhere. This set is that reference; the done-callback
+#: below is what stops it growing without bound.
+_RUNNING_BACKTESTS: Set[Any] = set()
+
+
+def _retire_background_backtest(task: Any) -> None:
+    """Drop the finished run's reference, and surface whatever it raised.
+
+    A task whose exception is never retrieved is reported by asyncio later, at
+    garbage-collection time and detached from the request that started it. Reading it here
+    puts the failure in the log beside the backtest it belongs to.
+
+    The DATABASE is not repaired here and does not need to be: the runtime records a failed
+    run as ``status='failed'`` through ``BacktestService`` before the exception ever leaves
+    it (BT-03). What this cannot cover is the process dying mid-run — see the module note on
+    ``.../backtests/start``.
+    """
+    _RUNNING_BACKTESTS.discard(task)
+    try:
+        if task.cancelled():
+            logger.warning("A background backtest was cancelled before it completed")
+            return
+        exc = task.exception()
+    except Exception:  # noqa: BLE001 - retiring a task must never raise
+        logger.exception("Could not read the outcome of a background backtest")
+        return
+    if exc is not None:
+        logger.error("A background backtest failed: %s", exc, exc_info=exc)
+
+
+@router.post("/strategy-operations/strategies/{strategy_id}/backtests/start", status_code=202)
+@router.post("/strategies/{strategy_id}/backtests/start", status_code=202)
+@limiter.limit("10/minute")
+async def start_backtest(request: Request,
+    strategy_id: str,
+    body: BacktestExecuteRequest,
+    user: dict = Depends(get_current_user),
+    _quota=Depends(check_backtest_quota),
+):
+    """Start the backtest ``.../backtests/execute`` runs, and answer with its id instead of
+    waiting for it.
+
+    WHY THIS EXISTS. The ALB in front of this service has a 60-second idle timeout. A real
+    backtest over a long window takes longer, so the synchronous route's response was being
+    killed in flight and the browser — which waits 300 s — reported a 504 for a run that was
+    still going and that still persisted its own result. The run was fine; only the answer
+    was lost.
+
+    WHY IT IS A SIBLING AND NOT A FLAG ON THE OTHER ROUTE. ``execute``'s contract is
+    "synchronous, one response, full results", stated in its docstring and pinned across
+    ``tests/test_task_6_1_backtest_execute.py``. Changing it in place would break every
+    caller that relies on it, so it is untouched and this is additive. Both routes share
+    ``_execute_version_backtest``, so they cannot drift on ownership, the archive gate, the
+    version load or the refusal mapping.
+
+    WHAT THE CALLER POLLS, AND WHY THERE IS NO JOB QUEUE HERE. ``strategy_backtests`` is
+    already a complete job record: ``BacktestService.create_backtest`` inserts the row with
+    ``status='running'`` BEFORE the simulation starts, and the same service moves it to
+    ``completed`` or ``failed`` at the end. So the row IS the handle, and
+    ``GET /api/backtests/{backtest_id}`` — which already existed — is the poll. No Redis
+    status hash, no second store that could disagree with the table, and the row that
+    appears in Saved Backtest History is the same row the whole way through, which is what
+    keeps Requirement 10.1's history, the ``Eligibility_Gate``'s backtest count and the
+    marketplace's evidence chain reading the one record.
+
+    The legacy ``POST /api/strategies/backtest`` job queue in ``routers/strategies.py`` is
+    NOT reused and not extended: its worker runs ``backtest_internal``, which does not write
+    ``strategy_backtests`` at all, so routing this through it would silently stop producing
+    the evidence every reader above depends on. ``design.md`` marks that path "RETAINED, NOT
+    EXTENDED".
+
+    Metered by the same ``check_backtest_quota`` as ``execute``. Without it this would be an
+    unmetered way to run the identical computation.
+
+    WHERE THE RUN LIVES, AND THE ONE THING THAT IS NOT COVERED. The simulation runs as a
+    background task in this process — which is where it already ran, since the synchronous
+    route offloads it with ``run_in_executor``; the only change is that the client no longer
+    waits. A deploy or a scale-in during a run therefore loses it and leaves the row at
+    ``running`` with nothing to move it. That needs a sweep for stale rows, which is not in
+    this change and is tracked separately; a client should treat a ``running`` row that has
+    stopped advancing as unfinished rather than as in-progress for ever.
+
+    Responses
+        **202** ``{backtest_id, status: "running"}`` — the row exists; poll
+        ``GET /api/backtests/{backtest_id}``.
+        **404 / 409 / 422 / 503** exactly as ``execute`` answers them. Every refusal that
+        precedes persistence is raised here rather than hidden behind an accepted job, so a
+        request that was rejected never looks like one that was started.
+        **429** from the existing limiter.
+    """
+    loop = asyncio.get_running_loop()
+    row_exists: Any = loop.create_future()
+
+    def _announce(backtest_id: str) -> None:
+        """Hand the id to the event loop. Called from the runtime, possibly off-thread."""
+        def _resolve() -> None:
+            if not row_exists.done():
+                row_exists.set_result(backtest_id)
+
+        loop.call_soon_threadsafe(_resolve)
+
+    run = asyncio.ensure_future(
+        _execute_version_backtest(
+            strategy_id=strategy_id,
+            body=body,
+            user=user,
+            on_record_created=_announce,
+        )
+    )
+    # Referenced before anything can await, so the task cannot be collected in between.
+    _RUNNING_BACKTESTS.add(run)
+    run.add_done_callback(_retire_background_backtest)
+
+    # Whichever comes first: the row appears, or the run settles without one. A client
+    # disconnect cancels this wait and NOT the run, which is the behaviour that matters —
+    # the backtest and its row outlive the request that asked for it.
+    await asyncio.wait({row_exists, run}, return_when=asyncio.FIRST_COMPLETED)
+
+    if row_exists.done():
+        return {"backtest_id": row_exists.result(), "status": "running"}
+
+    # No row was ever created, so the run was REFUSED by one of the checks that precede
+    # persistence — ownership, the archive gate, the version load. Awaiting it re-raises
+    # that refusal unchanged, so this route answers exactly what `execute` would.
+    payload = await run
+    # Reached only if a run completed without announcing a row, which the current runtime
+    # does not do. Answering with the handle actually in hand beats inventing one.
+    return {
+        "backtest_id": payload.get("backtest_id"),
+        "status": payload.get("status") or "completed",
+    }
 
 
 @router.get("/strategies/{strategy_id}/backtests")

@@ -363,6 +363,18 @@ MUTATING_ROUTES: Tuple[MutatingRoute, ...] = (
         path=f"/api/strategies/{_ID}/backtests/execute",
         handler="backend_app.routers.strategy_operations:execute_backtest",
     ),
+    # The asynchronous sibling of the route above. It takes the SAME
+    # `BacktestExecuteRequest` and shares `_execute_version_backtest` with it, so it has the
+    # same body to violate and the same refusals before anything is written; what differs is
+    # only that it answers 202 with the `strategy_backtests` id instead of waiting for the
+    # result. Registered under two paths, as `execute` is — coverage here is by HANDLER, so
+    # one entry exercises both.
+    MutatingRoute(
+        key="strategy_operations.start_backtest",
+        method="POST",
+        path=f"/api/strategies/{_ID}/backtests/start",
+        handler="backend_app.routers.strategy_operations:start_backtest",
+    ),
     MutatingRoute(
         key="strategy_operations.validate_historical_data",
         method="POST",
