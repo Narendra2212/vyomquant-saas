@@ -52,12 +52,21 @@ import pytest
 
 from tests.regression.capture_baseline import (
     BASELINE_DIR,
+    BASELINE_NOTE_PREFIX,
     CAPTURES,
+    IDENTITY_KEYS,
     api_module_index,
     baseline_path,
     capture,
+    identity_keys,
+    identity_of,
+    is_baseline_note,
     read_baseline,
 )
+
+#: Kept so the comparison helpers below read as they always did. The definition moved to
+#: ``capture_baseline`` because ``write_baseline`` needs it too -- see that module.
+_identity_of = identity_of
 
 # ══════════════════════════════════════════════════════════════════════════
 #  THE ADDITIVE ALLOWANCE
@@ -101,12 +110,12 @@ def is_additive(key_or_path: str) -> bool:
 #: This grants no licence to hide a regression. Dropping a *real* recorded key still requires
 #: deleting it from the baseline file, which is exactly what shows up in review; the prefix
 #: only makes the reason for that deletion travel with it.
-BASELINE_NOTE_PREFIX = "_baseline_note"
-
-
-def is_baseline_note(key: str) -> bool:
-    """Whether a baseline object member is a provenance annotation rather than a contract key."""
-    return str(key).startswith(BASELINE_NOTE_PREFIX)
+#:
+#: ``BASELINE_NOTE_PREFIX`` and ``is_baseline_note`` are imported from
+#: ``capture_baseline`` rather than defined here. The WRITER has to know what a note is, or
+#: re-recording one entry destroys the authorisation for every entry re-recorded before it
+#: -- and because the differ skips notes on the baseline side (the paragraph above), nothing
+#: would report the loss.
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -210,32 +219,11 @@ def _compare_objects(baseline: Dict[str, Any], current: Dict[str, Any], path: st
 #: whose entries carry no such key — ``raises``, ``returns``, a ``_CallLog`` sequence whose
 #: ``call`` names repeat — falls through to the positional comparison below rather than
 #: being matched on a key invented for it.
-IDENTITY_KEYS: Sequence[Sequence[str]] = (
-    ("via", "method", "path_template"),  # an ``api_calls`` entry
-    ("module", "handler"),  # a route contract's ``handlers`` entry
-    ("method", "path_template"),  # a ``frontend_bindings`` entry
-    ("method", "path"),  # a ``routes`` entry
-)
-
-
-def _identity_of(entry: Dict[str, Any], keys: Sequence[str]) -> str:
-    return json.dumps([entry[key] for key in keys], sort_keys=True)
-
-
-def identity_keys(baseline: Sequence[Any], current: Sequence[Any]) -> Optional[Sequence[str]]:
-    """The first tuple in ``IDENTITY_KEYS`` that uniquely identifies every entry, or ``None``."""
-    entries = list(baseline) + list(current)
-    if not entries or not all(isinstance(entry, dict) for entry in entries):
-        return None
-    for keys in IDENTITY_KEYS:
-        if not all(all(key in entry for key in keys) for entry in entries):
-            continue
-        if all(
-            len({_identity_of(entry, keys) for entry in side}) == len(list(side))
-            for side in (baseline, current)
-        ):
-            return keys
-    return None
+#: ``IDENTITY_KEYS``, ``identity_of`` and ``identity_keys`` are imported from
+#: ``capture_baseline`` for the reason above: ``carry_forward_notes`` re-attaches a nested
+#: note to the record it was written on, and it has to use THIS definition of "the same
+#: record". A note replaced under a looser rule could land on the wrong entry, which is
+#: worse than losing it.
 
 
 def _compare_records_by_identity(

@@ -2622,9 +2622,150 @@ def read_baseline(name: str) -> Dict[str, Any]:
     return json.loads(baseline_path(name).read_text(encoding="utf-8"))
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  PROVENANCE ANNOTATIONS, AND THE RECORD IDENTITY NEEDED TO REPLACE THEM
+#
+#  These three names used to live in ``test_baseline_unchanged.py``, which imports this
+#  module. They belong HERE, with the writer: a note is part of the baseline FORMAT, and
+#  the function that rewrites a baseline file is the one that has to know not to destroy
+#  one. The differ imports them back, so there is still exactly one definition of what a
+#  note is and of when two records are "the same record" -- a note re-attached under a
+#  looser rule than the differ's could land on the wrong entry, which is worse than
+#  losing it.
+# ══════════════════════════════════════════════════════════════════════════
+
+#: A baseline entry may only be re-recorded where a requirement *authorises* the change, and
+#: the authorisation has to be readable next to the entry it excuses. JSON has no comments,
+#: so the justification is carried as an object member whose name begins with this prefix.
+BASELINE_NOTE_PREFIX = "_baseline_note"
+
+
+def is_baseline_note(key: Any) -> bool:
+    """Whether a baseline object member is a provenance annotation, not a contract key."""
+    return str(key).startswith(BASELINE_NOTE_PREFIX)
+
+
+#: Key tuples that *identify* a record, tried in this order against an array of objects.
+#: See ``test_baseline_unchanged``'s differ for why an identity is needed at all: these
+#: arrays are sorted sets of identity-bearing records, so one insertion shifts every entry
+#: after it and position means nothing.
+#:
+#: A tuple is only used when it identifies *every* entry of both lists UNIQUELY. An array
+#: whose entries carry no such key falls through to a positional comparison.
+IDENTITY_KEYS: Sequence[Sequence[str]] = (
+    ("via", "method", "path_template"),  # an ``api_calls`` entry
+    ("module", "handler"),  # a route contract's ``handlers`` entry
+    ("method", "path_template"),  # a ``frontend_bindings`` entry
+    ("method", "path"),  # a ``routes`` entry
+)
+
+
+def identity_of(entry: Dict[str, Any], keys: Sequence[str]) -> str:
+    return json.dumps([entry[key] for key in keys], sort_keys=True)
+
+
+def identity_keys(baseline: Sequence[Any], current: Sequence[Any]) -> Optional[Sequence[str]]:
+    """The first tuple in ``IDENTITY_KEYS`` that uniquely identifies every entry, or ``None``."""
+    entries = list(baseline) + list(current)
+    if not entries or not all(isinstance(entry, dict) for entry in entries):
+        return None
+    for keys in IDENTITY_KEYS:
+        if not all(all(key in entry for key in keys) for entry in entries):
+            continue
+        if all(
+            len({identity_of(entry, keys) for entry in side}) == len(list(side))
+            for side in (baseline, current)
+        ):
+            return keys
+    return None
+
+
+def _note_paths(value: Any, prefix: str = "") -> List[str]:
+    """Every note in ``value``, as a readable path, so a lost one can be named."""
+    found: List[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if is_baseline_note(key):
+                found.append(f"{prefix}{key}")
+            else:
+                found.extend(_note_paths(child, f"{prefix}{key}."))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            found.extend(_note_paths(child, f"{prefix}[{index}]."))
+    return found
+
+
+def carry_forward_notes(previous: Any, payload: Any) -> Any:
+    """Copy every provenance note on ``previous`` onto ``payload``, in place.
+
+    A capture never produces a note -- a note is a human statement about why a recorded
+    contract was allowed to change -- so writing a fresh capture over a baseline file
+    DELETES every note that file carried. Nothing catches it: the differ skips notes on the
+    baseline side, precisely so a note is not reported as a key the re-run removed. The
+    result is that the documented way to re-record one entry silently destroys the
+    authorisation for every entry re-recorded before it.
+
+    Notes are matched to the place they were written:
+
+    * on an object, by member name;
+    * on an array of identity-bearing records, by that identity -- never by position,
+      because an inserted record shifts every entry after it and would drag the notes onto
+      the wrong records.
+
+    An array with no usable identity is left alone rather than guessed at. ``write_baseline``
+    reports anything that could not be placed, so a note is never dropped in silence.
+    """
+    if isinstance(previous, dict) and isinstance(payload, dict):
+        for key, value in previous.items():
+            if is_baseline_note(key):
+                payload.setdefault(key, value)
+            elif key in payload:
+                carry_forward_notes(value, payload[key])
+        return payload
+
+    if isinstance(previous, list) and isinstance(payload, list):
+        keys = identity_keys(previous, payload)
+        if keys is None:
+            return payload
+        current_by_identity = {
+            identity_of(entry, keys): entry for entry in payload if isinstance(entry, dict)
+        }
+        for entry in previous:
+            if not isinstance(entry, dict):
+                continue
+            match = current_by_identity.get(identity_of(entry, keys))
+            if match is not None:
+                carry_forward_notes(entry, match)
+    return payload
+
+
 def write_baseline(name: str, payload: Dict[str, Any]) -> Path:
+    """Write one baseline file, preserving the provenance notes already on disk.
+
+    See :func:`carry_forward_notes`. A note that cannot be placed -- because the entry it
+    annotated is genuinely gone, which is sometimes the correct outcome -- is REPORTED by
+    name rather than discarded quietly, because that is the whole defect this guards.
+    """
     BASELINE_DIR.mkdir(parents=True, exist_ok=True)
     path = baseline_path(name)
+
+    previous: Optional[Dict[str, Any]] = None
+    if path.is_file():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"WARNING {name}: existing baseline unreadable, notes not carried: {exc}")
+
+    if previous is not None:
+        expected = set(_note_paths(previous))
+        carry_forward_notes(previous, payload)
+        lost = sorted(expected - set(_note_paths(payload)))
+        for note in lost:
+            print(
+                f"WARNING {name}: note {note!r} could not be carried forward -- the entry it "
+                "annotated is no longer in the capture. Re-place it by hand if it still applies."
+            )
+
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
