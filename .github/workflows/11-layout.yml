@@ -58,7 +58,25 @@ env:
 jobs:
   layout:
     name: Layout sweep (real browser, three viewports)
-    runs-on: ubuntu-latest
+    # PINNED, and not to be changed to `ubuntu-latest` without re-measuring.
+    #
+    # `ubuntu-latest` now resolves to Ubuntu 26.04, which Playwright 1.59.1 does not
+    # support. The first run of this workflow failed in 19 seconds with:
+    #
+    #     BEWARE: your OS is not officially supported by Playwright; installing
+    #     dependencies for ubuntu26.04-x64 as a fallback.
+    #     Cannot install dependencies for ubuntu26.04-x64 with Playwright 1.59.1!
+    #     ERROR: Playwright does not support chromium on ubuntu26.04-x64
+    #
+    # `--with-deps` is what needs the supported OS: it installs the system libraries
+    # chromium links against, and Playwright ships that list per distribution.
+    #
+    # Pinning the RUNNER rather than bumping Playwright is deliberate. Chasing the runner
+    # with a dependency bump is how #296-#302 turned main red for a day across five
+    # workflows, and a browser-engine major is exactly the kind of change that deserves its
+    # own PR with its own measurement rather than riding along in a CI-wiring commit.
+    # Revisit when Playwright supports 26.04.
+    runs-on: ubuntu-24.04
     # Measured locally at 49s for nine specs against a warm dev server. CI additionally pays
     # `npm ci`, a possible browser download, and the cold Vite route-graph compile that the
     # first navigation triggers — the specs allow 150s for that one navigation. 20 minutes
