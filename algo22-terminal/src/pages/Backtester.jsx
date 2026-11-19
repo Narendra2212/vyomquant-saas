@@ -1611,6 +1611,51 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
     }
   }, []);
 
+  /*
+   * The removal of a saved run, and the two pieces of state it needs.
+   *
+   * `deletingId` is the ROW whose request is in flight rather than a boolean, because the
+   * control lives in a table: a boolean would spin every row's control for one row's request.
+   *
+   * `deleteFailure` carries the row id alongside the error, so the refusal on screen belongs
+   * to a named run and the retry re-issues THAT delete rather than the last one attempted.
+   */
+  const [deletingId, setDeletingId] = useState(null);
+  const [deleteFailure, setDeleteFailure] = useState(null);
+
+  /**
+   * Remove one saved run. Reachable only from `ds/ConfirmDialog`'s explicit confirm, which is
+   * what `CommandButton`'s `confirm` spec guarantees — a click opens the dialog and does not
+   * call this.
+   *
+   * WHY IT RE-READS THE LIST INSTEAD OF TRUSTING THE RESPONSE. `DELETE /api/backtests/{id}`
+   * answers `{success: true}` for every caller, deliberately: Requirement 20.2 requires "this
+   * backtest is not yours" and "there is no such backtest" to be indistinguishable, so
+   * `routers/strategy_operations.delete_backtest` does not forward whether its ownership-scoped
+   * predicate (`id` AND `user_id`) matched. The body therefore cannot confirm that a row went,
+   * and dropping the row from local state on a 200 would paint a deletion that may never have
+   * happened. Re-reading is the only honest confirmation, so it is awaited here rather than
+   * left to a later render.
+   *
+   * The `catch` is the DELETE's own failure only. `refetchSaved` settles its own error into
+   * `savedState` and never rejects, so a history read that breaks cannot be reported here as a
+   * failed deletion.
+   */
+  const handleDeleteSavedRun = useCallback(async (backtestId) => {
+    if (typeof backtestId !== "string" || backtestId.trim() === "") return;
+    setDeletingId(backtestId);
+    setDeleteFailure(null);
+    try {
+      await endpoints.strategies.deleteBacktest(backtestId);
+      await refetchSaved();
+    } catch (err) {
+      console.error("Backtest delete failed:", err?.message);
+      setDeleteFailure({ id: backtestId, error: err });
+    } finally {
+      setDeletingId(null);
+    }
+  }, [refetchSaved]);
+
   /**
    * What stops this configuration from being run, in the order a trader should fix them.
    *
@@ -1870,7 +1915,7 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
     [savedRuns, strategyRows],
   );
 
-  /** The saved table's columns plus its one action, which needs this page's handler. */
+  /** The saved table's columns plus its two actions, both of which need this page's handlers. */
   const savedRunColumns = useMemo(
     () => [
       ...SAVED_RUN_COLUMNS,
@@ -1879,20 +1924,70 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
         header: "Action",
         align: "numeric",
         render: ({ row }) => (
-          <CommandButton
-            intent="ghost"
-            disabled={row?.status !== "completed"}
-            disabledReason={row?.status === "completed"
-              ? undefined
-              : "This run did not complete, so it holds no result to inspect."}
-            onClick={() => handleLoadSavedRun(row)}
-          >
-            Inspect
-          </CommandButton>
+          <div className="flex items-center justify-end gap-2">
+            <CommandButton
+              intent="ghost"
+              disabled={row?.status !== "completed"}
+              disabledReason={row?.status === "completed"
+                ? undefined
+                : "This run did not complete, so it holds no result to inspect."}
+              onClick={() => handleLoadSavedRun(row)}
+            >
+              Inspect
+            </CommandButton>
+            {/*
+              Deliberately NOT disabled for any row, unlike `Inspect`. A run that failed or is
+              still running holds no result to load, which is what makes inspecting it
+              meaningless — but it is still a row the account owns and may remove, and it is
+              the row a trader most wants gone. So there is no state to report under
+              Requirement 15.3, because there is no state in which this is unavailable.
+
+              `loading` rather than `disabled` while the request is in flight: `CommandButton`
+              makes a loading control inoperable too, so the second click that would issue a
+              second DELETE is refused — and `loadingLabel` says why, which is why Requirement
+              15.3's reason is not owed for it.
+
+              The confirmation is `confirm` rather than a page-level dialog: this is the simple
+              one-step case `CommandButton` owns, and keeping the pending row in the control
+              that was activated means the page holds no "which row was that" state. `intent`
+              is left off the spec on purpose — the dialog inherits `destructive` from this
+              button (design.md §5.1), so the treatment cannot drift from the control's.
+
+              NO `acknowledgement`: Requirement 8.4 wants the real-funds statement never
+              CONSTRUCTED outside Live, not merely hidden, and this removes a stored simulation
+              result. For the same reason there is no `environment` badge — nothing here reaches
+              a venue, and `ds/ConfirmDialog` asks callers to omit it when the decision is not
+              about trading.
+            */}
+            <CommandButton
+              intent="destructive"
+              loading={deletingId === row?.id}
+              loadingLabel="Deleting"
+              onClick={() => handleDeleteSavedRun(String(row?.id ?? ""))}
+              confirm={{
+                title: "Delete this backtest run?",
+                description: "This removes the saved run and its stored metrics permanently. "
+                  + "The strategy and the version it ran are not touched, and you can run the "
+                  + "same backtest again.",
+                // Requirement 8.1's review grid, from the row the trader clicked. An absent
+                // figure renders `ds/ConfirmDialog`'s not-available marker rather than a guess.
+                review: [
+                  { label: "Strategy", value: row?.strategy },
+                  { label: "Version", value: row?.version },
+                  { label: "Pair", value: row?.dataset },
+                  { label: "Status", value: row?.status },
+                  { label: "Return", value: row?.returnText },
+                ],
+                confirmLabel: "Delete run",
+              }}
+            >
+              Delete
+            </CommandButton>
+          </div>
         ),
       },
     ],
-    [handleLoadSavedRun],
+    [deletingId, handleDeleteSavedRun, handleLoadSavedRun],
   );
 
   /*
@@ -2494,6 +2589,20 @@ export default function Backtester({ strategy: strategyProp, onBack: onBackProp 
                 density="compact"
               />
             </Panel>
+          )}
+
+          {/* A deletion that was refused, which is NOT the read failure below: the list on
+              screen is current, one row simply did not go. Separated so a failed delete cannot
+              be read as "the history is unavailable", and its retry re-issues that row's
+              DELETE rather than the list read. */}
+          {deleteFailure === null ? null : (
+            <ErrorState
+              error={deleteFailure.error}
+              context="backtest"
+              onRetry={() => handleDeleteSavedRun(deleteFailure.id)}
+              compact
+              data-region="saved-runs-delete-error"
+            />
           )}
 
           {savedState === PANEL_STATES.ERROR ? (
