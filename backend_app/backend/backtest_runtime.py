@@ -24,7 +24,7 @@ use the same DAG Engine execution pipeline.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import numpy as np
@@ -549,6 +549,7 @@ class BacktestRuntime:
         *,
         strategy_risk: Optional[Dict[str, Any]],
         registry: Any = None,
+        on_record_created: Optional[Callable[[str], None]] = None,
     ) -> Dict:
         """Backtest a stored version from its persisted plan.
 
@@ -648,6 +649,9 @@ class BacktestRuntime:
             start_date=start_date,
             end_date=end_date,
             exchange_instance=exchange_instance,
+            # Forwarded, not consumed: the row this names is created by `run_backtest`, so
+            # the plan-shaped entry point only has to carry the observer through.
+            on_record_created=on_record_created,
         )
     
     async def run_backtest(
@@ -659,7 +663,9 @@ class BacktestRuntime:
         version: str,
         start_date: str,
         end_date: str,
-        exchange_instance
+        exchange_instance,
+        *,
+        on_record_created: Optional[Callable[[str], None]] = None,
     ) -> Dict:
         """
         Execute backtest using Strategy Package.
@@ -673,7 +679,19 @@ class BacktestRuntime:
             start_date: Backtest start date
             end_date: Backtest end date
             exchange_instance: CCXT exchange instance for data fetching
-            
+            on_record_created: Called once with the ``strategy_backtests`` id, the moment
+                that row exists and before the simulation it describes begins.
+
+                KEYWORD-ONLY AND OPTIONAL, because it exists for one caller shape: a route
+                that answers its client with a handle instead of a result
+                (``.../backtests/start``). The row is created with ``status='running'`` and
+                moved to ``completed``/``failed`` by the same ``BacktestService``, so it is
+                already a complete job record — an asynchronous caller needs the id and
+                nothing else, and no second status store has to exist for it.
+
+                The synchronous caller passes nothing and is unaffected: there is no
+                behaviour here to opt out of, only one to opt into.
+
         Returns:
             Complete backtest results with metrics, trades, charts
         """
@@ -698,7 +716,22 @@ class BacktestRuntime:
         )
         
         backtest_id = backtest_record["id"]
-        
+
+        # The row exists from here, carrying `status='running'`, which is what makes it a
+        # usable handle before the simulation it describes has finished.
+        #
+        # Guarded, and the guard is the point: this callback belongs to a caller that is
+        # only OBSERVING the run. If answering its client fails, the run it was watching
+        # must still complete and still record its own result — the alternative is a
+        # backtest abandoned halfway because a response could not be sent.
+        if on_record_created is not None:
+            try:
+                on_record_created(backtest_id)
+            except Exception:  # noqa: BLE001 - an observer must not fail the observed run
+                logger.exception(
+                    "on_record_created failed for backtest %s; the run continues", backtest_id
+                )
+
         try:
             # PHASE B: Fetch historical data
             logger.info(f"[BACKTEST] Fetching historical data from {start_date} to {end_date}")
