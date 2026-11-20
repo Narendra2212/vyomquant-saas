@@ -476,6 +476,9 @@ describe('StrategyMarketplace transport (Requirements 20.2, 20.10)', () => {
       '../design/errorCopy',
       '../design/subscriptionState',
       '../hooks/usePanelState',
+      // AUTO-REFRESH-01: only the REFRESH cadence constants; it issues no request (the poll
+      // re-runs the reader usePanelState was given, which is still `../api`'s).
+      '../hooks/useAutoRefresh',
       '../utils/razorpayCheckout',
       './paperTradingFormat',
     ]);

@@ -131,7 +131,10 @@ const API_BASE = CONFIG.apiBaseUrl;
 const REQUEST_TIMEOUT = CONFIG.REQUEST_TIMEOUT;
 const MAX_RETRIES = 3;
 const RETRY_DELAY_BASE = 1000; // 1 second base delay
-const CACHE_TTL = 60000; // 60 second cache TTL
+// Short on purpose: pages poll every 10-60 s (hooks/useAutoRefresh.js), and a longer TTL
+// would turn those polls into cache hits that show stale trading state. 5 s still merges
+// the duplicate reads several panels make while one page mounts.
+export const CACHE_TTL = 5000;
 const IDEMPOTENCY_TTL = 300000; // 5 minute idempotency key TTL
 const MAX_CACHE_SIZE = 100; // Max cache entries
 const MAX_PENDING_REQUESTS = 50; // Max concurrent pending requests
@@ -1098,7 +1101,9 @@ export const post = (url, data = {}, config = {}) => {
       logSuccess(url, latency, 'POST');
 
       // Invalidate cache after successful mutation
-      invalidateCache(url.split('/').slice(0, -1).join('/'));
+      // Any successful write can change what another page shows (stopping a deployment
+      // changes strategies, orders and the dashboard), so every cached read is dropped.
+      invalidateCache();
 
       return response.data ?? null;
     })
@@ -1177,7 +1182,9 @@ export const put = (url, data = {}, config = {}) => {
       logSuccess(url, latency, 'PUT');
 
       // Invalidate cache after successful mutation
-      invalidateCache(url.split('/').slice(0, -1).join('/'));
+      // Any successful write can change what another page shows (stopping a deployment
+      // changes strategies, orders and the dashboard), so every cached read is dropped.
+      invalidateCache();
 
       return response.data ?? null;
     })
@@ -1255,7 +1262,9 @@ export const del = (url, config = {}) => {
       logSuccess(url, latency, 'DELETE');
 
       // Invalidate cache after successful mutation
-      invalidateCache(url.split('/').slice(0, -1).join('/'));
+      // Any successful write can change what another page shows (stopping a deployment
+      // changes strategies, orders and the dashboard), so every cached read is dropped.
+      invalidateCache();
 
       return response.data ?? null;
     })
@@ -1334,7 +1343,9 @@ export const patch = (url, data = {}, config = {}) => {
       logSuccess(url, latency, 'PATCH');
 
       // Invalidate cache after successful mutation
-      invalidateCache(url.split('/').slice(0, -1).join('/'));
+      // Any successful write can change what another page shows (stopping a deployment
+      // changes strategies, orders and the dashboard), so every cached read is dropped.
+      invalidateCache();
 
       return response.data ?? null;
     })

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useAutoRefresh, REFRESH } from "../hooks/useAutoRefresh";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import {
   Plus, Layers, TrendingUp, Edit2,
@@ -979,12 +980,22 @@ export default function Strategies() {
   /** Re-read the owner list. The retry action on the error state, and nothing else. */
   const reloadStrategies = useCallback(() => setListReloadKey((k) => k + 1), []);
 
+  // Auto-refresh: a background reload keeps the cards on screen (no full-page loader) and
+  // runs every REFRESH.ACCOUNT ms while the tab is visible, and again on returning to it.
+  const backgroundReloadRef = useRef(false);
+  useAutoRefresh(() => {
+    backgroundReloadRef.current = true;
+    setListReloadKey((k) => k + 1);
+    setOwnershipReloadKey((k) => k + 1);
+  }, REFRESH.ACCOUNT);
+
   useEffect(() => {
     let cancelled = false;
 
+    const background = backgroundReloadRef.current;
     const loadStrategies = async () => {
       try {
-        setIsLoading(true);
+        if (!background) setIsLoading(true);
         console.log("📊 API CALL: GET /api/strategies");
         const payload = await endpoints.strategies.list();
         console.log("📊 API RESPONSE:", payload);
@@ -1018,8 +1029,10 @@ export default function Strategies() {
   useEffect(() => {
     let cancelled = false;
 
+    const background = backgroundReloadRef.current;
+    backgroundReloadRef.current = false;
     const loadOwnership = async () => {
-      setOwnershipLoading(true);
+      if (!background) setOwnershipLoading(true);
       setOwnershipError(null);
       try {
         const payload = await api.library.myStrategies();

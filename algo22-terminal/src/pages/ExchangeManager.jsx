@@ -381,6 +381,7 @@ import { api } from '../api';
 import { PAGES, PAGE_FIELDS_BY_PAGE, VERDICT } from '../design/pageFields';
 import { available, fromNullable, unavailable } from '../design/reported';
 import { PANEL_STATES, usePanelState } from '../hooks/usePanelState';
+import { REFRESH } from '../hooks/useAutoRefresh';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The declaration, indexed once
@@ -941,7 +942,7 @@ export default function ExchangeManager() {
   );
 
   const supported = usePanelState(readSupported, { deps: [] });
-  const connections = usePanelState(readConnections, { deps: [] });
+  const connections = usePanelState(readConnections, { deps: [], intervalMs: REFRESH.ACCOUNT });
   const schema = usePanelState(readSchema, {
     deps: [selectedExchangeId],
     enabled: selectedExchangeId !== null,

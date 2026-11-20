@@ -283,6 +283,7 @@ import { fromNullable } from "../design/reported";
 import { ENVIRONMENT } from "../design/semantic";
 import { useLiveChannel } from "../hooks/useLiveChannel";
 import { PANEL_STATES, usePanelState } from "../hooks/usePanelState";
+import { REFRESH } from "../hooks/useAutoRefresh";
 import { apiErrorMessage } from '../design/apiErrors';
 
 /**
@@ -1689,7 +1690,10 @@ export default function Dashboard() {
     () => dashboardApi.getDashboard({ environment, equity_days: equityDays }),
     [environment, equityDays],
   );
-  const dashboard = usePanelState(readDashboard, { deps: [environment, equityDays] });
+  const dashboard = usePanelState(readDashboard, {
+    deps: [environment, equityDays],
+    intervalMs: REFRESH.ACCOUNT,
+  });
   // `payload`, not `data`: the WebSocket handlers below already name their frame `data`, and
   // one identifier meaning "the REST body" in one scope and "this tick" in another is how a
   // tick ends up written where a read belongs.
