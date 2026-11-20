@@ -30,6 +30,18 @@ from typing import Dict, List, Tuple
 #: The list is now DERIVED from the task definition's own `secrets[].valueFrom`, which
 #: is the file this script already validates two functions below. A hardcoded list can
 #: drift from the deployment; a derived one cannot.
+def _aws_error_code(stderr: str) -> str:
+    """The AWS error code from a CLI failure (e.g. ResourceNotFoundException,
+    AccessDeniedException, InvalidRequestException for a secret scheduled for deletion)."""
+    import re as _re
+
+    m = _re.search(r"\(([A-Za-z]+(?:Exception|Error|Denied))\)", stderr or "")
+    if m:
+        return m.group(1)
+    text = (stderr or "").strip().splitlines()
+    return (text[-1][:160] if text else "no error text")
+
+
 def required_secrets(filepath: str = "ecs-task-definition-full.json") -> List[str]:
     """Secret names the task definition actually resolves, read from it directly."""
     if not os.path.exists(filepath):
@@ -169,7 +181,11 @@ def validate_aws_live() -> Dict:
             ["secretsmanager", "describe-secret", "--secret-id", sec])
         if code != 0:
             report["secrets"][sec] = False
-            report["errors"].append(f"Secrets Manager secret missing: {sec}")
+            # DEPLOY-SEC-02: say WHY. "missing" (ResourceNotFound), "deleted" (scheduled for
+            # deletion) and "access denied" (the deploy role lost secretsmanager:Describe*)
+            # need three different fixes; the AWS error code names which. No value is read.
+            reason = _aws_error_code(stderr)
+            report["errors"].append(f"Secrets Manager secret missing: {sec} ({reason})")
             continue
         vcode, vout, verr = run_aws_cmd(
             ["secretsmanager", "list-secret-version-ids", "--secret-id", sec])
@@ -232,6 +248,12 @@ def main():
 
         all_sec_ok = all(aws_res["secrets"].values())
         print(f"Secrets Manager: {'ALL PASS' if all_sec_ok else 'SOME MISSING'}")
+        # DEPLOY-SEC-02: name each failing secret in the job log. "SOME MISSING" alone left
+        # a blocked deploy undiagnosable from CI (2026-11-20, runs 581/582). Names are not
+        # secret; values are never read.
+        for err in aws_res["errors"]:
+            if "Secrets Manager" in err:
+                print(f"  - {err}")
 
         print(f"ECS Cluster ({ECS_CLUSTER}): {'PASS' if aws_res['ecs_cluster'] else 'FAIL'}")
         print(f"ECS Service ({ECS_SERVICE}): {'PASS' if aws_res['ecs_service'] else 'FAIL'}")
