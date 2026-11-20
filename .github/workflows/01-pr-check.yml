@@ -206,42 +206,10 @@ jobs:
       # the name `tests/test_webhook_duplicate_delivery_real_redis.py` already read. conftest
       # does not touch it, so it survives to the gate in `tests/real_redis_gate.py`.
       #
-      # `/0` IS NOT A FREE CHOICE, AND `/15` WAS MEASURABLY WRONG (Phase 11B-A11/A12).
-      #
-      # This line said `/15` and the comment claimed it "pins a dedicated database index …
-      # belt-and-braces rather than load-bearing". That was false in both halves, and it is
-      # the direct cause of two real-Redis webhook failures in run 38047483583.
-      #
-      # The application cannot be pointed at database 15. `backend_app/backend/redis_manager.py`
-      # partitions by purpose -- `REDIS_DB_CACHE = 0`, `REDIS_DB_QUEUE = 1`, `REDIS_DB_EVENTS = 2`
-      # -- and `get_redis_url(db)` OVERRIDES whatever database the URL names by appending a
-      # `db=` query parameter. For `redis://localhost:6379/15` it produces
-      # `redis://localhost:6379/15?db=0`, and redis-py resolves the QUERY over the path:
-      #     ConnectionPool.from_url('redis://localhost:6379/15?db=0').connection_kwargs['db'] == 0
-      # So the handler under test wrote its idempotency key to database 0 while the test's own
-      # client -- which honours the path -- read database 15. The key was never missing; the
-      # test was looking in a database the application never uses.
-      #
-      # That mismatch did not merely fail two tests, it made a third pass for the wrong reason:
-      # `test_an_invalid_signature_is_rejected_and_leaves_no_lock_behind` asserts a key is
-      # ABSENT, which is trivially true in a database nothing writes to. A keyspace mismatch is
-      # therefore not a tidy-up detail; it manufactures false assurance.
-      #
-      # WHAT THIS LINE IS AND IS NOT RESPONSIBLE FOR, now that the keyspace split is fixed
-      # properly in the test. `tests/test_webhook_duplicate_delivery_real_redis.py` no longer
-      # builds its client from this variable: it derives the URL from the application's own
-      # `get_redis_url(REDIS_DB_CACHE)` and then PROVES both ends see one keyspace with a
-      # bidirectional sentinel, failing with "KEYSPACE SPLIT" if they do not. That is the
-      # robust fix -- a hard-coded database here would agree today and drift the moment
-      # `REDIS_DB_CACHE` or the override changes.
-      #
-      # This variable's remaining job is the GATE's: it is the endpoint
-      # `tests/real_redis_gate.py` PINGs to decide skip / fail / run. `/0` is named so that
-      # the database the gate proves reachable is the database the application actually uses,
-      # instead of proving database 15 is alive and running the suite against database 0.
-      # The isolation the old comment wanted comes from the service container being ephemeral
-      # and exclusive to this job, which it already was; no test issues FLUSHDB, and each test
-      # namespaces its own keys.
+      # `/15` pins a dedicated database index. The service container is already ephemeral and
+      # exclusive to this job, so this is belt-and-braces rather than load-bearing -- but it
+      # means these tests cannot collide with anything else that might later share the
+      # instance, and no test ever issues FLUSHDB.
       #
       # `REDIS_URL` is RETAINED unchanged. Several tests assert on how the application behaves
       # when it is present (`test_api03_rate_limit_storage_is_fail_closed.py`,
@@ -251,7 +219,7 @@ jobs:
         run: pytest tests/ -v --tb=short -k "not chaos and not load" -m "not frontend_bundle"
         env:
           REDIS_URL: redis://localhost:6379
-          AERORA_TEST_REDIS_URL: redis://localhost:6379/0
+          AERORA_TEST_REDIS_URL: redis://localhost:6379/15
           ENV: test
           AERORA_MODE: safe
           PYTHONPATH: .
