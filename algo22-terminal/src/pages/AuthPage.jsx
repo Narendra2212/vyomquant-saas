@@ -655,7 +655,7 @@ export default function AuthPage({ mode = "signin" }) {
     try {
       if (isUp) {
         // Sign Up Flow: Create account with password
-        const { error: signUpError } = await supabase.auth.signUp({
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email: targetEmail,
           password: password,
           options: {
@@ -674,6 +674,22 @@ export default function AuthPage({ mode = "signin" }) {
         });
 
         if (signUpError) throw signUpError;
+
+        // AUTH-DUP-01: an address that already has an account. Supabase answers `signUp`
+        // with success and a user whose `identities` list is EMPTY, and sends NO email (so
+        // the form cannot be used to discover who has an account). This page used to move to
+        // the code step anyway and ask for a code that never comes -- found in production
+        // 2026-11-20. Say what happened and send the user to sign in instead.
+        const identities = signUpData?.user?.identities;
+        if (Array.isArray(identities) && identities.length === 0) {
+          await supabase.auth.signOut();
+          setPasswordVerified(false);
+          setAuthState(AUTH_STATES.PASSWORD_REQUIRED);
+          setError(
+            "An account with this email already exists. Sign in instead, or use \"Forgot password\" if you can't remember it."
+          );
+          return;
+        }
 
         // FE-04: if this project's email-confirmation requirement is off, `signUp` above
         // already returns a live session -- the OTP screen below would then be decorative,
