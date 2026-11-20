@@ -15969,7 +15969,7 @@
     [
       "trigger_create_referral_code",
       "",
-      false
+      true
     ],
     [
       "update_creator_analytics_updated_at",
@@ -26538,6 +26538,11 @@
     [
       "migrations/079_exec_env01_execution_records_is_sandbox.sql",
       "a312a91df0d916199a3ebe160d1de72a2e8e21d52e62b77d2696d32edfbab4d7",
+      "step1"
+    ],
+    [
+      "migrations/080_sec_def01_profile_trigger_uses_the_body.sql",
+      "f110a5343c15811ae3c984ee0f26bf164ca4b3ccf36f0de57dbcda1325395275",
       "step1"
     ],
     [
