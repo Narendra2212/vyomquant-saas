@@ -11,7 +11,12 @@
 import { post, publicPost } from '../apiClient';
 
 export const PENDING_REFERRAL_KEY = 'vq_pending_referral';
-const CODE = /^[A-Za-z0-9]{3,32}$/;
+// REF-LEN-01: the SAME rule the server enforces (routers/referral.py,
+// REFERRAL_CODE_PATTERN): 5-20 letters/digits. Real codes are 8-10 characters. A looser
+// rule here let a 3-4 or 21-32 character code through the form, only for the server to
+// answer with a bare 422 instead of the form's own "check the code" message.
+const CODE = /^[A-Za-z0-9]{5,20}$/;
+export const REFERRAL_CODE_HINT = 'Referral codes are 5-20 letters and digits.';
 
 const store = () => {
   try {
@@ -69,13 +74,13 @@ export function clearPendingReferral() {
  */
 export async function validateReferralCode(code, send = (c) => publicPost('/api/referral/validate', { referral_code: c })) {
   const clean = normaliseReferralCode(code);
-  if (!clean) return { valid: false, message: 'Referral codes are 3-32 letters and digits.' };
+  if (!clean) return { valid: false, message: REFERRAL_CODE_HINT };
   try {
     const res = await send(clean);
     return { valid: Boolean(res?.valid), message: res?.message || '' };
   } catch (err) {
     const status = err?.response?.status ?? err?.status;
-    if (status === 422) return { valid: false, message: 'Referral codes are 3-32 letters and digits.' };
+    if (status === 422) return { valid: false, message: REFERRAL_CODE_HINT };
     return { valid: null, message: '' };
   }
 }

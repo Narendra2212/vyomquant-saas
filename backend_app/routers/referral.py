@@ -198,9 +198,14 @@ class CreatePayoutRequest(BaseModel):
         return float(d)
 
 
+#: REF-LEN-01: the one referral-code shape, shared by validate and claim and mirrored by the
+#: signup form (algo22-terminal/src/lib/pendingReferral.js). Generated codes are 8-10.
+REFERRAL_CODE_PATTERN = r"^[A-Za-z0-9]{5,20}$"
+
+
 class ValidateReferralCodeRequest(BaseModel):
     """Request to validate a referral code"""
-    referral_code: str = Field(..., min_length=5, max_length=20)
+    referral_code: str = Field(..., min_length=5, max_length=20, pattern=REFERRAL_CODE_PATTERN)
 
 
 class ValidateReferralCodeResponse(BaseModel):
@@ -754,7 +759,8 @@ async def validate_referral_code(
 
 
 class ClaimReferralRequest(BaseModel):
-    referral_code: str = Field(..., min_length=1, max_length=32)
+    # REF-LEN-01: was 1-32, so claim accepted codes validate refused.
+    referral_code: str = Field(..., min_length=5, max_length=20, pattern=REFERRAL_CODE_PATTERN)
 
 
 @router.post("/referral/claim")

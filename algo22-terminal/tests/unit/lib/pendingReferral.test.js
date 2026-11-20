@@ -68,3 +68,24 @@ describe('REF-UI-01: a typed referral code', () => {
     expect((await validateReferralCode('x!', vi.fn())).valid).toBe(false);
   });
 });
+
+describe('REF-LEN-01: one code rule, the server\'s (5-20 letters/digits)', () => {
+  it('rejects codes the server would refuse, accepts real ones', async () => {
+    const m = await import('../../../src/lib/pendingReferral');
+    expect(m.normaliseReferralCode('abc')).toBeNull();      // 3: was accepted
+    expect(m.normaliseReferralCode('ABCD')).toBeNull();     // 4: was accepted
+    expect(m.normaliseReferralCode('A'.repeat(21))).toBeNull(); // 21: was accepted
+    expect(m.normaliseReferralCode('claudebda7')).toBe('CLAUDEBDA7');
+    expect(m.normaliseReferralCode('ABCDE')).toBe('ABCDE');
+    expect(m.normaliseReferralCode('A'.repeat(20))).toBe('A'.repeat(20));
+  });
+
+  it('a too-short code gets the form\'s own message, without a request', async () => {
+    const m = await import('../../../src/lib/pendingReferral');
+    let sent = false;
+    const r = await m.validateReferralCode('abc', () => { sent = true; });
+    expect(sent).toBe(false);
+    expect(r).toEqual({ valid: false, message: m.REFERRAL_CODE_HINT });
+    expect(m.REFERRAL_CODE_HINT).toMatch(/5-20/);
+  });
+});
