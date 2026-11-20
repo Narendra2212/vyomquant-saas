@@ -8,7 +8,7 @@
  * everything that matters (valid code, self-referral, once per account, claim window); this
  * module only remembers the code and stops asking once the server has answered.
  */
-import { post } from '../apiClient';
+import { post, publicPost } from '../apiClient';
 
 export const PENDING_REFERRAL_KEY = 'vq_pending_referral';
 const CODE = /^[A-Za-z0-9]{3,32}$/;
@@ -36,6 +36,48 @@ export function capturePendingReferral(search) {
     return null;
   }
   return code.toUpperCase();
+}
+
+/** REF-UI-01: normalise a code typed into the signup form. Returns null if malformed. */
+export function normaliseReferralCode(raw) {
+  const code = String(raw || '').trim().toUpperCase();
+  return CODE.test(code) ? code : null;
+}
+
+/** REF-UI-01: remember a code the user TYPED (the form's field), as a link would. */
+export function setPendingReferral(code) {
+  const clean = normaliseReferralCode(code);
+  if (!clean) return null;
+  try {
+    store()?.setItem(PENDING_REFERRAL_KEY, clean);
+  } catch {
+    return null;
+  }
+  return clean;
+}
+
+/** REF-UI-01: the user emptied the field -- they do not want a referral recorded. */
+export function clearPendingReferral() {
+  try { store()?.removeItem(PENDING_REFERRAL_KEY); } catch { /* storage unavailable */ }
+}
+
+/**
+ * REF-UI-01: ask the server whether a code exists and is active, BEFORE the account is
+ * created (there is no session yet, so this is the public endpoint). Resolves to
+ * `{ valid, message }`; a network failure resolves to `{ valid: null }` -- unknown, so the
+ * form does not block signup on an outage (the claim after first sign-in re-checks anyway).
+ */
+export async function validateReferralCode(code, send = (c) => publicPost('/api/referral/validate', { referral_code: c })) {
+  const clean = normaliseReferralCode(code);
+  if (!clean) return { valid: false, message: 'Referral codes are 3-32 letters and digits.' };
+  try {
+    const res = await send(clean);
+    return { valid: Boolean(res?.valid), message: res?.message || '' };
+  } catch (err) {
+    const status = err?.response?.status ?? err?.status;
+    if (status === 422) return { valid: false, message: 'Referral codes are 3-32 letters and digits.' };
+    return { valid: null, message: '' };
+  }
 }
 
 export function readPendingReferral() {

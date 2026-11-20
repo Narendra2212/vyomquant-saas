@@ -44,3 +44,27 @@ describe('pendingReferral', () => {
     expect(readPendingReferral()).toBeNull();
   });
 });
+
+describe('REF-UI-01: a typed referral code', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('normalises, remembers and forgets a typed code', async () => {
+    const m = await import('../../../src/lib/pendingReferral');
+    expect(m.normaliseReferralCode(' vyom1234 ')).toBe('VYOM1234');
+    expect(m.normaliseReferralCode('ab')).toBeNull();
+    expect(m.setPendingReferral('vyom1234')).toBe('VYOM1234');
+    expect(m.readPendingReferral()).toBe('VYOM1234');
+    m.clearPendingReferral();
+    expect(m.readPendingReferral()).toBeNull();
+  });
+
+  it('reports valid, invalid, and unknown (outage) separately', async () => {
+    const { validateReferralCode } = await import('../../../src/lib/pendingReferral');
+    expect(await validateReferralCode('GOOD1', vi.fn().mockResolvedValue({ valid: true, message: 'ok' })))
+      .toEqual({ valid: true, message: 'ok' });
+    expect((await validateReferralCode('BAD12', vi.fn().mockResolvedValue({ valid: false, message: 'Invalid referral code' }))).valid)
+      .toBe(false);
+    expect((await validateReferralCode('NET12', vi.fn().mockRejectedValue(new Error('offline')))).valid).toBeNull();
+    expect((await validateReferralCode('x!', vi.fn())).valid).toBe(false);
+  });
+});

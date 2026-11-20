@@ -1415,6 +1415,33 @@ export const publicGet = async (url, params = {}) => {
 };
 
 /**
+ * Public POST request (no auth) -- REF-UI-01: the signup form checks a referral code before
+ * any session exists.
+ * @param {string} url - API endpoint path
+ * @param {Object} [data] - JSON body
+ * @returns {Promise<any>} Response data
+ */
+export const publicPost = async (url, data = {}) => {
+  const fullUrl = `${API_BASE}${url}`;
+  const response = await fetch(fullUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const error = new ApiError(
+      errorData.message ||
+      (typeof errorData.detail === 'string' ? errorData.detail : null) ||
+      `HTTP error! status: ${response.status}`,
+      { url: fullUrl, method: 'POST', status: response.status, statusText: response.statusText, data: errorData }
+    );
+    throw error;
+  }
+  return response.json();
+};
+
+/**
  * ═══════════════════════════════════════════════════════════════════════════
  * CONNECTION TEST FUNCTION
  * ═══════════════════════════════════════════════════════════════════════════
