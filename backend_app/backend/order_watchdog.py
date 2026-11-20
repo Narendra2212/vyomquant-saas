@@ -80,6 +80,29 @@ def _record_venue_fee(order: Any, status: Any) -> None:
     order.result = result
 
 
+#: RECON-EQ-01: the local status each venue status means. A venue status absent here is
+#: compared as-is, so anything unexpected still surfaces as a discrepancy.
+_VENUE_STATUS_AS_LOCAL = {
+    "open": "executing",
+    "new": "executing",
+    "partially_filled": "executing",
+    "partial": "executing",
+    "filled": "completed",
+    "closed": "completed",
+    "completed": "completed",
+}
+
+
+def _qty(value: Any) -> Optional[Decimal]:
+    """A quantity as a number, or None when absent/unparseable (compared as such)."""
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def venue_identifier(order: Any) -> Optional[str]:
     """The id the EXCHANGE knows this order by, from whichever column carries it.
 
@@ -673,20 +696,25 @@ class OrderWatchdog:
         
         Returns True if there are discrepancies between local state and exchange.
         """
-        # Check status change
+        # RECON-EQ-01: compare by MEANING, not spelling. The venue says `open`/`new`/
+        # `partially_filled` for an order this platform records as `EXECUTING`; a raw
+        # string compare made every resting limit order a "discrepancy" on every cycle,
+        # writing a reconciliation_mismatches row and alert each minute (production
+        # 2026-11-20: 21 rows in 21 minutes for one resting Testnet order).
         order_status_str = order.status.value if hasattr(order.status, 'value') else str(order.status)
         result_status_str = result.status.value if hasattr(result.status, 'value') else str(result.status)
-        if result_status_str.lower() != order_status_str.lower():
+        venue = str(result_status_str).lower()
+        local = str(order_status_str).lower()
+        equivalent = _VENUE_STATUS_AS_LOCAL.get(venue, venue)
+        if equivalent != local:
             return True
-        
-        # Check fill amount change
-        if str(result.filled_size) != str(order.filled_size):
+
+        # Quantities compared as numbers: "0" and "0.0" are the same fill.
+        if _qty(result.filled_size) != _qty(order.filled_size):
             return True
-        
-        # Check remaining amount change
-        if str(result.remaining_size) != str(order.remaining_size):
+        if _qty(result.remaining_size) != _qty(order.remaining_size):
             return True
-        
+
         return False
     
     async def _check_stale_orders(self):

@@ -1646,6 +1646,7 @@ class ExecutionRecordRepository:
                    price,
                    exchange_id,
                    order_id,
+                   venue_order_id,
                    submitted_at,
                    created_at,
                    EXTRACT(EPOCH FROM (now() - created_at)) AS age_seconds
@@ -1665,7 +1666,14 @@ class ExecutionRecordRepository:
 
         classified: list[dict] = []
         for row in rows:
-            if row.order_id is not None:
+            # TRADE-07b: the live engine records the EXCHANGE's id in `venue_order_id`
+            # and leaves `order_id` (this platform's FK) NULL (TRADE-12). Classifying on
+            # `order_id` alone put every resting live limit order in the "ambiguous"
+            # population: recovery found it open at the venue, raised a critical "live
+            # exposure, platform had no record" alert, set UNKNOWN, and the ordinary
+            # reconciliation set it back to EXECUTING -- every cycle (production
+            # 2026-11-20, Testnet order 8430401: 9 alerts in 4 minutes).
+            if row.order_id is not None or getattr(row, "venue_order_id", None) is not None:
                 classification = self.RECOVERY_SUBMITTED_WITH_ORDER_ID
             elif row.submitted_at is None:
                 classification = self.RECOVERY_FAILED_BEFORE_SUBMISSION
@@ -1874,6 +1882,7 @@ class ExecutionRecordRepository:
               FROM execution_records
              WHERE status = 'UNKNOWN'
                AND order_id IS NULL
+               AND venue_order_id IS NULL
                AND submitted_at IS NOT NULL
                AND submitted_at < now() - make_interval(secs => :threshold)
                {tenant_clause}
@@ -1946,6 +1955,8 @@ class ExecutionRecordRepository:
                        AND tenant_id = :tenant_id
                        AND upper(status::text) = 'UNKNOWN'
                        AND order_id IS NULL
+                       -- TRADE-07b: an order the venue has an id for is never "lost"
+                       AND venue_order_id IS NULL
                     RETURNING execution_id
                 """).bindparams(bindparam("tenant_id", type_=PG_UUID(as_uuid=True))),
                 {
