@@ -804,6 +804,7 @@ jobs:
                  tests/test_referral_payout_schema_contract_postgres.py \
                  tests/test_sec07_profiles_platform_columns_postgres.py \
                  tests/test_sec09_marketplace_evidence_service_role_only_postgres.py \
+                 tests/test_sec_def01_definer_functions_check_the_caller_postgres.py \
                  tests/test_sec16_strategy_deployments_guard_postgres.py \
                  tests/test_sup02_support_columns_postgres.py \
                  tests/test_dbalm02_identity_coverage_postgres.py \

@@ -3225,6 +3225,21 @@ async def cancel_subscription(
     customers in a subscription.
     """
     user_id = user["id"]
+    # BILL-CANCEL-01: there must be something to cancel. Found 2026-11-20 in the final launch
+    # certification: a FREE account's cancel returned 200 "will be cancelled at the end of the
+    # current billing period" and wrote subscription_status='cancelled' onto a profile that
+    # has no subscription and no billing period -- the only free profile of 185 in that state.
+    from backend_app.core.subscription_dependencies import get_plan_context
+
+    context = await get_plan_context(user_id, supabase)
+    if str(context.plan or "free").lower() == "free":
+        raise HTTPException(
+            409,
+            {
+                "error": "NO_ACTIVE_SUBSCRIPTION",
+                "message": "There is no paid subscription on this account to cancel.",
+            },
+        )
     try:
         from backend_app.core.billing_lifecycle import BillingLifecycle
         sb = _background_sb()

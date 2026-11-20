@@ -149,7 +149,9 @@ def test_no_installed_routine_writes_a_referral_settlement_state(conn):
             continue
         if "settled_at" in low or "'settled'" in low or "'completed'" in low \
                 or "approved_balance_usd =" in low:
-            settlers.append(name)
+            # SEC-DEF-01 (migration 078) moved user-callable bodies to `<name>__impl` behind
+            # a same-name caller-checking wrapper; the body is the same settler.
+            settlers.append(name[: -len("__impl")] if name.endswith("__impl") else name)
 
     known_ref01_settlers = {"create_referral_payout_request", "settle_referral_payout"}
     unexpected = sorted(set(settlers) - known_ref01_settlers)
@@ -172,7 +174,9 @@ def test_no_installed_routine_writes_a_referral_settlement_state(conn):
     # or re-crediting it against a payout it itself is settling.
     cur.execute(
         "select prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
-        "where n.nspname = 'public' and p.proname = 'create_referral_payout_request'"
+        "where n.nspname = 'public' and p.proname in "
+        "('create_referral_payout_request', 'create_referral_payout_request__impl') "
+        "order by p.proname desc limit 1"  # the body, where 078 has moved it
     )
     create_src = (cur.fetchone()[0] or "").lower()
     assert "pending_balance_usd" not in create_src, (

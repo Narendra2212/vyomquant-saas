@@ -112,3 +112,35 @@ def test_a_signed_in_user_cannot_act_for_another_user(engine, sql):
             assert "SEC-DEF-01" in str(exc.value)
         finally:
             trans.rollback()
+
+
+def test_a_database_credentialed_caller_is_not_refused(engine):
+    """080: the guard applies to the browser roles only. The service role (or the owner) on a
+    direct connection carries no JWT claim and was refused by 078's guard, breaking the paper
+    and referral-settlement lanes."""
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            conn.execute(text("SET LOCAL ROLE service_role"))
+            conn.execute(
+                text("SELECT public.sec_def01_assert_caller_is(CAST(:u AS uuid))"),
+                {"u": str(uuid.uuid4())},
+            )
+        finally:
+            trans.rollback()
+
+
+def test_creating_a_profile_still_creates_its_referral_code(engine):
+    """080: `tr_profiles_create_referral_code` called the guarded wrapper as the inserting role,
+    so every INSERT INTO public.profiles failed on a repository-provisioned database."""
+    with engine.connect() as conn:
+        if not _exists(conn, "public.trigger_create_referral_code()"):
+            pytest.skip("this schema has no profiles referral-code trigger")
+        prosecdef = conn.execute(
+            text("SELECT prosecdef FROM pg_proc WHERE oid = 'public.trigger_create_referral_code()'::regprocedure")
+        ).scalar()
+        assert prosecdef, "the trigger must run as owner to reach the service-only body"
+        src = conn.execute(
+            text("SELECT prosrc FROM pg_proc WHERE oid = 'public.trigger_create_referral_code()'::regprocedure")
+        ).scalar()
+        assert "create_referral_code_for_user__impl" in src

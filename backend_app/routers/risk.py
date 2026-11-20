@@ -461,10 +461,10 @@ async def _persist_strategy_limits(user: dict, uid: str, rows: list[dict]) -> bo
 # ═══════════════════════════════════════════════════════════════════════════
 
 class RiskSettingsUpdateRequest(BaseModel):
-    max_daily_loss: Optional[float] = Field(500.0, gt=0, le=1_000_000, description="Max daily loss in USD")
-    max_positions: Optional[int] = Field(10, gt=0, le=100, description="Max concurrent open positions")
-    max_leverage: Optional[int] = Field(3, ge=1, le=50, description="Max allowed account leverage")
-    circuit_breaker_armed: Optional[bool] = Field(True, description="Armed state of institutional circuit breaker")
+    max_daily_loss: Optional[float] = Field(None, gt=0, le=1_000_000, description="Max daily loss in USD")
+    max_positions: Optional[int] = Field(None, gt=0, le=100, description="Max concurrent open positions")
+    max_leverage: Optional[int] = Field(None, ge=1, le=50, description="Max allowed account leverage")
+    circuit_breaker_armed: Optional[bool] = Field(None, description="Armed state of institutional circuit breaker")
     kill_switches: Optional[Any] = Field(default=None, description="Kill switch configurations")
 
 
@@ -847,7 +847,14 @@ async def update_risk_settings(
             severity="info",
             title="Risk Parameters Updated",
             message=f"Risk controls updated (Max Loss: ${updated_record['max_daily_loss']:,}, Max Positions: {updated_record['max_positions']}).",
-            metadata={"settings": updated_record, "idempotency_key": f"risk_settings:{uid}"},
+            # NOTIF-RISK-01: the key names THIS save. It was `risk_settings:{uid}`, and the
+            # notifications table de-duplicates (user_id, idempotency_key) durably, so a user
+            # was told about their first risk change ever and never again -- a later change
+            # (including one they did not make) raised no notice, and the one shown was stale.
+            metadata={
+                "settings": updated_record,
+                "idempotency_key": f"risk_settings:{uid}:{updated_record['updated_at']}",
+            },
             ws_manager=ws_mgr,
         )
     except Exception as notif_err:
