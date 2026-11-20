@@ -294,6 +294,10 @@ async def lifespan(app: FastAPI):
         release="2.4.0",
         trading_mode=get_vyomquant_mode("safe"),
     )
+    # LOOP-STALL-01: started first, so a freeze anywhere in the rest of startup -- or in a
+    # background job a minute later -- logs the line the event loop is stuck on.
+    from backend_app.core.loop_stall_monitor import start_loop_stall_monitor
+    app.state.loop_stall_monitor = start_loop_stall_monitor()
     # NOTIF-05: hand this loop to synchronous producers.
     #
     # `backend/execution_engine.py` and the bot runner are SYNCHRONOUS and cannot

@@ -97,6 +97,8 @@ export const PREFLIGHT_CONDITION_ORDER = Object.freeze([
   'plan_readable',
   'market_resolved',
   'deployment_mode',
+  // LIVE-EXIT-01: a live strategy must have a rule that can close what it opens.
+  'exit_path',
   'execution_config',
   'gap_policy',
   'binding_storable',

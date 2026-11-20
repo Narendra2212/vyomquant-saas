@@ -3726,7 +3726,7 @@ class StrategyService:
             # ── 4. Steps 2, 3, 4 and 6 of the workflow. Writes nothing.
             preparation = await prepare_training(
                 plan,
-                user=user,
+                user=await _user_with_plan(sb, user),
                 registry=registry,
                 training_cfg=training_cfg,
                 job_counts=job_counts,
@@ -4144,7 +4144,7 @@ class StrategyService:
         job_counts = await count_training_jobs(sb, user["id"])
         preparation = await prepare_training(
             plan,
-            user=user,
+            user=await _user_with_plan(sb, user),
             registry=registry,
             training_cfg=training_cfg,
             job_counts=job_counts,
@@ -5907,6 +5907,31 @@ class TrainingPreparation:
                 for node in self.nodes
             ],
         }
+
+
+async def _user_with_plan(sb: Any, user: Mapping[str, Any]) -> Dict[str, Any]:
+    """ML-PLAN-01: the request user with its real plan attached, for ``resolve_caps``.
+
+    ``resolve_caps`` reads the plan off the user mapping. The request user is the JWT's
+    claims, which carry no plan, so every save-and-train and every training-job request
+    was capped as FREE (``max_epochs`` 0: "This plan includes no ML training") even for a
+    Pro account the entitlement gate had just admitted. Production, 2026-11-20.
+
+    The plan is read the way the worker reads it (``training_worker.resolve_job_user`` ->
+    ``get_user_plan`` -> ``profiles.subscription_tier``), so admission and the worker's
+    pre-first-epoch recheck cannot disagree. A plan already on the mapping is kept; an
+    unreadable plan leaves it absent, which ``resolve_caps`` treats as the most
+    restrictive tier (fail closed).
+    """
+    merged: Dict[str, Any] = dict(user or {})
+    if merged.get("plan") or sb is None or not merged.get("id"):
+        return merged
+    from backend_app.backend.training_worker import resolve_job_user
+
+    resolved = await resolve_job_user(sb, str(merged["id"]))
+    if resolved.get("plan"):
+        merged["plan"] = resolved["plan"]
+    return merged
 
 
 async def prepare_training(
